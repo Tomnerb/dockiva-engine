@@ -1,0 +1,51 @@
+/* AF_UNIX sockets on guest paths: bind/listen/connect/accept, names, a socket file
+   that stat reports, EADDRINUSE, unlink, a host path beyond macOS's 104-byte
+   sun_path limit, socketpair (stream and datagram), SO_TYPE/SO_PEERCRED, and
+   unsupported abstract names. Needs a writable root. */
+typedef unsigned long U;
+static long call(U n,U a,U b,U c,U d,U e,U f) {
+    register U x8 __asm__("x8")=n,x0 __asm__("x0")=a,x1 __asm__("x1")=b;
+    register U x2 __asm__("x2")=c,x3 __asm__("x3")=d,x4 __asm__("x4")=e,x5 __asm__("x5")=f;
+    __asm__ volatile("svc #0":"+r"(x0):"r"(x8),"r"(x1),"r"(x2),"r"(x3),"r"(x4),"r"(x5):"memory","cc");
+    return (long)x0;
+}
+static unsigned checks;
+static void check(int ok) { checks++;if(!ok) { call(64,1,(U)"unix FAIL\n",10,0,0,0);call(94,(U)checks,0,0,0,0,0);for(;;){} } }
+static unsigned set(unsigned char *a,const char *path) {             /* sockaddr_un; returns its length */
+    unsigned n=0;a[0]=1;a[1]=0;while(path[n]) { a[2+n]=(unsigned char)path[n];n++; }
+    a[2+n]=0;return n+3;
+}
+static int same(const unsigned char *a,const char *b) { while(*b && *a==(unsigned char)*b) { a++;b++; }return !*b && !*a; }
+static void roundtrip(const char *path) {
+    unsigned char addr[110],name[110];unsigned length=set(addr,path),size=110;char buf[8];
+    long server=call(198,1,1,0,0,0,0),client=call(198,1,1,0,0,0,0);check(server>=0 && client>=0);
+    check(call(200,server,(U)addr,length,0,0,0)==0 && call(201,server,8,0,0,0,0)==0);
+    check(call(203,client,(U)addr,length,0,0,0)==0);
+    long peer=call(202,server,(U)name,(U)&size,0,0,0);check(peer>=0 && size==2 && name[0]==1);
+    check(call(64,client,(U)"hi",2,0,0,0)==2 && call(63,peer,(U)buf,8,0,0,0)==2 && buf[0]=='h');
+    size=110;check(call(204,server,(U)name,(U)&size,0,0,0)==0 && same(name+2,path));
+    size=110;check(call(205,client,(U)name,(U)&size,0,0,0)==0 && same(name+2,path));
+    long again=call(198,1,1,0,0,0,0);check(call(200,again,(U)addr,length,0,0,0)==-98);   /* EADDRINUSE */
+    check(call(53,(U)-100,(U)path,0700,0,0,0)==0);                                    /* chmod */
+    unsigned char st[128];check(call(79,(U)-100,(U)path,(U)st,0,0,0)==0 && *(unsigned *)(st+16)==0140700);
+    check(call(35,(U)-100,(U)path,0,0,0,0)==0);                                      /* unlink */
+    check(call(203,again,(U)addr,length,0,0,0)==-2);                                 /* ENOENT */
+    for(long fd=server;fd<=again;fd++)call(57,(U)fd,0,0,0,0,0);
+}
+void _start(void) {
+    roundtrip("/test.sock");
+    static const char deep[]="/deep/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    check(call(34,(U)-100,(U)"/deep",0755,0,0,0)==0 && call(34,(U)-100,(U)deep,0755,0,0,0)==0);
+    char path[100];unsigned n=0;while(deep[n]) { path[n]=deep[n];n++; }
+    path[n++]='/';path[n++]='s';path[n]=0;
+    roundtrip(path);                                                                 /* host path > 104 bytes */
+    int pair[2];char buf[8];
+    check(call(199,1,1,0,(U)pair,0,0)==0 && call(64,(U)pair[0],(U)"ok",2,0,0,0)==2 && call(63,(U)pair[1],(U)buf,8,0,0,0)==2 && buf[1]=='k');
+    int type=0;unsigned size=4;check(call(209,(U)pair[0],1,3,(U)&type,(U)&size,0)==0 && type==1);
+    unsigned cred[3];size=12;check(call(209,(U)pair[0],1,17,(U)cred,(U)&size,0)==0 && size==12 && cred[0]>0);
+    int dgram[2];check(call(199,1,2,0,(U)dgram,0,0)==0 && call(64,(U)dgram[0],(U)"d",1,0,0,0)==1 && call(63,(U)dgram[1],(U)buf,8,0,0,0)==1);
+    unsigned char abstract[8]={1,0,0,'a','b','c'};long s=call(198,1,1,0,0,0,0);
+    check(call(200,s,(U)abstract,6,0,0,0)==-95);
+    check(call(198,1,5,0,0,0,0)==-94);                                               /* no SOCK_SEQPACKET */
+    call(64,1,(U)"unix PASS\n",10,0,0,0);call(94,0,0,0,0,0,0);for(;;){}
+}

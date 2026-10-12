@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "id": "elf-empty",
+      "source": "examples/m27/probe.elf",
+      "truncate": 0,
+      "diagnostic": "Expected little-endian ELF64",
+      "source_sha256": "6cf8ec49e87141b062c8364a88cccd640a99587d2f6f739990d559a39d38096f"
+    },
+    {
+      "id": "elf-short-header",
+      "source": "examples/m27/probe.elf",
+      "truncate": 32,
+      "diagnostic": "Expected little-endian ELF64",
+      "source_sha256": "6cf8ec49e87141b062c8364a88cccd640a99587d2f6f739990d559a39d38096f"
+    },
+    {
+      "id": "elf-wrong-machine",
+      "source": "examples/m27/probe.elf",
+      "patches": [
+        [
+          18,
+          "3e00"
+        ]
+      ],
+      "diagnostic": "Only ARM64",
+      "source_sha256": "6cf8ec49e87141b062c8364a88cccd640a99587d2f6f739990d559a39d38096f"
+    },
+    {
+      "id": "elf-invalid-ph-count",
+      "source": "examples/m27/probe.elf",
+      "patches": [
+        [
+          56,
+          "ffff"
+        ]
+      ],
+      "diagnostic": "Invalid program header",
+      "source_sha256": "6cf8ec49e87141b062c8364a88cccd640a99587d2f6f739990d559a39d38096f"
+    },
+    {
+      "id": "instruction-budget",
+      "source": "examples/m27/probe.elf",
+      "max_steps": 1,
+      "diagnostic": "Instruction budget exhausted",
+      "source_sha256": "6cf8ec49e87141b062c8364a88cccd640a99587d2f6f739990d559a39d38096f"
+    }
+  ]
+}

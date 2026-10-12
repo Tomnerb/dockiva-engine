@@ -1,0 +1,143 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "id": "shell-arithmetic",
+      "args": [
+        "sh",
+        "-c",
+        "x=7; echo $((x*6))"
+      ],
+      "expected": {
+        "exit_code": 0,
+        "stdout": "42\n",
+        "stderr": ""
+      }
+    },
+    {
+      "id": "pipeline",
+      "args": [
+        "sh",
+        "-c",
+        "echo hello | cat"
+      ],
+      "expected": {
+        "exit_code": 0,
+        "stdout": "hello\n",
+        "stderr": ""
+      }
+    },
+    {
+      "id": "nested-exec",
+      "args": [
+        "sh",
+        "-c",
+        "sh -c 'echo nested'; echo parent"
+      ],
+      "expected": {
+        "exit_code": 0,
+        "stdout": "nested\nparent\n",
+        "stderr": ""
+      }
+    },
+    {
+      "id": "cwd-child-isolation",
+      "args": [
+        "sh",
+        "-c",
+        "cd /bin; (cd /lib; pwd); pwd"
+      ],
+      "expected": {
+        "exit_code": 0,
+        "stdout": "/lib\n/bin\n",
+        "stderr": ""
+      }
+    },
+    {
+      "id": "redirection",
+      "args": [
+        "sh",
+        "-c",
+        "echo first >/out; echo second >>/out; cat /out"
+      ],
+      "expected": {
+        "exit_code": 0,
+        "stdout": "first\nsecond\n",
+        "stderr": ""
+      }
+    },
+    {
+      "id": "exit-status",
+      "args": [
+        "sh",
+        "-c",
+        "sh -c 'exit 7'; echo $?; false || echo recovered"
+      ],
+      "expected": {
+        "exit_code": 0,
+        "stdout": "7\nrecovered\n",
+        "stderr": ""
+      }
+    },
+    {
+      "id": "signal-trap",
+      "args": [
+        "sh",
+        "-c",
+        "trap 'echo trapped' USR1; kill -USR1 $$; echo resumed"
+      ],
+      "expected": {
+        "exit_code": 0,
+        "stdout": "trapped\nresumed\n",
+        "stderr": ""
+      }
+    },
+    {
+      "id": "dso-constructor-tls",
+      "executable": "bin/dynamic-probe",
+      "args": [],
+      "expected": {
+        "exit_code": 0,
+        "stdout": "shared library constructor and TLS passed\n",
+        "stderr": ""
+      }
+    },
+    {
+      "id": "parent-directory-policy",
+      "args": [
+        "sh",
+        "-c",
+        "cd /bin; if cd -P .. 2>/error; then echo allowed; else echo denied; fi; pwd"
+      ],
+      "expected": {
+        "exit_code": 0,
+        "stdout": "denied\n/bin\n",
+        "stderr": ""
+      },
+      "reference_expected": {
+        "exit_code": 0,
+        "stdout": "allowed\n/\n",
+        "stderr": ""
+      },
+      "policy_gap": "FS-001: parent traversal remains rejected; M27 open"
+    },
+    {
+      "id": "symlink-policy",
+      "args": [
+        "cat",
+        "/link"
+      ],
+      "expected": {
+        "exit_code": 1,
+        "stdout": "",
+        "stderr": "cat: can't open '/link': Permission denied\n"
+      },
+      "reference_expected": {
+        "exit_code": 0,
+        "stdout": "fixture\n",
+        "stderr": ""
+      },
+      "policy_gap": "FS-002: links remain rejected; M27 open"
+    }
+  ]
+}

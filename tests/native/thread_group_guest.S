@@ -1,0 +1,171 @@
+.text
+.global _start
+_start:
+ mov x8,#172
+ svc #0
+ adr x19,shared
+ str x0,[x19,#24]
+ mov x9,#111
+ msr tpidr_el0,x9
+ fmov d8,#1.0
+ add x0,x19,#32
+ mov x1,#2048
+ mov x8,#59
+ svc #0
+ cbnz x0,fail
+ mov x0,#0
+ mov x8,#20
+ svc #0
+ cmp x0,#0
+ b.lt fail
+ mov x23,x0
+ mov w9,#1
+ str w9,[x19,#48]
+ mov x9,#1234
+ str x9,[x19,#56]
+ mov x1,#1
+ ldr w2,[x19,#32]
+ add x3,x19,#48
+ mov x8,#21
+ svc #0
+ cbnz x0,fail
+ mov x0,#0x0f00
+ movk x0,#0x13d,lsl #16
+ adr x1,stack_end
+ add x2,x19,#8
+ mov x3,#222
+ add x4,x19,#12
+ mov x8,#220
+ svc #0
+ cmp x0,#0
+ b.lt fail
+ cbz x0,child
+ ldr w9,[x19,#8]
+ cmp w9,w0
+ b.ne fail
+ mov x20,x0
+ready_loop:
+ ldr w9,[x19]
+ cbnz w9,release
+ mov x0,x19
+ mov x1,#128
+ mov x2,#0
+ mov x3,#0
+ mov x8,#98
+ svc #0
+ b ready_loop
+release:
+ mov w9,#1
+ str w9,[x19,#4]
+ add x0,x19,#4
+ mov x1,#129
+ mov x2,#1
+ mov x8,#98
+ svc #0
+ cmp x0,#1
+ b.hi fail
+ mov x0,x23
+ add x1,x19,#48
+ mov x2,#1
+ mov x3,#1000
+ mov x4,#0
+ mov x5,#8
+ mov x8,#22
+ svc #0
+ cmp x0,#1
+ b.ne fail
+ ldr x9,[x19,#56]
+ cmp x9,#1234
+ b.ne fail
+join_loop:
+ ldr w2,[x19,#12]
+ cbz w2,joined
+ add x0,x19,#12
+ mov x1,#9
+ mov x3,#0
+ mov x5,#-1
+ mov x8,#98
+ svc #0
+ b join_loop
+joined:
+ mrs x9,tpidr_el0
+ cmp x9,#111
+ b.ne fail
+ fmov d9,#1.0
+ fcmp d8,d9
+ b.ne fail
+ ldr w9,[x19,#16]
+ cmp w9,#77
+ b.ne fail
+ mov x0,#0
+ mov x8,#94
+ svc #0
+child:
+ mrs x9,tpidr_el0
+ cmp x9,#222
+ b.ne fail
+ mov x8,#178
+ svc #0
+ ldr w9,[x19,#8]
+ cmp w9,w0
+ b.ne fail
+ ldr w9,[x19,#12]
+ cmp w9,w0
+ b.ne fail
+ mov x8,#172
+ svc #0
+ ldr x9,[x19,#24]
+ cmp x9,x0
+ b.ne fail
+ fmov d8,#2.0
+ mov w9,#1
+ str w9,[x19]
+ mov x0,x19
+ mov x1,#129
+ mov x2,#1
+ mov x8,#98
+ svc #0
+wait_gate:
+ ldr w9,[x19,#4]
+ cbnz w9,compute
+ add x0,x19,#4
+ mov x1,#128
+ mov x2,#0
+ mov x3,#0
+ mov x8,#98
+ svc #0
+ b wait_gate
+compute:
+ mov x21,#40000
+loop:
+ subs x21,x21,#1
+ b.ne loop
+ mov x8,#124
+ svc #0
+ fmov d9,#2.0
+ fcmp d8,d9
+ b.ne fail
+ mrs x9,tpidr_el0
+ cmp x9,#222
+ b.ne fail
+ mov w9,#77
+ str w9,[x19,#16]
+ ldr w0,[x19,#36]
+ add x1,x19,#16
+ mov x2,#1
+ mov x8,#64
+ svc #0
+ cmp x0,#1
+ b.ne fail
+ mov x0,#0
+ mov x8,#93
+ svc #0
+fail:
+ mov x0,#99
+ mov x8,#94
+ svc #0
+.bss
+.balign 16
+shared: .skip 80
+stack: .skip 16384
+stack_end:
