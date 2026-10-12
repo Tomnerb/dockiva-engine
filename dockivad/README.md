@@ -1,0 +1,56 @@
+# dockivad
+
+Go control plane for the supported VM-free preview engine. No external Go modules
+and no Python execution. Guest Linux semantics stay in the C runtime.
+
+Build the complete signed helper on Apple Silicon from the repository root:
+
+```sh
+python3 scripts/bundle_dockiva_engine.py --output build/dockiva-go
+build/dockiva-go/vmfree-engine/dockivad --home /tmp/dockivad-local
+```
+
+The Python command is build tooling. The resulting helper contains only Go/C
+executables and prepared OCI fixture data. `vmfree-engine` is a separately signed
+copy of `dockivad` for existing Dockiva helper discovery. Both run the same code.
+Stop the API with SIGTERM; active container supervisors continue independently.
+Use the authenticated Docker API subset or Dockiva for container lifecycle.
+
+Import a bounded OCI layout while the daemon is stopped:
+
+```sh
+build/dockiva-go/vmfree-engine/dockivad --home /tmp/dockivad-local \
+  --import-name local/demo:test --import-layout examples/m19/shell-image
+```
+
+`--pull registry/repository:tag` performs a verified scoped registry pull. OCI
+linux/arm64 only: no links/devices, 32 layers, 32 MiB per blob, 128 MiB packed,
+64 MiB expanded, 4096 members/paths. General stock-image support is not implied.
+`--insecure-local` is restricted to literal 127.0.0.1 for registry tests.
+
+Tests (macOS needs external linking with the local Go 1.22 toolchain):
+
+```sh
+go -C dockivad test -race -ldflags=-linkmode=external ./...
+python3 scripts/verify_dockivad.py \
+  --helper build/dockiva-go/vmfree-engine/vmfree-engine \
+  --report build/dockivad-recovery.json
+```
+
+State remains compatible with the legacy development tools. Import/pull and daemon
+startup share an exclusive daemon lock. Requests authenticate with the rotating
+private `docker-client/config.json` token. The default endpoint is `engine.sock`;
+`--tcp 0` explicitly selects a loopback test endpoint.
+
+Current resource policy is four live runtimes and 1024 MiB reserved guest memory
+per state store, not a machine-wide or RSS cap. The C guard applies core=0,
+file size=16 MiB, descriptors=128 and CPU=60 seconds to workers. Cross-store/JIT
+accounting, pressure feedback, production confinement and broader workload
+compatibility remain separate architecture gates.
+
+Execution profiles are defined in the embedded `profiles.json` catalog. New
+containers persist a digest-bound policy; Create/Start and supervisor launch
+query native `capabilities` before guest execution. Inspect includes
+`DockivaCompatibility`. Legacy state retains its existing configuration. See
+[profile semantics and verification](../docs/COMPATIBILITY-PROFILES-2026-09-22.md).
+The test suite now requires both built native executables for real capability probes.

@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "default": {
+    "id": "bounded-arm64-interpreter",
+    "revision": 2,
+    "image_digests": [],
+    "backend": "interpreter",
+    "required_capabilities": ["elf64-arm64", "private-rootfs", "loopback-tcp", "bounded-dynamic-elf"],
+    "dynamic": true,
+    "process_tree": true,
+    "scheduled_network": true,
+    "writable_root": "optional",
+    "memory_limit_mib": 512,
+    "max_steps": 18446744073709551615,
+    "scope": "Unqualified image; interpreter execution with dynamic ELF loading, multi-process trees with scheduled networking and no practical instruction limit (UINT64_MAX steps). Loading does not establish application compatibility."
+  },
+  "native": {
+    "id": "native-arm64-hvf",
+    "revision": 2,
+    "image_digests": [],
+    "backend": "hvf",
+    "required_capabilities": ["elf64-arm64", "private-rootfs", "loopback-tcp", "bounded-dynamic-elf", "native-threads"],
+    "dynamic": true,
+    "process_tree": true,
+    "scheduled_network": true,
+    "writable_root": "optional",
+    "memory_limit_mib": 512,
+    "max_steps": 18446744073709551615,
+    "scope": "Unqualified image; native ARM64 execution under Hypervisor.framework (no guest kernel), Linux syscalls served by the runtime, threads on parallel vCPUs. Loading does not establish application compatibility."
+  },
+  "images": [
+    {
+      "id": "prepared-redis-7.4.2-native",
+      "revision": 1,
+      "image_digests": ["sha256:bab8ae06b593428bbf090c1a6b8c3900f1512d38b3bb0f98f7108273296a0167"],
+      "backend": "hvf",
+      "required_capabilities": ["elf64-arm64", "private-rootfs", "loopback-tcp", "bounded-dynamic-elf", "native-threads"],
+      "dynamic": true,
+      "process_tree": true,
+      "scheduled_network": true,
+      "writable_root": "required",
+      "memory_limit_mib": 512,
+      "max_steps": 18446744073709551615,
+      "scope": "Prepared Redis 7.4.2 preset: native ARM64 execution under Hypervisor.framework, private writable data, loopback TCP. Experimental."
+    }
+  ]
+}
