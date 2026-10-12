@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.o
+build/
+mac-*-report.json
+mac-m2-*.json
+.DS_Store

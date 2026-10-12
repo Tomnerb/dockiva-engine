@@ -1,0 +1,22 @@
+name: Bounded compatibility corpus
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  corpus:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Build sanitized interpreter
+        run: python3 scripts/build_native.py --sanitize
+      - name: Test discrepancy classification
+        run: python3 -m unittest discover -s tests -p test_m30.py
+      - name: Replay pinned functional and malformed corpus
+        run: python3 scripts/verify_m30.py --native build/vmfree-c-sanitize --report m30-ci-report.json
+      - name: Show evidence
+        if: always()
+        run: test ! -f m30-ci-report.json || cat m30-ci-report.json
