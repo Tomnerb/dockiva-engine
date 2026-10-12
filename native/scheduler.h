@@ -470,6 +470,11 @@ static int schedule_finish(int current,int result,unsigned terminating) {
     return 0;
 }
 #define THREAD_EXIT (-4)  /* run(): the current thread ended, other threads of the process live on */
+/* Readiness of blocked tasks' sockets is polled on scheduling decisions only this
+   often while no worker is idle (an idle worker polls continuously instead): each
+   poll covers every blocked task under the runtime lock, and one poll wakes them all. */
+#define NETWORK_PUMP_INTERVAL_NS 250000
+static uint64_t network_pump_last_ns;
 /* Run tasks until the root exits (worker 0, which returns its status) or another
    worker sees the run end (it returns -1). Holds the lock throughout, except while
    guest code runs or the worker waits. current: the task already loaded, or -1. */
@@ -486,7 +491,10 @@ static int schedule_loop(int current) {
             current=next;schedule_enter(current,thread);
         }
         worker->task=current;
-        if(!schedule_polling) { timer_pump();network_pump(0); }
+        if(!schedule_polling) {
+            uint64_t now=thread_time_ns(0);
+            if(now-network_pump_last_ns>=NETWORK_PUMP_INTERVAL_NS) { network_pump_last_ns=now;timer_pump();network_pump(0); }
+        }
         terminal_pump(0);host_signal_pump();terminal_waiting=0;
         process_pid=(uint64_t)current+1;process_depth=current!=0;schedule_slice=4096;
         ScheduledTask *t=&schedule_tasks[current];

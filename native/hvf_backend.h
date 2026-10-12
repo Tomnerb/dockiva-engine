@@ -672,6 +672,22 @@ static int hvf_unlocked_exit(void) {
     if(!(memory?guest_memory_unlocked():guest_syscall_unlocked()))return 0;   /* the locked path rereads the same exit */
     hvf_put_regs();return 1;
 }
+/* An unlocked call would block on sockets. While other workers are idle, wait for
+   them here, briefly and without any lock, instead of a round trip through the
+   scheduler under the runtime lock (a server's next request often arrives within
+   microseconds). Returns whether one became ready; the caller then retries the call.
+   Called and returns with the process's mm lock held. */
+#define HVF_DIRECT_WAIT_MS 2
+static int hvf_must_stop(ScheduledTask *t);
+static int hvf_direct_wait(ScheduledTask *task) {
+    unsigned count=net_unlocked_wait.count;net_unlocked_wait.count=0;
+    if(!count || !net_unlocked_wait.timeout || !(schedule_idle || schedule_polling) || hvf_must_stop(task))return 0;
+    int budget=net_unlocked_wait.timeout<HVF_DIRECT_WAIT_MS?(int)net_unlocked_wait.timeout:HVF_DIRECT_WAIT_MS;
+    mm_unlock(task);
+    int ready=poll(net_unlocked_wait.fds,count,budget);
+    mm_lock(task);
+    return ready>0 && !hvf_must_stop(task);
+}
 /* The worker must leave guest code: the run or the process is ending, the process
    stops, this thread was ended, or a signal awaits delivery. Read without the
    runtime lock: whoever sets these interrupts workers that are in guest code. */
@@ -721,7 +737,8 @@ static int hvf_slice_run(void) {
             ran=hv_vcpu_run(vcpu);
             atomic_store(&self->in_guest,0);
             mm_lock(task);
-            if(!worker_threads || ran!=HV_SUCCESS || hvf_must_stop(task) || !hvf_unlocked_exit())break;
+            if(!worker_threads || ran!=HV_SUCCESS || hvf_must_stop(task))break;
+            if(!hvf_unlocked_exit() && !(hvf_direct_wait(task) && hvf_unlocked_exit()))break;
         }
         mm_unlock(task);
         runtime_lock(self);mm_lock(task);

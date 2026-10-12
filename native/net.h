@@ -81,8 +81,15 @@ static uint64_t net_now(void) {
 /* Blocking calls wait without limit unless the guest sets SO_RCVTIMEO/SO_SNDTIMEO
    or passes a poll timeout, as on Linux. */
 #define NET_FOREVER UINT32_MAX
+/* The sockets an unlocked call would have waited on (it aborted instead): the CPU
+   backend may wait for them itself, without any lock, before taking the slow path. */
+static _Thread_local struct { unsigned count,timeout;struct pollfd fds[NET_FD_LIMIT]; } net_unlocked_wait;
 static uint64_t net_suspend(const struct pollfd *fds,unsigned count,unsigned timeout) {
-    if(syscall_unlocked) { syscall_abort=1;return IO_BLOCK; }  /* blocking needs the scheduler */
+    if(syscall_unlocked) {                                       /* blocking needs the scheduler */
+        if(count>NET_FD_LIMIT)count=NET_FD_LIMIT;
+        memcpy(net_unlocked_wait.fds,fds,count*sizeof(*fds));net_unlocked_wait.count=count;net_unlocked_wait.timeout=timeout;
+        syscall_abort=1;return IO_BLOCK;
+    }
     uint64_t now=net_now();
     if(net_wait.active && net_wait.at_pc==cpu->pc && now>=net_wait.deadline) { net_wait.active=0;return linux_error(11); }
     /* +1: now is truncated to the millisecond, and a wait must last at least timeout. */

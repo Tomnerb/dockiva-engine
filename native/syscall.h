@@ -284,7 +284,7 @@ static int guest_syscall_unlocked(void) {
     cpu->exclusive_valid=0;
     int clamp=(call==63 || call==64 || call==206 || call==207) && count>1024*1024;
     if(clamp)cpu->gpr[2]=1024*1024;
-    syscall_unlocked=1;syscall_abort=0;epoll_prepared.valid=0;
+    syscall_unlocked=1;syscall_abort=0;epoll_prepared.valid=0;net_unlocked_wait.count=0;
     uint64_t result=epoll?guest_epoll(call):file?fs_call(call):net_call(call);
     syscall_unlocked=0;
     if(clamp)cpu->gpr[2]=count;
