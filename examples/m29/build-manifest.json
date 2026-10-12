@@ -1,0 +1,9 @@
+{
+  "upstream": "alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1",
+  "scope": "Unmodified BusyBox wget and musl, repackaged as a loopback HTTP artifact-fetching image; not the full Alpine image",
+  "sha256": {
+    "bin/busybox": "c879bc3e4a24d40158b2d4640f3c0fa75b1637551a44a45ec85e4b453e0ccd31",
+    "lib/ld-musl-aarch64.so.1": "da9c2d18642cf67ade0947b88b6859385c085fdbc6a022f5a8b518d7677e55df",
+    "lib/libc.musl-aarch64.so.1": "da9c2d18642cf67ade0947b88b6859385c085fdbc6a022f5a8b518d7677e55df"
+  }
+}

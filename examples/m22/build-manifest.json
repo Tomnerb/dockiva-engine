@@ -1,0 +1,13 @@
+{
+  "compiler": "/usr/bin/clang",
+  "linker": "/Users/macbookpro16m2max/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/gcc-ld/ld.lld",
+  "sha256": {
+    "examples/m22/probe.elf": "407e7ab740915a911234d3ebf14a1a70ad774f133681d234bf9c5a591de01b02",
+    "examples/m22/start.S": "253f11a8cfde7262d98005e5dac3b2e8ce2a80e05fe9cb9d9ee91fe189006332",
+    "examples/m22/shell.c": "4bf361b4b126d81f50a2a7eabad1c83dd11cec108e7fbfb8a0fe10f8034b72c7",
+    "examples/m22/shell.elf": "e3dc29bea1998ad474e82ff72b7686624231dee28ca49e4d61a864ddcecb0962",
+    "examples/m22/syscall.h": "f7e9507db910803c0ef72c8b1ea0823fb63c5f2cca1f480f91a8fa762794d969",
+    "examples/m22/probe.c": "1c91362fa93732a28c7e48afd88561c51b6a366bc81afd2c280f54744e4246b0",
+    "examples/m18/busybox.elf": "09c8bba5ddaf0c75128efcbd8df33b54d5062cd5402838ce6b8b746f3b55e3d9"
+  }
+}

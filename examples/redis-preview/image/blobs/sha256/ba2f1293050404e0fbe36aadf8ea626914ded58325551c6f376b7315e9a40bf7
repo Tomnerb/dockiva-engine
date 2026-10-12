@@ -1,0 +1,1 @@
+{"architecture":"arm64","config":{"Cmd":["--bind","127.0.0.1","--port","16379","--dir","/data","--save","","--appendonly","yes","--appendfsync","always","--daemonize","no"],"Entrypoint":["/usr/local/bin/redis-server"],"Env":[],"WorkingDir":"/"},"os":"linux","rootfs":{"diff_ids":["sha256:df76d198de8b3c67554008993c19387b7f8473f1494a25def701a8bc9d76e41d"],"type":"layers"}}

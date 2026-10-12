@@ -1,0 +1,1 @@
+{"architecture":"arm64","config":{"Cmd":["--help"],"Entrypoint":["/bin/busybox","wget"],"Env":[]},"os":"linux","rootfs":{"diff_ids":["sha256:27682857a1f9a0466e62a4c29aa02e3cac0d303a6a98e3b3fcf1fd32e4c001bc"],"type":"layers"}}

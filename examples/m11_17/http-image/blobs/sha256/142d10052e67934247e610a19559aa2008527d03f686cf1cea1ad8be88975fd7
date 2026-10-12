@@ -1,0 +1,1 @@
+{"architecture":"arm64","config":{"Cmd":["18080"],"Entrypoint":["/app/server"],"Env":[]},"os":"linux","rootfs":{"diff_ids":["sha256:4b065f112400acd0b812f3a167471042d6e1431af3718723e93b9ca842380dce"],"type":"layers"}}

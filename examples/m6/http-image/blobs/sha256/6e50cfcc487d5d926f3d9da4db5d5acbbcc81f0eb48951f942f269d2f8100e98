@@ -1,0 +1,1 @@
+{"architecture":"arm64","config":{"Cmd":[],"Entrypoint":["/app/server"],"Env":["MODE=oci"],"WorkingDir":"/"},"os":"linux","rootfs":{"diff_ids":["sha256:e7c7c2d036c0003699841735bc6a36bef65211a3f3a8a97e4e4da0450d643287"],"type":"layers"}}

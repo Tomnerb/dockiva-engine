@@ -1,0 +1,7 @@
+{
+  "examples/m28/library.c": "17911194d126a41b7b88d2f72fd1d3a9b3d0e012612ac8f10fb923adb452c1cf",
+  "examples/m28/dynamic.c": "627c90221aa6737330f6dba634e948f362d2cbf1c7709d4ee8c1e738948dd76a",
+  "examples/m28/start.S": "253f11a8cfde7262d98005e5dac3b2e8ce2a80e05fe9cb9d9ee91fe189006332",
+  "examples/m28/root/lib/libprobe.so": "126fe2efd5e401a6790008442cced80f9ea7b8d9eba919e923f9d9f27825c1a7",
+  "examples/m28/root/bin/dynamic-probe": "38dcd783685a5efa04d913283b025babd961a550bba8493f63ba9437e22dabcf"
+}

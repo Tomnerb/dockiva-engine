@@ -1,0 +1,6 @@
+{
+  "name": "vmfree/redis:preview",
+  "digest": "sha256:bab8ae06b593428bbf090c1a6b8c3900f1512d38b3bb0f98f7108273296a0167",
+  "source_image": "sha256:3b0f54bf27a77c98d319dc3a6706ed500a8985309f0b6c6407599b869f4a2bd9",
+  "scope": "Prepared Redis 7.4.2, native execution, private container data, loopback TCP"
+}

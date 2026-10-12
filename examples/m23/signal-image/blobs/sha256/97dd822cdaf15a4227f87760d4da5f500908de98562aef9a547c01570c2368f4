@@ -1,0 +1,1 @@
+{"architecture":"arm64","config":{"Cmd":["cancel-read"],"Entrypoint":["/bin/probe"],"Env":[]},"os":"linux","rootfs":{"diff_ids":["sha256:f15854f59451faca8374b90a45b04d26983c846aef27def3fa53dd0458e2fe9e"],"type":"layers"}}

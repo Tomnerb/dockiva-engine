@@ -1,0 +1,1 @@
+{"architecture":"arm64","config":{"Cmd":["cat","/hello.txt"],"Entrypoint":["/app/main"],"Env":[]},"os":"linux","rootfs":{"diff_ids":["sha256:87300682e1093c3babcc2bfb20d7223b3ab4c95a51f5ed54ac902f66be544829"],"type":"layers"}}

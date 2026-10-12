@@ -1,0 +1,10 @@
+{
+  "image": "busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23",
+  "image_id": "sha256:568b0d9653d0f09f02e264a434162b735e00cf081f9893c42cc80b402ca02d48",
+  "architecture": "arm64",
+  "os": "linux",
+  "modifications": "none; executable copied verbatim from the pinned public image",
+  "sha256": {
+    "examples/m24/busybox.elf": "f5131eaf292e8315788f4c0dc3f0dd70172c6a76592e6528ea63cfe0681f7814"
+  }
+}

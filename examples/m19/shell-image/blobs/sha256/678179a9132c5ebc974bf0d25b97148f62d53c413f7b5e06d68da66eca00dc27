@@ -1,0 +1,1 @@
+{"architecture":"arm64","config":{"Cmd":["-c","busybox echo M19; true"],"Entrypoint":["/bin/sh"],"Env":[]},"os":"linux","rootfs":{"diff_ids":["sha256:a7728227efcba180f578c99890c6d989fc12e16449050734994a989642fcccda"],"type":"layers"}}

@@ -1,0 +1,103 @@
+{
+  "compiler": "Zig cc / LLVM",
+  "version": "0.13.0",
+  "source_sha256": "7756b330be5d9bb659801841c143bfb38e0d86728848f6d75b7c18531897c5ae",
+  "files": [
+    {
+      "name": "stdout.elf",
+      "sha256": "284ccdf22ac23e485d0de6061c3686c0831d55531ba303f2f8d5cef726abd9f1",
+      "flags": [
+        "cc",
+        "-target",
+        "aarch64-linux-musl",
+        "-nostdlib",
+        "-static",
+        "-fno-pie",
+        "-no-pie",
+        "-Wl,--build-id=none",
+        "-Wl,-e,_start",
+        "-DCASE=1"
+      ]
+    },
+    {
+      "name": "stderr_exit42.elf",
+      "sha256": "ed5454ec8c034f0b457c1568d7ee398d756370c85e6768bb347e8476f3bed1af",
+      "flags": [
+        "cc",
+        "-target",
+        "aarch64-linux-musl",
+        "-nostdlib",
+        "-static",
+        "-fno-pie",
+        "-no-pie",
+        "-Wl,--build-id=none",
+        "-Wl,-e,_start",
+        "-DCASE=2"
+      ]
+    },
+    {
+      "name": "write_return.elf",
+      "sha256": "4aa5b6aca3f16cd37473303659a13d27b219417bb035562b89e2c7cf0bd2bac1",
+      "flags": [
+        "cc",
+        "-target",
+        "aarch64-linux-musl",
+        "-nostdlib",
+        "-static",
+        "-fno-pie",
+        "-no-pie",
+        "-Wl,--build-id=none",
+        "-Wl,-e,_start",
+        "-DCASE=3"
+      ]
+    },
+    {
+      "name": "zero_write.elf",
+      "sha256": "b43c6c8aaf4cd6e7613cdf50ccf149d2aea06e543aa8b5febdcf916d31d041bd",
+      "flags": [
+        "cc",
+        "-target",
+        "aarch64-linux-musl",
+        "-nostdlib",
+        "-static",
+        "-fno-pie",
+        "-no-pie",
+        "-Wl,--build-id=none",
+        "-Wl,-e,_start",
+        "-DCASE=4"
+      ]
+    },
+    {
+      "name": "bad_fd.elf",
+      "sha256": "64f8f8466c4922776b78cef20703a5f43ec015264bf1bd9105c7b355401702de",
+      "flags": [
+        "cc",
+        "-target",
+        "aarch64-linux-musl",
+        "-nostdlib",
+        "-static",
+        "-fno-pie",
+        "-no-pie",
+        "-Wl,--build-id=none",
+        "-Wl,-e,_start",
+        "-DCASE=5"
+      ]
+    },
+    {
+      "name": "exit_group.elf",
+      "sha256": "6020baed5bff41fd339ea9976aeaa4af3ae7ab6621bc3e75713becb61f70b1b8",
+      "flags": [
+        "cc",
+        "-target",
+        "aarch64-linux-musl",
+        "-nostdlib",
+        "-static",
+        "-fno-pie",
+        "-no-pie",
+        "-Wl,--build-id=none",
+        "-Wl,-e,_start",
+        "-DCASE=6"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,119 @@
+{
+  "compiler": "Zig cc / LLVM",
+  "version": "0.13.0",
+  "flags": [
+    "cc",
+    "-target",
+    "aarch64-linux-musl",
+    "-O0",
+    "-g0",
+    "-fno-sanitize=all",
+    "-fno-stack-protector",
+    "-ffreestanding",
+    "-fno-builtin",
+    "-fno-pie",
+    "-fno-vectorize",
+    "-fno-slp-vectorize",
+    "-nostdlib",
+    "-static",
+    "-no-pie",
+    "-Wl,--build-id=none",
+    "-Wl,-e,_start"
+  ],
+  "sources": {
+    "start.S": "253f11a8cfde7262d98005e5dac3b2e8ce2a80e05fe9cb9d9ee91fe189006332",
+    "demo.c": "69825e16963c5d078c35c2ef2cbdb93e9f19131c64bf9d91217d389817c3b64e",
+    "checks.S": "43caacda722fa750eac9f0303742d76b0549b48edb46d46f235aa6fbebd84b60"
+  },
+  "files": [
+    {
+      "name": "demo.elf",
+      "sha256": "67dd4153a21ac0a1d163df7526f457b1ba0f7cf7587db0f7c81f5622ecb70b36",
+      "extra_flags": [],
+      "sources": [
+        "start.S",
+        "demo.c"
+      ]
+    },
+    {
+      "name": "flags.elf",
+      "sha256": "d30601a0cffcb3d3b569091eb060aac059cfc0c39c33d3741ad9d240b1f1b54c",
+      "extra_flags": [
+        "-DCASE=1"
+      ],
+      "sources": [
+        "checks.S"
+      ]
+    },
+    {
+      "name": "memory.elf",
+      "sha256": "e6833df1ccc1f860b4dd66dc4e77b7b2a1476f99c2b348dfd9ce033da312ba27",
+      "extra_flags": [
+        "-DCASE=2"
+      ],
+      "sources": [
+        "checks.S"
+      ]
+    },
+    {
+      "name": "readonly_fault.elf",
+      "sha256": "307c75fe3017bbbbdc389658bdbfaa69045b204fa6284762ce4d23ad780b1e47",
+      "extra_flags": [
+        "-DCASE=3"
+      ],
+      "sources": [
+        "checks.S"
+      ]
+    },
+    {
+      "name": "stack_exec_fault.elf",
+      "sha256": "73ed6955467434e400e255bbce27bcd0fb7bff7848628ea9ae9e547cff7e3b18",
+      "extra_flags": [
+        "-DCASE=4"
+      ],
+      "sources": [
+        "checks.S"
+      ]
+    },
+    {
+      "name": "startup.elf",
+      "sha256": "5a2c5d3d6796c758739e8c9780779fbd65c65f820fd574524ef71054a11c8895",
+      "extra_flags": [
+        "-DCASE=5"
+      ],
+      "sources": [
+        "checks.S"
+      ]
+    },
+    {
+      "name": "unmapped_fault.elf",
+      "sha256": "3adc8c6e39d8fd987d90b4e901d92423da35ae6dfd91da0440aeb98050106f86",
+      "extra_flags": [
+        "-DCASE=6"
+      ],
+      "sources": [
+        "checks.S"
+      ]
+    },
+    {
+      "name": "unaligned_sp.elf",
+      "sha256": "6772693a744323adabb916071106739d6d1fcd96bffe0387364aa40b7dce2c11",
+      "extra_flags": [
+        "-DCASE=7"
+      ],
+      "sources": [
+        "checks.S"
+      ]
+    },
+    {
+      "name": "control.elf",
+      "sha256": "e39552511056e7db3be8356846c54e26d613bd4c4f9335862ecf41ea3713a713",
+      "extra_flags": [
+        "-DCASE=8"
+      ],
+      "sources": [
+        "checks.S"
+      ]
+    }
+  ]
+}

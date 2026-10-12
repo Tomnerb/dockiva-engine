@@ -1,0 +1,17 @@
+{
+  "name": "vmfree-demo",
+  "services": {
+    "backend": {
+      "image": "vmfree/server:demo",
+      "command": ["18082"],
+      "network_mode": "host"
+    },
+    "frontend": {
+      "image": "vmfree/server:demo",
+      "command": ["18081", "18082"],
+      "network_mode": "host",
+      "read_only": true,
+      "depends_on": ["backend"]
+    }
+  }
+}

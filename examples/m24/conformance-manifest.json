@@ -1,0 +1,9 @@
+{
+  "examples/m24/probe.elf": "44218e8b489d3796482e5af75a88c573da7226eff3e4565762e4c9181b35387a",
+  "examples/m24/busybox.elf": "f5131eaf292e8315788f4c0dc3f0dd70172c6a76592e6528ea63cfe0681f7814",
+  "examples/m24/start.S": "253f11a8cfde7262d98005e5dac3b2e8ce2a80e05fe9cb9d9ee91fe189006332",
+  "examples/m24/conformance.elf": "9a918586d49c2c6afc0dac8f2f4b4bfa15ff8482da74dac0f3a33ec5c67094ad",
+  "examples/m24/conformance.S": "7e5a2b93a3583b77292c6e8b5c07000ebd9970b9fbc76828ae555f9efbdfe774",
+  "examples/m24/syscall.h": "f7e9507db910803c0ef72c8b1ea0823fb63c5f2cca1f480f91a8fa762794d969",
+  "examples/m24/probe.c": "a31f50d91e9479f53e27869c1438aff67d15a142ff4bed02bee2dc20942cf1c8"
+}

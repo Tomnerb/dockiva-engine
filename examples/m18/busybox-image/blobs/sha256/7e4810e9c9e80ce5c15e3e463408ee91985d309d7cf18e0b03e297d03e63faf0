@@ -1,0 +1,1 @@
+{"architecture":"arm64","config":{"Cmd":["echo","BusyBox on VM-free"],"Entrypoint":["/bin/busybox"],"Env":[]},"os":"linux","rootfs":{"diff_ids":["sha256:ed33725d691a2a26d00c01d69f683dcde2a34232804892fbf6e021e60765eb46"],"type":"layers"}}

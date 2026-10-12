@@ -1,0 +1,1 @@
+{"architecture":"arm64","config":{"Cmd":["-c","echo M24"],"Entrypoint":["/bin/sh"],"Env":["PATH=/bin"]},"os":"linux","rootfs":{"diff_ids":["sha256:f24695673ba268f40e2e3d3e6a6cf03c650e4831a694c4b8fd970d86cc2e04bb"],"type":"layers"}}

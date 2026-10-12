@@ -1,0 +1,78 @@
+{
+  "compiler": "Zig cc / LLVM",
+  "version": "0.13.0",
+  "flags": [
+    "cc",
+    "-target",
+    "aarch64-linux-musl",
+    "-O0",
+    "-g0",
+    "-fno-sanitize=all",
+    "-fno-stack-protector",
+    "-ffreestanding",
+    "-fno-builtin",
+    "-fno-pie",
+    "-mgeneral-regs-only",
+    "-fno-vectorize",
+    "-fno-slp-vectorize",
+    "-nostdlib",
+    "-static",
+    "-no-pie",
+    "-Wl,--build-id=none",
+    "-Wl,-e,_start"
+  ],
+  "sources": {
+    "start.S": "253f11a8cfde7262d98005e5dac3b2e8ce2a80e05fe9cb9d9ee91fe189006332",
+    "server.c": "658b9aacf06eafe34d90a8f57e3582715a64abacc16e6c4e464477ce3bd800d9",
+    "checks.c": "388f16615907cf847ba6611e398c0f5fae2bf21a249282fdd08883fffbd511c0",
+    "syscall.h": "fa2bdcab34259681fe8d2975f57c736e2949074b9e19b1cb51ecaa0f72571caf",
+    "responses.json": "ab4a164da71a5e29ae8aa763af63855fd92e61d41f21e0ff337aad8af07156ac"
+  },
+  "files": [
+    {
+      "name": "server.elf",
+      "case": 0,
+      "sha256": "af94f7ad819d606258b69c24c6b47a576292739021e2c34fe3ae0c9d8f71266f"
+    },
+    {
+      "name": "invalid_fd.elf",
+      "case": 1,
+      "sha256": "8b84e88254e0088de783af1512783c842c2f6deaf8747aaeb3a4a5bc10f310cd"
+    },
+    {
+      "name": "close_twice.elf",
+      "case": 2,
+      "sha256": "c13332459bddc3a2dc712bd757000f2ab9e829326c8c366c29865ff59a49a4ae"
+    },
+    {
+      "name": "bind_bad_pointer.elf",
+      "case": 3,
+      "sha256": "476db7bd2955728888ee54820f05d11193d4394374130e1cdcfde50c6d5f2550"
+    },
+    {
+      "name": "read_bad_pointer.elf",
+      "case": 4,
+      "sha256": "8e4bc2cafde04f77478f5c73991f4dcbd757e5d75ed4f165eb605eaa242b645b"
+    },
+    {
+      "name": "wildcard_policy.elf",
+      "case": 5,
+      "sha256": "42fa2b135910fe80a44030a7e69b023d1e787b851bd00df324ca12f7401343d1"
+    },
+    {
+      "name": "udp_policy.elf",
+      "case": 6,
+      "sha256": "77794722f916d9557a6e75b08f1601c69e67d822bcebb19696f13013641d8da4"
+    },
+    {
+      "name": "descriptor_limit.elf",
+      "case": 7,
+      "sha256": "4350d63ef8c9abaf59a8d055bbe95c766e7bafcad40315da652ed88d6789776a"
+    },
+    {
+      "name": "implicit_bind_policy.elf",
+      "case": 8,
+      "sha256": "9bccee663fc9989ce2675a0f7e4c20849f90441083bfc27826e2143e718c84b3"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "image": "alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1",
+  "image_id": "sha256:02f8efbefad605a169e89926147edd0676646263268f303c6fb3cdfdbc4a9612",
+  "modifications": "ELF files copied verbatim; link aliases materialized as regular files for current root policy",
+  "sha256": {
+    "examples/m28/root/bin/cat": "c879bc3e4a24d40158b2d4640f3c0fa75b1637551a44a45ec85e4b453e0ccd31",
+    "examples/m28/root/bin/echo": "c879bc3e4a24d40158b2d4640f3c0fa75b1637551a44a45ec85e4b453e0ccd31",
+    "examples/m28/root/bin/sh": "c879bc3e4a24d40158b2d4640f3c0fa75b1637551a44a45ec85e4b453e0ccd31",
+    "examples/m28/root/bin/busybox": "c879bc3e4a24d40158b2d4640f3c0fa75b1637551a44a45ec85e4b453e0ccd31",
+    "examples/m28/root/lib/libc.musl-aarch64.so.1": "da9c2d18642cf67ade0947b88b6859385c085fdbc6a022f5a8b518d7677e55df",
+    "examples/m28/root/lib/ld-musl-aarch64.so.1": "da9c2d18642cf67ade0947b88b6859385c085fdbc6a022f5a8b518d7677e55df"
+  }
+}

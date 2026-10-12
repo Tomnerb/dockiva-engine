@@ -1,0 +1,8 @@
+{
+  "examples/m27/directory.c": "e2adb2da14a32981c5591811335561253599a36411a69cf8c8f29156eb95a49a",
+  "examples/m27/probe.elf": "6cf8ec49e87141b062c8364a88cccd640a99587d2f6f739990d559a39d38096f",
+  "examples/m27/directory.elf": "fd3803c337645a85cede41d949746fdf8ba2550a03d36000a70e63355606e835",
+  "examples/m27/start.S": "253f11a8cfde7262d98005e5dac3b2e8ce2a80e05fe9cb9d9ee91fe189006332",
+  "examples/m27/syscall.h": "f7e9507db910803c0ef72c8b1ea0823fb63c5f2cca1f480f91a8fa762794d969",
+  "examples/m27/probe.c": "4b6f30f4faabad75f6f099157433370c6b60626397f4279aaa4f87771fc81cc9"
+}

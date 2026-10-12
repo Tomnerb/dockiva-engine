@@ -1,0 +1,6 @@
+{
+  "ok": "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 23\r\nConnection: close\r\n\r\nVM-free HTTP server OK\n",
+  "missing": "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: 10\r\nConnection: close\r\n\r\nNot found\n",
+  "method": "HTTP/1.1 405 Method Not Allowed\r\nContent-Type: text/plain\r\nContent-Length: 19\r\nConnection: close\r\n\r\nMethod not allowed\n",
+  "too_large": "HTTP/1.1 431 Request Header Fields Too Large\r\nContent-Type: text/plain\r\nContent-Length: 18\r\nConnection: close\r\n\r\nHeaders too large\n"
+}

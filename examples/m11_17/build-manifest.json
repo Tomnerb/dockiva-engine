@@ -1,0 +1,32 @@
+{
+  "command": [
+    "/tmp/vmfree-toolchain/ziglang/zig",
+    "cc",
+    "-target",
+    "aarch64-linux-musl",
+    "-O0",
+    "-g0",
+    "-static",
+    "-fno-pie",
+    "-no-pie",
+    "-mgeneral-regs-only",
+    "-fno-sanitize=all",
+    "-fno-stack-protector",
+    "-ffreestanding",
+    "-fno-builtin",
+    "-nostdlib",
+    "-Wl,-e,_start",
+    "/workspace/scratch/026698cab616/vmfree-runtime/examples/m5/start.S",
+    "/workspace/scratch/026698cab616/vmfree-runtime/examples/m11_17/server.c",
+    "-o",
+    "/workspace/scratch/026698cab616/vmfree-runtime/examples/m11_17/server.elf"
+  ],
+  "sha256": {
+    "examples/m11_17/net-check.c": "0bcc7bd89abbaebdd6f3ca99040aa5671c249ac494b6036f28426bac87b9b609",
+    "examples/m11_17/net-check.elf": "2ba549f37f998bb967ed1a642323dc5721784bb17bde09c192f2a748ee6b04f6",
+    "examples/m11_17/server.c": "2895d60c62106f1e9bcdf529dd3ad32e70e611a66ff8eeae4370f44854a7430f",
+    "examples/m11_17/server.elf": "5e33bf047610f9a242b854f7cb557187bda9014e3948c24fa9f9006386e359e4",
+    "examples/m5/start.S": "253f11a8cfde7262d98005e5dac3b2e8ce2a80e05fe9cb9d9ee91fe189006332",
+    "examples/m5/syscall.h": "fa2bdcab34259681fe8d2975f57c736e2949074b9e19b1cb51ecaa0f72571caf"
+  }
+}

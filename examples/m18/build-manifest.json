@@ -1,0 +1,15 @@
+{
+  "version": "1.37.0",
+  "source_url": "https://busybox.net/downloads/busybox-1.37.0.tar.bz2",
+  "source_modifications": "none",
+  "configuration": "Minimal five-applet static ARM64 Linux musl build, -O0 applet code",
+  "toolchain": "Zig 0.13.0",
+  "sha256": {
+    "examples/m18/conformance.S": "8e8f79108c273790ee8fd002ee746fb7f3525a44a65821f505b3c80c188fd80d",
+    "examples/m18/conformance.elf": "4a63fe5453b7c9b722a21511b18c158c69fbbcabb249cb3ecae12c547a24479c",
+    "examples/m18/busybox.elf": "09c8bba5ddaf0c75128efcbd8df33b54d5062cd5402838ce6b8b746f3b55e3d9",
+    "examples/m18/busybox.config": "4172535dca71394ff1ede5360ca853eb87dbeb35fcdbe4d675737de7b1ed272a",
+    "examples/m18/compiler.py": "776be7b131f898d59280bf39cdc4527943d612950e4c35865343a38b0a4ec109",
+    "third_party/busybox/busybox-1.37.0.tar.bz2": "3311dff32e746499f4df0d5df04d7eb396382d7e108bb9250e7b519b837043a4"
+  }
+}
