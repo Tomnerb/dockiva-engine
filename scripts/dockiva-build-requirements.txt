@@ -1,0 +1,2 @@
+# No third-party Python packages are required by the Go/C bundle builder.
+# Python is development tooling only and is not included in the shipped engine.
