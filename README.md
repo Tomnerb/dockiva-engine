@@ -75,7 +75,7 @@ python3 scripts/verify_m30.py --report mac-m30-validation.json
 ```
 
 The optional macOS `--host-sandbox` candidate supports loopback clients only;
-server workloads cannot bind listeners in that mode. See [M31 scope](docs/MILESTONE-31.md).
+server workloads cannot bind listeners in that mode. See [M31 scope](docs/MILESTONES.md#m31).
 
 ## M23: foreground input
 
@@ -86,7 +86,7 @@ python3 oci.py run examples/m23/shell-image --interactive --max-steps 10000000 -
 ```
 
 Input, Ctrl-D and Ctrl-C are forwarded to scheduled guests. Host terminal modes
-remain unchanged. See [M23 scope and validation](docs/MILESTONE-23.md).
+remain unchanged. See [M23 scope and validation](docs/MILESTONES.md#m23).
 
 ## M22: scheduled guest cancellation
 
@@ -100,7 +100,7 @@ python3 oci.py run examples/m22/shell-image --schedule -- -c 'probe self-term; s
 
 Individual CPU-bound or pipe-blocked guests can be terminated with supported
 guest signals; wait statuses and shell status preserve the cause. See
-[M22 scope and evidence](docs/MILESTONE-22.md). Full signal handlers, terminal
+[M22 scope and evidence](docs/MILESTONES.md#m22). Full signal handlers, terminal
 input and production application qualification remain open.
 
 ## M21: concurrent pipeline streaming
@@ -116,7 +116,7 @@ The opt-in scheduler supports up to four live children. Readers and writers wait
 when pipes are empty or full, allowing streams beyond the 1 MiB buffer capacity.
 Try `probe large | busybox cat` to stream 4 MiB. All stages run and are waited for;
 a nonzero stage status makes the pipeline fail. Interactive terminals remain open.
-See [M21 scope and validation](docs/MILESTONE-21.md).
+See [M21 scope and validation](docs/MILESTONES.md#m21).
 
 ## M20: pipes and redirection
 
@@ -130,7 +130,7 @@ python3 oci.py run examples/m20/shell-image --writable -- -c 'busybox echo saved
 
 Pipeline stages run sequentially with a 1 MiB buffer and stop on the first failed
 stage. Redirection supports `<`, `>`, `>>` and `2>&1`; temporary OCI writes are
-discarded after exit. See [M20 scope and validation](docs/MILESTONE-20.md).
+discarded after exit. See [M20 scope and validation](docs/MILESTONES.md#m20).
 Concurrent streaming and interactive terminals remain separate work.
 
 ## M19: bounded processes and noninteractive commands
@@ -145,7 +145,7 @@ python3 scripts/verify_m19.py --lifecycle --report mac-m19-validation.json
 python3 oci.py run examples/m19/shell-image -- -c 'busybox echo hello; probe exit 7; status'
 ```
 
-See [M19 scope and validation](docs/MILESTONE-19.md). Children share a bounded
+See [M19 scope and validation](docs/MILESTONES.md#m19). Children share a bounded
 instruction budget; nested children, pipes and interactive terminals remain
 unsupported. This is a small custom shell, not BusyBox ash compatibility.
 
@@ -161,7 +161,7 @@ python3 scripts/verify_m18.py --report mac-m18-validation.json
 python3 oci.py run examples/m18/busybox-image -- echo 'Hello from BusyBox'
 ```
 
-See [M18 scope, source, and validation](docs/MILESTONE-18.md). Shell/process/thread
+See [M18 scope, source, and validation](docs/MILESTONES.md#m18). Shell/process/thread
 support is still outside this milestone. Mac M18 validation remains pending.
 
 ## Earlier milestone validation on your Mac
@@ -177,7 +177,7 @@ python3 scripts/verify_m7_10.py
 
 Expect **30 new PASS lines**, then 40 earlier checks. No Docker installation is
 required for these default tests. Optional real Docker/Compose validation adds
-15 checks; see the [release guide](docs/MILESTONE-11-17.md).
+15 checks; see the [release guide](docs/MILESTONES.md#m11-17).
 
 ## Run the two-service demo
 
@@ -219,12 +219,12 @@ Docker Compose 2.32.4 checks and one QEMU network reference passed. Native sanit
 checks and all earlier M2–M10 suites passed. M0–M10 Mac acceptance passed per user
 report; this release's Mac acceptance is pending.
 
-- [Release guide and commands](docs/MILESTONE-11-17.md)
+- [Release guide and commands](docs/MILESTONES.md#m11-17)
 - [Security review: open isolation gate](docs/SECURITY-REVIEW-M13.md)
-- [Benchmark: same-Mac VM comparison pending](docs/BENCHMARK-M14.md)
+- [Benchmark: same-Mac VM comparison pending](docs/MILESTONES.md#m14-benchmark)
 - [Mac distribution tooling and pending gates](docs/MAC-DISTRIBUTION-M17.md)
 - [Roadmap](docs/ROADMAP.md), [validation evidence](VALIDATION.md)
-- [Earlier M7–M10](docs/MILESTONE-7-10.md)
+- [Earlier M7–M10](docs/MILESTONES.md#m7-10)
 
 No performance advantage over Docker or a Linux VM has been established. The
 Mac packaging scripts must run on your Mac. The historical CLI package requires

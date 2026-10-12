@@ -61,7 +61,7 @@
     updates and tested rollback remain OPEN.
 
 M11–M17 is a combined release candidate, not seven fully closed acceptance gates.
-See MILESTONE-11-17.md for exact implemented scope and external validation needs.
+See MILESTONES.md#m11-17 for exact implemented scope and external validation needs.
 M0–M10 Mac acceptance passed per user report; this candidate's Mac checks are pending.
 
 Dynamic linking, threads, signals, general subprocess semantics and further ISA coverage remain
@@ -73,7 +73,7 @@ compatibility, production security and better performance remain goals to valida
 
 ## M18 — selected static BusyBox commands
 
-Implemented and validated locally: minimal unmodified-source BusyBox 1.37.0 echo, cat, pwd, ls, mkdir; required ARM64 forms and rooted filesystem adapters; OCI lifecycle. Mac validation pending. See [MILESTONE-18.md](MILESTONE-18.md). Shells, pipes and process creation remain separate future work.
+Implemented and validated locally: minimal unmodified-source BusyBox 1.37.0 echo, cat, pwd, ls, mkdir; required ARM64 forms and rooted filesystem adapters; OCI lifecycle. Mac validation pending. See [M18 notes](MILESTONES.md#m18). Shells, pipes and process creation remain separate future work.
 
 ## M19 — bounded processes and basic shell
 
@@ -81,7 +81,7 @@ Implemented: synchronous single-level guest clone, rooted static execve, wait4
 exit statuses, shared instruction and process limits, descriptor inheritance and
 close-on-exec, and a small noninteractive guest shell. Mac validation and sanitizer
 checks cover command sequences, failures, memory isolation and bounds. See
-[MILESTONE-19.md](MILESTONE-19.md). Upstream ash, concurrent children, pipes and
+[M19 notes](MILESTONES.md#m19). Upstream ash, concurrent children, pipes and
 interactive terminals remain future work.
 
 ## M20 — bounded pipes and descriptor redirection
@@ -91,7 +91,7 @@ duplication and close-on-exec, sequential shell pipelines, and ordered file/stdo
 stderr redirection. A failed stage stops its pipeline. Temporary OCI runs can opt
 into writable roots. Mac command, sanitizer and lifecycle checks cover buffering,
 EOF, failures, redirection ordering and persistent container output. See
-[MILESTONE-20.md](MILESTONE-20.md). Concurrent streaming, full descriptor-table
+[M20 notes](MILESTONES.md#m20). Concurrent streaming, full descriptor-table
 semantics and interactive terminals remain future work.
 
 ## M21 — concurrent pipeline streaming and backpressure
@@ -101,7 +101,7 @@ blocking pipe suspension/retry, wait4/WNOHANG, and streaming beyond the 1 MiB pi
 buffer capacity. The M21 shell launches all stages and reports the first nonzero
 stage status after waiting for all of them. Mac validation covers 4 MiB streams,
 backpressure, early exits, deadlock/budget bounds and container persistence. See
-[MILESTONE-21.md](MILESTONE-21.md). Interactive terminals, nested processes, guest
+[M21 notes](MILESTONES.md#m21). Interactive terminals, nested processes, guest
 full signal handling, scheduled networking and general asynchronous I/O remain future work.
 
 ## M22 — scheduled guest cancellation
@@ -110,7 +110,7 @@ Implemented guest-only kill for positive synthetic PIDs, existence probes,
 default termination for SIGINT/SIGKILL/SIGPIPE/SIGTERM, blocked-task cancellation,
 signal wait statuses and shell status translation. Mac and sanitizer tests cover
 cleanup, unrelated-task survival and zombie/reap behavior. See
-[MILESTONE-22.md](MILESTONE-22.md). Portable signal status comparisons pass on
+[M22 notes](MILESTONES.md#m22). Portable signal status comparisons pass on
 ARM64 Linux; production corpus selection remains open. This is not full POSIX
 signal compatibility.
 

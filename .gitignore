@@ -5,3 +5,4 @@ build/
 mac-*-report.json
 mac-m2-*.json
 .DS_Store
+/mac-*.json

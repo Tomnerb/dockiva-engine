@@ -153,7 +153,7 @@ The 2026-09-21 build bundled Python, the native runtime, API/supervisor and M19 
 
 The current requested endpoint is M58. Work first removes observed database
 loader/ISA/ABI blockers, with each change retaining bounded failure behavior.
-See [M35](MILESTONE-35.md), [M39](MILESTONE-39.md), [M44](MILESTONE-44.md) and
+See [M35](MILESTONES.md#m35), [M39](MILESTONES.md#m39), [M44](MILESTONES.md#m44) and
 [database probes](DATABASE-COMPATIBILITY-PROBES.md). PostgreSQL version success
 is not PostgreSQL service acceptance. A separate local Dockiva Redis test build packages the opt-in adapter and prepared Redis fixture. The default installed app remains unchanged.
 

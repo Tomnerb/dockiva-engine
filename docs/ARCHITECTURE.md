@@ -114,7 +114,7 @@ not a substitute for future isolation design.
 The Python OCI adapter merges validated layers in memory, writes a fresh private
 temporary tree, and launches the native interpreter with image argv/env. It
 forwards stop signals and cleans up after child exit. The extracted tree supplies
-the ELF; it does not implement a mediated guest filesystem. See MILESTONE-6.md
+the ELF; it does not implement a mediated guest filesystem. See [M6 in MILESTONES.md](MILESTONES.md#m6)
 for accepted image types, limits and concurrency assumptions.
 
 ## Combined M7–M10 update

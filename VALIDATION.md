@@ -146,7 +146,7 @@ https://deb.debian.org/debian/pool/main/q/qemu/qemu-user-static_7.2+dfsg-7+deb12
 
 Implemented synchronous single-level interpreted children, rooted static execve,
 wait4 status handling, shared execution limits, descriptor inheritance/CLOEXEC,
-and a freestanding noninteractive guest shell. See docs/MILESTONE-19.md for the
+and a freestanding noninteractive guest shell. See docs/MILESTONES.md#m19 for the
 restricted contract; no upstream ash or general process compatibility claim.
 
 - `mac-m19-validation.json`: 39/39 checks passed, including OCI status and managed
@@ -169,7 +169,7 @@ restricted contract; no upstream ash or general process compatibility claim.
 Implemented nonblocking guest pipes, descriptor duplication, close-on-exec and
 ordered shell redirection. Pipeline stages run sequentially with at most 1 MiB
 buffered per pipe and stop on the first failing stage. This is not concurrent
-streaming or POSIX pipeline-status compatibility. See docs/MILESTONE-20.md.
+streaming or POSIX pipeline-status compatibility. See docs/MILESTONES.md#m20.
 
 - `mac-m20-validation.json`: 60/60 checks passed, including pipe capacity boundary
   and overflow, EOF, quoting and syntax rejection, ordered stderr duplication,
@@ -193,7 +193,7 @@ Implemented opt-in guest scheduling with four live children, blocking pipe and
 wait4 suspension/retry, shared instruction bounds, and streaming pipelines.
 M21 launches all stages and waits for all of them; it reports the first nonzero
 status in command order. Default M19/M20 synchronous behavior remains available.
-See docs/MILESTONE-21.md for the process, I/O and shell limits.
+See docs/MILESTONES.md#m21 for the process, I/O and shell limits.
 
 - `mac-m21-validation.json`: 72/72 checks passed, including exact 4 MiB output
   through two, three and four stages; a slow consumer; early reader exit; exec
@@ -216,7 +216,7 @@ See docs/MILESTONE-21.md for the process, I/O and shell limits.
 
 Implemented guest-only positive-PID cancellation for SIGINT, SIGKILL, SIGPIPE
 and SIGTERM, signal-0 existence checks, signal wait statuses and shell status
-translation. See docs/MILESTONE-22.md for the bounded scope.
+translation. See docs/MILESTONES.md#m22 for the bounded scope.
 
 - `mac-m22-validation.json`: 30/30 checks passed. The same 30 checks passed under
   ASan/UBSan in `evidence/m22-sanitizer.json`.
