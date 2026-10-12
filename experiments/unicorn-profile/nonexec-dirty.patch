@@ -1,0 +1,11 @@
+--- a/qemu/accel/tcg/cputlb.c
++++ b/qemu/accel/tcg/cputlb.c
+@@ -1209,7 +1209,7 @@
+     // - or doing snapshot
+     // , then never clean the tlb
+     if (!(!mr || (tlbe->addr_write != -1 && mr->priority < cpu->uc->snapshot_level)) &&
+-            !(tlbe->addr_code != -1) &&
++            !(mr->perms & UC_PROT_EXEC) &&
+             !uc_mem_hook_installed(cpu->uc, tlbe->paddr | (mem_vaddr & ~TARGET_PAGE_MASK))) {
+         tlb_set_dirty(cpu, mem_vaddr);
+     }

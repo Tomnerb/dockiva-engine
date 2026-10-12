@@ -1,0 +1,44 @@
+[
+  {
+    "name": "VM-free",
+    "kind": "vmfree",
+    "command": [
+      "/Users/macbookpro16m2max/Documents/vmfree-runtime/build/vmfree-c",
+      "run",
+      "/Users/macbookpro16m2max/.vmfree/containers/bench-bind-e6909416/rootfs/app/server",
+      "--root",
+      "/Users/macbookpro16m2max/.vmfree/containers/bench-bind-e6909416/rootfs",
+      "--max-steps",
+      "10000000",
+      "--",
+      "0"
+    ]
+  },
+  {
+    "name": "Docker Linux VM",
+    "kind": "linux-vm",
+    "port": 52622,
+    "command": [
+      "/opt/homebrew/bin/docker",
+      "--context",
+      "orbstack",
+      "run",
+      "--rm",
+      "--name",
+      "vmfree-bench-62dd0dba",
+      "--platform",
+      "linux/arm64",
+      "-p",
+      "127.0.0.1:52622:18080",
+      "vmfree-benchmark:local"
+    ],
+    "cleanup": [
+      "/opt/homebrew/bin/docker",
+      "--context",
+      "orbstack",
+      "rm",
+      "-f",
+      "vmfree-bench-62dd0dba"
+    ]
+  }
+]
