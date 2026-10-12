@@ -290,7 +290,7 @@ The bundled-engine integration test passed seeded image discovery, HTTP response
 
 ## Dockiva capacity and API recovery — 2026-09-21
 
-Twenty isolated bundled-engine checks passed: four concurrent HTTP containers, fifth-runtime admission rejection, released-slot reuse, API shutdown/restart with workloads preserved and rediscovered, token rotation, recovered Stop/Restart and cleanup. Short steady windows measured 44.3 MiB summed RSS / 0.09% CPU for the idle engine and 189.8 MiB / 0.38% for the engine plus four idle servers and supervisors. GUI/WebViews are excluded; host RAM is 32 GiB. See `docs/DOCKIVA-8GB-VALIDATION.md` and `evidence/dockiva-capacity.json`. No 8 GB hardware or production gate is marked accepted.
+Twenty isolated bundled-engine checks passed: four concurrent HTTP containers, fifth-runtime admission rejection, released-slot reuse, API shutdown/restart with workloads preserved and rediscovered, token rotation, recovered Stop/Restart and cleanup. Short steady windows measured 44.3 MiB summed RSS / 0.09% CPU for the idle engine and 189.8 MiB / 0.38% for the engine plus four idle servers and supervisors. GUI/WebViews are excluded; host RAM is 32 GiB. See `docs/DOCKIVA-INTEGRATION.md#dockiva-8gb-validation` and `evidence/dockiva-capacity.json`. No 8 GB hardware or production gate is marked accepted.
 
 ## Database compatibility probes — 2026-09-21
 

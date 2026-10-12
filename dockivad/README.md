@@ -52,5 +52,5 @@ Execution profiles are defined in the embedded `profiles.json` catalog. New
 containers persist a digest-bound policy; Create/Start and supervisor launch
 query native `capabilities` before guest execution. Inspect includes
 `DockivaCompatibility`. Legacy state retains its existing configuration. See
-[profile semantics and verification](../docs/COMPATIBILITY-PROFILES-2026-09-22.md).
+[profile semantics and verification](../docs/DOCKIVA-INTEGRATION.md#compatibility-profiles).
 The test suite now requires both built native executables for real capability probes.

@@ -24,16 +24,16 @@ AppKit are the required production macOS UI; the existing Vue/Wails application
 is the transitional development desktop. The production target uses Go dockivad
 and the C runtime, with Python retained only for development tooling. The current
 Go/C helper now implements that language boundary for the supported preview engine;
-see [migration evidence](DOCKIVAD-GO-MIGRATION-2026-09-22.md). Valkey
+see [migration evidence](DOCKIVA-INTEGRATION.md#dockivad-go-migration). Valkey
 persistence (V0–V11) is the first major compatibility gate, followed by PostgreSQL
 crash recovery and stress (P0–P12); see [workload gates](WORKLOAD-GATES-V1.md).
 Current Redis evidence remains regression protection, not acceptance of either gate.
-CPU-state and [address-space state/synchronization](ADDRESS-SPACE-OWNERSHIP-2026-09-22.md)
-extractions are implemented and regression-tested. [Reference-counted backing](MEMORY-BACKING-OWNERSHIP-2026-09-22.md)
-now owns segment views, heap and mmap storage. [Private interpreter fork COW](PRIVATE-FORK-COW-2026-09-22.md)
+CPU-state and [address-space state/synchronization](MEMORY-AND-STATE.md#address-space-ownership)
+extractions are implemented and regression-tested. [Reference-counted backing](MEMORY-AND-STATE.md#memory-backing-ownership)
+now owns segment views, heap and mmap storage. [Private interpreter fork COW](MEMORY-AND-STATE.md#private-fork-cow)
 defers allocation copies until writable access, preserving local segment views.
-[Unicorn write-fault COW](UNICORN-COW-FAULTS-2026-09-22.md) now defers backend
-backing copies until guest stores. [macOS host-page COW and bounded Unicorn fork](PAGE-COW-UNICORN-FORK-2026-09-23.md)
+[Unicorn write-fault COW](UNICORN.md#unicorn-cow-faults) now defers backend
+backing copies until guest stores. [macOS host-page COW and bounded Unicorn fork](UNICORN.md#page-cow-unicorn-fork)
 now support nested private processes, fork from a threaded parent, inherited
 sockets/epoll, wait and single-threaded exec. Prepared Redis background snapshots
 and AOF rewrites pass with parent writes and restart validation. MAP_SHARED and
@@ -58,7 +58,7 @@ restart/remove and snapshot logs. General pulls, builds, attach, volumes, Compos
 DNS, bridge networking, port publishing, migration, image deletion and resource
 statistics remain unsupported. M24+ execution modes are not enabled automatically.
 The separate prepared Redis preset below permits its private writable root.
-[Digest-bound profiles](COMPATIBILITY-PROFILES-2026-09-22.md) select its Unicorn
+[Digest-bound profiles](DOCKIVA-INTEGRATION.md#compatibility-profiles) select its Unicorn
 backend independently of the image tag, validate native capabilities before
 launch, and expose the saved policy through Inspect.
 
@@ -114,11 +114,11 @@ Dockiva now includes an HTTP server demo preset in addition to Hello. The bundle
 
 ## 8 GB product target
 
-Dockiva targets 8 GB machines. Proposed targets and the initial four-container/recovery results are recorded in [8 GB validation](DOCKIVA-8GB-VALIDATION.md). Current engine-only measurements on a 32 GiB Mac do not qualify total UI memory, battery savings or an 8 GB machine.
+Dockiva targets 8 GB machines. Proposed targets and the initial four-container/recovery results are recorded in [8 GB validation](DOCKIVA-INTEGRATION.md#dockiva-8gb-validation). Current engine-only measurements on a 32 GiB Mac do not qualify total UI memory, battery savings or an 8 GB machine.
 
 ## Prepared Redis local test — 2026-09-22
 
-The separate [Dockiva Redis test build](DOCKIVA-REDIS-PREVIEW-2026-09-22.md) bundles the opt-in Unicorn adapter and a digest-pinned prepared Redis 7.4.2 image. Its preset uses a private writable root and loopback port 16379. Packaged adapter tests cover automatic engine startup, PING/SET/GET and recovery after Stop/Start and Restart. Other images retain the interpreter. This is local experimental integration; PostgreSQL, Valkey, stock-image compatibility, distribution and production gates remain open.
+The separate [Dockiva Redis test build](REDIS.md#dockiva-redis-preview) bundles the opt-in Unicorn adapter and a digest-pinned prepared Redis 7.4.2 image. Its preset uses a private writable root and loopback port 16379. Packaged adapter tests cover automatic engine startup, PING/SET/GET and recovery after Stop/Start and Restart. Other images retain the interpreter. This is local experimental integration; PostgreSQL, Valkey, stock-image compatibility, distribution and production gates remain open.
 
 The newest isolated test build is `dockiva-profiles-test.app` in the Dockiva checkout.
 Use `Launch Dockiva Profiles Test.command` to select a separate profile-test store.

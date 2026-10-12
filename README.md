@@ -14,14 +14,14 @@ Hypervisor.framework with no guest kernel, and all Linux syscalls go through thi
 `scripts/verify_hvf.py` and `scripts/verify_fork_sockets.py` cover it. The notes below
 describe the project's history.
 
-The [opt-in Unicorn CPU adapter](docs/REDIS-UNICORN-INTEGRATION.md) passed
-[prepared Redis query and persistence acceptance](docs/REDIS-QUERY-PERSISTENCE-2026-09-22.md)
-and [four/eight-client concurrency and process-crash recovery tests](docs/REDIS-CONCURRENCY-RECOVERY-2026-09-22.md).
+The [opt-in Unicorn CPU adapter](docs/REDIS.md#redis-unicorn-integration) passed
+[prepared Redis query and persistence acceptance](docs/REDIS.md#redis-query-persistence)
+and [four/eight-client concurrency and process-crash recovery tests](docs/REDIS.md#redis-concurrency-recovery).
 This is bounded prepared-ELF validation, not stock-image or production qualification.
-The [local Dockiva Redis test build](docs/DOCKIVA-REDIS-PREVIEW-2026-09-22.md) now packages
+The [local Dockiva Redis test build](docs/REDIS.md#dockiva-redis-preview) now packages
 the adapter and prepared Redis preset; its adapter lifecycle and persistence checks pass.
 
-The [production roadmap](docs/PRODUCTION-ROADMAP.md) defines proposed M22–M80
+The [production roadmap](docs/ROADMAP.md#production-roadmap) defines proposed M22–M80
 work and the gates for a supported Docker replacement on Apple Silicon.
 The [M1–M80 status ledger](docs/MILESTONE-STATUS.md) separates implemented scope
 from open acceptance gates.
@@ -30,22 +30,22 @@ target: SwiftUI/AppKit UI, Go dockivad and C runtime, with no Python in producti
 execution. [Component contracts](docs/TARGET-ARCHITECTURE-CONTRACTS.md) define
 ownership, interfaces and implementation slices. [Valkey V11 and PostgreSQL P12](docs/WORKLOAD-GATES-V1.md)
 are the major compatibility gates. These target components are not yet all implemented.
-The [first CPU-state extraction](docs/CPU-STATE-OWNERSHIP-2026-09-22.md) passes
+The [first CPU-state extraction](docs/MEMORY-AND-STATE.md#cpu-state-ownership) passes
 interpreter/Unicorn regressions, Redis recovery and bundled Dockiva adapter checks.
-The subsequent [address-space extraction](docs/ADDRESS-SPACE-OWNERSHIP-2026-09-22.md)
+The subsequent [address-space extraction](docs/MEMORY-AND-STATE.md#address-space-ownership)
 adds explicit memory state and revision-driven backend mapping synchronization;
 its mapping, recovery and packaged-adapter tests also pass.
-[Reference-counted memory backing](docs/MEMORY-BACKING-OWNERSHIP-2026-09-22.md) now
+[Reference-counted memory backing](docs/MEMORY-AND-STATE.md#memory-backing-ownership) now
 keeps split mappings on the same allocation and releases it after the last owner.
-[macOS host-page COW and bounded Unicorn fork](docs/PAGE-COW-UNICORN-FORK-2026-09-23.md) now
+[macOS host-page COW and bounded Unicorn fork](docs/UNICORN.md#page-cow-unicorn-fork) now
 support private processes, inherited descriptors, nested forks and fork from a
 multithreaded parent. Prepared Redis BGSAVE/AOF rewrite tests include parent
 writes during child execution and validated restart data. Guest pages remain
 4 KiB; physical COW uses 16 KiB host pages on the tested Mac. MAP_SHARED and
 PostgreSQL shared-state workflows remain open.
-The bundled control plane now uses [Go dockivad](docs/DOCKIVAD-GO-MIGRATION-2026-09-22.md) for the supported preview API, OCI preparation and supervisors. Its Go/C process tree and bundle contain no Python runtime.
+The bundled control plane now uses [Go dockivad](docs/DOCKIVA-INTEGRATION.md#dockivad-go-migration) for the supported preview API, OCI preparation and supervisors. Its Go/C process tree and bundle contain no Python runtime.
 
-[Versioned execution profiles](docs/COMPATIBILITY-PROFILES-2026-09-22.md) now select
+[Versioned execution profiles](docs/DOCKIVA-INTEGRATION.md#compatibility-profiles) now select
 backends by image digest, negotiate capabilities with the native runtime and expose
 the effective policy in Inspect. All compatibility results remain experimental.
 
@@ -220,10 +220,10 @@ checks and all earlier M2–M10 suites passed. M0–M10 Mac acceptance passed pe
 report; this release's Mac acceptance is pending.
 
 - [Release guide and commands](docs/MILESTONES.md#m11-17)
-- [Security review: open isolation gate](docs/SECURITY-REVIEW-M13.md)
+- [Security review: open isolation gate](docs/MILESTONES.md#security-review-m13)
 - [Benchmark: same-Mac VM comparison pending](docs/MILESTONES.md#m14-benchmark)
-- [Mac distribution tooling and pending gates](docs/MAC-DISTRIBUTION-M17.md)
-- [Roadmap](docs/ROADMAP.md), [validation evidence](VALIDATION.md)
+- [Mac distribution tooling and pending gates](docs/MILESTONES.md#mac-distribution-m17)
+- [Roadmap](docs/ROADMAP.md#roadmap), [validation evidence](VALIDATION.md)
 - [Earlier M7–M10](docs/MILESTONES.md#m7-10)
 
 No performance advantage over Docker or a Linux VM has been established. The

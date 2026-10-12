@@ -72,7 +72,7 @@ Sources: [Unicorn](https://github.com/unicorn-engine/unicorn), [Unicorn 2.1.4 wh
 
 ## Recommended next decision
 
-Follow-up completed: [CPU adapter experiment and decision](UNICORN-ADAPTER-DECISION-2026-09-21.md). The recommendation below records the scope proposed before that experiment.
+Follow-up completed: [CPU adapter experiment and decision](UNICORN.md#unicorn-adapter-decision). The recommendation below records the scope proposed before that experiment.
 
 Do not commission the whole implementation roadmap. If another batch is approved, use one bounded experiment to test an **isolated C CPU adapter**, with:
 

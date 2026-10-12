@@ -6,15 +6,15 @@ M1–M21 contain scoped prototype implementations; their remaining qualification
 limits still apply. M22 cancellation and M23 terminal basics are implemented and locally tested.
 M24 bounded upstream shell scripts, M25 scoped job control, and M26 scheduled networking are implemented and locally tested. Scoped M27–M32 work is present with open acceptance gaps. M33–M80 remain unaccepted; scoped instruction, glibc-startup and filesystem work for M34/M35/M39/M44 is now present. M27–M32 are not fully accepted merely because scoped checks pass. There is no production release approval.
 
-Acceptance criteria and dependencies remain in [the production roadmap](PRODUCTION-ROADMAP.md).
+Acceptance criteria and dependencies remain in [the production roadmap](ROADMAP.md#production-roadmap).
 The [frozen architecture v1.0](FINAL-ARCHITECTURE-V1.md) is now the authoritative
 production design. The supported preview control plane now runs in Go/C without
-Python; [migration evidence](DOCKIVAD-GO-MIGRATION-2026-09-22.md) covers API, OCI,
+Python; [migration evidence](DOCKIVA-INTEGRATION.md#dockivad-go-migration) covers API, OCI,
 lifecycle, recovery and packaging. Native SwiftUI/AppKit and production distribution
 remain unimplemented migrations. [Valkey V0–V11 and PostgreSQL
 P0–P12](WORKLOAD-GATES-V1.md) are registered OPEN; previous bounded Redis and
 PostgreSQL version evidence does not automatically accept those gates.
-Historical scope is in [the implementation roadmap](ROADMAP.md) and
+Historical scope is in [the implementation roadmap](ROADMAP.md#roadmap) and
 [validation evidence](../VALIDATION.md). A later regression pass does not close
 an earlier independent audit, signing, hardware, or performance requirement.
 
@@ -101,7 +101,7 @@ an earlier independent audit, signing, hardware, or performance requirement.
 | M79 | Production release candidate | Not implemented / not accepted |
 | M80 | Production Docker-replacement v1 | Not implemented / not accepted |
 
-Latest CPU experiment: [prepared Redis query and AOF clean-restart acceptance](REDIS-QUERY-PERSISTENCE-2026-09-22.md) passes on opt-in Unicorn. This bounded fixture result does not complete a whole milestone. The separate [Dockiva Redis test package](DOCKIVA-REDIS-PREVIEW-2026-09-22.md) now passes bundled adapter checks; native GUI clicks and distribution remain unqualified.
+Latest CPU experiment: [prepared Redis query and AOF clean-restart acceptance](REDIS.md#redis-query-persistence) passes on opt-in Unicorn. This bounded fixture result does not complete a whole milestone. The separate [Dockiva Redis test package](REDIS.md#dockiva-redis-preview) now passes bundled adapter checks; native GUI clicks and distribution remain unqualified.
 
 ## Immediate remaining work
 
@@ -112,12 +112,12 @@ prepared Redis acceptance; then address database process/shared-memory behavior.
 Go daemon migration and the required native UI replacement are production
 deliverables, but are not prerequisites for those runtime steps.
 This prioritization does not waive the earlier acceptance gaps listed below.
-The [CPU-state extraction](CPU-STATE-OWNERSHIP-2026-09-22.md) and
-[address-space state/backend synchronization](ADDRESS-SPACE-OWNERSHIP-2026-09-22.md)
-have passed their local regression gates. [Reference-counted backing](MEMORY-BACKING-OWNERSHIP-2026-09-22.md)
-also passes. [Private interpreter fork COW](PRIVATE-FORK-COW-2026-09-22.md) now passes
+The [CPU-state extraction](MEMORY-AND-STATE.md#cpu-state-ownership) and
+[address-space state/backend synchronization](MEMORY-AND-STATE.md#address-space-ownership)
+have passed their local regression gates. [Reference-counted backing](MEMORY-AND-STATE.md#memory-backing-ownership)
+also passes. [Private interpreter fork COW](MEMORY-AND-STATE.md#private-fork-cow) now passes
 isolation, syscall-write, mapping and vfork checks. [macOS host-page COW and
-bounded Unicorn private fork](PAGE-COW-UNICORN-FORK-2026-09-23.md) now pass process, descriptor, thread and
+bounded Unicorn private fork](UNICORN.md#page-cow-unicorn-fork) now pass process, descriptor, thread and
 exec tests plus prepared Redis background persistence/restart isolation.
 MAP_SHARED, complete signals/exec and PostgreSQL shared-memory workflows remain open.
 
@@ -178,7 +178,7 @@ native UI, production isolation and distribution remain open.
 
 ## Dockivad compatibility profiles — 2026-09-22
 
-[Digest-bound execution profiles](COMPATIBILITY-PROFILES-2026-09-22.md) replace
+[Digest-bound execution profiles](DOCKIVA-INTEGRATION.md#compatibility-profiles) replace
 Go tag-specific backend selection. Schema/revision, required native capabilities,
 policy limits and evidence scope are persisted and exposed through Inspect.
 Create/Start/supervisor launch reject mismatches before guest execution. Legacy

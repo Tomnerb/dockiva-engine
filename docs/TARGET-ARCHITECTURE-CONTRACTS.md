@@ -99,16 +99,16 @@ an explicit amendment; updating the status ledger alone cannot alter the baselin
 | Target component | Current code and evidence | Remaining work |
 |---|---|---|
 | Native desktop | Current Dockiva Vue/Wails application | Required SwiftUI/AppKit migration; current test desktop stays usable during runtime work |
-| Go daemon | [Go dockivad](../dockivad/) now implements the supported preview API; [migration evidence](DOCKIVAD-GO-MIGRATION-2026-09-22.md) | Broader Docker API, extended compatibility analysis and production qualification |
+| Go daemon | [Go dockivad](../dockivad/) now implements the supported preview API; [migration evidence](DOCKIVA-INTEGRATION.md#dockivad-go-migration) | Broader Docker API, extended compatibility analysis and production qualification |
 | OCI store | Go [image.go](../dockivad/image.go), [registry.go](../dockivad/registry.go); Python retained for development/reference | Shared immutable storage, crash-safe reclamation and broader image semantics |
 | Supervisor | Go [lifecycle.go](../dockivad/lifecycle.go), C [worker guard](../native/worker_launcher.c); legacy-state/crash checks pass | Richer worker protocol, wider failure corpus and independently verified confinement |
-| Profile | [Versioned digest profiles and native capability negotiation](COMPATIBILITY-PROFILES-2026-09-22.md); persisted policy and Inspect metadata | Broader static dependency analysis, optional-feature negotiation and production qualification |
+| Profile | [Versioned digest profiles and native capability negotiation](DOCKIVA-INTEGRATION.md#compatibility-profiles); persisted policy and Inspect metadata | Broader static dependency analysis, optional-feature negotiation and production qualification |
 | Loader/backend | [runtime.c](../native/runtime.c), [unicorn_backend.h](../native/unicorn_backend.h) | Explicit state ownership and common backend interface |
-| Process/thread state | [process.h](../native/process.h), [scheduler.h](../native/scheduler.h), [unicorn_threads.h](../native/unicorn_threads.h) | Unify ownership; [bounded private fork](PAGE-COW-UNICORN-FORK-2026-09-23.md) now has an engine/address space/FD table per process and up to eight cooperative tasks across groups; full signal/clone/exec semantics remain open |
+| Process/thread state | [process.h](../native/process.h), [scheduler.h](../native/scheduler.h), [unicorn_threads.h](../native/unicorn_threads.h) | Unify ownership; [bounded private fork](UNICORN.md#page-cow-unicorn-fork) now has an engine/address space/FD table per process and up to eight cooperative tasks across groups; full signal/clone/exec semantics remain open |
 | Memory | [address_space.h](../native/address_space.h), [heap.h](../native/heap.h), [mapping.h](../native/mapping.h); explicit state, macOS host-page COW, Unicorn write faults and revision-driven full/incremental synchronization tested | MAP_SHARED, portable page COW, shared process ownership and full coherence |
 | FD/VFS/events/network | [fs.h](../native/fs.h), [io.h](../native/io.h), [epoll.h](../native/epoll.h), [net.h](../native/net.h) | Common object identity; broader Linux semantics and managed endpoint publication |
 | Resource accounting | [resources.h](../native/resources.h), capacity admission in Go lifecycle.go, host rlimits | Full worker-tree accounting including Unicorn/JIT, measured pressure feedback and enforceable global policy |
-| Application evidence | [Redis recovery](REDIS-CONCURRENCY-RECOVERY-2026-09-22.md), [Dockiva Redis bundle](DOCKIVA-REDIS-PREVIEW-2026-09-22.md) | PostgreSQL/Valkey services, stock-image qualification and production workloads |
+| Application evidence | [Redis recovery](REDIS.md#redis-concurrency-recovery), [Dockiva Redis bundle](REDIS.md#dockiva-redis-preview) | PostgreSQL/Valkey services, stock-image qualification and production workloads |
 
 Current allocation counters are not total resident memory. Current admission is
 limited to a state store (four active runtimes and 1024 MiB of reserved guest
@@ -239,14 +239,14 @@ the capability contract.
 
 ## First implementation change
 
-Progress: the [first CPU-state extraction](CPU-STATE-OWNERSHIP-2026-09-22.md) is
+Progress: the [first CPU-state extraction](MEMORY-AND-STATE.md#cpu-state-ownership) is
 implemented and tested. CPU ownership, process snapshots and explicit Unicorn
-register transfer are in place. [Address-space state and backend synchronization](ADDRESS-SPACE-OWNERSHIP-2026-09-22.md)
-are now extracted and tested too. [Reference-counted backing and offset views](MEMORY-BACKING-OWNERSHIP-2026-09-22.md)
-are implemented. [Private interpreter fork COW](PRIVATE-FORK-COW-2026-09-22.md) now
-retains backing and detaches it on writable access. [Unicorn write-fault COW](UNICORN-COW-FAULTS-2026-09-22.md)
+register transfer are in place. [Address-space state and backend synchronization](MEMORY-AND-STATE.md#address-space-ownership)
+are now extracted and tested too. [Reference-counted backing and offset views](MEMORY-AND-STATE.md#memory-backing-ownership)
+are implemented. [Private interpreter fork COW](MEMORY-AND-STATE.md#private-fork-cow) now
+retains backing and detaches it on writable access. [Unicorn write-fault COW](UNICORN.md#unicorn-cow-faults)
 now defers shared backing copies until guest stores. [macOS host-page COW and
-bounded Unicorn fork](PAGE-COW-UNICORN-FORK-2026-09-23.md) additionally pass generic process/descriptor tests
+bounded Unicorn fork](UNICORN.md#page-cow-unicorn-fork) additionally pass generic process/descriptor tests
 and prepared Redis BGSAVE/AOF rewrite with restart isolation. MAP_SHARED, full
 FD/signal ownership, scheduler unification and the full execution interface
 remain open; slice A is not yet accepted.
@@ -292,4 +292,4 @@ crash/reconnect cannot duplicate the tested workers, legacy state/control migrat
 passes, and the built helper/process tree contain no Python. E4 native UI and E5
 production distribution remain open. The migration does not close slice E as a
 whole or establish the complete control-plane resource/networking contracts.
-See [the implementation report](DOCKIVAD-GO-MIGRATION-2026-09-22.md).
+See [the implementation report](DOCKIVA-INTEGRATION.md#dockivad-go-migration).

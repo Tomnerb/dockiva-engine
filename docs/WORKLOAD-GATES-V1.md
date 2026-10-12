@@ -8,7 +8,7 @@ Before accepting a workload gate, pin the image digest, unchanged binary hash, c
 
 Crash tests distinguish guest/process termination from host power loss. Declare fsync/durability settings and the acknowledgement oracle before running; assert the promised data guarantees. A process-crash pass is not a power-loss result. No claim about an 8 GB host is accepted from a larger machine alone.
 
-Small semantic probes and application startup probes run throughout development. The order below controls acceptance dependencies, not a requirement to postpone all workload testing until every subsystem is built. Preserve the [Redis recovery regression](REDIS-CONCURRENCY-RECOVERY-2026-09-22.md) while implementing generic semantics.
+Small semantic probes and application startup probes run throughout development. The order below controls acceptance dependencies, not a requirement to postpone all workload testing until every subsystem is built. Preserve the [Redis recovery regression](REDIS.md#redis-concurrency-recovery) while implementing generic semantics.
 
 ## Valkey: V0–V11
 

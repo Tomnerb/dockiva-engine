@@ -12,35 +12,35 @@ acceptance tests. Global resource management, isolation
 and optimized backend components are explicitly distinguished from implemented
 behavior. This design does not close a milestone acceptance gate.
 
-Today Dockiva's adapter talks to [Go dockivad](DOCKIVAD-GO-MIGRATION-2026-09-22.md)
+Today Dockiva's adapter talks to [Go dockivad](DOCKIVA-INTEGRATION.md#dockivad-go-migration)
 over an authenticated Unix socket. Go validates OCI images, manages private state
 and supervises C guards/native runtime workers. The shipped path contains no Python.
 Legacy Python CLIs remain development and migration-reference tools.
 The interpreter remains the default; the separately packaged prepared Redis
-preview selects the experimental Unicorn backend through a [digest-bound profile](COMPATIBILITY-PROFILES-2026-09-22.md). Native capability negotiation runs before launch; Inspect exposes the effective policy. Both paths use our Linux
+preview selects the experimental Unicorn backend through a [digest-bound profile](DOCKIVA-INTEGRATION.md#compatibility-profiles). Native capability negotiation runs before launch; Inspect exposes the effective policy. Both paths use our Linux
 compatibility services. The C runtime still has substantial global state and
 separate interpreter/Unicorn scheduling paths; extracting shared state ownership
-is the first implementation slice. Its [CPU-state portion](CPU-STATE-OWNERSHIP-2026-09-22.md)
+is the first implementation slice. Its [CPU-state portion](MEMORY-AND-STATE.md#cpu-state-ownership)
 now has an explicit owner shared by interpreter snapshots and the Unicorn transfer
 interface, with regression evidence.
 
-[Address-space state and backend synchronization](ADDRESS-SPACE-OWNERSHIP-2026-09-22.md)
+[Address-space state and backend synchronization](MEMORY-AND-STATE.md#address-space-ownership)
 have subsequently been extracted. Unicorn now synchronizes mapping revisions
 before execution instead of relying on a syscall-number list.
-[Reference-counted backing](MEMORY-BACKING-OWNERSHIP-2026-09-22.md) now owns segment,
+[Reference-counted backing](MEMORY-AND-STATE.md#memory-backing-ownership) now owns segment,
 heap and mmap allocations. Segment permission splits retain offset views without
-copying data. [Private interpreter fork COW](PRIVATE-FORK-COW-2026-09-22.md) now
+copying data. [Private interpreter fork COW](MEMORY-AND-STATE.md#private-fork-cow) now
 shares backing until writable access, with rollback on failed detachment.
-[Unicorn COW fault handling](UNICORN-COW-FAULTS-2026-09-22.md) now maps shared
+[Unicorn COW fault handling](UNICORN.md#unicorn-cow-faults) now maps shared
 writable backing with backend write protection and retries stores after private
-copy/remapping. [macOS host-page COW and bounded private fork](PAGE-COW-UNICORN-FORK-2026-09-23.md) now
+copy/remapping. [macOS host-page COW and bounded private fork](UNICORN.md#page-cow-unicorn-fork) now
 use separate Unicorn engines/caches per process, shared thread state within each
 process, and reference-counted inherited sockets/pipes/epoll handles. Prepared
 Redis background persistence and snapshot isolation pass. MAP_SHARED, complete
 signal/exec behavior, unified FD ownership and scheduler extraction remain open.
 
 Prepared Redis query, concurrency and recovery evidence is linked from the
-[status ledger](MILESTONE-STATUS.md). The [Dockiva Redis test build](DOCKIVA-REDIS-PREVIEW-2026-09-22.md)
+[status ledger](MILESTONE-STATUS.md). The [Dockiva Redis test build](REDIS.md#dockiva-redis-preview)
 passes its packaged adapter tests. PostgreSQL/Valkey service qualification,
 machine-wide resource management and production isolation remain open.
 
