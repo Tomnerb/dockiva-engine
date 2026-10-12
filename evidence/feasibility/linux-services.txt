@@ -1,0 +1,3 @@
+postgresql Client mismatch
+redis pass query, graceful restart and SIGKILL recovery for one acknowledged write
+valkey pass query, graceful restart and SIGKILL recovery for one acknowledged write

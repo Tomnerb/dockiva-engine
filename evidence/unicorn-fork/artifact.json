@@ -1,0 +1,88 @@
+{
+  "host": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+  "host_page_bytes": 16384,
+  "scope": "Signed Go/C helper, native COW/fork, prepared Redis and Dockiva bundled adapter tests; installed desktop app unchanged",
+  "bundle": "/Users/macbookpro16m2max/Documents/vmfree-runtime/build/dockiva-fork/vmfree-engine",
+  "binaries": {
+    "build/dockiva-fork/vmfree-engine/vmfree-engine": "0278fa7af31cb2e051a97645b793988c4c1afc6e67f25e7099280890cc816192",
+    "build/dockiva-fork/vmfree-engine/dockivad": "5583685bba1039178ce2f01fb911a525ec49e82d2953612522cbbfe9cf5f09ae",
+    "build/dockiva-fork/vmfree-engine/_internal/build/vmfree-c": "6973e29568798cc4ff0a4eca58c989f58c9c4da7c0ae20501b2190b00658545d",
+    "build/dockiva-fork/vmfree-engine/_internal/build/vmfree-c-unicorn": "7bc89cfb92ec8fff433d446fb1a21cbeaa672408a4e1f45bd8d56312dbf12a93",
+    "build/dockiva-fork/vmfree-engine/_internal/build/vmfree-worker": "ca7600ee9cb9d85ed37e68624b4e349617d261a1979b737e05eae3589cc6aad0"
+  },
+  "source_hashes": {
+    "native/address_space.h": "6cdb485520577fc01e598aa457c1ad760222c1b3a5facc1e5ff8eaf034a7d132",
+    "native/address_space_ops.h": "9e4d83a78cc86f46a66a2d86e5b13711a314ce0b4ab622c4aeee994187e61d9d",
+    "native/compat.h": "e71e30f495be92195c86cdc0f22cbd7cb494524909e6d05801232b743aa9e3eb",
+    "native/cpu_state.h": "d58dc254674399b197e7c305b0dc558f5c38e5879eb43fe3f9db6954a2d8836e",
+    "native/decode.h": "fdc15750c69a7f12c54e1ef9c27ac93c47fd722093958d1190497964a8ff40bd",
+    "native/epoll.h": "e57fe5f6b522fc9d17333abae149aa9384b9e1406e0b07be333ff36f1ef5d8aa",
+    "native/fadvise.h": "ca5ffefe679d1847c9b8f6028512e5342b2287fb5337b6630753f57fb0b2ab8d",
+    "native/fs.h": "c843b02549ebc9af66a26e21f31a68d118a662658bd0e8db4b2e5d91c7f7411f",
+    "native/heap.h": "979e434bfcf0070e2ea92840768aa4898eea68b81de644acf0e0fb7bbf0419e3",
+    "native/io.h": "3f8796c23c7f86f5c472334efad99674c44855edfa29a477aa899420321d4fcc",
+    "native/mapping.h": "289e555414a0fad92556f0b116557280d8dee6f1a84ee972b4520ea37cc0d4c8",
+    "native/memory_backing.h": "ab092e2d68a9da39f117d56c5437718a5b89d59abebe168d6c5034c064b47ae9",
+    "native/memory_backing_mach.h": "1a67eea692a0b37ddbf529e19de5f1340c7fd6acdb9000fb53f29503d9a0df6b",
+    "native/memory_backing_ops.h": "2adf478f28a5883f7156ddc0f99daa9aebcf177459a2064c23a72703607ac3cf",
+    "native/net.h": "caa6154ae7826c01e686a80925cb2fadce3aa511d236aeff2809bb8597c92c25",
+    "native/process.h": "4e8742e77c9087d3add585b7797b683d92b163ed0418c5483b1ebdb526129a2d",
+    "native/profile.h": "d69dbabe6c7a9c2aa35f625f26ede05e95e02e70c0a32da6882ed3689bf0af51",
+    "native/resources.h": "941ba34cf44b05fc8bbbb90f4b5f600de3ac60860e84740f8759b083684f5b8e",
+    "native/runtime_context.h": "359d8763832761ee358b9d1380a3211067c9654c3dba2611dd4cf57099f9119f",
+    "native/scheduler.h": "14e58fe11902e99a025f284fc7f04d8dbcf2922172f8f728890f17399e32a229",
+    "native/signals.h": "453fbbd3e69ae46abaab1a2701258e4b1602f63600fed18ef94c562e913ea5a8",
+    "native/syscall.h": "342080b73d0aa7235dcf29ee21979fc8406d878a351a42f8fd4940307f7b5a5f",
+    "native/sysinfo.h": "50e5742797c013db83e308a543bb4177995f6a99a7b6668b8eacca9a956c5a52",
+    "native/terminal.h": "34211fcb44ee7282a75f916964434b4f8a6077d9985c8a96406c0b53c269b888",
+    "native/unicorn_backend.h": "f8d17c6ae93e5ba8153b21ce71206774ba55ccca208dd289e6cdfa43448eda8f",
+    "native/unicorn_threads.h": "8eb907d35e9eb43ca019a79e1693b39630c8c1b8880ed4622ce129d555809d66",
+    "native/runtime.c": "875bffca7a3d7b4d0558a42204072d665f5e3d7fc98b467ef921b58d90a30568",
+    "scripts/verify_unicorn_fork.py": "40db1c5b11e69ddd8f26f3a4c6f8f6cdd2677c6606fb668bfd76134331de6c48",
+    "scripts/verify_redis_fork.py": "c5522426d05b6f30a383ab1ef1eb2917a048c0cf1cb9c6cdc6e51100f48a8fe7",
+    "scripts/verify_cow.py": "dcc93af62863f6407cf96188c8fc547524b686954ee9f2231457e501d1d40276",
+    "scripts/verify_unicorn_cow.py": "4c8dca18bc906e29fc4fd6ccf5c6445bfd3ae70bf3dad0c59bd263eb3804ea21",
+    "tests/native/fork_exec_guest.c": "43dfb80e74179d7fcb33966247bf3930730a0f708b1ea798a1f018a6f5ef4316",
+    "tests/native/fork_exec_leaf.S": "f8a910691d935fc250aedd5ae0b19468090bed781dd01f44d07dc04d36e5ee9b",
+    "tests/native/fork_guest.c": "2663e5d10db5c27211a725d166f58a3da2dc91343dd16a670d8127d0da09a252",
+    "tests/native/fork_threads_guest.S": "7e38b42b31f5b01fd2d9ddbbb68895189d47ebb152840c3be91efdc1b817a29b",
+    "tests/native/page_cow_host.c": "290e1e87de9392700ddd48f2b00d500c20a128ea115d422fb5a1fc09a90489c0",
+    "tests/native/unicorn_cow_host.c": "6af636a1adcf9a95a5a6636bac1c2412d35047a402462e2bd990af3aea36b228"
+  },
+  "report_hashes": {
+    "evidence/unicorn-fork/dockiva-integration.json": "5825167ef8dbfd58bbc3eabf9429fe7efdd71b789f918cab2bf1cfd6b6c5729d",
+    "evidence/unicorn-fork/final-validation.json": "be5e0f25986adfb459a21828e69e3f64c92fa4e37fbdaf93788219118dceecb3",
+    "evidence/unicorn-fork/probes.json": "6f6360dffed84a0bbc8b78e5634048952ef15f631605f85060aad9ad0122ebcd",
+    "evidence/unicorn-fork/profiles.json": "330aad493094d2baf1d89114894dc3906db15b05407eb85ab03d68b18bf4cc17",
+    "evidence/unicorn-fork/redis-background.json": "fd1057fdc1956eb6e93ed8c12fd0f7513a786efeee1c1368f94109e09470ecac",
+    "evidence/unicorn-fork/redis-recovery.json": "f62bae18c6bc142a36883bdb8014325e912939d2a4838e6e2c7c0546b485a4a1",
+    "evidence/unicorn-fork/sanitizer-probes.json": "de9826e2813b912a94a8cc169dfe8c1cd8790c7e931e03a8573f288c6a6a031e",
+    "evidence/unicorn-fork/thread-regressions.json": "3702f4e08ffacc5c9ce1cfd35abc9422923f401f9ec3bed392a6e8e22841d606"
+  },
+  "limits": {
+    "live_processes": 5,
+    "total_child_creations": 16,
+    "live_tasks": 8,
+    "code_buffer_bytes_per_process": 16777216
+  },
+  "native_capabilities": {
+    "schema_version": 1,
+    "runtime_abi": "dockiva-native-v1",
+    "backends": {
+      "interpreter": [
+        "elf64-arm64",
+        "private-rootfs",
+        "loopback-tcp",
+        "bounded-dynamic-elf"
+      ],
+      "unicorn": [
+        "elf64-arm64",
+        "private-rootfs",
+        "loopback-tcp",
+        "bounded-dynamic-elf",
+        "cooperative-threads",
+        "bounded-private-fork"
+      ]
+    }
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "scope": "ARM64 epoll ABI, pipe readiness, timeout, alias lifetime, close/reuse, MOD/DEL, fairness and errors",
+  "elf_sha256": "027a595ea72845e375d62f1ce25f383f4500e40ff535f3b017300060fcf1b302",
+  "results": [
+    {
+      "backend": "interpreter",
+      "exit": 0,
+      "stderr": "",
+      "passed": true,
+      "checks": 40
+    },
+    {
+      "backend": "hvf",
+      "exit": 0,
+      "stderr": "",
+      "passed": true,
+      "checks": 40
+    }
+  ]
+}

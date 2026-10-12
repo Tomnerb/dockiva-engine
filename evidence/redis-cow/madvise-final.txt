@@ -1,0 +1,99 @@
+{
+  "cases": [
+    "normal",
+    "random",
+    "sequential",
+    "contents_preserved",
+    "unknown_advice",
+    "unaligned",
+    "empty_unmapped",
+    "overflow",
+    "unmapped",
+    "prot_none",
+    "hole",
+    "free_unsupported",
+    "int_abi"
+  ],
+  "expected_runtime": [
+    0,
+    0,
+    0,
+    0,
+    22,
+    22,
+    0,
+    22,
+    12,
+    0,
+    12,
+    22,
+    0
+  ],
+  "declared_difference": "MADV_FREE unsupported: runtime EINVAL; Linux reference supports it",
+  "elf_sha256": "0a2a4f5539df3ddd3a1138360c1a031c0d331468c0f634b137e57f35cc015bd4",
+  "results": [
+    {
+      "backend": "interpreter",
+      "exit": 0,
+      "results": [
+        0,
+        0,
+        0,
+        0,
+        22,
+        22,
+        0,
+        22,
+        12,
+        0,
+        12,
+        22,
+        0
+      ],
+      "stderr": "",
+      "passed": true
+    },
+    {
+      "backend": "unicorn",
+      "exit": 0,
+      "results": [
+        0,
+        0,
+        0,
+        0,
+        22,
+        22,
+        0,
+        22,
+        12,
+        0,
+        12,
+        22,
+        0
+      ],
+      "stderr": "",
+      "passed": true
+    },
+    {
+      "backend": "Linux reference",
+      "exit": 0,
+      "results": [
+        0,
+        0,
+        0,
+        0,
+        22,
+        22,
+        0,
+        22,
+        12,
+        0,
+        12,
+        0,
+        0
+      ],
+      "stderr": "",
+      "passed": true
+    }
+  ]
+}

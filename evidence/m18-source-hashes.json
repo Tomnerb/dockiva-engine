@@ -1,0 +1,13 @@
+{
+  "native/runtime.c": "c64f957c2863afe138f27767dd22e2d178f1968145c97a7ee16d8a5e3d2ae323",
+  "native/compat.h": "fe26b6493c006e15c081b7bac7fd76617aa9163a14d49f63a0b6217a924c20a8",
+  "native/decode.h": "6f6ec28223bcd197e9a6535258a2d084ea86f44bda56d8fb4c236cd7ff37477f",
+  "native/fs.h": "bc9e0a0af1aebdd1aed8cc251f556a7164d79752aba6eda5af8fb622dfbcda65",
+  "native/heap.h": "97655ddcfec1ca4d299ec6eca42131cb22c4b0f2b5ca9df3a74e9312ad552d3f",
+  "native/net.h": "6b6136594441f89fef376f019fded87897fc10ea728db60112f792062e78001d",
+  "native/profile.h": "e5a95845a20852e4912c4ab7ce34f0a8abe51ca3b2c047b449d0b63e452cf0f8",
+  "scripts/build_m18.py": "56d0cdc2fb26cb979fccdb790402bb62360ec7ea15b08e2fef0fab19ed340655",
+  "scripts/verify_m18.py": "bb947b1d9eb8d7ccacacffe9bb5bf882541202875cacd42be623ca38d3b61baf",
+  "scripts/verify_m18_native.py": "6cb8ef7a4602c25578c65477990fd13cb678ab4cbebd1878c0a427b5ec1eeb12",
+  "tests/native/m18_fs.c": "0c21875aa5d6fd20a9b5f61fda1bf5c0144d72833c9b836ab227879514724ea4"
+}

@@ -1,0 +1,45 @@
+{
+  "passed": true,
+  "checks": [
+    {
+      "name": "validation",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed": 0.5927951250050683,
+      "stdout": "timer validation and error side effects match Linux\n",
+      "stderr": ""
+    },
+    {
+      "name": "inherit",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed": 0.049403624987462536,
+      "stdout": "fork clears child timer and preserves parent timer\n",
+      "stderr": ""
+    },
+    {
+      "name": "periodic",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed": 0.10076475000823848,
+      "stdout": "periodic alarm interrupts blocked guest reads\n",
+      "stderr": ""
+    },
+    {
+      "name": "default",
+      "passed": true,
+      "exit_code": 142,
+      "elapsed": 0.11638208298245445,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "name": "cancel",
+      "passed": true,
+      "exit_code": 143,
+      "elapsed": 0.05011174999526702,
+      "stdout": "",
+      "stderr": ""
+    }
+  ]
+}

@@ -1,0 +1,168 @@
+{
+  "host": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+  "unicorn_version": "2.1.4",
+  "runtime_sha256": "2d438cdea89792d59ebc7774219976a5aa06690cbcae0f990fc2ffc153eeba01",
+  "results": {
+    "compute": {
+      "iterations": 1000000,
+      "elf_sha256": "0946b3141a57a882a725bba99cfaf9ce02c562f105acd0a1ae8e3332a4bd83d0",
+      "samples": {
+        "native_macos": [
+          {
+            "wall_seconds": 0.0020008329884149134,
+            "result": "6f5f641591606be9"
+          },
+          {
+            "wall_seconds": 0.0019257079984527081,
+            "result": "6f5f641591606be9"
+          },
+          {
+            "wall_seconds": 0.0020141669956501573,
+            "result": "6f5f641591606be9"
+          },
+          {
+            "wall_seconds": 0.0020231250091455877,
+            "result": "6f5f641591606be9"
+          },
+          {
+            "wall_seconds": 0.0019428329833317548,
+            "result": "6f5f641591606be9"
+          }
+        ],
+        "interpreter": [
+          {
+            "wall_seconds": 0.07577391702216119,
+            "result": "6f5f641591606be9"
+          },
+          {
+            "wall_seconds": 0.07478754199109972,
+            "result": "6f5f641591606be9"
+          },
+          {
+            "wall_seconds": 0.09419116700883023,
+            "result": "6f5f641591606be9"
+          },
+          {
+            "wall_seconds": 0.09690779098309577,
+            "result": "6f5f641591606be9"
+          },
+          {
+            "wall_seconds": 0.11453508399426937,
+            "result": "6f5f641591606be9"
+          }
+        ],
+        "unicorn": [
+          {
+            "wall_seconds": 0.0038313329860102385,
+            "result": "6f5f641591606be9"
+          },
+          {
+            "wall_seconds": 0.0036674580187536776,
+            "result": "6f5f641591606be9"
+          },
+          {
+            "wall_seconds": 0.003780666011152789,
+            "result": "6f5f641591606be9"
+          },
+          {
+            "wall_seconds": 0.004046124988235533,
+            "result": "6f5f641591606be9"
+          },
+          {
+            "wall_seconds": 0.0038571660115849227,
+            "result": "6f5f641591606be9"
+          }
+        ]
+      },
+      "median_seconds": {
+        "native_macos": 0.0020008329884149134,
+        "interpreter": 0.09419116700883023,
+        "unicorn": 0.0038313329860102385
+      }
+    },
+    "memory64k": {
+      "iterations": 1000000,
+      "elf_sha256": "d388891cd2db255ea76e84317b768baa9b4146ebee1c9df12fa30c8ad7d59748",
+      "samples": {
+        "native_macos": [
+          {
+            "wall_seconds": 0.0003536249860189855,
+            "result": "00375752a3030000"
+          },
+          {
+            "wall_seconds": 0.0003473750257398933,
+            "result": "00375752a3030000"
+          },
+          {
+            "wall_seconds": 0.0003633340238593519,
+            "result": "00375752a3030000"
+          },
+          {
+            "wall_seconds": 0.0003472910029813647,
+            "result": "00375752a3030000"
+          },
+          {
+            "wall_seconds": 0.0003685830160975456,
+            "result": "00375752a3030000"
+          }
+        ],
+        "interpreter": [
+          {
+            "wall_seconds": 0.13170837497455068,
+            "result": "00375752a3030000"
+          },
+          {
+            "wall_seconds": 0.13126141700195149,
+            "result": "00375752a3030000"
+          },
+          {
+            "wall_seconds": 0.15203525000833906,
+            "result": "00375752a3030000"
+          },
+          {
+            "wall_seconds": 0.1520245420106221,
+            "result": "00375752a3030000"
+          },
+          {
+            "wall_seconds": 0.17071691699675284,
+            "result": "00375752a3030000"
+          }
+        ],
+        "unicorn": [
+          {
+            "wall_seconds": 0.021783625008538365,
+            "result": "00375752a3030000"
+          },
+          {
+            "wall_seconds": 0.021585167007287964,
+            "result": "00375752a3030000"
+          },
+          {
+            "wall_seconds": 0.021673084003850818,
+            "result": "00375752a3030000"
+          },
+          {
+            "wall_seconds": 0.02153041699784808,
+            "result": "00375752a3030000"
+          },
+          {
+            "wall_seconds": 0.02154099999461323,
+            "result": "00375752a3030000"
+          }
+        ]
+      },
+      "median_seconds": {
+        "native_macos": 0.0003536249860189855,
+        "interpreter": 0.1520245420106221,
+        "unicorn": 0.021585167007287964
+      }
+    }
+  },
+  "limitations": [
+    "Two synthetic integer/memory kernels; not a database, concurrency or syscall workload.",
+    "Native times one call through ctypes excluding dylib/buffer setup. Interpreter includes process launch/ELF load. Unicorn times emulation only, includes translation and two Python syscall callbacks, excludes setup. Unequal setup costs limit exact ratios.",
+    "Each Unicorn sample uses a new engine. One discarded warmup per backend, five alternating-order measured runs.",
+    "Native macOS shares the assembly loop; this is not a Docker throughput comparison.",
+    "No production syscall adapter, confinement, JIT signing, RAM, CPU or battery qualification."
+  ]
+}

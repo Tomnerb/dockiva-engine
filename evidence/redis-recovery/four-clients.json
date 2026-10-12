@@ -1,0 +1,159 @@
+{
+  "scope": "Prepared pinned Linux ARM64 ELF, VM-free Unicorn; concurrent clients, clean restarts, process SIGKILL/AOF recovery; not power-loss or stock-image qualification",
+  "image_id": "sha256:3b0f54bf27a77c98d319dc3a6706ed500a8985309f0b6c6407599b869f4a2bd9",
+  "runtime_sha256": "bc0b97b1174f24269a6dc12a95a33ec8274a875d08220c649285a6fe60a51000",
+  "passed": true,
+  "cycles": [
+    {
+      "phase": "clean",
+      "index": 0,
+      "passed": true,
+      "expected_before": 0,
+      "recovered_keys_verified": 0,
+      "workload": {
+        "acknowledged_sets": 100,
+        "verified_gets": 100,
+        "verified_increments": 100,
+        "connected_clients": 4,
+        "interrupted_clients": 0,
+        "clients": 4,
+        "all_clients_connected_before_writes": true,
+        "deliberate_sigkill": false
+      },
+      "post_write_keys_verified": 101,
+      "exit": 0,
+      "expected_after": 101,
+      "stdout": "1:C 22 Sep 2026 01:33:07.217 * oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo\n1:C 22 Sep 2026 01:33:07.222 * Redis version=7.4.2, bits=64, commit=00000000, modified=0, pid=1, just started\n1:C 22 Sep 2026 01:33:07.222 * Configuration loaded\n1:M 22 Sep 2026 01:33:07.279 # Unable to obtain the current NOFILE limit (Operation not supported), assuming 1024 and setting the max clients configuration accordingly.\n1:M 22 Sep 2026 01:33:07.282 * monotonic clock: POSIX clock_gettime\n1:M 22 Sep 2026 01:33:07.756 * Running mode=standalone, port=55863.\n1:M 22 Sep 2026 01:33:07.830 * Server initialized\n1:M 22 Sep 2026 01:33:07.953 * Creating AOF base file appendonly.aof.1.base.rdb on server start\n1:M 22 Sep 2026 01:33:07.961 * Creating AOF incr file appendonly.aof.1.incr.aof on server start\n1:M 22 Sep 2026 01:33:07.962 * Ready to accept connections tcp\n1:M 22 Sep 2026 01:33:08.263 * User requested shutdown...\n1:M 22 Sep 2026 01:33:08.266 * Calling fsync() on the AOF file.\n1:M 22 Sep 2026 01:33:08.267 # Redis is now ready to exit, bye bye...\n",
+      "stdout_bytes": 1041,
+      "stderr": "",
+      "stderr_bytes": 0
+    },
+    {
+      "phase": "clean",
+      "index": 1,
+      "passed": true,
+      "expected_before": 101,
+      "recovered_keys_verified": 101,
+      "workload": {
+        "acknowledged_sets": 100,
+        "verified_gets": 100,
+        "verified_increments": 100,
+        "connected_clients": 4,
+        "interrupted_clients": 0,
+        "clients": 4,
+        "all_clients_connected_before_writes": true,
+        "deliberate_sigkill": false
+      },
+      "post_write_keys_verified": 202,
+      "exit": 0,
+      "expected_after": 202,
+      "stdout": "1:C 22 Sep 2026 01:33:08.991 * oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo\n1:C 22 Sep 2026 01:33:08.996 * Redis version=7.4.2, bits=64, commit=00000000, modified=0, pid=1, just started\n1:C 22 Sep 2026 01:33:08.996 * Configuration loaded\n1:M 22 Sep 2026 01:33:09.058 # Unable to obtain the current NOFILE limit (Operation not supported), assuming 1024 and setting the max clients configuration accordingly.\n1:M 22 Sep 2026 01:33:09.061 * monotonic clock: POSIX clock_gettime\n1:M 22 Sep 2026 01:33:09.561 * Running mode=standalone, port=55863.\n1:M 22 Sep 2026 01:33:09.638 * Server initialized\n1:M 22 Sep 2026 01:33:09.774 * Reading RDB base file on AOF loading...\n1:M 22 Sep 2026 01:33:09.779 * Loading RDB produced by version 7.4.2\n1:M 22 Sep 2026 01:33:09.780 * RDB age 6835962 seconds\n1:M 22 Sep 2026 01:33:09.782 * RDB memory usage when created 0.46 Mb\n1:M 22 Sep 2026 01:33:09.782 * RDB is base AOF\n1:M 22 Sep 2026 01:33:09.782 * Done loading RDB, keys loaded: 0, keys expired: 0.\n1:M 22 Sep 2026 01:33:09.813 * DB loaded from base file appendonly.aof.1.base.rdb: 0.045 seconds\n1:M 22 Sep 2026 01:33:09.836 * DB loaded from incr file appendonly.aof.1.incr.aof: 0.023 seconds\n1:M 22 Sep 2026 01:33:09.837 * DB loaded from append only file: 0.075 seconds\n1:M 22 Sep 2026 01:33:09.838 * Opening AOF incr file appendonly.aof.1.incr.aof on server start\n1:M 22 Sep 2026 01:33:09.838 * Ready to accept connections tcp\n1:M 22 Sep 2026 01:33:10.276 * User requested shutdown...\n1:M 22 Sep 2026 01:33:10.279 * Calling fsync() on the AOF file.\n1:M 22 Sep 2026 01:33:10.280 # Redis is now ready to exit, bye bye...\n",
+      "stdout_bytes": 1609,
+      "stderr": "",
+      "stderr_bytes": 0
+    },
+    {
+      "phase": "clean",
+      "index": 2,
+      "passed": true,
+      "expected_before": 202,
+      "recovered_keys_verified": 202,
+      "workload": {
+        "acknowledged_sets": 100,
+        "verified_gets": 100,
+        "verified_increments": 100,
+        "connected_clients": 4,
+        "interrupted_clients": 0,
+        "clients": 4,
+        "all_clients_connected_before_writes": true,
+        "deliberate_sigkill": false
+      },
+      "post_write_keys_verified": 303,
+      "exit": 0,
+      "expected_after": 303,
+      "stdout": "1:C 22 Sep 2026 01:33:11.006 * oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo\n1:C 22 Sep 2026 01:33:11.012 * Redis version=7.4.2, bits=64, commit=00000000, modified=0, pid=1, just started\n1:C 22 Sep 2026 01:33:11.012 * Configuration loaded\n1:M 22 Sep 2026 01:33:11.071 # Unable to obtain the current NOFILE limit (Operation not supported), assuming 1024 and setting the max clients configuration accordingly.\n1:M 22 Sep 2026 01:33:11.074 * monotonic clock: POSIX clock_gettime\n1:M 22 Sep 2026 01:33:11.556 * Running mode=standalone, port=55863.\n1:M 22 Sep 2026 01:33:11.632 * Server initialized\n1:M 22 Sep 2026 01:33:11.768 * Reading RDB base file on AOF loading...\n1:M 22 Sep 2026 01:33:11.773 * Loading RDB produced by version 7.4.2\n1:M 22 Sep 2026 01:33:11.774 * RDB age 6835962 seconds\n1:M 22 Sep 2026 01:33:11.776 * RDB memory usage when created 0.46 Mb\n1:M 22 Sep 2026 01:33:11.776 * RDB is base AOF\n1:M 22 Sep 2026 01:33:11.776 * Done loading RDB, keys loaded: 0, keys expired: 0.\n1:M 22 Sep 2026 01:33:11.807 * DB loaded from base file appendonly.aof.1.base.rdb: 0.044 seconds\n1:M 22 Sep 2026 01:33:11.845 * DB loaded from incr file appendonly.aof.1.incr.aof: 0.037 seconds\n1:M 22 Sep 2026 01:33:11.845 * DB loaded from append only file: 0.088 seconds\n1:M 22 Sep 2026 01:33:11.846 * Opening AOF incr file appendonly.aof.1.incr.aof on server start\n1:M 22 Sep 2026 01:33:11.846 * Ready to accept connections tcp\n1:M 22 Sep 2026 01:33:12.419 * User requested shutdown...\n1:M 22 Sep 2026 01:33:12.422 * Calling fsync() on the AOF file.\n1:M 22 Sep 2026 01:33:12.423 # Redis is now ready to exit, bye bye...\n",
+      "stdout_bytes": 1609,
+      "stderr": "",
+      "stderr_bytes": 0
+    },
+    {
+      "phase": "crash",
+      "index": 3,
+      "passed": true,
+      "expected_before": 303,
+      "recovered_keys_verified": 303,
+      "workload": {
+        "acknowledged_sets": 24,
+        "verified_gets": 20,
+        "verified_increments": 0,
+        "connected_clients": 4,
+        "interrupted_clients": 4,
+        "clients": 4,
+        "all_clients_connected_before_writes": true,
+        "deliberate_sigkill": true
+      },
+      "exit": -9,
+      "expected_after": 327,
+      "stdout": "1:C 22 Sep 2026 01:33:13.161 * oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo\n1:C 22 Sep 2026 01:33:13.165 * Redis version=7.4.2, bits=64, commit=00000000, modified=0, pid=1, just started\n1:C 22 Sep 2026 01:33:13.166 * Configuration loaded\n1:M 22 Sep 2026 01:33:13.227 # Unable to obtain the current NOFILE limit (Operation not supported), assuming 1024 and setting the max clients configuration accordingly.\n1:M 22 Sep 2026 01:33:13.230 * monotonic clock: POSIX clock_gettime\n1:M 22 Sep 2026 01:33:13.719 * Running mode=standalone, port=55863.\n1:M 22 Sep 2026 01:33:13.795 * Server initialized\n1:M 22 Sep 2026 01:33:13.932 * Reading RDB base file on AOF loading...\n1:M 22 Sep 2026 01:33:13.937 * Loading RDB produced by version 7.4.2\n1:M 22 Sep 2026 01:33:13.939 * RDB age 6835962 seconds\n1:M 22 Sep 2026 01:33:13.940 * RDB memory usage when created 0.46 Mb\n1:M 22 Sep 2026 01:33:13.941 * RDB is base AOF\n1:M 22 Sep 2026 01:33:13.941 * Done loading RDB, keys loaded: 0, keys expired: 0.\n1:M 22 Sep 2026 01:33:13.972 * DB loaded from base file appendonly.aof.1.base.rdb: 0.045 seconds\n1:M 22 Sep 2026 01:33:14.026 * DB loaded from incr file appendonly.aof.1.incr.aof: 0.053 seconds\n1:M 22 Sep 2026 01:33:14.026 * DB loaded from append only file: 0.105 seconds\n1:M 22 Sep 2026 01:33:14.027 * Opening AOF incr file appendonly.aof.1.incr.aof on server start\n1:M 22 Sep 2026 01:33:14.028 * Ready to accept connections tcp\n",
+      "stdout_bytes": 1417,
+      "stderr": "",
+      "stderr_bytes": 0
+    },
+    {
+      "phase": "crash",
+      "index": 4,
+      "passed": true,
+      "expected_before": 327,
+      "recovered_keys_verified": 327,
+      "workload": {
+        "acknowledged_sets": 24,
+        "verified_gets": 20,
+        "verified_increments": 0,
+        "connected_clients": 4,
+        "interrupted_clients": 4,
+        "clients": 4,
+        "all_clients_connected_before_writes": true,
+        "deliberate_sigkill": true
+      },
+      "exit": -9,
+      "expected_after": 351,
+      "stdout": "1:C 22 Sep 2026 01:33:15.043 * oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo\n1:C 22 Sep 2026 01:33:15.048 * Redis version=7.4.2, bits=64, commit=00000000, modified=0, pid=1, just started\n1:C 22 Sep 2026 01:33:15.048 * Configuration loaded\n1:M 22 Sep 2026 01:33:15.105 # Unable to obtain the current NOFILE limit (Operation not supported), assuming 1024 and setting the max clients configuration accordingly.\n1:M 22 Sep 2026 01:33:15.108 * monotonic clock: POSIX clock_gettime\n1:M 22 Sep 2026 01:33:15.602 * Running mode=standalone, port=55863.\n1:M 22 Sep 2026 01:33:15.680 * Server initialized\n1:M 22 Sep 2026 01:33:15.815 * Reading RDB base file on AOF loading...\n1:M 22 Sep 2026 01:33:15.820 * Loading RDB produced by version 7.4.2\n1:M 22 Sep 2026 01:33:15.821 * RDB age 6835962 seconds\n1:M 22 Sep 2026 01:33:15.823 * RDB memory usage when created 0.46 Mb\n1:M 22 Sep 2026 01:33:15.823 * RDB is base AOF\n1:M 22 Sep 2026 01:33:15.824 * Done loading RDB, keys loaded: 0, keys expired: 0.\n1:M 22 Sep 2026 01:33:15.855 * DB loaded from base file appendonly.aof.1.base.rdb: 0.045 seconds\n1:M 22 Sep 2026 01:33:15.909 * DB loaded from incr file appendonly.aof.1.incr.aof: 0.054 seconds\n1:M 22 Sep 2026 01:33:15.909 * DB loaded from append only file: 0.105 seconds\n1:M 22 Sep 2026 01:33:15.910 * Opening AOF incr file appendonly.aof.1.incr.aof on server start\n1:M 22 Sep 2026 01:33:15.910 * Ready to accept connections tcp\n",
+      "stdout_bytes": 1417,
+      "stderr": "",
+      "stderr_bytes": 0
+    },
+    {
+      "phase": "final_recovery",
+      "index": 5,
+      "passed": true,
+      "expected_before": 351,
+      "recovered_keys_verified": 351,
+      "post_write_keys_verified": 351,
+      "exit": 0,
+      "expected_after": 351,
+      "stdout": "1:C 22 Sep 2026 01:33:16.970 * oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo\n1:C 22 Sep 2026 01:33:16.975 * Redis version=7.4.2, bits=64, commit=00000000, modified=0, pid=1, just started\n1:C 22 Sep 2026 01:33:16.975 * Configuration loaded\n1:M 22 Sep 2026 01:33:17.032 # Unable to obtain the current NOFILE limit (Operation not supported), assuming 1024 and setting the max clients configuration accordingly.\n1:M 22 Sep 2026 01:33:17.036 * monotonic clock: POSIX clock_gettime\n1:M 22 Sep 2026 01:33:17.530 * Running mode=standalone, port=55863.\n1:M 22 Sep 2026 01:33:17.607 * Server initialized\n1:M 22 Sep 2026 01:33:17.745 * Reading RDB base file on AOF loading...\n1:M 22 Sep 2026 01:33:17.750 * Loading RDB produced by version 7.4.2\n1:M 22 Sep 2026 01:33:17.751 * RDB age 6835962 seconds\n1:M 22 Sep 2026 01:33:17.753 * RDB memory usage when created 0.46 Mb\n1:M 22 Sep 2026 01:33:17.753 * RDB is base AOF\n1:M 22 Sep 2026 01:33:17.754 * Done loading RDB, keys loaded: 0, keys expired: 0.\n1:M 22 Sep 2026 01:33:17.785 * DB loaded from base file appendonly.aof.1.base.rdb: 0.045 seconds\n1:M 22 Sep 2026 01:33:17.841 * DB loaded from incr file appendonly.aof.1.incr.aof: 0.056 seconds\n1:M 22 Sep 2026 01:33:17.842 * DB loaded from append only file: 0.107 seconds\n1:M 22 Sep 2026 01:33:17.843 * Opening AOF incr file appendonly.aof.1.incr.aof on server start\n1:M 22 Sep 2026 01:33:17.843 * Ready to accept connections tcp\n1:M 22 Sep 2026 01:33:18.374 * User requested shutdown...\n1:M 22 Sep 2026 01:33:18.377 * Calling fsync() on the AOF file.\n1:M 22 Sep 2026 01:33:18.378 # Redis is now ready to exit, bye bye...\n",
+      "stdout_bytes": 1609,
+      "stderr": "",
+      "stderr_bytes": 0
+    }
+  ],
+  "acknowledged_keys": 351,
+  "acknowledged_data_sha256": "98f4c31eb8ea8185ac53679511171b2b1dae229888a098b864131f9908e6a613",
+  "aof_files": [
+    {
+      "path": "appendonlydir/appendonly.aof.1.base.rdb",
+      "bytes": 86,
+      "sha256": "0ac8b1d422a211a35135d46d73286153c17277638a347912a90d17702c2ed121"
+    },
+    {
+      "path": "appendonlydir/appendonly.aof.1.incr.aof",
+      "bytes": 90574,
+      "sha256": "a4b2609e7727ba2c03bbde67916076016031c50453ef671f847103f93d035770"
+    },
+    {
+      "path": "appendonlydir/appendonly.aof.manifest",
+      "bytes": 88,
+      "sha256": "ca465c5845ad4d4c0a2b4cda8853efeb9423cb4242a4eaaa5ecbaa00a4e75492"
+    }
+  ]
+}

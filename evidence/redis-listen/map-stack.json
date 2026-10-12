@@ -1,0 +1,27 @@
+{
+  "scope": "MAP_STACK allocation, zero-fill, guard access, mprotect, data retention, unmap and zero-length validation",
+  "elf_sha256": "be17d6825c4f46f591b9fbfd650c8528a0a6ab3292a04abf7057eccab658bdd1",
+  "results": [
+    {
+      "backend": "interpreter",
+      "exit": 0,
+      "stderr": "",
+      "passed": true,
+      "checks": 12
+    },
+    {
+      "backend": "unicorn",
+      "exit": 0,
+      "stderr": "",
+      "passed": true,
+      "checks": 12
+    },
+    {
+      "backend": "Linux reference",
+      "exit": 0,
+      "stderr": "",
+      "passed": true,
+      "checks": 12
+    }
+  ]
+}

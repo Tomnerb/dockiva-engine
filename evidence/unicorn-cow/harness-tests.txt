@@ -1,0 +1,5 @@
+interpreter-sanitize PASS
+interpreter-sanitize-oom-store PASS
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/cow/unicorn: replacing existing signature
+unicorn PASS
+unicorn-oom-store PASS

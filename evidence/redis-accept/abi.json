@@ -1,0 +1,20 @@
+{
+  "scope": "accept/accept4/getpeername peer sockaddr ABI, truncation, zero/NULL outputs, bad pointers, invalid lengths, nonblocking flags and actual data exchange",
+  "elf_sha256": "e790af060f3e92ed153b877f2926a2a194e28bbafd9ed4e1eb211ec2033b2da1",
+  "results": [
+    {
+      "backend": "interpreter",
+      "exit": 0,
+      "stderr": "",
+      "passed": true,
+      "checks": 110
+    },
+    {
+      "backend": "hvf",
+      "exit": 0,
+      "stderr": "",
+      "passed": true,
+      "checks": 110
+    }
+  ]
+}

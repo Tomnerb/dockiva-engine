@@ -1,0 +1,1310 @@
+{
+  "runtime_sha256": "781b42a346d65782e5c8b910c9bd13969b79c3fd9e909b42fee237ea5a25a21d",
+  "scope": "Direct ELF probes with optional temporary server startup; not stock image, Dockiva or persistence acceptance",
+  "expanded_limits": true,
+  "results": [
+    {
+      "database": "postgresql",
+      "image_id": "sha256:d394728dee24b7791f1969c683f8b8410fe57450713a1db2aff5a500f0f98ab0",
+      "repository_digests": [
+        "postgres@sha256:4e6e670bb069649261c9c18031f0aded7bb249a5b6664ddec29c013a89310d50"
+      ],
+      "binary": "/usr/local/bin/postgres",
+      "service_qualified": false,
+      "files": {
+        "/etc/passwd": {
+          "sha256": "7e4d76a6252d1b22b4db845d151663801e84e05e3f57f80c1b54664a2d630ea8",
+          "bytes": 748
+        },
+        "/etc/group": {
+          "sha256": "96e5294cea7cfbbb31f2f93f23d4828afbd8d00a6a5fc85dfd1276d7fee3a3a0",
+          "bytes": 533
+        },
+        "/etc/hosts": {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        },
+        "/etc/nsswitch.conf": {
+          "sha256": "0afd94c183d30a348b45057f6bf468e121aa448a7641109addb5bb8e282f514d",
+          "bytes": 205
+        },
+        "/usr/local/share/postgresql/errcodes.txt": {
+          "sha256": "1d1d741b7b7c6dfd8275287e31c79befed75f3b9349e1a42ef0ca147c429ff88",
+          "bytes": 33458
+        },
+        "/usr/local/share/postgresql/extension/adminpack--1.0--1.1.sql": {
+          "sha256": "3fd4be2c4ade8770e76403072329232f2b9d57c264a013467174c72a02aa480d",
+          "bytes": 274
+        },
+        "/usr/local/share/postgresql/extension/adminpack--1.0.sql": {
+          "sha256": "cd4ab224700cfeed7ce07f8250b42b45575bd961374618b38e4f943fc749a26c",
+          "bytes": 1535
+        },
+        "/usr/local/share/postgresql/extension/adminpack--1.1--2.0.sql": {
+          "sha256": "79b1cfc03528bc75d8f6240a8f7cd8e0c58009b0cf8f49a020e3ce93a1017d25",
+          "bytes": 1682
+        },
+        "/usr/local/share/postgresql/extension/adminpack--2.0--2.1.sql": {
+          "sha256": "14008334b21d9453661c3a0363edfa89b288bcf3aac189c55d40c6452042f299",
+          "bytes": 595
+        },
+        "/usr/local/share/postgresql/extension/adminpack.control": {
+          "sha256": "d2811bdeb3fbe221a1da04f72b2fa6f46e47330f550ca69f242468a358493b02",
+          "bytes": 176
+        },
+        "/usr/local/share/postgresql/extension/amcheck--1.0--1.1.sql": {
+          "sha256": "ef7837e801a68f98a386417dcc2e6daffbcf489903ac6ae2a7785f5c979f2a57",
+          "bytes": 931
+        },
+        "/usr/local/share/postgresql/extension/amcheck--1.0.sql": {
+          "sha256": "6a11b89aac993740431348d1c578d5be1e285a81de79eb27ff6335b075bb7e79",
+          "bytes": 704
+        },
+        "/usr/local/share/postgresql/extension/amcheck--1.1--1.2.sql": {
+          "sha256": "2a67d156021c0aa2f96f89e4a537c2087666debecb07cb708c022adfafa7db35",
+          "bytes": 705
+        },
+        "/usr/local/share/postgresql/extension/amcheck--1.2--1.3.sql": {
+          "sha256": "7205188cc931c77ccf914d234285d4c67fbc8384c5d1f5178aa3be1892ed7b26",
+          "bytes": 852
+        },
+        "/usr/local/share/postgresql/extension/amcheck.control": {
+          "sha256": "3996a45b93b65197921bbf72e35efea3e5415222d759de25d94c4c11568c62a1",
+          "bytes": 154
+        },
+        "/usr/local/share/postgresql/extension/autoinc--1.0.sql": {
+          "sha256": "90a86e5b46d1d6b1688c3cc068b60782e26a52fa19139feb6b6049ec7c289b53",
+          "bytes": 249
+        },
+        "/usr/local/share/postgresql/extension/autoinc.control": {
+          "sha256": "4fc948f4ae89d47a07589a4c2cb93af211bad46369666322fe0a3d41d6d7d5ff",
+          "bytes": 149
+        },
+        "/usr/local/share/postgresql/extension/bloom--1.0.sql": {
+          "sha256": "cecce7d404b82c1fb397f8598953c55a9d9eaf02b5554989259bbf185611837f",
+          "bytes": 666
+        },
+        "/usr/local/share/postgresql/extension/bloom.control": {
+          "sha256": "a638be9bb2eac43f8fb73db7d5fc43a170b9112ddbf2034d7d037b34d5deedbf",
+          "bytes": 156
+        },
+        "/usr/local/share/postgresql/extension/bool_plperl--1.0.sql": {
+          "sha256": "a98954c904f169003d487158a0af802996a357872de06d7578b2b91ba1595e65",
+          "bytes": 647
+        },
+        "/usr/local/share/postgresql/extension/bool_plperl.control": {
+          "sha256": "4427c7d1edfcce8103853ba8a9c57f28ef0fd6f76fd01aa286b7963335614b55",
+          "bytes": 188
+        },
+        "/usr/local/share/postgresql/extension/bool_plperlu--1.0.sql": {
+          "sha256": "f1a2a6d44cef98a8d174a76b193bb70090c98226a600fc8d7b69e74865560624",
+          "bytes": 691
+        },
+        "/usr/local/share/postgresql/extension/bool_plperlu.control": {
+          "sha256": "1b8806a8cb82734681c84bc5350e1c07a54607b32cf8532e15c40db7618f7817",
+          "bytes": 176
+        },
+        "/usr/local/share/postgresql/extension/btree_gin--1.0--1.1.sql": {
+          "sha256": "c81798c7433e3286af13d5b876c0640e0f6cbe7fae25275b86511500ba5d8879",
+          "bytes": 1372
+        },
+        "/usr/local/share/postgresql/extension/btree_gin--1.0.sql": {
+          "sha256": "0c5440a89f33c953fd0217d273a3ad6816ae32eeea8bcadbc8951ea6688756e3",
+          "bytes": 24818
+        },
+        "/usr/local/share/postgresql/extension/btree_gin--1.1--1.2.sql": {
+          "sha256": "6a3c43f4d8e91802f205b1c0ee330eadbb23372b1ff86e2954bb1ea3dd412f42",
+          "bytes": 1445
+        },
+        "/usr/local/share/postgresql/extension/btree_gin--1.2--1.3.sql": {
+          "sha256": "7a159af1a74eb2202be19c5a6383720a08e65ded58d4b2393cca56fe8c34cd35",
+          "bytes": 4571
+        },
+        "/usr/local/share/postgresql/extension/btree_gin.control": {
+          "sha256": "ba6ceeda8de05adc0145a152178fc96a84ef7d21b4347af36f8c644542c94bcd",
+          "bytes": 175
+        },
+        "/usr/local/share/postgresql/extension/btree_gist--1.0--1.1.sql": {
+          "sha256": "bf5d5f760da60f41fbfcd31804550f06c4511b1a5c19ffa302c3c1761c4afe38",
+          "bytes": 3739
+        },
+        "/usr/local/share/postgresql/extension/btree_gist--1.1--1.2.sql": {
+          "sha256": "2d3caf344f62e7367e7b9227e42196fcabbf3a666b5a2216e44854675f643033",
+          "bytes": 5048
+        },
+        "/usr/local/share/postgresql/extension/btree_gist--1.2--1.3.sql": {
+          "sha256": "5dc7a402185ddbdff6d4488686ba28e3e89c59a850e54f833114f383cda19123",
+          "bytes": 1955
+        },
+        "/usr/local/share/postgresql/extension/btree_gist--1.2.sql": {
+          "sha256": "6ce065d3cf6225cdc56d06ce0e8c18f404b658f18d5ae5b5adc652b69b4a66b4",
+          "bytes": 41115
+        },
+        "/usr/local/share/postgresql/extension/btree_gist--1.3--1.4.sql": {
+          "sha256": "7a7f5ece012f23d7a11f460e7536b65435ee0aeead0717963a428b092135ab84",
+          "bytes": 1932
+        },
+        "/usr/local/share/postgresql/extension/btree_gist--1.4--1.5.sql": {
+          "sha256": "4e28241668ad1ccc0d645ac46726a160617af4d07a8d77f188776e91b085d3ce",
+          "bytes": 1872
+        },
+        "/usr/local/share/postgresql/extension/btree_gist--1.5--1.6.sql": {
+          "sha256": "593f167508dc9c6e8be7e5565c15d5fb8d259e38f6139170b72b3da115e2cff4",
+          "bytes": 13417
+        },
+        "/usr/local/share/postgresql/extension/btree_gist--1.6--1.7.sql": {
+          "sha256": "426340ca65ed9763e3934c39e5f427e743a4947f6e89eba6bb4c7d9bd3ad0bf5",
+          "bytes": 2170
+        },
+        "/usr/local/share/postgresql/extension/btree_gist.control": {
+          "sha256": "3ca06b88ec216596b06215d9c0cc7f08cd10f0f3fdaf48f58b19bce0464c07ee",
+          "bytes": 178
+        },
+        "/usr/local/share/postgresql/extension/citext--1.0--1.1.sql": {
+          "sha256": "8e522f09d70ccaa6794ba3aa9e0eb19e4c4235b6772605506e619f5b77ba23c4",
+          "bytes": 1028
+        },
+        "/usr/local/share/postgresql/extension/citext--1.1--1.2.sql": {
+          "sha256": "9f9fe637eab0a2af2a3b6c1595d73fe8a24c8f23668c9ac43190f050055400cf",
+          "bytes": 3424
+        },
+        "/usr/local/share/postgresql/extension/citext--1.2--1.3.sql": {
+          "sha256": "7d28362af43aa2cbfe46785afeafea351dc47c75257876aa07e466f7e1c4901f",
+          "bytes": 850
+        },
+        "/usr/local/share/postgresql/extension/citext--1.3--1.4.sql": {
+          "sha256": "7289ff58c1cb20ca73b4c5a0e1c55808661b07d196f28a0b9a1c1dd7679a736e",
+          "bytes": 668
+        },
+        "/usr/local/share/postgresql/extension/citext--1.4--1.5.sql": {
+          "sha256": "8104223ef4f55afc26bddbca5a6f5500a87c026a9692c6bf1f06e2594fe69c21",
+          "bytes": 2284
+        },
+        "/usr/local/share/postgresql/extension/citext--1.4.sql": {
+          "sha256": "ca0e42530cef4281e9ee788739c6774cf4d5e1ce8eeb1a84964150a9659d3e0b",
+          "bytes": 13466
+        },
+        "/usr/local/share/postgresql/extension/citext--1.5--1.6.sql": {
+          "sha256": "31917f922dcc33b58c34cd9f221d4822eadfd5a190f2d3f0a447e03f46de394e",
+          "bytes": 427
+        },
+        "/usr/local/share/postgresql/extension/citext.control": {
+          "sha256": "748d123583d37e9f1be4376b736579b2e248750ddaa12a7bae1f8bc115ce43b5",
+          "bytes": 173
+        },
+        "/usr/local/share/postgresql/extension/cube--1.0--1.1.sql": {
+          "sha256": "943afc9d06b3898eb53855166438e42f3475f284176d5ec3745a701c53365bfc",
+          "bytes": 1594
+        },
+        "/usr/local/share/postgresql/extension/cube--1.1--1.2.sql": {
+          "sha256": "5815a7165eaec913b651bc1aabbecddb0a85a0c5eb67b995d86f185ac07dd8fa",
+          "bytes": 3815
+        },
+        "/usr/local/share/postgresql/extension/cube--1.2--1.3.sql": {
+          "sha256": "ccc82742d4a9360cbd3baeb8eb50090824be5a84e30e9e01f8ef9f1e82c0beb5",
+          "bytes": 365
+        },
+        "/usr/local/share/postgresql/extension/cube--1.2.sql": {
+          "sha256": "5c6dbab000abc408addfbf19bd797a7d7bcea7d64f02f4ab44356eb0acb2daeb",
+          "bytes": 9761
+        },
+        "/usr/local/share/postgresql/extension/cube--1.3--1.4.sql": {
+          "sha256": "1ece52185fcbeaf78b43984c9923d1949ddca64d30350a5b96e3d42fe5e1ee72",
+          "bytes": 2387
+        },
+        "/usr/local/share/postgresql/extension/cube--1.4--1.5.sql": {
+          "sha256": "cd493c743c1a8fc305cdfac8c8a06bfd7aac89f6ef737a6e5197c34fef8088b7",
+          "bytes": 591
+        },
+        "/usr/local/share/postgresql/extension/cube.control": {
+          "sha256": "bab0de58b95c1014fa8f2372680653c39b8b7af2fde69393c966112a44dc9a8a",
+          "bytes": 157
+        },
+        "/usr/local/share/postgresql/extension/dblink--1.0--1.1.sql": {
+          "sha256": "41aae031fc6c6e60bd64ddc21841d02a0d894a3894ddad2591a37c02281633bd",
+          "bytes": 419
+        },
+        "/usr/local/share/postgresql/extension/dblink--1.1--1.2.sql": {
+          "sha256": "65ef017bd7c0b07f65f0785420e83939a833645f5cd2935b9fc7235bac0f3001",
+          "bytes": 2832
+        },
+        "/usr/local/share/postgresql/extension/dblink--1.2.sql": {
+          "sha256": "615d0687b504a6389ce94d4fd202a78a0dec09eef55653d358e9c964f9521914",
+          "bytes": 6645
+        },
+        "/usr/local/share/postgresql/extension/dblink.control": {
+          "sha256": "000235278aab047a81911dbb285563e4ea5cefbbc1930901560914f28c86237c",
+          "bytes": 170
+        },
+        "/usr/local/share/postgresql/extension/dict_int--1.0.sql": {
+          "sha256": "ef69820527c757bd6004c04353fc2136b405b47dfd78c4af6aa34e96b8fd540f",
+          "bytes": 711
+        },
+        "/usr/local/share/postgresql/extension/dict_int.control": {
+          "sha256": "7f8fecf5146855a282f1a66ce0902cf78fa0f3a6ab0ac0eb081f83bf8275c206",
+          "bytes": 173
+        },
+        "/usr/local/share/postgresql/extension/dict_xsyn--1.0.sql": {
+          "sha256": "a0ff05b7ee7c72242952d6cecb4a00837a19b3ed28da25a00a0ffa7ecaf90019",
+          "bytes": 694
+        },
+        "/usr/local/share/postgresql/extension/dict_xsyn.control": {
+          "sha256": "99ccde7920c8f430fea48e311d5420bc238491d2d9f7e2d38f916ade95a0b9cd",
+          "bytes": 179
+        },
+        "/usr/local/share/postgresql/extension/earthdistance--1.0--1.1.sql": {
+          "sha256": "378acfc1526f7a7b9dff088cde21bc85548d15388f7283732fe728f7facac809",
+          "bytes": 671
+        },
+        "/usr/local/share/postgresql/extension/earthdistance--1.1--1.2.sql": {
+          "sha256": "a7bc619b81e8204ddec34fd9109b34a50e6c93c4725fb281b437e5164a701781",
+          "bytes": 2194
+        },
+        "/usr/local/share/postgresql/extension/earthdistance--1.1.sql": {
+          "sha256": "ebd715f3f22ec5287c4d5c42b4301fb82fbc9d2f5037656b1943cc542444ea15",
+          "bytes": 3319
+        },
+        "/usr/local/share/postgresql/extension/earthdistance.control": {
+          "sha256": "22fe151b4758eb166ec24400df08df3e9711827d207947f5511f1f476f08a9d4",
+          "bytes": 202
+        },
+        "/usr/local/share/postgresql/extension/file_fdw--1.0.sql": {
+          "sha256": "9e8c813cfe876d71d5ee36ecaad5d17c77bbfc8bbfb005490f76478ac37e3f53",
+          "bytes": 475
+        },
+        "/usr/local/share/postgresql/extension/file_fdw.control": {
+          "sha256": "2f5964ed7e8d26aeb1a5b78674b891f219cb4d8b63fecc9600aded4315c6de78",
+          "bytes": 155
+        },
+        "/usr/local/share/postgresql/extension/fuzzystrmatch--1.0--1.1.sql": {
+          "sha256": "b4e6797d0a1d25ca905b52bc96f5ab18b40f18b1fc71fdadd8d01513b03a754e",
+          "bytes": 788
+        },
+        "/usr/local/share/postgresql/extension/fuzzystrmatch--1.1--1.2.sql": {
+          "sha256": "69c66f21261fb48cf64bbcfccc204a5f5bb078d0d3dbd1bdbb3f2fc7fd99ea31",
+          "bytes": 351
+        },
+        "/usr/local/share/postgresql/extension/fuzzystrmatch--1.1.sql": {
+          "sha256": "84009c54e3756973a0e8c5786161eb5bbd1d45b83d2f1c717ecac2917ae6cf06",
+          "bytes": 1576
+        },
+        "/usr/local/share/postgresql/extension/fuzzystrmatch.control": {
+          "sha256": "03cb75eb2e7602c93bae23f6912a9cb6728229c1118434505ff26958829045d4",
+          "bytes": 190
+        },
+        "/usr/local/share/postgresql/extension/hstore--1.1--1.2.sql": {
+          "sha256": "8e166794ad480bd9141f5627b838d9c9076a76f63237c9058b836c36f0600df7",
+          "bytes": 1639
+        },
+        "/usr/local/share/postgresql/extension/hstore--1.2--1.3.sql": {
+          "sha256": "0753c346e86147cb7767f603310b774cff6affb11e65c2d5caf173cf0766ad2c",
+          "bytes": 525
+        },
+        "/usr/local/share/postgresql/extension/hstore--1.3--1.4.sql": {
+          "sha256": "7e8df8d33964ce7ab39d32be90e94b64f9776588fe43b53e70077a3e58ec95f9",
+          "bytes": 5310
+        },
+        "/usr/local/share/postgresql/extension/hstore--1.4--1.5.sql": {
+          "sha256": "045d0def508a248fd0049f1bf99bbbec9bccff523f31514ffa3f7daf46b11de6",
+          "bytes": 409
+        },
+        "/usr/local/share/postgresql/extension/hstore--1.4.sql": {
+          "sha256": "bcd0328004e985554dc3831cb0db92da3f45bec48b6501fce962187b7a2c2bbf",
+          "bytes": 13765
+        },
+        "/usr/local/share/postgresql/extension/hstore--1.5--1.6.sql": {
+          "sha256": "957ae4e39efc2841766c59e2ece1bc431d87a8cfe39e8433b70ba08cf3e3b8d5",
+          "bytes": 455
+        },
+        "/usr/local/share/postgresql/extension/hstore--1.6--1.7.sql": {
+          "sha256": "0d410440dc457b525626b0fd6f5a0262dd233ec6f299e5c3ca7b090d2f9576db",
+          "bytes": 1061
+        },
+        "/usr/local/share/postgresql/extension/hstore--1.7--1.8.sql": {
+          "sha256": "49bbb159d5f67e86ddcb93d11a9d444f6dd70bcb03a8400ce8c3664fbb974dba",
+          "bytes": 508
+        },
+        "/usr/local/share/postgresql/extension/hstore.control": {
+          "sha256": "1df9f2b3059cd77e38920dd35235161b3ad336fc71198c66120d120262ad086d",
+          "bytes": 173
+        },
+        "/usr/local/share/postgresql/extension/hstore_plperl--1.0.sql": {
+          "sha256": "1db9dd3199d7f549920b0eb1bbda9a1c29e82328c4da8769e9f8bbbbddd0f9ac",
+          "bytes": 580
+        },
+        "/usr/local/share/postgresql/extension/hstore_plperl.control": {
+          "sha256": "cfba6a09c204d8010b7da4a62efd190f10d895fd2a3fa93894ffc0bc5a1e17f5",
+          "bytes": 186
+        },
+        "/usr/local/share/postgresql/extension/hstore_plperlu--1.0.sql": {
+          "sha256": "6fb0cb4ea07faf0ed479975ff5be57b271b341212148ed364218e82d299122ed",
+          "bytes": 627
+        },
+        "/usr/local/share/postgresql/extension/hstore_plperlu.control": {
+          "sha256": "e002350703f6eb8b8dab94bcea938bef8176b9d6d5624478e6eb67d5be297f35",
+          "bytes": 189
+        },
+        "/usr/local/share/postgresql/extension/hstore_plpython3u--1.0.sql": {
+          "sha256": "0439a302b4f76dd5a6c556686b368ce6541cfc88390156eb0630983c040322cf",
+          "bytes": 750
+        },
+        "/usr/local/share/postgresql/extension/hstore_plpython3u.control": {
+          "sha256": "3de66771562dae0ce5cc830ce780d9d67883f458e5fece4920ea0183f5d5c4e6",
+          "bytes": 201
+        },
+        "/usr/local/share/postgresql/extension/insert_username--1.0.sql": {
+          "sha256": "dfd01c866f57383291de8998b03dc99f4ef0d0f6a6f238a61511f6b3c05676db",
+          "bytes": 273
+        },
+        "/usr/local/share/postgresql/extension/insert_username.control": {
+          "sha256": "a50a089237d1da5e5d56ace503a601d5e3d759ffb1d3cc5a61c9024eb19a0ddd",
+          "bytes": 170
+        },
+        "/usr/local/share/postgresql/extension/intagg--1.0--1.1.sql": {
+          "sha256": "7d1dc1395321cf717ccb84383f95bf5f34f9691a303ee16c5a32bb2387d60e57",
+          "bytes": 897
+        },
+        "/usr/local/share/postgresql/extension/intagg--1.1.sql": {
+          "sha256": "23efea89ed8f96cc6aff196d2ca19100757e8a27d69add7ea516ade554273324",
+          "bytes": 1089
+        },
+        "/usr/local/share/postgresql/extension/intagg.control": {
+          "sha256": "b0fd3e80a9386f194adebdcdec7a87d3e3be05f2b121b5feedf24c70c3a6590f",
+          "bytes": 119
+        },
+        "/usr/local/share/postgresql/extension/intarray--1.0--1.1.sql": {
+          "sha256": "afe3f46b5ea00c14d203b81de1f9c44ddff65fb1780f12fdbe9f9a5fe8bf3296",
+          "bytes": 1794
+        },
+        "/usr/local/share/postgresql/extension/intarray--1.1--1.2.sql": {
+          "sha256": "999a398ea4c6c568c9c539223fd6fa22582e5cfbce48efeaff73cb88157c7737",
+          "bytes": 5525
+        },
+        "/usr/local/share/postgresql/extension/intarray--1.2--1.3.sql": {
+          "sha256": "6ec2bd07555168eac88c09efd777fdf5855b01e8170e9c21c164d36e2976513f",
+          "bytes": 663
+        },
+        "/usr/local/share/postgresql/extension/intarray--1.2.sql": {
+          "sha256": "cdbe2efda79cb5c9cfc17f157425e240bcd659b5c4ff590b30ab7dafc8b9dab1",
+          "bytes": 12293
+        },
+        "/usr/local/share/postgresql/extension/intarray--1.3--1.4.sql": {
+          "sha256": "df2479d62a6aac3fba7a924f5c84f994fd98d4ad9926966d9d471794f604460e",
+          "bytes": 692
+        },
+        "/usr/local/share/postgresql/extension/intarray--1.4--1.5.sql": {
+          "sha256": "2fadcb036e13e88a68ad11030c5c90234951050c0db3ce925cd8b82ae4797dd1",
+          "bytes": 282
+        },
+        "/usr/local/share/postgresql/extension/intarray.control": {
+          "sha256": "4639c9ee34acfc0f3a25bcff0c4e6398722f9a6371241b1950a4c1d1b73121c1",
+          "bytes": 191
+        },
+        "/usr/local/share/postgresql/extension/isn--1.0--1.1.sql": {
+          "sha256": "481e984efaf9cf02f0351f601945976b1604bbb46eaf72f8400da7121f206302",
+          "bytes": 12333
+        },
+        "/usr/local/share/postgresql/extension/isn--1.1--1.2.sql": {
+          "sha256": "a8bb938809c0c3cd239ba3248590e774961a54da454a7f2d3050169b221e46b2",
+          "bytes": 5264
+        },
+        "/usr/local/share/postgresql/extension/isn--1.1.sql": {
+          "sha256": "eedbf152770a67be7cb839ce3c229c2886ae07d4888f8ec61caac09c818a0fcb",
+          "bytes": 69885
+        },
+        "/usr/local/share/postgresql/extension/isn.control": {
+          "sha256": "444230950d1bc13cccaa16c9e9fbf69da1ec92eeb4d9546eafcc7ea7a8529e8e",
+          "bytes": 175
+        },
+        "/usr/local/share/postgresql/extension/jsonb_plperl--1.0.sql": {
+          "sha256": "23e7e30bdb43fc83f8936694f491f35974a997e79b5d4a8881e4e66fd50f584c",
+          "bytes": 658
+        },
+        "/usr/local/share/postgresql/extension/jsonb_plperl.control": {
+          "sha256": "d71e1b2bdf89c97e804af1a51d83c2558e84d004067890f58e3bc3d8f7ad1397",
+          "bytes": 191
+        },
+        "/usr/local/share/postgresql/extension/jsonb_plperlu--1.0.sql": {
+          "sha256": "c747f638060e4335c023bf1ae9a8015858e07e310f50ddba872955aacf812651",
+          "bytes": 704
+        },
+        "/usr/local/share/postgresql/extension/jsonb_plperlu.control": {
+          "sha256": "3921ac857c91d90e72ee32460249b505e08360ff7e233eddd321d76f45ac8248",
+          "bytes": 178
+        },
+        "/usr/local/share/postgresql/extension/jsonb_plpython3u--1.0.sql": {
+          "sha256": "b3e695c8192d716ca3b851310162cb86ffda8c97c33d7d83eacbc234797ffa61",
+          "bytes": 732
+        },
+        "/usr/local/share/postgresql/extension/jsonb_plpython3u.control": {
+          "sha256": "3de997dc17c74bd808972e3689d80d52fd26336815272242141cb4efacc6c9e3",
+          "bytes": 191
+        },
+        "/usr/local/share/postgresql/extension/lo--1.0--1.1.sql": {
+          "sha256": "6b746a7b34517f8c4a9aded518085fcdce85ee9145b7400788167401833a3485",
+          "bytes": 223
+        },
+        "/usr/local/share/postgresql/extension/lo--1.1.sql": {
+          "sha256": "d045cbbb5385d15052b9dacd213d896d994ba51af55695e1685681b2f7637d5e",
+          "bytes": 722
+        },
+        "/usr/local/share/postgresql/extension/lo.control": {
+          "sha256": "bf59f18118f7f02c6d79cd3a559249414c3a373f5af318d9a75f343749a919f6",
+          "bytes": 141
+        },
+        "/usr/local/share/postgresql/extension/ltree--1.0--1.1.sql": {
+          "sha256": "069cf8d289005a3ce19bbd4f7c0b7aa84fccac2763392a1c7ebe1fcfe641a25f",
+          "bytes": 6336
+        },
+        "/usr/local/share/postgresql/extension/ltree--1.1--1.2.sql": {
+          "sha256": "e8f907408575edae282a028691eaa6f61b0c810b6f7c3a9cd2b7fb8935bfb406",
+          "bytes": 5217
+        },
+        "/usr/local/share/postgresql/extension/ltree--1.1.sql": {
+          "sha256": "17bd2b7616cc0fdd72ded20017c224e7c1d8d145a7562f985f5093bb8180b7cc",
+          "bytes": 19375
+        },
+        "/usr/local/share/postgresql/extension/ltree.control": {
+          "sha256": "90dae470c48b8c3cb82df0658f42a54323833be9b448884144c6c66908496c70",
+          "bytes": 170
+        },
+        "/usr/local/share/postgresql/extension/ltree_plpython3u--1.0.sql": {
+          "sha256": "4b576bd49f567410a8b6c8506729079ec78b6e331c76623117a0336a4c7db9b0",
+          "bytes": 449
+        },
+        "/usr/local/share/postgresql/extension/ltree_plpython3u.control": {
+          "sha256": "881d44740488f0339e89a1b87bbd9b5697a045139dfe6a1568f483127eec33d0",
+          "bytes": 197
+        },
+        "/usr/local/share/postgresql/extension/moddatetime--1.0.sql": {
+          "sha256": "81aa1167a1f7ab51f1518698c8f56f712a5030e15ec588d2e1def03dddc69c96",
+          "bytes": 261
+        },
+        "/usr/local/share/postgresql/extension/moddatetime.control": {
+          "sha256": "7c6e860c0570348baa620603566c6bc4d7bb4b3b11a66dd0033493fcb4f1f96e",
+          "bytes": 165
+        },
+        "/usr/local/share/postgresql/extension/old_snapshot--1.0.sql": {
+          "sha256": "120b6ac4a523a48d0f98ea6e05a6e41bd1ffa0a2c1b3115560ee5fe16a799299",
+          "bytes": 549
+        },
+        "/usr/local/share/postgresql/extension/old_snapshot.control": {
+          "sha256": "5593838fa73c7815f60932f61e7c2385e92e42507bb5566507fb976ef6966b83",
+          "bytes": 168
+        },
+        "/usr/local/share/postgresql/extension/pageinspect--1.0--1.1.sql": {
+          "sha256": "84268e37d39bef6585d42a4e14dee567e7afb919addf6621dfd4ec9eabf08fca",
+          "bytes": 560
+        },
+        "/usr/local/share/postgresql/extension/pageinspect--1.1--1.2.sql": {
+          "sha256": "84899c9fbf372d2c2dacffd817eec64c6076fe41006be6261e76f3661c91435e",
+          "bytes": 562
+        },
+        "/usr/local/share/postgresql/extension/pageinspect--1.10--1.11.sql": {
+          "sha256": "37957ad54c1565165d586604605ffe6c017a2fcd749eadb91f19c1d04c980db6",
+          "bytes": 1570
+        },
+        "/usr/local/share/postgresql/extension/pageinspect--1.11--1.12.sql": {
+          "sha256": "9ac047074faab612b9b04e8a9239ee99eb662522538b855016575618374954fa",
+          "bytes": 1165
+        },
+        "/usr/local/share/postgresql/extension/pageinspect--1.2--1.3.sql": {
+          "sha256": "df73aa055b6977ae94cbafca5ce57dab3778633189525ffcd517722a333cb9d7",
+          "bytes": 1946
+        },
+        "/usr/local/share/postgresql/extension/pageinspect--1.3--1.4.sql": {
+          "sha256": "77ea8f779d43ca5fbf04b81170e9971459c9667f0d3e340b5d1ae2c055d35f41",
+          "bytes": 2566
+        },
+        "/usr/local/share/postgresql/extension/pageinspect--1.4--1.5.sql": {
+          "sha256": "b433f6d5838c1055b9d67fa15c170069b9f7e48f0c44d89b30b9207254b4de2a",
+          "bytes": 1347
+        },
+        "/usr/local/share/postgresql/extension/pageinspect--1.5--1.6.sql": {
+          "sha256": "24280667f07c8e9323361c01e6180453f659c3b7aa92ed4cb2356bc6742fcc10",
+          "bytes": 2252
+        },
+        "/usr/local/share/postgresql/extension/pageinspect--1.5.sql": {
+          "sha256": "c8ae5e8b5b2a4ddd91606768bb97a15b20d9801bf221dc5f5a6b9d04f8728582",
+          "bytes": 6262
+        },
+        "/usr/local/share/postgresql/extension/pageinspect--1.6--1.7.sql": {
+          "sha256": "9429a8581910c56ca47892c6c0c5f21f978de3b365735234dc918eb88da689fb",
+          "bytes": 698
+        },
+        "/usr/local/share/postgresql/extension/pageinspect--1.7--1.8.sql": {
+          "sha256": "063f1cd1dc1fbf11db12e10528dee5f2298e7032e5a2cbc5853c864526a02215",
+          "bytes": 1711
+        },
+        "/usr/local/share/postgresql/extension/pageinspect--1.8--1.9.sql": {
+          "sha256": "52b688ab40c01ef54b9ac660fd05520aa35b5132b712f001fcb4a2f4c3bdc307",
+          "bytes": 3398
+        },
+        "/usr/local/share/postgresql/extension/pageinspect--1.9--1.10.sql": {
+          "sha256": "a2b2dde12407e6bdfddf9bec8e6db6a48a973d4ed6fed1e4349b1b6a477b20ec",
+          "bytes": 589
+        },
+        "/usr/local/share/postgresql/extension/pageinspect.control": {
+          "sha256": "a828f9f2b9bd160bbd67c6604c70a95e81a3b4150be698c8d76b8eab3fbc4f2e",
+          "bytes": 174
+        },
+        "/usr/local/share/postgresql/extension/pg_buffercache--1.0--1.1.sql": {
+          "sha256": "88d9a4fe3d4b1f57716786357bf323c3a563da32e5ba424220dc79b96134458c",
+          "bytes": 508
+        },
+        "/usr/local/share/postgresql/extension/pg_buffercache--1.1--1.2.sql": {
+          "sha256": "78054761138f260a9c1b34577e7f2a09b81ff3d58ac3f6e1c6424e0f7f5ca00f",
+          "bytes": 271
+        },
+        "/usr/local/share/postgresql/extension/pg_buffercache--1.2--1.3.sql": {
+          "sha256": "7a90452071e7dae7ca6e75bacf15b73f96bb4be46abfa93502c3e6d520540aad",
+          "bytes": 328
+        },
+        "/usr/local/share/postgresql/extension/pg_buffercache--1.2.sql": {
+          "sha256": "ef83a188c86f21905f9ace8393143c6407d2c25c577e486df6a251c742b6cb6e",
+          "bytes": 794
+        },
+        "/usr/local/share/postgresql/extension/pg_buffercache--1.3--1.4.sql": {
+          "sha256": "d90f11f4e76c28f5a92a298658a44f2d1bdf6751cf5543fdf9647ebd085abefd",
+          "bytes": 1021
+        },
+        "/usr/local/share/postgresql/extension/pg_buffercache.control": {
+          "sha256": "b5062f9077e9e9a1a2bd9e764ba26e4b40e62270af9e748ce707a77e64f74a94",
+          "bytes": 157
+        },
+        "/usr/local/share/postgresql/extension/pg_freespacemap--1.0--1.1.sql": {
+          "sha256": "67a3bc34c99015ddb234e33af7468aecf7d07d32ad2edca1689c8f385b8ff0f5",
+          "bytes": 335
+        },
+        "/usr/local/share/postgresql/extension/pg_freespacemap--1.1--1.2.sql": {
+          "sha256": "d864b9660785a2b139368539f5523c26a125e1f70e110d60f7106f203b4bb5b2",
+          "bytes": 377
+        },
+        "/usr/local/share/postgresql/extension/pg_freespacemap--1.1.sql": {
+          "sha256": "af0b659e01f3d1c49cdae9857be584e7ee0358b80c917eb810e8a808b5a3d087",
+          "bytes": 899
+        },
+        "/usr/local/share/postgresql/extension/pg_freespacemap.control": {
+          "sha256": "37218e3edb4b4b1e9c0e71b0771128ae7ba49fffb21443b9056d137c8cadfea4",
+          "bytes": 160
+        },
+        "/usr/local/share/postgresql/extension/pg_prewarm--1.0--1.1.sql": {
+          "sha256": "086aab8d6f130184865916aa93e84a2563ce335eb8da130fc485368860c8c390",
+          "bytes": 281
+        },
+        "/usr/local/share/postgresql/extension/pg_prewarm--1.1--1.2.sql": {
+          "sha256": "1e3071f0c1535462db8e3d03df58c4de0de73e0106f16a013c4b47e4d84cdd19",
+          "bytes": 458
+        },
+        "/usr/local/share/postgresql/extension/pg_prewarm--1.1.sql": {
+          "sha256": "879227a872c8a8e200b87a09470d166264d0f71269118dcd2117cd89370dbdf6",
+          "bytes": 475
+        },
+        "/usr/local/share/postgresql/extension/pg_prewarm.control": {
+          "sha256": "02457f028a8d2b0a861c4a6611318e3a9af92926881fb111d7d39c329da52b08",
+          "bytes": 139
+        },
+        "/usr/local/share/postgresql/extension/pg_stat_statements--1.0--1.1.sql": {
+          "sha256": "3be14c0cfbc48097813ddb38be7b6ba8b64e61eed495ac78691b112f177fad5d",
+          "bytes": 1246
+        },
+        "/usr/local/share/postgresql/extension/pg_stat_statements--1.1--1.2.sql": {
+          "sha256": "585bcd4b958d9509a4884807895263dc408cd84deb591422fb5088c84797a03c",
+          "bytes": 1336
+        },
+        "/usr/local/share/postgresql/extension/pg_stat_statements--1.2--1.3.sql": {
+          "sha256": "fec6a32365da764be76cf65d3cc5aa70286601f33a07191d122f394eb34c6214",
+          "bytes": 1454
+        },
+        "/usr/local/share/postgresql/extension/pg_stat_statements--1.3--1.4.sql": {
+          "sha256": "1224d505a793c90f36e8d9ee860780a3b9cc57043d75bf5a3c3b9f3e45b20a60",
+          "bytes": 345
+        },
+        "/usr/local/share/postgresql/extension/pg_stat_statements--1.4--1.5.sql": {
+          "sha256": "2f0256a0f057d6bbf62fec58045f06e31974d8d391f553b6ba48fb8583962b86",
+          "bytes": 305
+        },
+        "/usr/local/share/postgresql/extension/pg_stat_statements--1.4.sql": {
+          "sha256": "2bf423c3cebe2fcce8ac589f4b12cbdd6c4e678520d5d8bd76bbf21d7d86a185",
+          "bytes": 1427
+        },
+        "/usr/local/share/postgresql/extension/pg_stat_statements--1.5--1.6.sql": {
+          "sha256": "7c537b11d4bb551208b8f61ecc240ab8af9ba779b76fbd653bd12f38bfe28dc6",
+          "bytes": 376
+        },
+        "/usr/local/share/postgresql/extension/pg_stat_statements--1.6--1.7.sql": {
+          "sha256": "7a5ffffffbff4eab6dff365f8cdb63fd5b675674e2ab52a53adf705aec45fc73",
+          "bytes": 806
+        },
+        "/usr/local/share/postgresql/extension/pg_stat_statements--1.7--1.8.sql": {
+          "sha256": "049ebb696bfbd46fe5b9695a3b44aa6f4059e360e1edd2c047f9c0a0d5f619dd",
+          "bytes": 1744
+        },
+        "/usr/local/share/postgresql/extension/pg_stat_statements--1.8--1.9.sql": {
+          "sha256": "56b838f8d2eb7dcad313370d656fc6a8d886574e93ddc1d942c6d9af85b89d57",
+          "bytes": 2128
+        },
+        "/usr/local/share/postgresql/extension/pg_stat_statements--1.9--1.10.sql": {
+          "sha256": "cfb235d790cceb4bb64dc1e23211114324a978b6ea874fe143bf6acc64bc6171",
+          "bytes": 2114
+        },
+        "/usr/local/share/postgresql/extension/pg_stat_statements.control": {
+          "sha256": "beb5e1d882be0e612f7313b05df6e3cae4283db0fa68ddede3296140be2e3976",
+          "bytes": 205
+        },
+        "/usr/local/share/postgresql/extension/pg_surgery--1.0.sql": {
+          "sha256": "03db9e2e8ab9d92eed941cdbf3f2cb5f43f530cff2d2810baaca36dea5cdee6d",
+          "bytes": 608
+        },
+        "/usr/local/share/postgresql/extension/pg_surgery.control": {
+          "sha256": "4f213c2f2ae1e53ef463a20d8b3c5dd0e7122c6cb6fd32c1f0b50f0aee627cd6",
+          "bytes": 168
+        },
+        "/usr/local/share/postgresql/extension/pg_trgm--1.0--1.1.sql": {
+          "sha256": "a85cff55497081250bef3bb3b7fc8d8beb3b9bab64675501f79f923d7bd0a06c",
+          "bytes": 536
+        },
+        "/usr/local/share/postgresql/extension/pg_trgm--1.1--1.2.sql": {
+          "sha256": "0ed40419dc9b01417ce058aba210c615bf1ff04daba44e4d23085983a4565f7f",
+          "bytes": 2192
+        },
+        "/usr/local/share/postgresql/extension/pg_trgm--1.2--1.3.sql": {
+          "sha256": "29caec4ef2830920c74c2594c11e0255c3a17102c59d244d9aacb3b1add541ea",
+          "bytes": 3498
+        },
+        "/usr/local/share/postgresql/extension/pg_trgm--1.3--1.4.sql": {
+          "sha256": "98763d59a6e221dd1bfc43e941024e4ed363fc05c9ce4514bc93554dfd8a8ed5",
+          "bytes": 2045
+        },
+        "/usr/local/share/postgresql/extension/pg_trgm--1.3.sql": {
+          "sha256": "2d90a742f644ca794f3819bbefac60bddb53fd9e253bfbc68d6ad3b6d1cf45c4",
+          "bytes": 7942
+        },
+        "/usr/local/share/postgresql/extension/pg_trgm--1.4--1.5.sql": {
+          "sha256": "e5de4624f7dcc3954b4c8d84136f9cc6dfc9942545b091180ca18da41f234d18",
+          "bytes": 858
+        },
+        "/usr/local/share/postgresql/extension/pg_trgm--1.5--1.6.sql": {
+          "sha256": "76d02b6ac7c6a5c2eed44d8fa48c8a104b7af98da594969b19e5bdafbb706bb8",
+          "bytes": 418
+        },
+        "/usr/local/share/postgresql/extension/pg_trgm.control": {
+          "sha256": "17c2745da2a706e1443ee363ab7424ced871a9a652e86bf55d25d139f43ee27b",
+          "bytes": 192
+        },
+        "/usr/local/share/postgresql/extension/pg_visibility--1.0--1.1.sql": {
+          "sha256": "60764a081274333c2fb9378e339ede225cd914d72da82fb4f2e7144e9630f6af",
+          "bytes": 883
+        },
+        "/usr/local/share/postgresql/extension/pg_visibility--1.1--1.2.sql": {
+          "sha256": "e013d95f190343277fb02d797b2ab845a975e4a4280a4702cb6941c2211a8b60",
+          "bytes": 833
+        },
+        "/usr/local/share/postgresql/extension/pg_visibility--1.1.sql": {
+          "sha256": "4894754ecbcd82334a9af001bc8eec10f81a12149afe89ff04ea1193ea71cc34",
+          "bytes": 2825
+        },
+        "/usr/local/share/postgresql/extension/pg_visibility.control": {
+          "sha256": "5265d68f17d85a14d89441b5a800a2689509dab34c05419bbdb1c5081d4cc39e",
+          "bytes": 186
+        },
+        "/usr/local/share/postgresql/extension/pg_walinspect--1.0--1.1.sql": {
+          "sha256": "f0f705c1776991de419b64fa77eb7ab75cb323ab9345fd4ae1e3333019dd51a5",
+          "bytes": 1296
+        },
+        "/usr/local/share/postgresql/extension/pg_walinspect--1.0.sql": {
+          "sha256": "dc1835c445c2a571d1d46740941618e0d07a0a0596b9b04217c4dc50f09ba782",
+          "bytes": 3665
+        },
+        "/usr/local/share/postgresql/extension/pg_walinspect.control": {
+          "sha256": "794e7a688fc60ea2e0dd109f6ce6d5f7a013a2e5e9fc230f9c8d0de645fdec2a",
+          "bytes": 183
+        },
+        "/usr/local/share/postgresql/extension/pgcrypto--1.0--1.1.sql": {
+          "sha256": "530abf4709c3010f600312b513cafd2c169b8d8810b59f54ad4da5e576689ec3",
+          "bytes": 307
+        },
+        "/usr/local/share/postgresql/extension/pgcrypto--1.1--1.2.sql": {
+          "sha256": "d33b87d052730a764df864d59f16f09686c0f6c8883184d60784c02702ab1af3",
+          "bytes": 483
+        },
+        "/usr/local/share/postgresql/extension/pgcrypto--1.2--1.3.sql": {
+          "sha256": "dfc2f4de2ca4eef79c4b24e25562b8d1948f5a6571a916b6b4c81b07d14dfbc6",
+          "bytes": 2346
+        },
+        "/usr/local/share/postgresql/extension/pgcrypto--1.3.sql": {
+          "sha256": "84f8eee1d6b03982fac596988b46bf89d5d5d8790d3133783eedad38bc7d8d38",
+          "bytes": 5708
+        },
+        "/usr/local/share/postgresql/extension/pgcrypto.control": {
+          "sha256": "2a6c81eef34ae6cee9ff5b557f3b6285db7fdd7bc76ee57798e82c945c61c939",
+          "bytes": 152
+        },
+        "/usr/local/share/postgresql/extension/pgrowlocks--1.0--1.1.sql": {
+          "sha256": "679105d3cf9c1ae69ee1f95653bc3bdfd6501b1ce2b4f166749937c7a7c9e52f",
+          "bytes": 651
+        },
+        "/usr/local/share/postgresql/extension/pgrowlocks--1.1--1.2.sql": {
+          "sha256": "5718fa13fd8e3ea9058284683eafe8c1be3ea8d549032d04b625ecb33208f46b",
+          "bytes": 253
+        },
+        "/usr/local/share/postgresql/extension/pgrowlocks--1.2.sql": {
+          "sha256": "6645e58b3282e3f7ef35a7ec832bf1a06cd0480715993f379e03472eb8d9e636",
+          "bytes": 555
+        },
+        "/usr/local/share/postgresql/extension/pgrowlocks.control": {
+          "sha256": "95be083d42f975d6868a667d2c085accea63e65e235cd65d1697de4e4ea0ff49",
+          "bytes": 152
+        },
+        "/usr/local/share/postgresql/extension/pgstattuple--1.0--1.1.sql": {
+          "sha256": "f3d746e666e75ea13570858459e9cc6264de26fe9a7149af35f6739605682947",
+          "bytes": 400
+        },
+        "/usr/local/share/postgresql/extension/pgstattuple--1.1--1.2.sql": {
+          "sha256": "3166dce80800ea8cd1abe4334f8d76b16b4b1c25f5fc69533264ee97920646d5",
+          "bytes": 1435
+        },
+        "/usr/local/share/postgresql/extension/pgstattuple--1.2--1.3.sql": {
+          "sha256": "140f5d8b2a6fa9285244fafeb3763e579e3478762ab2646011c8aab6a21e43f6",
+          "bytes": 1126
+        },
+        "/usr/local/share/postgresql/extension/pgstattuple--1.3--1.4.sql": {
+          "sha256": "d4a79f01e50e9623ed1bc0e44d84b88ab5312ed1b25c23d43b6eb5db9dccf7d7",
+          "bytes": 623
+        },
+        "/usr/local/share/postgresql/extension/pgstattuple--1.4--1.5.sql": {
+          "sha256": "8d8eb6a614cbfca248684edff229303a1c18ad0e12c89f62da0e1b2411f35e24",
+          "bytes": 5506
+        },
+        "/usr/local/share/postgresql/extension/pgstattuple--1.4.sql": {
+          "sha256": "f2340a359a830b8ca02d192a40470df25e4cd600212062910980ad694f49d5cb",
+          "bytes": 3764
+        },
+        "/usr/local/share/postgresql/extension/pgstattuple.control": {
+          "sha256": "51ddd02509a3c65c5b07eae95f4f49375cd3d3da56f0357a4c9c12bc5a357941",
+          "bytes": 147
+        },
+        "/usr/local/share/postgresql/extension/plperl--1.0.sql": {
+          "sha256": "8a6ef30b252bfdd4fd79bed8acd37622600544148e780060c8bfa7f968a43716",
+          "bytes": 642
+        },
+        "/usr/local/share/postgresql/extension/plperl.control": {
+          "sha256": "12e5ab2ab6f9d9963482311084b3171087a28b3168f7e1e09ada38df4ba264e3",
+          "bytes": 190
+        },
+        "/usr/local/share/postgresql/extension/plperlu--1.0.sql": {
+          "sha256": "6a0fcd71e16f0b9d81c8cc553445912993d4c5ee9794cd3733063d72a628a868",
+          "bytes": 530
+        },
+        "/usr/local/share/postgresql/extension/plperlu.control": {
+          "sha256": "933c365708883cb25ce9602ae342db7d75e1c0c128fb6825160c7e3cb2b8ce5a",
+          "bytes": 187
+        },
+        "/usr/local/share/postgresql/extension/plpgsql--1.0.sql": {
+          "sha256": "f4e7e05438808ac0da0b3801397d16e36102969af7e2ffc982def5b7524fb557",
+          "bytes": 658
+        },
+        "/usr/local/share/postgresql/extension/plpgsql.control": {
+          "sha256": "9457c3f51d6bdfab93f13080d177795a9274c025e378fb613218342e3a3c7b45",
+          "bytes": 193
+        },
+        "/usr/local/share/postgresql/extension/plpython3u--1.0.sql": {
+          "sha256": "7c4588b4f1176b3bbec5f5b3fd851931fda88652ee3b3985cde4f88d75b11a65",
+          "bytes": 556
+        },
+        "/usr/local/share/postgresql/extension/plpython3u.control": {
+          "sha256": "efdfc8503fb9e88e0ecf3c8352ea2fd187ef698e10d67f152b37c7855b9a6114",
+          "bytes": 196
+        },
+        "/usr/local/share/postgresql/extension/pltcl--1.0.sql": {
+          "sha256": "ac88016ee30120ef28b03d64f9b511ef55bcc2e8deb1a79e6bf18302a529c174",
+          "bytes": 374
+        },
+        "/usr/local/share/postgresql/extension/pltcl.control": {
+          "sha256": "1a82de220094e85a979335f97e14d3baab8eed8c8d98015c2adc7ba4dd98c30c",
+          "bytes": 187
+        },
+        "/usr/local/share/postgresql/extension/pltclu--1.0.sql": {
+          "sha256": "81990a8e4dd323fd70a2669dcbd33a9d74d250bc7a965790dee9d96b3f823d0c",
+          "bytes": 259
+        },
+        "/usr/local/share/postgresql/extension/pltclu.control": {
+          "sha256": "f8b2f8f3b14be8d14326913047eb320227f6891f6d303eecf300f0231ac853d4",
+          "bytes": 184
+        },
+        "/usr/local/share/postgresql/extension/postgres_fdw--1.0--1.1.sql": {
+          "sha256": "7a9c1935dc118da7811a9b07a00e7e688362a3af7c82bad26710b1437c723e98",
+          "bytes": 626
+        },
+        "/usr/local/share/postgresql/extension/postgres_fdw--1.0.sql": {
+          "sha256": "3a6af33c106f7f62040e0ed8ca97eaa5f144b23efdfc0e261bb25368d0239a70",
+          "bytes": 507
+        },
+        "/usr/local/share/postgresql/extension/postgres_fdw.control": {
+          "sha256": "493ad428c23f4822c92cee17ea2816e5a73e9f46a59c1b26b1f09740331c1e8a",
+          "bytes": 172
+        },
+        "/usr/local/share/postgresql/extension/refint--1.0.sql": {
+          "sha256": "25f8d28d97c44c2ec317755620cbfdd740360a868a58626a47ad4aebee0dfe7b",
+          "bytes": 343
+        },
+        "/usr/local/share/postgresql/extension/refint.control": {
+          "sha256": "2c04e91a2d113ec5e6596c5b66cdbdc80dd4e0b9d0d7af9af13116c91e06fe04",
+          "bytes": 169
+        },
+        "/usr/local/share/postgresql/extension/seg--1.0--1.1.sql": {
+          "sha256": "7375ad8d52499dde1fa5a574ce106c926068ce97d5282bbcfa7fb067259912cb",
+          "bytes": 3005
+        },
+        "/usr/local/share/postgresql/extension/seg--1.1--1.2.sql": {
+          "sha256": "fc18230eaa27579238ad232553393cf09ae9e47de249b5f3ce064e9045ea1a96",
+          "bytes": 360
+        },
+        "/usr/local/share/postgresql/extension/seg--1.1.sql": {
+          "sha256": "afcaf459b8f653942151c68723510724b596b8b914b6a41525efa00a378e63c0",
+          "bytes": 8142
+        },
+        "/usr/local/share/postgresql/extension/seg--1.2--1.3.sql": {
+          "sha256": "59e7d2875e78467c18349da9b0648e213be07654c0c52c0ef4cf89e719acc78f",
+          "bytes": 2344
+        },
+        "/usr/local/share/postgresql/extension/seg--1.3--1.4.sql": {
+          "sha256": "41df806282108d0e41826a13f6a25815822bf09181e4dacbf9a9170bb3f5a196",
+          "bytes": 259
+        },
+        "/usr/local/share/postgresql/extension/seg.control": {
+          "sha256": "adcb5b70f99424bbdb49e866bfbc21a6d2fbaf78b3e852125fe8df7d7f42c379",
+          "bytes": 187
+        },
+        "/usr/local/share/postgresql/extension/sslinfo--1.0--1.1.sql": {
+          "sha256": "1a293f04b59457df7fbd0609a1358324516baff7ff1e59d47070619c92ce4bd0",
+          "bytes": 375
+        },
+        "/usr/local/share/postgresql/extension/sslinfo--1.1--1.2.sql": {
+          "sha256": "95cf20ca97265301b1f046a65aa153890bc93817e2cf20d5f5cddfc3cd00b122",
+          "bytes": 746
+        },
+        "/usr/local/share/postgresql/extension/sslinfo--1.2.sql": {
+          "sha256": "e58a0233448e54dd486126208d4551ee1f313a8330eccf1d28a6400795ef95a4",
+          "bytes": 1534
+        },
+        "/usr/local/share/postgresql/extension/sslinfo.control": {
+          "sha256": "e6a93ff05db1a9947cbb5d2a8477a71c0726f656e934a525f651731193ff717e",
+          "bytes": 146
+        },
+        "/usr/local/share/postgresql/extension/tablefunc--1.0.sql": {
+          "sha256": "82488e9d01a88bc0481d1a4be6193802d0aecd925a362a56ddcb406bea39ad7e",
+          "bytes": 2153
+        },
+        "/usr/local/share/postgresql/extension/tablefunc.control": {
+          "sha256": "2b679be26461f6014cce2d9af5bab584fe1ab0fc016158bbde6e6e02e58fd89d",
+          "bytes": 189
+        },
+        "/usr/local/share/postgresql/extension/tcn--1.0.sql": {
+          "sha256": "61685715d8213fe053f8e1d78864e4948df337a7a660bcdf3d61d0808b1d1af3",
+          "bytes": 274
+        },
+        "/usr/local/share/postgresql/extension/tcn.control": {
+          "sha256": "ffbb70de41a41be97629bb6918e21b442d905d4cf0b3d92ef8f398657674fb06",
+          "bytes": 149
+        },
+        "/usr/local/share/postgresql/extension/tsm_system_rows--1.0.sql": {
+          "sha256": "b6ff301cc9069b9be9f3e29ea6708f8e452b4621e5728b25cc10e8d6b45a1ef3",
+          "bytes": 327
+        },
+        "/usr/local/share/postgresql/extension/tsm_system_rows.control": {
+          "sha256": "3e9077a0ef885ffb4af0de79bd2177bdd5445d9c5269061c1d6f725d2624146f",
+          "bytes": 201
+        },
+        "/usr/local/share/postgresql/extension/tsm_system_time--1.0.sql": {
+          "sha256": "3c47246eab5711c561310e9c5209318deb12df9a2f26837493e701c56ca37ef3",
+          "bytes": 327
+        },
+        "/usr/local/share/postgresql/extension/tsm_system_time.control": {
+          "sha256": "2ce290064590c7a10cdc59658acca7d5564e8275f10982139242f9a7e88f8779",
+          "bytes": 207
+        },
+        "/usr/local/share/postgresql/extension/unaccent--1.0--1.1.sql": {
+          "sha256": "82040e64db6ec0fe8210bb414e175ca6fb7ae4a70d80b0e65d861f4f4266ac96",
+          "bytes": 445
+        },
+        "/usr/local/share/postgresql/extension/unaccent--1.1.sql": {
+          "sha256": "e08a90e98ae8e1b6cdb5d25dcab352064f13f187e99f29b6d971ef61e10f6a7a",
+          "bytes": 910
+        },
+        "/usr/local/share/postgresql/extension/unaccent.control": {
+          "sha256": "6845006fd86d373d556ce0ad83b3f1cdfe6f9c35df71a4fe31e3bc23312d8160",
+          "bytes": 172
+        },
+        "/usr/local/share/postgresql/extension/uuid-ossp--1.0--1.1.sql": {
+          "sha256": "112b84c73afb619a0dcddc2c23aef834cab2b4a2a0aa6b54c42d74e0064f3bc1",
+          "bytes": 688
+        },
+        "/usr/local/share/postgresql/extension/uuid-ossp--1.1.sql": {
+          "sha256": "1cf94e2eaa2033f32b80b1a7a371809d6cacc108b39d187c254f6fe04b383f84",
+          "bytes": 1516
+        },
+        "/usr/local/share/postgresql/extension/uuid-ossp.control": {
+          "sha256": "eaafef3ac3fbaa16e59986201e15f2944abb841167fb37553700c11b6ba97e5b",
+          "bytes": 178
+        },
+        "/usr/local/share/postgresql/extension/xml2--1.0--1.1.sql": {
+          "sha256": "f14378e15a56c8e837feb24deffd3fb779a456b87d9e81ddb7da702802d4990a",
+          "bytes": 944
+        },
+        "/usr/local/share/postgresql/extension/xml2--1.1.sql": {
+          "sha256": "287954e902826960e9dec8f7e86bc0e39ca1e257fe25c0641f9f9fd5a4594e0d",
+          "bytes": 2049
+        },
+        "/usr/local/share/postgresql/extension/xml2.control": {
+          "sha256": "8d9c0fefc71714d6e70598c164f3bb2343b7078cee75b89f9500e9a75718b210",
+          "bytes": 182
+        },
+        "/usr/local/share/postgresql/fix-CVE-2024-4317.sql": {
+          "sha256": "2a4edf00e85f28ac5cd8867477d572a5e7f609f416da18a00e18442a15baf83d",
+          "bytes": 5765
+        },
+        "/usr/local/share/postgresql/information_schema.sql": {
+          "sha256": "6680d96b4619788df3ca4ad5b4b0c5e946ecb68ea1e80e3782b4f0e1f3c0c5b2",
+          "bytes": 114975
+        },
+        "/usr/local/share/postgresql/pg_hba.conf.sample": {
+          "sha256": "773da9453bd833227b59aba7f2b686c0e6f6ac51c6779405659cda7f71b7a451",
+          "bytes": 5625
+        },
+        "/usr/local/share/postgresql/pg_ident.conf.sample": {
+          "sha256": "b4dfef08731a7d20a3bb724ad4cf3e1cd91ec01fbe51349c6a3acc5704072965",
+          "bytes": 2640
+        },
+        "/usr/local/share/postgresql/pg_service.conf.sample": {
+          "sha256": "897f62fc8e9a7a2a9d5866489a0cc54e5fc67b3e64933399c0efc46499c0c6da",
+          "bytes": 604
+        },
+        "/usr/local/share/postgresql/postgres.bki": {
+          "sha256": "e7ccf0cbdf9a993e2bbfd99e3c4bb2161036ad33233d66281756750c409c983f",
+          "bytes": 944104
+        },
+        "/usr/local/share/postgresql/postgresql.conf.sample": {
+          "sha256": "36034e0b42e32b38205a1c1a4534d62ea565e14548a457516d1ce0eb69f12558",
+          "bytes": 29789
+        },
+        "/usr/local/share/postgresql/postgresql.conf.sample.orig": {
+          "sha256": "5707dd79b2777fd8ee5c766d84b4efde1ecd6ddd1cc63ef49901798ba4ba1c67",
+          "bytes": 29835
+        },
+        "/usr/local/share/postgresql/psqlrc.sample": {
+          "sha256": "2b42310e0d223450f5aef5d8762531d228141397577c0fe787f09c954e437426",
+          "bytes": 278
+        },
+        "/usr/local/share/postgresql/snowball_create.sql": {
+          "sha256": "82299ac2cdf8ca19ed6a82c9b51a7572aecb44c616c6d6bcd34b73cae2740af4",
+          "bytes": 44176
+        },
+        "/usr/local/share/postgresql/sql_features.txt": {
+          "sha256": "5a15f999e425de2ab9097c05dff67b6cc05f97ccb979110fec80381e112adc37",
+          "bytes": 35681
+        },
+        "/usr/local/share/postgresql/system_constraints.sql": {
+          "sha256": "09407a5554a7b4310fc1aa7570c010e151e0f89ad4fb6d659dd6acc870725a01",
+          "bytes": 8895
+        },
+        "/usr/local/share/postgresql/system_functions.sql": {
+          "sha256": "56b935b41d653a9dd7282b7d0871b37a4ecccd72bbfe03e79a89e05e0131347c",
+          "bytes": 23315
+        },
+        "/usr/local/share/postgresql/system_views.sql": {
+          "sha256": "1c47b3f1172e7ff8a0736d6747cd4487a3e970cc8f437705b1484baf2aae29e0",
+          "bytes": 50273
+        },
+        "/usr/local/share/postgresql/timezonesets/Africa.txt": {
+          "sha256": "29f630662fde2db5724990f715b73f09791a85627dfeb5612adfef12a6a0b8f4",
+          "bytes": 6973
+        },
+        "/usr/local/share/postgresql/timezonesets/America.txt": {
+          "sha256": "8ca517c53d723a61b85cea6880af7ce1672e6c1be73f704fbf28477db2645124",
+          "bytes": 11007
+        },
+        "/usr/local/share/postgresql/timezonesets/Antarctica.txt": {
+          "sha256": "6f47ca542b13b594bb3a3689a63fbf3bcc8414815ece60eeeb15158ea4becb7c",
+          "bytes": 1134
+        },
+        "/usr/local/share/postgresql/timezonesets/Asia.txt": {
+          "sha256": "ae480b39d72487ffc4576a7fdf9a1e613ac3f87633daafeb7e071d6cd47dc982",
+          "bytes": 8311
+        },
+        "/usr/local/share/postgresql/timezonesets/Atlantic.txt": {
+          "sha256": "d03378d66a563226cb25390dcdbc8d5dc9015d0ec86cbba07b81718062c28ca5",
+          "bytes": 3533
+        },
+        "/usr/local/share/postgresql/timezonesets/Australia": {
+          "sha256": "249e83499ae7cd0348571d31ef50e240071bca5b063eed97ee902edcc98105dd",
+          "bytes": 1135
+        },
+        "/usr/local/share/postgresql/timezonesets/Australia.txt": {
+          "sha256": "32128798fcc64d269c9033acf05ea5e404f155d13c4d7afee0046f3a4649e2b9",
+          "bytes": 3384
+        },
+        "/usr/local/share/postgresql/timezonesets/Default": {
+          "sha256": "0dadd689b1998cc2d3acec42f66913194661f8d4835623776593b7bcdd075cb1",
+          "bytes": 27214
+        },
+        "/usr/local/share/postgresql/timezonesets/Etc.txt": {
+          "sha256": "abe5ce63e30162ae9200603bcf68cdab453826e3180651eee3cc10d0e6fc9c69",
+          "bytes": 1250
+        },
+        "/usr/local/share/postgresql/timezonesets/Europe.txt": {
+          "sha256": "3dc21632cab73cc7cbe973a671f549bc2603b6af862f130b82c09adb5a73c6b6",
+          "bytes": 8746
+        },
+        "/usr/local/share/postgresql/timezonesets/India": {
+          "sha256": "77eb5794aeb96c90f5016a74f1ef8efd597a2059e74ec2258be03be9a1e8d894",
+          "bytes": 593
+        },
+        "/usr/local/share/postgresql/timezonesets/Indian.txt": {
+          "sha256": "6973cbbfdf88507ff4d32566e8c5328685b6a441a8ae22ee83b35039722c1acc",
+          "bytes": 1261
+        },
+        "/usr/local/share/postgresql/timezonesets/Pacific.txt": {
+          "sha256": "55f614feedb1857c43d0f5aee1a5cabe9073365e368865c6c79495a3ee25e0a3",
+          "bytes": 3768
+        },
+        "/usr/local/share/postgresql/tsearch_data/danish.stop": {
+          "sha256": "1bedc9cf5a8830dacf8c4ee0d8b301f0801861756ad0d504431d01047f961b0c",
+          "bytes": 424
+        },
+        "/usr/local/share/postgresql/tsearch_data/dutch.stop": {
+          "sha256": "e5a2a7c390fe3ad0c0a132586ed11492b635d66a1f426cd89677f80b07bc76a6",
+          "bytes": 453
+        },
+        "/usr/local/share/postgresql/tsearch_data/english.stop": {
+          "sha256": "b3f772a000465cb76e23adb03b47073c591c156fad8f7af09c8b8e80d6bd8eac",
+          "bytes": 622
+        },
+        "/usr/local/share/postgresql/tsearch_data/finnish.stop": {
+          "sha256": "952af766edc9b8e7ddc877fc464cbd94b91754b5621fdfdd7020568fd4813fcd",
+          "bytes": 1579
+        },
+        "/usr/local/share/postgresql/tsearch_data/french.stop": {
+          "sha256": "6ca60ffd4257c35cc3981d0e923881c3d8b85c8c0f6ef7a6697bd4ae97200fd8",
+          "bytes": 805
+        },
+        "/usr/local/share/postgresql/tsearch_data/german.stop": {
+          "sha256": "46bf0dcec5b5bd83cd7fb96a5283876fdf91cfae7f988252132218545a61d1f7",
+          "bytes": 1349
+        },
+        "/usr/local/share/postgresql/tsearch_data/hungarian.stop": {
+          "sha256": "cb66b000fe0c852579ab2cb01e086f3d0eef80d650353bcd854958556dcf917d",
+          "bytes": 1227
+        },
+        "/usr/local/share/postgresql/tsearch_data/hunspell_sample.affix": {
+          "sha256": "0f1fb5943562c9523d010780b61784c147b49e57596b2497d1396d31c5214aaf",
+          "bytes": 243
+        },
+        "/usr/local/share/postgresql/tsearch_data/hunspell_sample_long.affix": {
+          "sha256": "2132c84f2453d7c3d8bc6b5598a57afe4f9c4aca04d886f46308a070a86df217",
+          "bytes": 633
+        },
+        "/usr/local/share/postgresql/tsearch_data/hunspell_sample_long.dict": {
+          "sha256": "1926afe91b724eb2a3bcd6dd3a03ae3d46691d3246a597d2682a209eb3ada459",
+          "bytes": 98
+        },
+        "/usr/local/share/postgresql/tsearch_data/hunspell_sample_num.affix": {
+          "sha256": "5c2eeed5197453472cc4f918d556a8d092b3b8891579dc8cc0b3db939da52364",
+          "bytes": 462
+        },
+        "/usr/local/share/postgresql/tsearch_data/hunspell_sample_num.dict": {
+          "sha256": "dc6e8fcfaf5bc2b93cd58e8273cae625107ba02dace80061bb6c765ec97dea6f",
+          "bytes": 129
+        },
+        "/usr/local/share/postgresql/tsearch_data/ispell_sample.affix": {
+          "sha256": "3a5a3e7a54acd42c27d3c231526ccf8ccf7f29f688ef6ad74dbd04af11309d8f",
+          "bytes": 465
+        },
+        "/usr/local/share/postgresql/tsearch_data/ispell_sample.dict": {
+          "sha256": "e913216b14f04ebfe390f8f6048c408aebab7fe7ff313d61a0d2355146d83397",
+          "bytes": 81
+        },
+        "/usr/local/share/postgresql/tsearch_data/italian.stop": {
+          "sha256": "293d7841f198e4012f49e8e5653c3bfd073a58cea1259fa2c0fcec894167b628",
+          "bytes": 1654
+        },
+        "/usr/local/share/postgresql/tsearch_data/nepali.stop": {
+          "sha256": "43245d062fa39a6543d5ff3216552a391bac95fd2ba26c05b1d6959d26f441fb",
+          "bytes": 4261
+        },
+        "/usr/local/share/postgresql/tsearch_data/norwegian.stop": {
+          "sha256": "f7e5b42208ccf1b1f282f9e0f8570e464272762bda5718b6b26750f510a688dc",
+          "bytes": 851
+        },
+        "/usr/local/share/postgresql/tsearch_data/portuguese.stop": {
+          "sha256": "5f305fac1d830620eeb9b2a68a1b96bf26f65c2e9257d56c8413d6fb36ed6cac",
+          "bytes": 1267
+        },
+        "/usr/local/share/postgresql/tsearch_data/russian.stop": {
+          "sha256": "1743191192b4a4f77fcc216499455dc00c1b8626fdd407076a8deefff80e3d59",
+          "bytes": 1235
+        },
+        "/usr/local/share/postgresql/tsearch_data/spanish.stop": {
+          "sha256": "7450c1f7196c161d9a4e537de43f88bd55cdb64028c808e14587bd7a6ac7be3d",
+          "bytes": 2178
+        },
+        "/usr/local/share/postgresql/tsearch_data/swedish.stop": {
+          "sha256": "2a9d9d756bc4257d49329994f805c712cd5ab6746162e2082752238766c1c0c8",
+          "bytes": 559
+        },
+        "/usr/local/share/postgresql/tsearch_data/synonym_sample.syn": {
+          "sha256": "59a46c3c25c2b5a1fe174de62bf2f53ce46021e3831eec0eb62d9301ea327e49",
+          "bytes": 73
+        },
+        "/usr/local/share/postgresql/tsearch_data/thesaurus_sample.ths": {
+          "sha256": "346954eaf1def3007ad848731b3c26c203ed12923911b6a0ac198604831f7dc4",
+          "bytes": 473
+        },
+        "/usr/local/share/postgresql/tsearch_data/turkish.stop": {
+          "sha256": "f2c7f0c2bd3dba42da700776266831853a3b5f1207fada5c15207334109abb57",
+          "bytes": 260
+        },
+        "/usr/local/share/postgresql/tsearch_data/unaccent.rules": {
+          "sha256": "0976b49849393a5d501ceb9020775114a203da84d2c8ecf70b8054368c543210",
+          "bytes": 9939
+        },
+        "/usr/local/share/postgresql/tsearch_data/xsyn_sample.rules": {
+          "sha256": "25346fa2b510399e4f30548067ef76b0b61aee884b301a7fa55db4781aa1d84e",
+          "bytes": 139
+        },
+        "/bin/sh": {
+          "sha256": "dd10691d81c84f0182f5af5f1583d566ddc0b9d0d9fc46b41b99b83c398306dd",
+          "bytes": 919304
+        },
+        "/lib/libc.musl-aarch64.so.1": {
+          "sha256": "fc61b6e11fd8c6bfee3235865249cd78eea34aa36d88277e6008038031160993",
+          "bytes": 723480
+        },
+        "/lib/ld-musl-aarch64.so.1": {
+          "sha256": "fc61b6e11fd8c6bfee3235865249cd78eea34aa36d88277e6008038031160993",
+          "bytes": 723480
+        },
+        "/usr/local/bin/initdb": {
+          "sha256": "61c19825630252b84f453ce3dfaf3ac63e7044d2e53bf265cda33c5dca06b433",
+          "bytes": 230576
+        },
+        "/usr/lib/libicuuc.so.76": {
+          "sha256": "069f842194b17fac4913a06434ab0478c04924579a6bda77e697e42bcd39b57a",
+          "bytes": 1837096
+        },
+        "/usr/lib/libgcc_s.so.1": {
+          "sha256": "fd240181fecbb70409aa70ccb76671a96ac22be540e6398fe66d6800a16b2b18",
+          "bytes": 133008
+        },
+        "/usr/lib/libstdc++.so.6": {
+          "sha256": "bafcd4d332533ba4b30d09e8e59fd305818abb633742f68151a1efcdc24be213",
+          "bytes": 2820600
+        },
+        "/usr/lib/libicudata.so.76": {
+          "sha256": "59a562e1bb77aa4f93105214b5758c37177e8abeeb0552acd9424565d90dbe07",
+          "bytes": 66296
+        },
+        "/usr/local/lib/libpq.so.5": {
+          "sha256": "332eb425d7ce55a25000829f64a42ab65c228abbdc490eb7852d20c557641a25",
+          "bytes": 435816
+        },
+        "/usr/lib/libldap.so.2": {
+          "sha256": "239bab17fcf2ae1b98dd7bedce96b09db6c28d59762bd9dd9357910d72fe73e3",
+          "bytes": 396688
+        },
+        "/usr/lib/libcrypto.so.3": {
+          "sha256": "f4ab81f14f97c1b984e89a3cc57e71e8b9efc7a0cba13f96381553f7fd424cc6",
+          "bytes": 4533144
+        },
+        "/usr/lib/libssl.so.3": {
+          "sha256": "8c50c1b721e0670d92a3cc82f48ddf0fd23ea94f9011a3df869181e29626680b",
+          "bytes": 868240
+        },
+        "/usr/lib/libsasl2.so.3": {
+          "sha256": "ff7a3c7840ce4acd474d72d75cd6b11de1a14f5269db18a938429d957c62537c",
+          "bytes": 133680
+        },
+        "/usr/lib/liblber.so.2": {
+          "sha256": "898072f515acc3b09a902f1fccc12249ce2178fe1f993321c3e584963a8df3f7",
+          "bytes": 67600
+        },
+        "/usr/lib/libgssapi_krb5.so.2": {
+          "sha256": "4e58c1281a6edb53aa4a87240afd695bf273218de6b49644c133259960f48a05",
+          "bytes": 331952
+        },
+        "/usr/lib/libkrb5support.so.0": {
+          "sha256": "ec00311bc7acec3680fe81dea399f82775e86696d7dd8efa1680296ac3805b24",
+          "bytes": 67648
+        },
+        "/usr/lib/libcom_err.so.2": {
+          "sha256": "3fcc8cf68c432aee7d514ce3edae4ccb31a0cc1cc0895c4ee778bd257ca682c9",
+          "bytes": 67320
+        },
+        "/usr/lib/libk5crypto.so.3": {
+          "sha256": "ab091915abddb1de2513258866d26a3decd7dd3f92e2b875fdaed78e96e2dff2",
+          "bytes": 198736
+        },
+        "/usr/lib/libkrb5.so.3": {
+          "sha256": "62ff5d150e00d413dd8840ccebb50bed2420dfa5bcd3d88755edba59af62b985",
+          "bytes": 726736
+        },
+        "/usr/lib/libkeyutils.so.1": {
+          "sha256": "8311287820ee8db071eaed4f88d1ea41422a37cab3a4c0bfd05b7e043452b194",
+          "bytes": 67400
+        },
+        "/usr/local/bin/postgres": {
+          "sha256": "994e3a2448fd13599d04f5d2e99d11f9b93364abadea0c9662fcd29f10a12c43",
+          "bytes": 10368792
+        },
+        "/usr/lib/libicui18n.so.76": {
+          "sha256": "77d69a661595c5dad01c22bf5153dc51ce1cd27804c085a1ae50756db3fac1ae",
+          "bytes": 3082536
+        },
+        "/usr/lib/libz.so.1": {
+          "sha256": "88a9f0b9eae3d367e8cf829a4470614db1fca41faab3da6b18f5a26b7505dcd4",
+          "bytes": 133008
+        },
+        "/usr/lib/libxml2.so.2": {
+          "sha256": "e73cdfb070ad5735e046e3881a89ffd66ff30e518e54f030be0c57772918a689",
+          "bytes": 1182624
+        },
+        "/usr/lib/liblzma.so.5": {
+          "sha256": "0486cb3dd909c99d768c9d4becdf9285a9abb8e9e9053f1afd4ae8ced491b359",
+          "bytes": 263928
+        },
+        "/usr/lib/liblz4.so.1": {
+          "sha256": "ba67154e7da1874ad0bdac6fa988fd05dd14ad74243f408da7e29871d7907b15",
+          "bytes": 198392
+        },
+        "/usr/lib/libzstd.so.1": {
+          "sha256": "68b829b7761e9bd28dc7f17367d9a82174f0be110bbfbe9cd14066849a64fdf1",
+          "bytes": 657240
+        }
+      },
+      "adaptation": "Direct executable and transitive ELF libraries; archive link targets materialized as regular files. Original ELF bytes unchanged. Image entrypoint, environment and full filesystem are not reproduced.",
+      "interpreter": "/lib/ld-musl-aarch64.so.1",
+      "missing_libraries": [],
+      "default_probe": {
+        "exit_code": 125,
+        "stdout": "",
+        "stderr": "vmfree: Unsupported ELF interpreter\n",
+        "wall_seconds": 0.5853987919981591
+      },
+      "max_steps": 20000000,
+      "dynamic_probe": {
+        "exit_code": 125,
+        "stdout": "postgres (PostgreSQL) 16.13\n",
+        "stderr": "vmfree: Instruction budget exhausted\n",
+        "wall_seconds": 0.3729852079995908
+      },
+      "outcome": "version probe did not exit successfully; service untested",
+      "linux_reference": {
+        "exit_code": 0,
+        "stdout": "postgres (PostgreSQL) 16.13\n",
+        "stderr": "",
+        "wall_seconds": 0.21666162498877384
+      },
+      "version_matches_linux": false
+    }
+  ]
+}

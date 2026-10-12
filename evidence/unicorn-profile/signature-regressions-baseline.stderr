@@ -1,0 +1,24 @@
+Executable=/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/regressions-baseline-hardened
+Identifier=regressions-baseline-hardened-555549440455f574dd9d333f9b71e5e4a4b23df0
+Format=Mach-O thin (arm64)
+CodeDirectory v=20500 size=5159 flags=0x10002(adhoc,runtime) hashes=149+7 location=embedded
+VersionPlatform=1
+VersionMin=1703936
+VersionSDK=1705216
+Hash type=sha256 size=32
+CandidateCDHash sha256=6be93de059350424ae743ad7aa639abf9d421fb2
+CandidateCDHashFull sha256=6be93de059350424ae743ad7aa639abf9d421fb21bc2982b585bb25840f0fa39
+Hash choices=sha256
+CMSDigest=6be93de059350424ae743ad7aa639abf9d421fb21bc2982b585bb25840f0fa39
+CMSDigestType=2
+Executable Segment base=0
+Executable Segment limit=1458176
+Executable Segment flags=0x1
+Page size=16384
+CDHash=6be93de059350424ae743ad7aa639abf9d421fb2
+Signature=adhoc
+Info.plist=not bound
+TeamIdentifier=not set
+Runtime Version=26.5.0
+Sealed Resources=none
+Internal requirements count=0 size=12

@@ -1,0 +1,5 @@
+threads_guest.S unicorn PASS
+threads_guest.S Linux reference PASS
+futex_guest.c unicorn PASS
+futex_guest.c Linux reference PASS
+thread_limit_guest.S unicorn PASS

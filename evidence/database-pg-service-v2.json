@@ -1,0 +1,33 @@
+{
+  "scope": "Prepared unchanged ELF fixtures; no Docker execution or fallback. No persistence qualification.",
+  "runtime_sha256": "2d438cdea89792d59ebc7774219976a5aa06690cbcae0f990fc2ffc153eeba01",
+  "results": [
+    {
+      "database": "postgresql",
+      "image_id": "sha256:d394728dee24b7791f1969c683f8b8410fe57450713a1db2aff5a500f0f98ab0",
+      "service_qualified": false,
+      "version": {
+        "exit_code": 0,
+        "stdout": "postgres (PostgreSQL) 16.13\n",
+        "stderr": "",
+        "wall_seconds": 0.34996816600323655
+      },
+      "initialization": {
+        "exit_code": 1,
+        "stdout": "The files belonging to this database system will be owned by user \"postgres\".\nThis user must also own the server process.\n\nThe database cluster will be initialized with locale \"C\".\nThe default text search configuration will be set to \"english\".\n\nData page checksums are disabled.\n\ncreating directory /data ... ok\ncreating subdirectories ... ok\nselecting dynamic shared memory implementation ... sysv\nselecting default max_connections ... 20\nselecting default shared_buffers ... 400kB\nselecting default time zone ... UTC0\ncreating configuration files ... ok\nrunning bootstrap script ... ",
+        "stderr": "sh: can't open /dev/null: no such file\nsh: can't open /dev/null: no such file\nsh: can't open /dev/null: no such file\nsh: can't open /dev/null: no such file\nsh: can't open /dev/null: no such file\nsh: can't open /dev/null: no such file\nsh: can't open /dev/null: no such file\nsh: can't open /dev/null: no such file\nsh: can't open /dev/null: no such file\nsh: can't open /dev/null: no such file\nsh: can't open /dev/null: no such file\nsh: can't open /dev/null: no such file\nsh: can't open /dev/null: no such file\nsh: can't open /dev/null: no such file\ninitdb: warning: could not open directory \"/usr/share/zoneinfo\": No such file or directory\ninitdb: error: could not execute command \"\"/usr/local/bin/postgres\" --boot -X 16777216  -F -c log_checkpoints=false  \": Resource temporarily unavailable\ninitdb: removing data directory \"/data\"\n",
+        "wall_seconds": 1.157176333013922
+      },
+      "startup": {
+        "stage": "server startup against empty data directory; initialization not yet implemented",
+        "ready": false,
+        "process": {
+          "exit_code": 1,
+          "stdout": "",
+          "stderr": "FATAL:  could not open directory \"/usr/local/lib/postgresql\": No such file or directory\nHINT:  This may indicate an incomplete PostgreSQL installation, or that the file \"/usr/local/bin/postgres\" has been moved away from its proper location.\n",
+          "wall_seconds": 0.472908041003393
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+PASS access checks preserve root policy; sync, data sync, reopen and invalid descriptors

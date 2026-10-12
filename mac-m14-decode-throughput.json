@@ -1,0 +1,252 @@
+{
+  "cache": "decode",
+  "completed": true,
+  "host": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+  "native_sha256": "6dbecb0a3dc9c24b0ffb812cb44ccc8a901692e350bcaa1506177961604c7736",
+  "rate": 0.0,
+  "resources_enabled": false,
+  "profiling_enabled": false,
+  "methodology": "One binary, cache off/on with balanced AB/BA rounds. Warmup excluded from load metrics. Counters include warmup and startup. Native instruction budget 10 billion.",
+  "results": [
+    {
+      "name": "Cache off",
+      "samples": [
+        {
+          "target_requests_per_second": null,
+          "target_fraction_achieved": null,
+          "requests": 182779,
+          "elapsed_s": 15.039531207992695,
+          "requests_per_second": 12153.237855104346,
+          "latency_median_ms": 0.31970799318514764,
+          "latency_p95_ms": 0.35299998125992715,
+          "command": [
+            "/Users/macbookpro16m2max/Documents/vmfree-runtime/build/vmfree-c",
+            "run",
+            "/Users/macbookpro16m2max/.vmfree/containers/bench-bind-e6909416/rootfs/app/server",
+            "--root",
+            "/Users/macbookpro16m2max/.vmfree/containers/bench-bind-e6909416/rootfs",
+            "--max-steps",
+            "10000000000",
+            "--no-decode-cache",
+            "--",
+            "0"
+          ],
+          "startup_to_first_response_ms": 5.827041022712365,
+          "readiness_attempts": 1,
+          "warmup_s": 2.0,
+          "concurrency": 4
+        },
+        {
+          "target_requests_per_second": null,
+          "target_fraction_achieved": null,
+          "requests": 184655,
+          "elapsed_s": 15.000335167016601,
+          "requests_per_second": 12310.058271632994,
+          "latency_median_ms": 0.31033300911076367,
+          "latency_p95_ms": 0.352540984749794,
+          "command": [
+            "/Users/macbookpro16m2max/Documents/vmfree-runtime/build/vmfree-c",
+            "run",
+            "/Users/macbookpro16m2max/.vmfree/containers/bench-bind-e6909416/rootfs/app/server",
+            "--root",
+            "/Users/macbookpro16m2max/.vmfree/containers/bench-bind-e6909416/rootfs",
+            "--max-steps",
+            "10000000000",
+            "--no-decode-cache",
+            "--",
+            "0"
+          ],
+          "startup_to_first_response_ms": 5.017791991122067,
+          "readiness_attempts": 1,
+          "warmup_s": 2.0,
+          "concurrency": 4
+        },
+        {
+          "target_requests_per_second": null,
+          "target_fraction_achieved": null,
+          "requests": 185667,
+          "elapsed_s": 15.000368500011973,
+          "requests_per_second": 12377.495926173533,
+          "latency_median_ms": 0.3046249912586063,
+          "latency_p95_ms": 0.3509579983074218,
+          "command": [
+            "/Users/macbookpro16m2max/Documents/vmfree-runtime/build/vmfree-c",
+            "run",
+            "/Users/macbookpro16m2max/.vmfree/containers/bench-bind-e6909416/rootfs/app/server",
+            "--root",
+            "/Users/macbookpro16m2max/.vmfree/containers/bench-bind-e6909416/rootfs",
+            "--max-steps",
+            "10000000000",
+            "--no-decode-cache",
+            "--",
+            "0"
+          ],
+          "startup_to_first_response_ms": 4.821832990273833,
+          "readiness_attempts": 1,
+          "warmup_s": 2.0,
+          "concurrency": 4
+        },
+        {
+          "target_requests_per_second": null,
+          "target_fraction_achieved": null,
+          "requests": 182894,
+          "elapsed_s": 15.000347167020664,
+          "requests_per_second": 12192.651140908629,
+          "latency_median_ms": 0.3144590009469539,
+          "latency_p95_ms": 0.3252500027883798,
+          "command": [
+            "/Users/macbookpro16m2max/Documents/vmfree-runtime/build/vmfree-c",
+            "run",
+            "/Users/macbookpro16m2max/.vmfree/containers/bench-bind-e6909416/rootfs/app/server",
+            "--root",
+            "/Users/macbookpro16m2max/.vmfree/containers/bench-bind-e6909416/rootfs",
+            "--max-steps",
+            "10000000000",
+            "--no-decode-cache",
+            "--",
+            "0"
+          ],
+          "startup_to_first_response_ms": 4.469207982765511,
+          "readiness_attempts": 1,
+          "warmup_s": 2.0,
+          "concurrency": 4
+        }
+      ]
+    },
+    {
+      "name": "Cache on",
+      "samples": [
+        {
+          "target_requests_per_second": null,
+          "target_fraction_achieved": null,
+          "requests": 248385,
+          "elapsed_s": 15.0002798330097,
+          "requests_per_second": 16558.69108877573,
+          "latency_median_ms": 0.21708401618525386,
+          "latency_p95_ms": 0.2894169883802533,
+          "command": [
+            "/Users/macbookpro16m2max/Documents/vmfree-runtime/build/vmfree-c",
+            "run",
+            "/Users/macbookpro16m2max/.vmfree/containers/bench-bind-e6909416/rootfs/app/server",
+            "--root",
+            "/Users/macbookpro16m2max/.vmfree/containers/bench-bind-e6909416/rootfs",
+            "--max-steps",
+            "10000000000",
+            "--",
+            "0"
+          ],
+          "startup_to_first_response_ms": 5.164667003555223,
+          "readiness_attempts": 1,
+          "warmup_s": 2.0,
+          "concurrency": 4
+        },
+        {
+          "target_requests_per_second": null,
+          "target_fraction_achieved": null,
+          "requests": 258129,
+          "elapsed_s": 15.000338709010975,
+          "requests_per_second": 17208.211428248433,
+          "latency_median_ms": 0.2129170170519501,
+          "latency_p95_ms": 0.2560419961810112,
+          "command": [
+            "/Users/macbookpro16m2max/Documents/vmfree-runtime/build/vmfree-c",
+            "run",
+            "/Users/macbookpro16m2max/.vmfree/containers/bench-bind-e6909416/rootfs/app/server",
+            "--root",
+            "/Users/macbookpro16m2max/.vmfree/containers/bench-bind-e6909416/rootfs",
+            "--max-steps",
+            "10000000000",
+            "--",
+            "0"
+          ],
+          "startup_to_first_response_ms": 4.380375001346692,
+          "readiness_attempts": 1,
+          "warmup_s": 2.0,
+          "concurrency": 4
+        },
+        {
+          "target_requests_per_second": null,
+          "target_fraction_achieved": null,
+          "requests": 260109,
+          "elapsed_s": 15.040539291978348,
+          "requests_per_second": 17293.861273892308,
+          "latency_median_ms": 0.21083300816826522,
+          "latency_p95_ms": 0.2532079815864563,
+          "command": [
+            "/Users/macbookpro16m2max/Documents/vmfree-runtime/build/vmfree-c",
+            "run",
+            "/Users/macbookpro16m2max/.vmfree/containers/bench-bind-e6909416/rootfs/app/server",
+            "--root",
+            "/Users/macbookpro16m2max/.vmfree/containers/bench-bind-e6909416/rootfs",
+            "--max-steps",
+            "10000000000",
+            "--",
+            "0"
+          ],
+          "startup_to_first_response_ms": 4.431000008480623,
+          "readiness_attempts": 1,
+          "warmup_s": 2.0,
+          "concurrency": 4
+        },
+        {
+          "target_requests_per_second": null,
+          "target_fraction_achieved": null,
+          "requests": 257862,
+          "elapsed_s": 15.00035183300497,
+          "requests_per_second": 17190.396790069382,
+          "latency_median_ms": 0.2118749835062772,
+          "latency_p95_ms": 0.2681250043679029,
+          "command": [
+            "/Users/macbookpro16m2max/Documents/vmfree-runtime/build/vmfree-c",
+            "run",
+            "/Users/macbookpro16m2max/.vmfree/containers/bench-bind-e6909416/rootfs/app/server",
+            "--root",
+            "/Users/macbookpro16m2max/.vmfree/containers/bench-bind-e6909416/rootfs",
+            "--max-steps",
+            "10000000000",
+            "--",
+            "0"
+          ],
+          "startup_to_first_response_ms": 4.665416985517368,
+          "readiness_attempts": 1,
+          "warmup_s": 2.0,
+          "concurrency": 4
+        }
+      ]
+    }
+  ],
+  "order": [
+    {
+      "round": 1,
+      "name": "Cache off"
+    },
+    {
+      "round": 1,
+      "name": "Cache on"
+    },
+    {
+      "round": 2,
+      "name": "Cache on"
+    },
+    {
+      "round": 2,
+      "name": "Cache off"
+    },
+    {
+      "round": 3,
+      "name": "Cache off"
+    },
+    {
+      "round": 3,
+      "name": "Cache on"
+    },
+    {
+      "round": 4,
+      "name": "Cache on"
+    },
+    {
+      "round": 4,
+      "name": "Cache off"
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "scope": "ARM64 listen: zero, boundary, oversized, negative and upper-register-bit backlogs; real connect/accept/data, repeated listen and closed descriptors. Queue capacity itself is host-dependent.",
+  "elf_sha256": "b6e652c9c633863c358d0b5562b31876ce8e22326751ada1c9381b2c52de4cbe",
+  "results": [
+    {
+      "backend": "interpreter",
+      "exit": 0,
+      "stderr": "",
+      "passed": true,
+      "checks": 140
+    },
+    {
+      "backend": "hvf",
+      "exit": 0,
+      "stderr": "",
+      "passed": true,
+      "checks": 140
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "native/compat.h": true,
+  "native/decode.h": true,
+  "native/fs.h": true,
+  "native/heap.h": true,
+  "native/io.h": true,
+  "native/mapping.h": true,
+  "native/net.h": true,
+  "native/process.h": true,
+  "native/profile.h": true,
+  "native/resources.h": true,
+  "native/runtime.c": true,
+  "native/scheduler.h": true,
+  "native/signals.h": true,
+  "native/terminal.h": true
+}

@@ -1,0 +1,97 @@
+{
+  "passed": true,
+  "checks": [
+    {
+      "name": "body",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed": 0.1315438330057077,
+      "data_hex": "616263646566",
+      "stderr": ""
+    },
+    {
+      "name": "slow",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed": 0.3054268749838229,
+      "data_hex": "616263646566",
+      "stderr": ""
+    },
+    {
+      "name": "chunked",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed": 0.1511928749969229,
+      "data_hex": "616263646566",
+      "stderr": ""
+    },
+    {
+      "name": "redirect",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed": 0.12998966700979508,
+      "data_hex": "616263646566",
+      "stderr": ""
+    },
+    {
+      "name": "not-found",
+      "passed": true,
+      "exit_code": 1,
+      "elapsed": 0.12909216599655338,
+      "data_hex": null,
+      "stderr": "wget: server returned error: HTTP/1.0 404 Not Found\n"
+    },
+    {
+      "name": "truncated",
+      "passed": true,
+      "exit_code": 1,
+      "elapsed": 0.13119054201524705,
+      "data_hex": "616263",
+      "stderr": "wget: connection closed prematurely\n"
+    },
+    {
+      "name": "timeout",
+      "passed": true,
+      "exit_code": 1,
+      "elapsed": 1.1692070409771986,
+      "data_hex": null,
+      "stderr": "wget: download timed out\n"
+    },
+    {
+      "name": "cancel",
+      "passed": true,
+      "exit_code": 143,
+      "elapsed": 0.15266962500754744,
+      "data_hex": null,
+      "stderr": ""
+    },
+    {
+      "name": "crash",
+      "passed": true,
+      "exit_code": -9,
+      "elapsed": 0.13096408298588358,
+      "data_hex": null,
+      "stderr": ""
+    },
+    {
+      "name": "oci_fetch_stdout",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "abcdef",
+      "stderr": ""
+    },
+    {
+      "name": "managed_fetch_0",
+      "passed": true
+    },
+    {
+      "name": "managed_fetch_1",
+      "passed": true
+    },
+    {
+      "name": "managed_removed",
+      "passed": true
+    }
+  ],
+  "runtime_sha256": "4b2bcc8a3ea9f5b806ac9aa39bd7c221932b3880263022c3c8e4a483039ea5c0"
+}

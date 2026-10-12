@@ -1,0 +1,30 @@
+[
+  {
+    "backend": "interpreter",
+    "test": "fadvise",
+    "passed": true,
+    "exit": 0,
+    "stderr": ""
+  },
+  {
+    "backend": "interpreter",
+    "test": "accept",
+    "passed": true,
+    "exit": 0,
+    "stderr": ""
+  },
+  {
+    "backend": "unicorn",
+    "test": "fadvise",
+    "passed": true,
+    "exit": 0,
+    "stderr": ""
+  },
+  {
+    "backend": "unicorn",
+    "test": "accept",
+    "passed": true,
+    "exit": 0,
+    "stderr": ""
+  }
+]

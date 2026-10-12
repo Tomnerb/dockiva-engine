@@ -1,0 +1,24 @@
+Executable=/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/probe-baseline-hardened
+Identifier=probe-baseline-hardened-55554944c5da6e962ae03327bb07eae12da67492
+Format=Mach-O thin (arm64)
+CodeDirectory v=20500 size=5153 flags=0x10002(adhoc,runtime) hashes=149+7 location=embedded
+VersionPlatform=1
+VersionMin=1703936
+VersionSDK=1705216
+Hash type=sha256 size=32
+CandidateCDHash sha256=2e455d4e44dc97779c1284d08c8e8c8b5f8d8aac
+CandidateCDHashFull sha256=2e455d4e44dc97779c1284d08c8e8c8b5f8d8aac042b80988091a4da2621255a
+Hash choices=sha256
+CMSDigest=2e455d4e44dc97779c1284d08c8e8c8b5f8d8aac042b80988091a4da2621255a
+CMSDigestType=2
+Executable Segment base=0
+Executable Segment limit=1458176
+Executable Segment flags=0x1
+Page size=16384
+CDHash=2e455d4e44dc97779c1284d08c8e8c8b5f8d8aac
+Signature=adhoc
+Info.plist=not bound
+TeamIdentifier=not set
+Runtime Version=26.5.0
+Sealed Resources=none
+Internal requirements count=0 size=12

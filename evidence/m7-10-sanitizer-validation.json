@@ -1,0 +1,195 @@
+{
+  "host": "Linux-6.18.44-x86_64-with-glibc2.39",
+  "passed": true,
+  "cases": [
+    {
+      "name": "fixture_hashes",
+      "passed": true
+    },
+    {
+      "name": "read_seek_stat",
+      "passed": true,
+      "exit_code": 0,
+      "stderr": ""
+    },
+    {
+      "name": "write_create",
+      "passed": true,
+      "exit_code": 0,
+      "stderr": ""
+    },
+    {
+      "name": "directory_rename_unlink",
+      "passed": true,
+      "exit_code": 0,
+      "stderr": ""
+    },
+    {
+      "name": "readonly_rejection",
+      "passed": true,
+      "exit_code": 0,
+      "stderr": ""
+    },
+    {
+      "name": "traversal_rejection",
+      "passed": true,
+      "exit_code": 0,
+      "stderr": ""
+    },
+    {
+      "name": "symlink_rejection",
+      "passed": true,
+      "exit_code": 0,
+      "stderr": ""
+    },
+    {
+      "name": "bad_path_pointer",
+      "passed": true,
+      "exit_code": 0,
+      "stderr": ""
+    },
+    {
+      "name": "bad_buffer_pointer",
+      "passed": true,
+      "exit_code": 0,
+      "stderr": ""
+    },
+    {
+      "name": "missing_file",
+      "passed": true,
+      "exit_code": 0,
+      "stderr": ""
+    },
+    {
+      "name": "read_fd_write_rejection",
+      "passed": true,
+      "exit_code": 0,
+      "stderr": ""
+    },
+    {
+      "name": "zero_read",
+      "passed": true,
+      "exit_code": 0,
+      "stderr": ""
+    },
+    {
+      "name": "file_size_limit",
+      "passed": true,
+      "exit_code": 0,
+      "stderr": ""
+    },
+    {
+      "name": "file_descriptor_limit",
+      "passed": true,
+      "exit_code": 0,
+      "stderr": ""
+    },
+    {
+      "name": "append",
+      "passed": true,
+      "exit_code": 0,
+      "stderr": ""
+    },
+    {
+      "name": "host_file_unchanged",
+      "passed": true
+    },
+    {
+      "name": "append_content",
+      "passed": true
+    },
+    {
+      "name": "directory_removed",
+      "passed": true
+    },
+    {
+      "name": "libc_startup",
+      "passed": true,
+      "linux_reference": null
+    },
+    {
+      "name": "libc_file_read",
+      "passed": true,
+      "linux_reference": null
+    },
+    {
+      "name": "libc_errno",
+      "passed": true,
+      "linux_reference": null
+    },
+    {
+      "name": "libc_arguments",
+      "passed": true,
+      "linux_reference": null
+    },
+    {
+      "name": "integer_vector_conformance",
+      "passed": true
+    },
+    {
+      "name": "image_html_response",
+      "passed": true
+    },
+    {
+      "name": "create_instances",
+      "passed": true
+    },
+    {
+      "name": "exit_code",
+      "passed": true
+    },
+    {
+      "name": "stdout_logs",
+      "passed": true
+    },
+    {
+      "name": "restart_persists",
+      "passed": true
+    },
+    {
+      "name": "instance_independence",
+      "passed": true
+    },
+    {
+      "name": "image_unchanged",
+      "passed": true
+    },
+    {
+      "name": "readonly_container",
+      "passed": true
+    },
+    {
+      "name": "running_status",
+      "passed": true
+    },
+    {
+      "name": "duplicate_start_rejected",
+      "passed": true
+    },
+    {
+      "name": "running_remove_rejected",
+      "passed": true
+    },
+    {
+      "name": "stop_exit_status",
+      "passed": true
+    },
+    {
+      "name": "stop_listener_closed",
+      "passed": true
+    },
+    {
+      "name": "list_instances",
+      "passed": true
+    },
+    {
+      "name": "stderr_logs",
+      "passed": true
+    },
+    {
+      "name": "remove_private_state",
+      "passed": true
+    }
+  ],
+  "reference": "not-run"
+}

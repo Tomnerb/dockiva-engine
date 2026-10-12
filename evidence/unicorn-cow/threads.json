@@ -1,0 +1,50 @@
+{
+  "runtime_sha256": "80b80f14b13f37064cf813dc1ef464b3c75a47d31d46773e473572c087b5c260",
+  "results": [
+    {
+      "test": "threads_guest.S",
+      "backend": "unicorn",
+      "passed": true,
+      "exit": 0,
+      "stdout_hex": "",
+      "stderr": "",
+      "elf_sha256": "a5d1f5f7126e259ff4db5db89901e3e3d5f5c701c630518e16dfda9e0e185e22"
+    },
+    {
+      "test": "threads_guest.S",
+      "backend": "Linux reference",
+      "passed": true,
+      "exit": 0,
+      "stdout_hex": "",
+      "stderr": "",
+      "elf_sha256": "a5d1f5f7126e259ff4db5db89901e3e3d5f5c701c630518e16dfda9e0e185e22"
+    },
+    {
+      "test": "futex_guest.c",
+      "backend": "unicorn",
+      "passed": true,
+      "exit": 0,
+      "stdout_hex": "0b000000",
+      "stderr": "",
+      "elf_sha256": "68a5b3017c8d2f7d1a358a7f6fad527cd44700463a68b88ddb7d75736065c45a"
+    },
+    {
+      "test": "futex_guest.c",
+      "backend": "Linux reference",
+      "passed": true,
+      "exit": 0,
+      "stdout_hex": "0b000000",
+      "stderr": "",
+      "elf_sha256": "68a5b3017c8d2f7d1a358a7f6fad527cd44700463a68b88ddb7d75736065c45a"
+    },
+    {
+      "test": "thread_limit_guest.S",
+      "backend": "unicorn",
+      "passed": true,
+      "exit": 0,
+      "stdout_hex": "",
+      "stderr": "",
+      "elf_sha256": "c547d4c9909c4de285a015c144f562eb853a557e9242e53b36375ee1a2433504"
+    }
+  ]
+}

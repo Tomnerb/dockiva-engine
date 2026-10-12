@@ -1,0 +1,32 @@
+{
+  "started_at": "2026-09-22T00:14:15+00:00",
+  "finished_at": "2026-09-22T00:22:00.083188+00:00",
+  "elapsed_seconds": 465.08,
+  "limits": {
+    "tokens": 10000,
+    "seconds": 1800
+  },
+  "token_usage": "Exact per-batch counter unavailable; no measured token total claimed.",
+  "result": "Redis advances via its documented unsupported-MADV_FREE fallback",
+  "fork_cow_test_executed": false,
+  "madv_free_implemented": false,
+  "service_qualified": false,
+  "next_observed_syscall": 179,
+  "dockiva_modified": false,
+  "validation": {
+    "abi_cases": 13,
+    "linux_matches": 12,
+    "declared_capability_differences": 1,
+    "native_sanitizer": "passed",
+    "cpu_adapter_cases": 14,
+    "python_tests": 53
+  },
+  "source_hashes": {
+    "native/mapping.h": "a1d0076ca78597033da42443b7e0bd7666b0e69bca0c8c94c76da78a1099e2c5",
+    "native/syscall.h": "14985502393316dc5eeaafb117f55a448efcd84f00b9bfbcc4020c585bd02a50",
+    "tests/native/madvise.c": "56a8d5a647f00f0fc2af6e147a2fb4727e82bddc4e4248be8c07ae49bdaeb52f",
+    "tests/native/madvise_guest.c": "bc8346a35525a26a7fc7e95c0a5f28726b160425149f15805327b8d905faf223",
+    "scripts/verify_madvise.py": "ab7230a898ce8b3eee601c45eba544d110e7ba28002dc9aee2e9f428723bb18d",
+    "scripts/verify_redis_unicorn.py": "9dd05543e2e5366403d89d03cb1f8b0ade5299a3a077b123f451e083134b3605"
+  }
+}

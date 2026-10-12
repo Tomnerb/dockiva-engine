@@ -1,0 +1,27 @@
+{
+  "scope": "accept/accept4 peer sockaddr ABI, truncation, zero/NULL outputs, bad pointers, invalid lengths, nonblocking flags and actual data exchange",
+  "elf_sha256": "2232ae1fc06fa9f1b5ff8b43595f5581720f5622aea0d0c779fd8bf8de1ac24c",
+  "results": [
+    {
+      "backend": "interpreter",
+      "exit": 0,
+      "stderr": "",
+      "passed": true,
+      "checks": 69
+    },
+    {
+      "backend": "unicorn",
+      "exit": 0,
+      "stderr": "",
+      "passed": true,
+      "checks": 69
+    },
+    {
+      "backend": "Linux reference",
+      "exit": 0,
+      "stderr": "",
+      "passed": true,
+      "checks": 69
+    }
+  ]
+}

@@ -1,0 +1,541 @@
+{
+  "host": "Linux-6.18.44-x86_64-with-glibc2.39",
+  "native": "/workspace/scratch/026698cab616/vmfree-runtime/build/vmfree-c",
+  "reference": [
+    "/tmp/vmfree-qemu/usr/bin/qemu-aarch64-static"
+  ],
+  "passed": true,
+  "cases": [
+    {
+      "name": "no_arguments",
+      "elf": "demo.elf",
+      "args": [],
+      "env": {},
+      "actual": {
+        "stdout_hex": "75736167653a2064656d6f204449474954530a",
+        "stderr_hex": "",
+        "exit_code": 2
+      },
+      "passed": true,
+      "expected": {
+        "stdout_hex": "75736167653a2064656d6f204449474954530a",
+        "stderr_hex": "",
+        "exit_code": 2
+      },
+      "linux_reference": {
+        "stdout_hex": "75736167653a2064656d6f204449474954530a",
+        "stderr_hex": "",
+        "exit_code": 2
+      }
+    },
+    {
+      "name": "digits_and_environment",
+      "elf": "demo.elf",
+      "args": [
+        "12345"
+      ],
+      "env": {
+        "MODE": "demo"
+      },
+      "actual": {
+        "stdout_hex": "73756d3d31350a4d4f44453d64656d6f0a",
+        "stderr_hex": "",
+        "exit_code": 15
+      },
+      "passed": true,
+      "expected": {
+        "stdout_hex": "73756d3d31350a4d4f44453d64656d6f0a",
+        "stderr_hex": "",
+        "exit_code": 15
+      },
+      "linux_reference": {
+        "stdout_hex": "73756d3d31350a4d4f44453d64656d6f0a",
+        "stderr_hex": "",
+        "exit_code": 15
+      }
+    },
+    {
+      "name": "zero",
+      "elf": "demo.elf",
+      "args": [
+        "0"
+      ],
+      "env": {},
+      "actual": {
+        "stdout_hex": "73756d3d30300a",
+        "stderr_hex": "",
+        "exit_code": 0
+      },
+      "passed": true,
+      "expected": {
+        "stdout_hex": "73756d3d30300a",
+        "stderr_hex": "",
+        "exit_code": 0
+      },
+      "linux_reference": {
+        "stdout_hex": "73756d3d30300a",
+        "stderr_hex": "",
+        "exit_code": 0
+      }
+    },
+    {
+      "name": "maximum_sum",
+      "elf": "demo.elf",
+      "args": [
+        "999999999"
+      ],
+      "env": {},
+      "actual": {
+        "stdout_hex": "73756d3d38310a",
+        "stderr_hex": "",
+        "exit_code": 81
+      },
+      "passed": true,
+      "expected": {
+        "stdout_hex": "73756d3d38310a",
+        "stderr_hex": "",
+        "exit_code": 81
+      },
+      "linux_reference": {
+        "stdout_hex": "73756d3d38310a",
+        "stderr_hex": "",
+        "exit_code": 81
+      }
+    },
+    {
+      "name": "leading_zeroes",
+      "elf": "demo.elf",
+      "args": [
+        "0012"
+      ],
+      "env": {},
+      "actual": {
+        "stdout_hex": "73756d3d30330a",
+        "stderr_hex": "",
+        "exit_code": 3
+      },
+      "passed": true,
+      "expected": {
+        "stdout_hex": "73756d3d30330a",
+        "stderr_hex": "",
+        "exit_code": 3
+      },
+      "linux_reference": {
+        "stdout_hex": "73756d3d30330a",
+        "stderr_hex": "",
+        "exit_code": 3
+      }
+    },
+    {
+      "name": "invalid_character",
+      "elf": "demo.elf",
+      "args": [
+        "1x"
+      ],
+      "env": {},
+      "actual": {
+        "stdout_hex": "6572726f723a2075736520312d39206469676974730a",
+        "stderr_hex": "",
+        "exit_code": 3
+      },
+      "passed": true,
+      "expected": {
+        "stdout_hex": "6572726f723a2075736520312d39206469676974730a",
+        "stderr_hex": "",
+        "exit_code": 3
+      },
+      "linux_reference": {
+        "stdout_hex": "6572726f723a2075736520312d39206469676974730a",
+        "stderr_hex": "",
+        "exit_code": 3
+      }
+    },
+    {
+      "name": "empty_argument",
+      "elf": "demo.elf",
+      "args": [
+        ""
+      ],
+      "env": {},
+      "actual": {
+        "stdout_hex": "6572726f723a2075736520312d39206469676974730a",
+        "stderr_hex": "",
+        "exit_code": 3
+      },
+      "passed": true,
+      "expected": {
+        "stdout_hex": "6572726f723a2075736520312d39206469676974730a",
+        "stderr_hex": "",
+        "exit_code": 3
+      },
+      "linux_reference": {
+        "stdout_hex": "6572726f723a2075736520312d39206469676974730a",
+        "stderr_hex": "",
+        "exit_code": 3
+      }
+    },
+    {
+      "name": "too_many_digits",
+      "elf": "demo.elf",
+      "args": [
+        "1234567890"
+      ],
+      "env": {},
+      "actual": {
+        "stdout_hex": "6572726f723a2075736520312d39206469676974730a",
+        "stderr_hex": "",
+        "exit_code": 3
+      },
+      "passed": true,
+      "expected": {
+        "stdout_hex": "6572726f723a2075736520312d39206469676974730a",
+        "stderr_hex": "",
+        "exit_code": 3
+      },
+      "linux_reference": {
+        "stdout_hex": "6572726f723a2075736520312d39206469676974730a",
+        "stderr_hex": "",
+        "exit_code": 3
+      }
+    },
+    {
+      "name": "extra_argument",
+      "elf": "demo.elf",
+      "args": [
+        "1",
+        "2"
+      ],
+      "env": {},
+      "actual": {
+        "stdout_hex": "75736167653a2064656d6f204449474954530a",
+        "stderr_hex": "",
+        "exit_code": 2
+      },
+      "passed": true,
+      "expected": {
+        "stdout_hex": "75736167653a2064656d6f204449474954530a",
+        "stderr_hex": "",
+        "exit_code": 2
+      },
+      "linux_reference": {
+        "stdout_hex": "75736167653a2064656d6f204449474954530a",
+        "stderr_hex": "",
+        "exit_code": 2
+      }
+    },
+    {
+      "name": "non_ascii",
+      "elf": "demo.elf",
+      "args": [
+        "ខ្មែរ"
+      ],
+      "env": {},
+      "actual": {
+        "stdout_hex": "6572726f723a2075736520312d39206469676974730a",
+        "stderr_hex": "",
+        "exit_code": 3
+      },
+      "passed": true,
+      "expected": {
+        "stdout_hex": "6572726f723a2075736520312d39206469676974730a",
+        "stderr_hex": "",
+        "exit_code": 3
+      },
+      "linux_reference": {
+        "stdout_hex": "6572726f723a2075736520312d39206469676974730a",
+        "stderr_hex": "",
+        "exit_code": 3
+      }
+    },
+    {
+      "name": "environment_limit",
+      "elf": "demo.elf",
+      "args": [
+        "1"
+      ],
+      "env": {
+        "VALUE": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "actual": {
+        "stdout_hex": "73756d3d30310a56414c55453d61616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161610a",
+        "stderr_hex": "",
+        "exit_code": 1
+      },
+      "passed": true,
+      "expected": {
+        "stdout_hex": "73756d3d30310a56414c55453d61616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161610a",
+        "stderr_hex": "",
+        "exit_code": 1
+      },
+      "linux_reference": {
+        "stdout_hex": "73756d3d30310a56414c55453d61616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161610a",
+        "stderr_hex": "",
+        "exit_code": 1
+      }
+    },
+    {
+      "name": "empty_environment_value",
+      "elf": "demo.elf",
+      "args": [
+        "9"
+      ],
+      "env": {
+        "MODE": ""
+      },
+      "actual": {
+        "stdout_hex": "73756d3d30390a4d4f44453d0a",
+        "stderr_hex": "",
+        "exit_code": 9
+      },
+      "passed": true,
+      "expected": {
+        "stdout_hex": "73756d3d30390a4d4f44453d0a",
+        "stderr_hex": "",
+        "exit_code": 9
+      },
+      "linux_reference": {
+        "stdout_hex": "73756d3d30390a4d4f44453d0a",
+        "stderr_hex": "",
+        "exit_code": 9
+      }
+    },
+    {
+      "name": "flags",
+      "elf": "flags.elf",
+      "args": [],
+      "env": {},
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      },
+      "passed": true,
+      "expected": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      },
+      "linux_reference": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      }
+    },
+    {
+      "name": "memory",
+      "elf": "memory.elf",
+      "args": [],
+      "env": {},
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      },
+      "passed": true,
+      "expected": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      },
+      "linux_reference": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      }
+    },
+    {
+      "name": "startup",
+      "elf": "startup.elf",
+      "args": [],
+      "env": {},
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      },
+      "passed": true,
+      "expected": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      },
+      "linux_reference": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      }
+    },
+    {
+      "name": "control",
+      "elf": "control.elf",
+      "args": [],
+      "env": {},
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      },
+      "passed": true,
+      "expected": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      },
+      "linux_reference": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      }
+    },
+    {
+      "name": "readonly_fault",
+      "elf": "readonly_fault.elf",
+      "args": [],
+      "env": {},
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "766d667265653a20477565737420777269746520697320756e6d6170706564206f72207065726d697373696f6e2064656e6965640a",
+        "exit_code": 125
+      },
+      "passed": true,
+      "linux_reference": "not-run: interpreter rejection check"
+    },
+    {
+      "name": "stack_exec_fault",
+      "elf": "stack_exec_fault.elf",
+      "args": [],
+      "env": {},
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "766d667265653a20556e6d6170706564206f72206e6f6e2d65786563757461626c6520696e737472756374696f6e0a",
+        "exit_code": 125
+      },
+      "passed": true,
+      "linux_reference": "not-run: interpreter rejection check"
+    },
+    {
+      "name": "unmapped_fault",
+      "elf": "unmapped_fault.elf",
+      "args": [],
+      "env": {},
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "766d667265653a204775657374207265616420697320756e6d6170706564206f72207065726d697373696f6e2064656e6965640a",
+        "exit_code": 125
+      },
+      "passed": true,
+      "linux_reference": "not-run: interpreter rejection check"
+    },
+    {
+      "name": "unaligned_sp",
+      "elf": "unaligned_sp.elf",
+      "args": [],
+      "env": {},
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "766d667265653a20556e616c69676e656420737461636b20706f696e7465720a",
+        "exit_code": 125
+      },
+      "passed": true,
+      "linux_reference": "not-run: interpreter rejection check"
+    },
+    {
+      "name": "argument_count_limit",
+      "elf": "demo.elf",
+      "args": [
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x"
+      ],
+      "env": {},
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "766d667265653a204174206d6f737420363320677565737420617267756d656e747320737570706f727465640a",
+        "exit_code": 125
+      },
+      "passed": true,
+      "linux_reference": "not-run: interpreter rejection check"
+    },
+    {
+      "name": "startup_bytes_limit",
+      "elf": "demo.elf",
+      "args": [
+        "1"
+      ],
+      "env": {
+        "BIG": "<65536 test bytes>"
+      },
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "766d667265653a20417267756d656e747320616e6420656e7669726f6e6d656e7420657863656564203634204b69420a",
+        "exit_code": 125
+      },
+      "passed": true,
+      "linux_reference": "not-run: interpreter rejection check"
+    }
+  ],
+  "reference_kind": "qemu-user-linux",
+  "native_source_sha256": "91481231360189924b860b5eafc98ec96afa23fba21498c955c2a1dd193929b8",
+  "reference_tool_version": "qemu-aarch64 version 7.2.22 (Debian 1:7.2+dfsg-7+deb12u18+b3)"
+}

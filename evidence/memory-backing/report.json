@@ -1,0 +1,92 @@
+{
+  "date": "2026-09-22",
+  "scope": "Reference-counted backing and segment offset views; eager private fork preserved; no COW or MAP_SHARED acceptance",
+  "passed": true,
+  "checks": {
+    "backing-tests": {
+      "passed": true,
+      "checks_or_cycles": 1
+    },
+    "address-space": {
+      "passed": true,
+      "checks_or_cycles": 2
+    },
+    "cpu-state": {
+      "passed": true,
+      "checks_or_cycles": 2
+    },
+    "backend": {
+      "passed": true,
+      "checks_or_cycles": 14
+    },
+    "threads": {
+      "passed": true,
+      "checks_or_cycles": 5
+    },
+    "interpreter-shell": {
+      "passed": true,
+      "checks_or_cycles": 89
+    },
+    "interpreter-loader": {
+      "passed": true,
+      "checks_or_cycles": 21
+    },
+    "redis-query": {
+      "passed": true,
+      "checks_or_cycles": 2
+    },
+    "redis-recovery": {
+      "passed": true,
+      "checks_or_cycles": 6
+    }
+  },
+  "python_tests_passed": 63,
+  "dockiva_tests_passed": 4,
+  "dockiva_external_live_engine_tests_skipped": 1,
+  "artifacts": {
+    "build/vmfree-c": "ccada875ded5660185ddbcf67b5ff69f759425ea7fb2bc7215c3c5f20f66b4de",
+    "build/vmfree-c-unicorn": "952e5f2f034db098d12b2a008baed41235381b7590551dd7996457cb493a80bb",
+    "build/dockiva-memory-backing/vmfree-engine/vmfree-engine": "4077e898ee6d4ae9f688b9dae8174b6327c78133c13f92ac515ef54d4df332de",
+    "build/dockiva-memory-backing/vmfree-engine/_internal/build/vmfree-c-unicorn": "952e5f2f034db098d12b2a008baed41235381b7590551dd7996457cb493a80bb"
+  },
+  "source_hashes": {
+    "native/address_space.h": "9112b2318272f33947751ee8b26f74f6e96504b16864b3f239ecabc1d3288d71",
+    "native/address_space_ops.h": "bfcfff2e02861cf6e983fdb75b82279e9ee5526d042881c7dae2fdb93070ea4a",
+    "native/compat.h": "a8330b1e66610aaf63b31fa5c1281813e2104ead8b8caeff09875de7f401cc72",
+    "native/cpu_state.h": "d58dc254674399b197e7c305b0dc558f5c38e5879eb43fe3f9db6954a2d8836e",
+    "native/decode.h": "fdc15750c69a7f12c54e1ef9c27ac93c47fd722093958d1190497964a8ff40bd",
+    "native/epoll.h": "9eb6ed6a5a4f9ee7b9555f55560c259271b0017cc82beef790ee1b728d0567ed",
+    "native/fadvise.h": "ca5ffefe679d1847c9b8f6028512e5342b2287fb5337b6630753f57fb0b2ab8d",
+    "native/fs.h": "c843b02549ebc9af66a26e21f31a68d118a662658bd0e8db4b2e5d91c7f7411f",
+    "native/heap.h": "13381730245dd5d0e45101f9c80a9ed88904b42ecb0718e74798cc12389f75cb",
+    "native/io.h": "3f8796c23c7f86f5c472334efad99674c44855edfa29a477aa899420321d4fcc",
+    "native/mapping.h": "0d82d19f565737ddc57a1e25068cc20d1fc140365513e06ceb6446cc8f84df5d",
+    "native/memory_backing.h": "aa2267bed64e7dbc66037e5cd373bf6cd38427102f4b8bff23f9c54459b1b228",
+    "native/memory_backing_ops.h": "4debdddc2707202c4020a65e8dd4a43b765f900987ec25afca759dbc7d234474",
+    "native/net.h": "67e94e6b9ea7ee875e273b9e86d2098fd344f6009df06cc2c916dbf4ed04edc2",
+    "native/process.h": "c1cd05d7dabdc1b4acb27f03877bca7babf0fd33baee12664d0e6b08eff2852d",
+    "native/profile.h": "d69dbabe6c7a9c2aa35f625f26ede05e95e02e70c0a32da6882ed3689bf0af51",
+    "native/resources.h": "941ba34cf44b05fc8bbbb90f4b5f600de3ac60860e84740f8759b083684f5b8e",
+    "native/runtime_context.h": "359d8763832761ee358b9d1380a3211067c9654c3dba2611dd4cf57099f9119f",
+    "native/scheduler.h": "7896939e7b5f75ed99fec1d77c5d354d2d11f92572ea1d2976a3a08d4c141449",
+    "native/signals.h": "453fbbd3e69ae46abaab1a2701258e4b1602f63600fed18ef94c562e913ea5a8",
+    "native/syscall.h": "342080b73d0aa7235dcf29ee21979fc8406d878a351a42f8fd4940307f7b5a5f",
+    "native/sysinfo.h": "50e5742797c013db83e308a543bb4177995f6a99a7b6668b8eacca9a956c5a52",
+    "native/terminal.h": "34211fcb44ee7282a75f916964434b4f8a6077d9985c8a96406c0b53c269b888",
+    "native/unicorn_backend.h": "be2f8a0060fbf52f969d157c5fc7442f76a177a71b7219c3d8d6a5cc6ddb4835",
+    "native/unicorn_threads.h": "662c9b50ac5b983cfbc82488823d7219bcbcad1d33b8532854d3018a7f5fd9af",
+    "native/runtime.c": "689572ad482db6f36eaa9aaf0c0c3eec2866a2108a7f6bf55e26bdecba69ca99",
+    "tests/native/address_space_host.c": "0b546eab5d6690b3048a4b9df4db76428a0d7cc4aa176f793c392ee949285423",
+    "tests/native/cpu_state_host.c": "4d90259a1b345bf588d101cdd95874605b37eca0296c833e89e7b15622e0e857",
+    "tests/native/memory_backing_host.c": "cba8372a4e5694d0cfd9387a2fe3746a4b5bdf98fc847d37dc9bb4e5ac739701",
+    "scripts/verify_memory_backing.py": "2a3f8e2d5e8f9e5727f3bc94c7e61d7bcf868f052dfca1958a271399f060ab12"
+  },
+  "remaining": [
+    "Private fork COW and general MAP_SHARED",
+    "Unified FD/scheduler ownership and full backend interface",
+    "Valkey V0\u2013V11 and PostgreSQL P0\u2013P12",
+    "Production isolation and performance qualification"
+  ],
+  "existing_dockiva_app_replaced": false,
+  "gui_tested": false
+}

@@ -1,0 +1,287 @@
+[  1%] Building C object CMakeFiles/unicorn-common.dir/list.c.o
+[  4%] Building C object CMakeFiles/unicorn-common.dir/glib_compat/glib_compat.c.o
+[  4%] Building C object CMakeFiles/unicorn-common.dir/glib_compat/gtestutils.c.o
+[  4%] Building C object CMakeFiles/unicorn-common.dir/glib_compat/gtree.c.o
+[  6%] Building C object CMakeFiles/unicorn-common.dir/glib_compat/garray.c.o
+[  6%] Building C object CMakeFiles/unicorn-common.dir/glib_compat/grand.c.o
+[  8%] Building C object CMakeFiles/unicorn-common.dir/glib_compat/glist.c.o
+[  9%] Building C object CMakeFiles/unicorn-common.dir/glib_compat/gmem.c.o
+[ 10%] Building C object CMakeFiles/unicorn-common.dir/glib_compat/gpattern.c.o
+[ 11%] Building C object CMakeFiles/unicorn-common.dir/glib_compat/gslice.c.o
+[ 12%] Building C object CMakeFiles/unicorn-common.dir/qemu/util/bitmap.c.o
+[ 15%] Building C object CMakeFiles/unicorn-common.dir/qemu/util/crc32c.c.o
+[ 15%] Building C object CMakeFiles/unicorn-common.dir/qemu/util/bitops.c.o
+[ 16%] Building C object CMakeFiles/unicorn-common.dir/qemu/util/cutils.c.o
+[ 17%] Building C object CMakeFiles/unicorn-common.dir/qemu/util/getauxval.c.o
+[ 18%] Building C object CMakeFiles/unicorn-common.dir/qemu/util/guest-random.c.o
+[ 19%] Building C object CMakeFiles/unicorn-common.dir/qemu/util/host-utils.c.o
+[ 20%] Building C object CMakeFiles/unicorn-common.dir/qemu/util/osdep.c.o
+[ 22%] Building C object CMakeFiles/unicorn-common.dir/qemu/util/qdist.c.o
+[ 23%] Building C object CMakeFiles/unicorn-common.dir/qemu/util/qemu-timer.c.o
+[ 24%] Building C object CMakeFiles/unicorn-common.dir/qemu/util/qemu-timer-common.c.o
+[ 25%] Building C object CMakeFiles/unicorn-common.dir/qemu/util/range.c.o
+[ 27%] Building C object CMakeFiles/unicorn-common.dir/qemu/util/qht.c.o
+[ 27%] Building C object CMakeFiles/unicorn-common.dir/qemu/util/pagesize.c.o
+[ 29%] Building C object CMakeFiles/unicorn-common.dir/qemu/util/cacheinfo.c.o
+[ 30%] Building C object CMakeFiles/unicorn-common.dir/qemu/crypto/aes.c.o
+[ 32%] Building C object CMakeFiles/unicorn-common.dir/qemu/util/oslib-posix.c.o
+[ 32%] Building C object CMakeFiles/unicorn-common.dir/qemu/util/qemu-thread-posix.c.o
+[ 33%] Linking C static library libunicorn-common.a
+[ 33%] Built target unicorn-common
+[ 36%] Building C object CMakeFiles/aarch64-softmmu.dir/qemu/exec.c.o
+[ 38%] Building C object CMakeFiles/aarch64-softmmu.dir/qemu/softmmu/cpus.c.o
+[ 39%] Building C object CMakeFiles/aarch64-softmmu.dir/qemu/softmmu/ioport.c.o
+[ 39%] Building C object CMakeFiles/aarch64-softmmu.dir/qemu/softmmu/memory.c.o
+[ 39%] Building C object CMakeFiles/aarch64-softmmu.dir/qemu/exec-vary.c.o
+[ 40%] Building C object CMakeFiles/aarch64-softmmu.dir/qemu/softmmu/memory_mapping.c.o
+[ 43%] Building C object CMakeFiles/aarch64-softmmu.dir/qemu/fpu/softfloat.c.o
+[ 43%] Building C object CMakeFiles/aarch64-softmmu.dir/qemu/tcg/optimize.c.o
+[ 44%] Building C object CMakeFiles/aarch64-softmmu.dir/qemu/tcg/tcg.c.o
+[ 45%] Building C object CMakeFiles/aarch64-softmmu.dir/qemu/tcg/tcg-op.c.o
+[ 46%] Building C object CMakeFiles/aarch64-softmmu.dir/qemu/tcg/tcg-op-gvec.c.o
+In file included from /Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/tcg/tcg.c:294:
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/tcg/aarch64/tcg-target.inc.c:1508:41: warning: initializer overrides prior initialization of this subobject [-Winitializer-overrides]
+ 1508 |         [TCG_MO_ST_ST]                = DMB_ISH | DMB_ST,
+      |                                         ^~~~~~~~~~~~~~~~
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/tcg/aarch64/tcg-target.inc.c:1507:41: note: previous initialization is here
+ 1507 |         [0 ... TCG_MO_ALL]            = DMB_ISH | DMB_LD | DMB_ST,
+      |                                         ^~~~~~~~~~~~~~~~~~~~~~~~~
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/tcg/aarch64/tcg-target.inc.c:1509:41: warning: initializer overrides prior initialization of this subobject [-Winitializer-overrides]
+ 1509 |         [TCG_MO_LD_LD]                = DMB_ISH | DMB_LD,
+      |                                         ^~~~~~~~~~~~~~~~
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/tcg/aarch64/tcg-target.inc.c:1507:41: note: previous initialization is here
+ 1507 |         [0 ... TCG_MO_ALL]            = DMB_ISH | DMB_LD | DMB_ST,
+      |                                         ^~~~~~~~~~~~~~~~~~~~~~~~~
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/tcg/aarch64/tcg-target.inc.c:1510:41: warning: initializer overrides prior initialization of this subobject [-Winitializer-overrides]
+ 1510 |         [TCG_MO_LD_ST]                = DMB_ISH | DMB_LD,
+      |                                         ^~~~~~~~~~~~~~~~
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/tcg/aarch64/tcg-target.inc.c:1507:41: note: previous initialization is here
+ 1507 |         [0 ... TCG_MO_ALL]            = DMB_ISH | DMB_LD | DMB_ST,
+      |                                         ^~~~~~~~~~~~~~~~~~~~~~~~~
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/tcg/aarch64/tcg-target.inc.c:1511:41: warning: initializer overrides prior initialization of this subobject [-Winitializer-overrides]
+ 1511 |         [TCG_MO_LD_ST | TCG_MO_LD_LD] = DMB_ISH | DMB_LD,
+      |                                         ^~~~~~~~~~~~~~~~
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/tcg/aarch64/tcg-target.inc.c:1507:41: note: previous initialization is here
+ 1507 |         [0 ... TCG_MO_ALL]            = DMB_ISH | DMB_LD | DMB_ST,
+      |                                         ^~~~~~~~~~~~~~~~~~~~~~~~~
+[ 47%] Building C object CMakeFiles/aarch64-softmmu.dir/qemu/tcg/tcg-op-vec.c.o
+[ 48%] Building C object CMakeFiles/aarch64-softmmu.dir/qemu/accel/tcg/cpu-exec.c.o
+[ 50%] Building C object CMakeFiles/aarch64-softmmu.dir/qemu/accel/tcg/cpu-exec-common.c.o
+[ 51%] Building C object CMakeFiles/aarch64-softmmu.dir/qemu/accel/tcg/cputlb.c.o
+[ 52%] Building C object CMakeFiles/aarch64-softmmu.dir/qemu/accel/tcg/tcg-all.c.o
+[ 53%] Building C object CMakeFiles/aarch64-softmmu.dir/qemu/accel/tcg/tcg-runtime.c.o
+[ 54%] Building C object CMakeFiles/aarch64-softmmu.dir/qemu/accel/tcg/tcg-runtime-gvec.c.o
+[ 55%] Building C object CMakeFiles/aarch64-softmmu.dir/qemu/accel/tcg/translate-all.c.o
+[ 56%] Building C object CMakeFiles/aarch64-softmmu.dir/qemu/accel/tcg/translator.c.o
+[ 58%] Building C object CMakeFiles/aarch64-softmmu.dir/qemu/softmmu/unicorn_vtlb.c.o
+4 warnings generated.
+[ 59%] Building C object CMakeFiles/aarch64-softmmu.dir/qemu/target/arm/cpu64.c.o
+[ 60%] Building C object CMakeFiles/aarch64-softmmu.dir/qemu/target/arm/cpu.c.o
+[ 61%] Building C object CMakeFiles/aarch64-softmmu.dir/qemu/target/arm/crypto_helper.c.o
+[ 62%] Building C object CMakeFiles/aarch64-softmmu.dir/qemu/target/arm/debug_helper.c.o
+[ 63%] Building C object CMakeFiles/aarch64-softmmu.dir/qemu/target/arm/helper-a64.c.o
+[ 65%] Building C object CMakeFiles/aarch64-softmmu.dir/qemu/target/arm/helper.c.o
+[ 66%] Building C object CMakeFiles/aarch64-softmmu.dir/qemu/target/arm/iwmmxt_helper.c.o
+[ 67%] Building C object CMakeFiles/aarch64-softmmu.dir/qemu/target/arm/m_helper.c.o
+[ 68%] Building C object CMakeFiles/aarch64-softmmu.dir/qemu/target/arm/neon_helper.c.o
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/target/arm/helper.c:4708:15: warning: initializer overrides prior initialization of this subobject [-Winitializer-overrides]
+ 4708 |       .type = ARM_CP_CONST, .resetvalue = 0 },
+      |               ^~~~~~~~~~~~
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/target/arm/cpu.h:2340:34: note: expanded from macro 'ARM_CP_CONST'
+ 2340 | #define ARM_CP_CONST             0x0002
+      |                                  ^~~~~~
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/target/arm/helper.c:4705:15: note: previous initialization is here
+ 4705 |       .type = ARM_CP_NO_RAW,
+      |               ^~~~~~~~~~~~~
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/target/arm/cpu.h:2346:34: note: expanded from macro 'ARM_CP_NO_RAW'
+ 2346 | #define ARM_CP_NO_RAW            0x0080
+      |                                  ^~~~~~
+[ 69%] Building C object CMakeFiles/aarch64-softmmu.dir/qemu/target/arm/op_helper.c.o
+[ 70%] Building C object CMakeFiles/aarch64-softmmu.dir/qemu/target/arm/pauth_helper.c.o
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/target/arm/neon_helper.c:1030:1: warning: implicit conversion from 'int' to 'int8_t' (aka 'signed char') changes value from 128 to -128 [-Wconstant-conversion]
+ 1030 | NEON_VOP_ENV(qrshl_s8, neon_s8, 4)
+      | ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/target/arm/neon_helper.c:116:83: note: expanded from macro 'NEON_VOP_ENV'
+  116 | uint32_t HELPER(glue(neon_,name))(CPUARMState *env, uint32_t arg1, uint32_t arg2) \
+      |                                                                                   ^
+  117 | NEON_VOP_BODY(vtype, n)
+      | ~~~~~~~~~~~~~~~~~~~~~~~
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/target/arm/neon_helper.c:106:5: note: expanded from macro '\
+NEON_VOP_BODY'
+  106 |     NEON_DO##n; \
+      |     ^~~~~~~~~~
+<scratch space>:144:1: note: expanded from here
+  144 | NEON_DO4
+      | ^~~~~~~~
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/target/arm/neon_helper.c:93:5: note: expanded from macro 'NEON_DO4'
+   93 |     NEON_FN(vdest.v1, vsrc1.v1, vsrc2.v1); \
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/target/arm/neon_helper.c:1009:23: note: expanded from macro 'NEON_FN'
+ 1009 |             dest = (1 << (sizeof(src1) * 8 - 1)); \
+      |                  ~  ~~^~~~~~~~~~~~~~~~~~~~~~~~~
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/target/arm/neon_helper.c:1030:1: warning: implicit conversion from 'int' to 'int8_t' (aka 'signed char') changes value from 128 to -128 [-Wconstant-conversion]
+ 1030 | NEON_VOP_ENV(qrshl_s8, neon_s8, 4)
+      | ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/target/arm/neon_helper.c:116:83: note: expanded from macro 'NEON_VOP_ENV'
+  116 | uint32_t HELPER(glue(neon_,name))(CPUARMState *env, uint32_t arg1, uint32_t arg2) \
+      |                                                                                   ^
+  117 | NEON_VOP_BODY(vtype, n)
+      | ~~~~~~~~~~~~~~~~~~~~~~~
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/target/arm/neon_helper.c:106:5: note: expanded from macro '\
+NEON_VOP_BODY'
+  106 |     NEON_DO##n; \
+      |     ^~~~~~~~~~
+<scratch space>:144:1: note: expanded from here
+  144 | NEON_DO4
+      | ^~~~~~~~
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/target/arm/neon_helper.c:94:5: note: expanded from macro 'NEON_DO4'
+   94 |     NEON_FN(vdest.v2, vsrc1.v2, vsrc2.v2); \
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/target/arm/neon_helper.c:1009:23: note: expanded from macro 'NEON_FN'
+ 1009 |             dest = (1 << (sizeof(src1) * 8 - 1)); \
+      |                  ~  ~~^~~~~~~~~~~~~~~~~~~~~~~~~
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/target/arm/neon_helper.c:1030:1: warning: implicit conversion from 'int' to 'int8_t' (aka 'signed char') changes value from 128 to -128 [-Wconstant-conversion]
+ 1030 | NEON_VOP_ENV(qrshl_s8, neon_s8, 4)
+      | ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/target/arm/neon_helper.c:116:83: note: expanded from macro 'NEON_VOP_ENV'
+  116 | uint32_t HELPER(glue(neon_,name))(CPUARMState *env, uint32_t arg1, uint32_t arg2) \
+      |                                                                                   ^
+  117 | NEON_VOP_BODY(vtype, n)
+      | ~~~~~~~~~~~~~~~~~~~~~~~
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/target/arm/neon_helper.c:106:5: note: expanded from macro '\
+NEON_VOP_BODY'
+  106 |     NEON_DO##n; \
+      |     ^~~~~~~~~~
+<scratch space>:144:1: note: expanded from here
+  144 | NEON_DO4
+      | ^~~~~~~~
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/target/arm/neon_helper.c:95:5: note: expanded from macro 'NEON_DO4'
+   95 |     NEON_FN(vdest.v3, vsrc1.v3, vsrc2.v3); \
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/target/arm/neon_helper.c:1009:23: note: expanded from macro 'NEON_FN'
+ 1009 |             dest = (1 << (sizeof(src1) * 8 - 1)); \
+      |                  ~  ~~^~~~~~~~~~~~~~~~~~~~~~~~~
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/target/arm/neon_helper.c:1030:1: warning: implicit conversion from 'int' to 'int8_t' (aka 'signed char') changes value from 128 to -128 [-Wconstant-conversion]
+ 1030 | NEON_VOP_ENV(qrshl_s8, neon_s8, 4)
+      | ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/target/arm/neon_helper.c:116:83: note: expanded from macro 'NEON_VOP_ENV'
+  116 | uint32_t HELPER(glue(neon_,name))(CPUARMState *env, uint32_t arg1, uint32_t arg2) \
+      |                                                                                   ^
+  117 | NEON_VOP_BODY(vtype, n)
+      | ~~~~~~~~~~~~~~~~~~~~~~~
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/target/arm/neon_helper.c:106:5: note: expanded from macro '\
+NEON_VOP_BODY'
+  106 |     NEON_DO##n; \
+      |     ^~~~~~~~~~
+<scratch space>:144:1: note: expanded from here
+  144 | NEON_DO4
+      | ^~~~~~~~
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/target/arm/neon_helper.c:96:5: note: expanded from macro 'NEON_DO4'
+   96 |     NEON_FN(vdest.v4, vsrc1.v4, vsrc2.v4);
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/target/arm/neon_helper.c:1009:23: note: expanded from macro 'NEON_FN'
+ 1009 |             dest = (1 << (sizeof(src1) * 8 - 1)); \
+      |                  ~  ~~^~~~~~~~~~~~~~~~~~~~~~~~~
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/target/arm/neon_helper.c:1031:1: warning: implicit conversion from 'int' to 'int16_t' (aka 'short') changes value from 32768 to -32768 [-Wconstant-conversion]
+ 1031 | NEON_VOP_ENV(qrshl_s16, neon_s16, 2)
+      | ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/target/arm/neon_helper.c:116:83: note: expanded from macro 'NEON_VOP_ENV'
+  116 | uint32_t HELPER(glue(neon_,name))(CPUARMState *env, uint32_t arg1, uint32_t arg2) \
+      |                                                                                   ^
+  117 | NEON_VOP_BODY(vtype, n)
+      | ~~~~~~~~~~~~~~~~~~~~~~~
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/target/arm/neon_helper.c:106:5: note: expanded from macro '\
+NEON_VOP_BODY'
+  106 |     NEON_DO##n; \
+      |     ^~~~~~~~~~
+<scratch space>:147:1: note: expanded from here
+  147 | NEON_DO2
+      | ^~~~~~~~
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/target/arm/neon_helper.c:90:5: note: expanded from macro 'NEON_DO2'
+   90 |     NEON_FN(vdest.v1, vsrc1.v1, vsrc2.v1); \
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/target/arm/neon_helper.c:1009:23: note: expanded from macro 'NEON_FN'
+ 1009 |             dest = (1 << (sizeof(src1) * 8 - 1)); \
+      |                  ~  ~~^~~~~~~~~~~~~~~~~~~~~~~~~
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/target/arm/neon_helper.c:1031:1: warning: implicit conversion from 'int' to 'int16_t' (aka 'short') changes value from 32768 to -32768 [-Wconstant-conversion]
+ 1031 | NEON_VOP_ENV(qrshl_s16, neon_s16, 2)
+      | ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/target/arm/neon_helper.c:116:83: note: expanded from macro 'NEON_VOP_ENV'
+  116 | uint32_t HELPER(glue(neon_,name))(CPUARMState *env, uint32_t arg1, uint32_t arg2) \
+      |                                                                                   ^
+  117 | NEON_VOP_BODY(vtype, n)
+      | ~~~~~~~~~~~~~~~~~~~~~~~
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/target/arm/neon_helper.c:106:5: note: expanded from macro '\
+NEON_VOP_BODY'
+  106 |     NEON_DO##n; \
+      |     ^~~~~~~~~~
+<scratch space>:147:1: note: expanded from here
+  147 | NEON_DO2
+      | ^~~~~~~~
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/target/arm/neon_helper.c:91:5: note: expanded from macro 'NEON_DO2'
+   91 |     NEON_FN(vdest.v2, vsrc1.v2, vsrc2.v2);
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/qemu/target/arm/neon_helper.c:1009:23: note: expanded from macro 'NEON_FN'
+ 1009 |             dest = (1 << (sizeof(src1) * 8 - 1)); \
+      |                  ~  ~~^~~~~~~~~~~~~~~~~~~~~~~~~
+[ 72%] Building C object CMakeFiles/aarch64-softmmu.dir/qemu/target/arm/psci.c.o
+[ 73%] Building C object CMakeFiles/aarch64-softmmu.dir/qemu/target/arm/sve_helper.c.o
+[ 74%] Building C object CMakeFiles/aarch64-softmmu.dir/qemu/target/arm/tlb_helper.c.o
+[ 75%] Building C object CMakeFiles/aarch64-softmmu.dir/qemu/target/arm/translate-a64.c.o
+6 warnings generated.
+[ 76%] Building C object CMakeFiles/aarch64-softmmu.dir/qemu/target/arm/translate.c.o
+[ 77%] Building C object CMakeFiles/aarch64-softmmu.dir/qemu/target/arm/translate-sve.c.o
+[ 79%] Building C object CMakeFiles/aarch64-softmmu.dir/qemu/target/arm/vec_helper.c.o
+[ 80%] Building C object CMakeFiles/aarch64-softmmu.dir/qemu/target/arm/vfp_helper.c.o
+1 warning generated.
+[ 81%] Building C object CMakeFiles/aarch64-softmmu.dir/qemu/target/arm/unicorn_aarch64.c.o
+[ 82%] Linking C static library libaarch64-softmmu.a
+[ 82%] Built target aarch64-softmmu
+[ 84%] Building C object CMakeFiles/unicorn.dir/qemu/hw/core/cpu.c.o
+[ 84%] Building C object CMakeFiles/unicorn.dir/uc.c.o
+[ 86%] Building C object CMakeFiles/unicorn.dir/qemu/softmmu/vl.c.o
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/uc.c:1102:14: warning: unused variable 'begin_pc32' [-Wunused-variable]
+ 1102 |     uint32_t begin_pc32 = READ_DWORD(begin);
+      |              ^~~~~~~~~~
+1 warning generated.
+[ 87%] Linking C static library libunicorn-static.a
+[ 87%] Built target unicorn
+[ 88%] Linking C static library libunicorn.a
+[ 89%] Building C object CMakeFiles/test_mem.dir/tests/unit/test_mem.c.o
+[ 91%] Building C object CMakeFiles/test_ctl.dir/tests/unit/test_ctl.c.o
+[ 91%] Building C object CMakeFiles/sample_arm64.dir/samples/sample_arm64.c.o
+[ 94%] Building C object CMakeFiles/sample_ctl.dir/samples/sample_ctl.c.o
+[ 94%] Building C object CMakeFiles/test_arm64.dir/tests/unit/test_arm64.c.o
+In file included from /Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/tests/unit/test_arm64.c:1:
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/tests/unit/acutest.h:1708:9: warning: variable 'junk' set but not used [-Wunused-but-set-variable]
+ 1708 |     int junk;
+      |         ^
+In file included from /Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/tests/unit/test_ctl.c:1:
+In file included from /Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/tests/unit/unicorn_test.h:7:
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/tests/unit/acutest.h:1708:9: warning: variable 'junk' set but not used [-Wunused-but-set-variable]
+ 1708 |     int junk;
+      |         ^
+In file included from /Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/tests/unit/test_mem.c:1:
+In file included from /Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/tests/unit/unicorn_test.h:7:
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/unicorn-2.1.4/tests/unit/acutest.h:1708:9: warning: variable 'junk' set but not used [-Wunused-but-set-variable]
+ 1708 |     int junk;
+      |         ^
+[ 95%] Linking C executable sample_ctl
+[ 96%] Linking C executable sample_arm64
+[ 96%] Built target unicorn_archive
+ld: warning: ignoring duplicate libraries: '-lpthread'
+ld: warning: ignoring duplicate libraries: '-lpthread'
+[ 96%] Built target sample_ctl
+[ 96%] Built target sample_arm64
+1 warning generated.
+[ 97%] Linking C executable test_ctl
+1 warning generated.
+1 warning generated.
+[ 98%] Linking C executable test_arm64
+ld: warning: ignoring duplicate libraries: '-lpthread'
+[100%] Linking C executable test_mem
+ld: warning: ignoring duplicate libraries: '-lpthread'
+ld: warning: ignoring duplicate libraries: '-lpthread'
+[100%] Built target test_ctl
+[100%] Built target test_arm64
+[100%] Built target test_mem

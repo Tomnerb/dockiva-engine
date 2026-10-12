@@ -1,0 +1,136 @@
+{
+  "host": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+  "machine": "arm64",
+  "timing": "wall clock, startup includes launcher and host HTTP readiness retries",
+  "cpu_memory_comparison": "not measured; do not infer resource savings",
+  "results": [
+    {
+      "name": "VM-free",
+      "kind": "vmfree",
+      "command": [
+        "/Users/macbookpro16m2max/Documents/vmfree-runtime/build/vmfree-c",
+        "run",
+        "/Users/macbookpro16m2max/.vmfree/containers/bench-bind-e6909416/rootfs/app/server",
+        "--root",
+        "/Users/macbookpro16m2max/.vmfree/containers/bench-bind-e6909416/rootfs",
+        "--max-steps",
+        "10000000",
+        "--",
+        "0"
+      ],
+      "samples": [
+        {
+          "readiness_attempts": 1,
+          "startup_to_first_response_ms": 7.1672500052955,
+          "requests_per_second": 7928.799385794894,
+          "latency_median_ms": 0.3927289944840595,
+          "latency_p95_ms": 0.46037501306273043,
+          "requests": 100,
+          "concurrency": 4
+        },
+        {
+          "readiness_attempts": 1,
+          "startup_to_first_response_ms": 3.5784579813480377,
+          "requests_per_second": 10340.103573116203,
+          "latency_median_ms": 0.33177049772348255,
+          "latency_p95_ms": 0.44133298797532916,
+          "requests": 100,
+          "concurrency": 4
+        },
+        {
+          "readiness_attempts": 1,
+          "startup_to_first_response_ms": 3.248249995522201,
+          "requests_per_second": 10438.821968269513,
+          "latency_median_ms": 0.3360204864293337,
+          "latency_p95_ms": 0.39312499575316906,
+          "requests": 100,
+          "concurrency": 4
+        },
+        {
+          "readiness_attempts": 1,
+          "startup_to_first_response_ms": 3.3369579759892076,
+          "requests_per_second": 10220.376879267145,
+          "latency_median_ms": 0.3474165132502094,
+          "latency_p95_ms": 0.5057090020272881,
+          "requests": 100,
+          "concurrency": 4
+        },
+        {
+          "readiness_attempts": 1,
+          "startup_to_first_response_ms": 3.7768750044051558,
+          "requests_per_second": 10334.092962520837,
+          "latency_median_ms": 0.3466875059530139,
+          "latency_p95_ms": 0.4460829950403422,
+          "requests": 100,
+          "concurrency": 4
+        }
+      ]
+    },
+    {
+      "name": "Docker Linux VM",
+      "kind": "linux-vm",
+      "command": [
+        "/opt/homebrew/bin/docker",
+        "--context",
+        "orbstack",
+        "run",
+        "--rm",
+        "--name",
+        "vmfree-bench-62dd0dba",
+        "--platform",
+        "linux/arm64",
+        "-p",
+        "127.0.0.1:52622:18080",
+        "vmfree-benchmark:local"
+      ],
+      "samples": [
+        {
+          "readiness_attempts": 5,
+          "startup_to_first_response_ms": 442.81991699244827,
+          "requests_per_second": 2873.4737117273144,
+          "latency_median_ms": 1.1460629903012887,
+          "latency_p95_ms": 2.9262080206535757,
+          "requests": 100,
+          "concurrency": 4
+        },
+        {
+          "readiness_attempts": 1,
+          "startup_to_first_response_ms": 114.98304200358689,
+          "requests_per_second": 5812.700386568666,
+          "latency_median_ms": 0.5785834800917655,
+          "latency_p95_ms": 0.8819999929983169,
+          "requests": 100,
+          "concurrency": 4
+        },
+        {
+          "readiness_attempts": 1,
+          "startup_to_first_response_ms": 108.6225830076728,
+          "requests_per_second": 5477.113554990725,
+          "latency_median_ms": 0.6073334952816367,
+          "latency_p95_ms": 1.0672080097720027,
+          "requests": 100,
+          "concurrency": 4
+        },
+        {
+          "readiness_attempts": 1,
+          "startup_to_first_response_ms": 114.4311249954626,
+          "requests_per_second": 5548.953531987415,
+          "latency_median_ms": 0.6031460070516914,
+          "latency_p95_ms": 0.908583024283871,
+          "requests": 100,
+          "concurrency": 4
+        },
+        {
+          "readiness_attempts": 1,
+          "startup_to_first_response_ms": 105.62116600340232,
+          "requests_per_second": 4570.34025392799,
+          "latency_median_ms": 0.647312990622595,
+          "latency_p95_ms": 1.564459002111107,
+          "requests": 100,
+          "concurrency": 4
+        }
+      ]
+    }
+  ],
+  "completed": true
+}

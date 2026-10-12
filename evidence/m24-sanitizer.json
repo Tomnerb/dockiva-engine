@@ -1,0 +1,630 @@
+{
+  "milestone": 24,
+  "host": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+  "passed": true,
+  "results": [
+    {
+      "name": "fixture_hashes",
+      "passed": true
+    },
+    {
+      "name": "echo",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "hello\n",
+      "stderr": ""
+    },
+    {
+      "name": "variables",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "hello world\n",
+      "stderr": ""
+    },
+    {
+      "name": "arithmetic",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "42\n",
+      "stderr": ""
+    },
+    {
+      "name": "for",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "a\nb\nc\n",
+      "stderr": ""
+    },
+    {
+      "name": "conditional",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "yes\n",
+      "stderr": ""
+    },
+    {
+      "name": "pipeline",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "hello\n",
+      "stderr": ""
+    },
+    {
+      "name": "three_stages",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "a\n",
+      "stderr": ""
+    },
+    {
+      "name": "substitution",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "substituted\n",
+      "stderr": ""
+    },
+    {
+      "name": "nested_substitution",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "deep\n",
+      "stderr": ""
+    },
+    {
+      "name": "subshell",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "nested\nouter\n",
+      "stderr": ""
+    },
+    {
+      "name": "external",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "external\n",
+      "stderr": ""
+    },
+    {
+      "name": "redirection",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "alpha\nbeta\n",
+      "stderr": ""
+    },
+    {
+      "name": "nested_pipeline",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "nested\ndone\n",
+      "stderr": ""
+    },
+    {
+      "name": "nested_status",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "7\n",
+      "stderr": ""
+    },
+    {
+      "name": "printf",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "value:7\n",
+      "stderr": ""
+    },
+    {
+      "name": "while",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "0\n1\n2\n",
+      "stderr": ""
+    },
+    {
+      "name": "case",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "matched\n",
+      "stderr": ""
+    },
+    {
+      "name": "function",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "function:yes\n",
+      "stderr": ""
+    },
+    {
+      "name": "default_expansion",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "fallback\n",
+      "stderr": ""
+    },
+    {
+      "name": "substitution_pipeline",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "a\n",
+      "stderr": ""
+    },
+    {
+      "name": "stderr_status",
+      "passed": true,
+      "exit_code": 7,
+      "stdout": "",
+      "stderr": "test\n"
+    },
+    {
+      "name": "mask",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "masked signal delivered after unblock\n",
+      "stderr": ""
+    },
+    {
+      "name": "ignored",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "ignored pending signal cleared and disposition inherited\n",
+      "stderr": ""
+    },
+    {
+      "name": "signal-errors",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "signal errors preserved state\n",
+      "stderr": ""
+    },
+    {
+      "name": "nested",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "process tree reaped correctly\n",
+      "stderr": ""
+    },
+    {
+      "name": "orphan",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "process tree reaped correctly\n",
+      "stderr": ""
+    },
+    {
+      "name": "echo--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "hello\n",
+      "stderr": ""
+    },
+    {
+      "name": "variables--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "hello world\n",
+      "stderr": ""
+    },
+    {
+      "name": "arithmetic--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "42\n",
+      "stderr": ""
+    },
+    {
+      "name": "for--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "a\nb\nc\n",
+      "stderr": ""
+    },
+    {
+      "name": "conditional--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "yes\n",
+      "stderr": ""
+    },
+    {
+      "name": "pipeline--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "hello\n",
+      "stderr": ""
+    },
+    {
+      "name": "three_stages--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "a\n",
+      "stderr": ""
+    },
+    {
+      "name": "substitution--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "substituted\n",
+      "stderr": ""
+    },
+    {
+      "name": "nested_substitution--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "deep\n",
+      "stderr": ""
+    },
+    {
+      "name": "subshell--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "nested\nouter\n",
+      "stderr": ""
+    },
+    {
+      "name": "external--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "external\n",
+      "stderr": ""
+    },
+    {
+      "name": "redirection--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "alpha\nbeta\n",
+      "stderr": ""
+    },
+    {
+      "name": "nested_pipeline--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "nested\ndone\n",
+      "stderr": ""
+    },
+    {
+      "name": "nested_status--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "7\n",
+      "stderr": ""
+    },
+    {
+      "name": "printf--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "value:7\n",
+      "stderr": ""
+    },
+    {
+      "name": "while--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "0\n1\n2\n",
+      "stderr": ""
+    },
+    {
+      "name": "case--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "matched\n",
+      "stderr": ""
+    },
+    {
+      "name": "function--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "function:yes\n",
+      "stderr": ""
+    },
+    {
+      "name": "default_expansion--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "fallback\n",
+      "stderr": ""
+    },
+    {
+      "name": "substitution_pipeline--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "a\n",
+      "stderr": ""
+    },
+    {
+      "name": "stderr_status--no-decode-cache",
+      "passed": true,
+      "exit_code": 7,
+      "stdout": "",
+      "stderr": "test\n"
+    },
+    {
+      "name": "mask--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "masked signal delivered after unblock\n",
+      "stderr": ""
+    },
+    {
+      "name": "ignored--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "ignored pending signal cleared and disposition inherited\n",
+      "stderr": ""
+    },
+    {
+      "name": "signal-errors--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "signal errors preserved state\n",
+      "stderr": ""
+    },
+    {
+      "name": "nested--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "process tree reaped correctly\n",
+      "stderr": ""
+    },
+    {
+      "name": "orphan--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "process tree reaped correctly\n",
+      "stderr": ""
+    },
+    {
+      "name": "echo--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "hello\n",
+      "stderr": ""
+    },
+    {
+      "name": "variables--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "hello world\n",
+      "stderr": ""
+    },
+    {
+      "name": "arithmetic--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "42\n",
+      "stderr": ""
+    },
+    {
+      "name": "for--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "a\nb\nc\n",
+      "stderr": ""
+    },
+    {
+      "name": "conditional--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "yes\n",
+      "stderr": ""
+    },
+    {
+      "name": "pipeline--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "hello\n",
+      "stderr": ""
+    },
+    {
+      "name": "three_stages--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "a\n",
+      "stderr": ""
+    },
+    {
+      "name": "substitution--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "substituted\n",
+      "stderr": ""
+    },
+    {
+      "name": "nested_substitution--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "deep\n",
+      "stderr": ""
+    },
+    {
+      "name": "subshell--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "nested\nouter\n",
+      "stderr": ""
+    },
+    {
+      "name": "external--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "external\n",
+      "stderr": ""
+    },
+    {
+      "name": "redirection--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "alpha\nbeta\n",
+      "stderr": ""
+    },
+    {
+      "name": "nested_pipeline--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "nested\ndone\n",
+      "stderr": ""
+    },
+    {
+      "name": "nested_status--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "7\n",
+      "stderr": ""
+    },
+    {
+      "name": "printf--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "value:7\n",
+      "stderr": ""
+    },
+    {
+      "name": "while--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "0\n1\n2\n",
+      "stderr": ""
+    },
+    {
+      "name": "case--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "matched\n",
+      "stderr": ""
+    },
+    {
+      "name": "function--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "function:yes\n",
+      "stderr": ""
+    },
+    {
+      "name": "default_expansion--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "fallback\n",
+      "stderr": ""
+    },
+    {
+      "name": "substitution_pipeline--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "a\n",
+      "stderr": ""
+    },
+    {
+      "name": "stderr_status--no-lookup-cache",
+      "passed": true,
+      "exit_code": 7,
+      "stdout": "",
+      "stderr": "test\n"
+    },
+    {
+      "name": "mask--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "masked signal delivered after unblock\n",
+      "stderr": ""
+    },
+    {
+      "name": "ignored--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "ignored pending signal cleared and disposition inherited\n",
+      "stderr": ""
+    },
+    {
+      "name": "signal-errors--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "signal errors preserved state\n",
+      "stderr": ""
+    },
+    {
+      "name": "nested--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "process tree reaped correctly\n",
+      "stderr": ""
+    },
+    {
+      "name": "orphan--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "process tree reaped correctly\n",
+      "stderr": ""
+    },
+    {
+      "name": "isa_output",
+      "passed": true,
+      "sha256": "abe163f372e1450cc5f1800032eb2c5bb2fa210811bc11b4855c3b1049d31d7a"
+    },
+    {
+      "name": "isa--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "4\u0012\u0000\u0000\u0000\u0000\u0000\u00004\u0012\u0000\u0000\u0000\u0000\u0000\u00004\u0012\u0000\u00004\u0012\u0000\u00004\u0012\u0000\u00004\u0012\u0000\u0000\u0000\u0002\u0001\u0002\u0002\u0002\u0003\u0002\u0004\u0002\u0005\u0002\u0006\u0002\u0007\u0002\b\t\u0000\u0000\n\u000b\u0000\u0000\f\r\u0000\u0000\u0010\ufffd\u0000\u0000\u0000\u0001\u0002\u0003\u0004\u0005\u0006\u0007\b\t\n\u000b\f\r\u0000\u0000h$\u0000\u0000\u0000\u0000\u0000\u0000h$\u0000\u0000\u0000\u0000\u0000\u0000\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\u0002\u0003\u0002\u0003\u0006\u0007\u0006\u0007\n\u000b\n\u000b\u000e\u000f\u0012\ufffd\u0004\u0005\u0006\u0007\f\r\u0010\ufffd4\u0012\u0000\u00004\u0012\u0000\u0000\u0004\u0005\u0006\u0007\f\r\u0010\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u00004\u0012\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u00004\u0012\u0000\u00004\u0012\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0002\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u00004\u0012\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u00004\u0012\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000",
+      "stderr": ""
+    },
+    {
+      "name": "isa--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "4\u0012\u0000\u0000\u0000\u0000\u0000\u00004\u0012\u0000\u0000\u0000\u0000\u0000\u00004\u0012\u0000\u00004\u0012\u0000\u00004\u0012\u0000\u00004\u0012\u0000\u0000\u0000\u0002\u0001\u0002\u0002\u0002\u0003\u0002\u0004\u0002\u0005\u0002\u0006\u0002\u0007\u0002\b\t\u0000\u0000\n\u000b\u0000\u0000\f\r\u0000\u0000\u0010\ufffd\u0000\u0000\u0000\u0001\u0002\u0003\u0004\u0005\u0006\u0007\b\t\n\u000b\f\r\u0000\u0000h$\u0000\u0000\u0000\u0000\u0000\u0000h$\u0000\u0000\u0000\u0000\u0000\u0000\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\u0002\u0003\u0002\u0003\u0006\u0007\u0006\u0007\n\u000b\n\u000b\u000e\u000f\u0012\ufffd\u0004\u0005\u0006\u0007\f\r\u0010\ufffd4\u0012\u0000\u00004\u0012\u0000\u0000\u0004\u0005\u0006\u0007\f\r\u0010\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u00004\u0012\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u00004\u0012\u0000\u00004\u0012\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0002\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u00004\u0012\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u00004\u0012\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000",
+      "stderr": ""
+    },
+    {
+      "name": "entry_overflow",
+      "passed": true
+    },
+    {
+      "name": "bias_overflow",
+      "passed": true
+    },
+    {
+      "name": "dynamic_oob",
+      "passed": true
+    },
+    {
+      "name": "dynamic_partial",
+      "passed": true
+    },
+    {
+      "name": "interpreter_rejected",
+      "passed": true
+    },
+    {
+      "name": "needed_rejected",
+      "passed": true
+    },
+    {
+      "name": "oci_upstream_shell",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "upstream\n",
+      "stderr": ""
+    }
+  ],
+  "linux_reference": "not-run",
+  "runtime_sha256": "d36086ea2b53cfaa38ff783f0d3da0f9c8ab3a4c7f2656211b694582ccf517d8",
+  "source_hashes": {
+    "native/compat.h": "4942308092ced51c32b524b10c1b60528635f39ae2e18b762ae489828820f731",
+    "native/decode.h": "ede060ffff5d5db6cc957c4cf14c95779ae096e0802ab0815c05ffd9c0a48412",
+    "native/fs.h": "4e57c77d9d6ffb7c577d064f75362f99d94a97453adf08d28eb6f345a55ca25f",
+    "native/heap.h": "97655ddcfec1ca4d299ec6eca42131cb22c4b0f2b5ca9df3a74e9312ad552d3f",
+    "native/io.h": "129cf62a0433f6a7ba137a1c498fc53e13d0379630af3ca7efb1b7e961210944",
+    "native/net.h": "6b6136594441f89fef376f019fded87897fc10ea728db60112f792062e78001d",
+    "native/process.h": "e0093304decdbb654dd2010774b0034b54f8c50d45e5d4fbe007950ed4ebfdff",
+    "native/profile.h": "e5a95845a20852e4912c4ab7ce34f0a8abe51ca3b2c047b449d0b63e452cf0f8",
+    "native/runtime.c": "fea050522d5db02a6a3f8eb88a3622a29c19c98a3f1a05a2a1f42b4575587620",
+    "native/scheduler.h": "691a02b1b0ef1cbcbdd8b95e726b580aebeaf89a76900470a559aba3c616090a",
+    "native/signals.h": "76af0e430bfa6847c00edef6c8671c7cd364739bf06a27610f8caa6baba70b75",
+    "native/terminal.h": "10040e2f5197c44cce92a801ff15b29a61e99fab21adb0f65ba55afa2d9a5d17"
+  },
+  "excluded": [
+    "caught signal handlers and traps",
+    "job control",
+    "unbounded process trees",
+    "chdir",
+    "general filesystem and full applet compatibility"
+  ]
+}

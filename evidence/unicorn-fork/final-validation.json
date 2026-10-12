@@ -1,0 +1,110 @@
+[
+  {
+    "test": "COW allocation/isolation",
+    "command": [
+      "python3",
+      "scripts/verify_cow.py"
+    ],
+    "exit": 0,
+    "seconds": 7.702205750043504,
+    "stdout": "interpreter-sanitize PASS\ninterpreter-sanitize-oom-store PASS\nunicorn PASS\nunicorn-oom-store PASS\npage-sanitize PASS\n",
+    "stderr": "/Users/macbookpro16m2max/Documents/vmfree-runtime/build/cow/unicorn: replacing existing signature\n"
+  },
+  {
+    "test": "Address-space synchronization",
+    "command": [
+      "python3",
+      "scripts/verify_address_space.py"
+    ],
+    "exit": 0,
+    "seconds": 4.824887708004098,
+    "stdout": "interpreter-sanitize PASS\nunicorn PASS\n",
+    "stderr": "/Users/macbookpro16m2max/Documents/vmfree-runtime/build/address-space/unicorn: replacing existing signature\n"
+  },
+  {
+    "test": "Fork/FD/thread/exec",
+    "command": [
+      "python3",
+      "scripts/verify_unicorn_fork.py",
+      "--runtime",
+      "/Users/macbookpro16m2max/Documents/vmfree-runtime/build/dockiva-fork/vmfree-engine/_internal/build/vmfree-c-unicorn"
+    ],
+    "exit": 0,
+    "seconds": 0.7050188749562949,
+    "stdout": "fork_guest.c unicorn PASS\nfork_threads_guest.S unicorn PASS\nfork_exec_guest.c unicorn PASS\n",
+    "stderr": ""
+  },
+  {
+    "test": "Sanitized fork/FD/thread/exec",
+    "command": [
+      "python3",
+      "scripts/verify_unicorn_fork.py",
+      "--runtime",
+      "/Users/macbookpro16m2max/Documents/vmfree-runtime/build/vmfree-c-sanitize-unicorn",
+      "--report",
+      "/Users/macbookpro16m2max/Documents/vmfree-runtime/evidence/unicorn-fork/sanitizer-probes.json"
+    ],
+    "exit": 0,
+    "seconds": 0.9400277499807999,
+    "stdout": "fork_guest.c unicorn PASS\nfork_threads_guest.S unicorn PASS\nfork_exec_guest.c unicorn PASS\n",
+    "stderr": ""
+  },
+  {
+    "test": "Thread/futex regressions",
+    "command": [
+      "python3",
+      "scripts/verify_unicorn_threads.py",
+      "--runtime",
+      "/Users/macbookpro16m2max/Documents/vmfree-runtime/build/dockiva-fork/vmfree-engine/_internal/build/vmfree-c-unicorn",
+      "--report",
+      "/Users/macbookpro16m2max/Documents/vmfree-runtime/evidence/unicorn-fork/thread-regressions.json"
+    ],
+    "exit": 0,
+    "seconds": 0.17746320797596127,
+    "stdout": "threads_guest.S unicorn PASS\nfutex_guest.c unicorn PASS\nthread_limit_guest.S unicorn PASS\n",
+    "stderr": ""
+  },
+  {
+    "test": "Redis background persistence",
+    "command": [
+      "python3",
+      "scripts/verify_redis_fork.py",
+      "--runtime",
+      "/Users/macbookpro16m2max/Documents/vmfree-runtime/build/dockiva-fork/vmfree-engine/_internal/build/vmfree-c-unicorn"
+    ],
+    "exit": 0,
+    "seconds": 6.276109166967217,
+    "stdout": "rdb background PASS\nrdb restart PASS\naof background PASS\naof restart PASS\n",
+    "stderr": ""
+  },
+  {
+    "test": "Redis concurrent crash recovery",
+    "command": [
+      "python3",
+      "scripts/verify_redis_recovery.py",
+      "--runtime",
+      "/Users/macbookpro16m2max/Documents/vmfree-runtime/build/dockiva-fork/vmfree-engine/_internal/build/vmfree-c-unicorn",
+      "--report",
+      "/Users/macbookpro16m2max/Documents/vmfree-runtime/evidence/unicorn-fork/redis-recovery.json"
+    ],
+    "exit": 0,
+    "seconds": 9.44481104199076,
+    "stdout": "clean 0 PASS acknowledged keys=101\nclean 1 PASS acknowledged keys=202\nclean 2 PASS acknowledged keys=303\ncrash 3 PASS acknowledged keys=327\ncrash 4 PASS acknowledged keys=351\nfinal_recovery 5 PASS acknowledged keys=351\n",
+    "stderr": ""
+  },
+  {
+    "test": "Packaged profile negotiation",
+    "command": [
+      "python3",
+      "scripts/verify_dockivad_profiles.py",
+      "--helper",
+      "/Users/macbookpro16m2max/Documents/vmfree-runtime/build/dockiva-fork/vmfree-engine/vmfree-engine",
+      "--report",
+      "/Users/macbookpro16m2max/Documents/vmfree-runtime/evidence/unicorn-fork/profiles.json"
+    ],
+    "exit": 0,
+    "seconds": 3.845629584044218,
+    "stdout": "PASS packaged native handshake interpreter\nPASS packaged native handshake unicorn\nPASS alias requires writable root before state publication\nPASS alias inspection exposes digest profile and experimental scope\nPASS missing required backend fails without interpreter fallback\nPASS failed negotiation launches no guest worker\nPASS restored backend runs renamed prepared Redis\nPASS daemon reconnect preserves exact selected profile\nPASS saved launch-policy drift rejected before restart\nPASS restored policy remains removable\n",
+    "stderr": ""
+  }
+]

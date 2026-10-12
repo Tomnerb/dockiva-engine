@@ -1,0 +1,186 @@
+{
+  "schema_version": 1,
+  "host": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+  "machine": "arm64",
+  "runtime_sha256": "46073a5c03c84e747427affc1cf8ab94960ea636fd046c587073df8f187577f8",
+  "scope": "standalone native process, including guest tasks; excludes server fixture, managed supervisors, Docker VM and battery",
+  "baseline": null,
+  "savings": null,
+  "production_feasibility_accepted": false,
+  "samples": [
+    {
+      "workload": "shell-startup",
+      "iteration": 0,
+      "wall_seconds": 0.010359999985666946,
+      "cpu_user_seconds": 0.0034939999999999997,
+      "cpu_system_seconds": 0.002434,
+      "peak_rss_bytes": 30736384
+    },
+    {
+      "workload": "shell-startup",
+      "iteration": 1,
+      "wall_seconds": 0.010114540986251086,
+      "cpu_user_seconds": 0.003502,
+      "cpu_system_seconds": 0.002535,
+      "peak_rss_bytes": 30752768
+    },
+    {
+      "workload": "shell-startup",
+      "iteration": 2,
+      "wall_seconds": 0.007091375009622425,
+      "cpu_user_seconds": 0.0033439999999999998,
+      "cpu_system_seconds": 0.002389,
+      "peak_rss_bytes": 30769152
+    },
+    {
+      "workload": "shell-startup",
+      "iteration": 3,
+      "wall_seconds": 0.006965583976125345,
+      "cpu_user_seconds": 0.0033659999999999996,
+      "cpu_system_seconds": 0.002408,
+      "peak_rss_bytes": 30752768
+    },
+    {
+      "workload": "shell-startup",
+      "iteration": 4,
+      "wall_seconds": 0.006953500007512048,
+      "cpu_user_seconds": 0.00339,
+      "cpu_system_seconds": 0.002358,
+      "peak_rss_bytes": 30752768
+    },
+    {
+      "workload": "shell-startup",
+      "iteration": 5,
+      "wall_seconds": 0.010256541980197653,
+      "cpu_user_seconds": 0.0036379999999999997,
+      "cpu_system_seconds": 0.002773,
+      "peak_rss_bytes": 30785536
+    },
+    {
+      "workload": "shell-startup",
+      "iteration": 6,
+      "wall_seconds": 0.010248000005958602,
+      "cpu_user_seconds": 0.0034449999999999997,
+      "cpu_system_seconds": 0.0026089999999999998,
+      "peak_rss_bytes": 30769152
+    },
+    {
+      "workload": "shell-startup",
+      "iteration": 7,
+      "wall_seconds": 0.009833874995820224,
+      "cpu_user_seconds": 0.003372,
+      "cpu_system_seconds": 0.002428,
+      "peak_rss_bytes": 30818304
+    },
+    {
+      "workload": "fetch-1mib",
+      "iteration": 0,
+      "wall_seconds": 0.010160292004002258,
+      "cpu_user_seconds": 0.00358,
+      "cpu_system_seconds": 0.002865,
+      "peak_rss_bytes": 30818304
+    },
+    {
+      "workload": "fetch-1mib",
+      "iteration": 1,
+      "wall_seconds": 0.010135583026567474,
+      "cpu_user_seconds": 0.003584,
+      "cpu_system_seconds": 0.002791,
+      "peak_rss_bytes": 30867456
+    },
+    {
+      "workload": "fetch-1mib",
+      "iteration": 2,
+      "wall_seconds": 0.010119957994902506,
+      "cpu_user_seconds": 0.0035979999999999996,
+      "cpu_system_seconds": 0.0030859999999999998,
+      "peak_rss_bytes": 30834688
+    },
+    {
+      "workload": "fetch-1mib",
+      "iteration": 3,
+      "wall_seconds": 0.010116250021383166,
+      "cpu_user_seconds": 0.003573,
+      "cpu_system_seconds": 0.0028499999999999997,
+      "peak_rss_bytes": 30834688
+    },
+    {
+      "workload": "fetch-1mib",
+      "iteration": 4,
+      "wall_seconds": 0.010168583015911281,
+      "cpu_user_seconds": 0.003627,
+      "cpu_system_seconds": 0.0031349999999999998,
+      "peak_rss_bytes": 30818304
+    },
+    {
+      "workload": "fetch-1mib",
+      "iteration": 5,
+      "wall_seconds": 0.010690750001231208,
+      "cpu_user_seconds": 0.003884,
+      "cpu_system_seconds": 0.003339,
+      "peak_rss_bytes": 30834688
+    },
+    {
+      "workload": "fetch-1mib",
+      "iteration": 6,
+      "wall_seconds": 0.010392333992058411,
+      "cpu_user_seconds": 0.003715,
+      "cpu_system_seconds": 0.0032459999999999998,
+      "peak_rss_bytes": 30818304
+    },
+    {
+      "workload": "fetch-1mib",
+      "iteration": 7,
+      "wall_seconds": 0.010294832987710834,
+      "cpu_user_seconds": 0.00362,
+      "cpu_system_seconds": 0.003064,
+      "peak_rss_bytes": 30867456
+    }
+  ],
+  "summary": {
+    "shell-startup": {
+      "wall_seconds": {
+        "median": 0.009974207991035655,
+        "minimum": 0.006953500007512048,
+        "maximum": 0.010359999985666946
+      },
+      "cpu_user_seconds": {
+        "median": 0.0034174999999999995,
+        "minimum": 0.0033439999999999998,
+        "maximum": 0.0036379999999999997
+      },
+      "cpu_system_seconds": {
+        "median": 0.002431,
+        "minimum": 0.002358,
+        "maximum": 0.002773
+      },
+      "peak_rss_bytes": {
+        "median": 30760960.0,
+        "minimum": 30736384,
+        "maximum": 30818304
+      }
+    },
+    "fetch-1mib": {
+      "wall_seconds": {
+        "median": 0.01016443750995677,
+        "minimum": 0.010116250021383166,
+        "maximum": 0.010690750001231208
+      },
+      "cpu_user_seconds": {
+        "median": 0.003609,
+        "minimum": 0.003573,
+        "maximum": 0.003884
+      },
+      "cpu_system_seconds": {
+        "median": 0.0030749999999999996,
+        "minimum": 0.002791,
+        "maximum": 0.003339
+      },
+      "peak_rss_bytes": {
+        "median": 30834688.0,
+        "minimum": 30818304,
+        "maximum": 30867456
+      }
+    }
+  }
+}

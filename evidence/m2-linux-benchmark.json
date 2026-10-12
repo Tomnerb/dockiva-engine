@@ -1,0 +1,258 @@
+{
+  "host": "Linux-6.18.44-x86_64-with-glibc2.39",
+  "python": "3.12.14 (main, Aug 25 2026, 14:00:49) [Clang 22.1.3 ]",
+  "samples": 7,
+  "branch_steps": 500000,
+  "native_sha256": "7673df5944f1d22ce5e59fd73ebadd8c17be882195e1b80cc8716df6bc4db544",
+  "build": {
+    "host": "Linux-6.18.44-x86_64-with-glibc2.39",
+    "compiler": "cc (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0",
+    "flags": [
+      "-std=c11",
+      "-O2",
+      "-Wall",
+      "-Wextra",
+      "-Werror",
+      "-pedantic"
+    ],
+    "source_sha256": "dfe065dbab539f144aae1ef9e5ce59538537265ce94b1f2e983ad59c31a53ce4"
+  },
+  "workloads": {
+    "startup_exit": {
+      "python": {
+        "samples": [
+          {
+            "wall_ms": 132.60428899957333,
+            "cpu_ms": 132.028,
+            "peak_rss_kib": 13568.0,
+            "status": 42,
+            "stderr": ""
+          },
+          {
+            "wall_ms": 98.25746400019852,
+            "cpu_ms": 97.768,
+            "peak_rss_kib": 13568.0,
+            "status": 42,
+            "stderr": ""
+          },
+          {
+            "wall_ms": 109.8207180002646,
+            "cpu_ms": 109.244,
+            "peak_rss_kib": 13568.0,
+            "status": 42,
+            "stderr": ""
+          },
+          {
+            "wall_ms": 115.66643699916312,
+            "cpu_ms": 114.72699999999999,
+            "peak_rss_kib": 13568.0,
+            "status": 42,
+            "stderr": ""
+          },
+          {
+            "wall_ms": 106.90218899981119,
+            "cpu_ms": 106.129,
+            "peak_rss_kib": 13568.0,
+            "status": 42,
+            "stderr": ""
+          },
+          {
+            "wall_ms": 133.25532499948167,
+            "cpu_ms": 132.716,
+            "peak_rss_kib": 13568.0,
+            "status": 42,
+            "stderr": ""
+          },
+          {
+            "wall_ms": 100.39315700123552,
+            "cpu_ms": 99.764,
+            "peak_rss_kib": 13568.0,
+            "status": 42,
+            "stderr": ""
+          }
+        ],
+        "median_wall_ms": 109.8207180002646,
+        "median_cpu_ms": 109.244,
+        "median_peak_rss_kib": 13568.0
+      },
+      "c": {
+        "samples": [
+          {
+            "wall_ms": 6.298222999248537,
+            "cpu_ms": 5.922999999999999,
+            "peak_rss_kib": 13568.0,
+            "status": 42,
+            "stderr": ""
+          },
+          {
+            "wall_ms": 5.709328999728314,
+            "cpu_ms": 5.2940000000000005,
+            "peak_rss_kib": 13568.0,
+            "status": 42,
+            "stderr": ""
+          },
+          {
+            "wall_ms": 6.61609300004784,
+            "cpu_ms": 6.242999999999999,
+            "peak_rss_kib": 13568.0,
+            "status": 42,
+            "stderr": ""
+          },
+          {
+            "wall_ms": 7.336792001296999,
+            "cpu_ms": 6.991,
+            "peak_rss_kib": 13568.0,
+            "status": 42,
+            "stderr": ""
+          },
+          {
+            "wall_ms": 8.337846000358695,
+            "cpu_ms": 7.894,
+            "peak_rss_kib": 13568.0,
+            "status": 42,
+            "stderr": ""
+          },
+          {
+            "wall_ms": 6.886469000164652,
+            "cpu_ms": 6.098999999999999,
+            "peak_rss_kib": 13568.0,
+            "status": 42,
+            "stderr": ""
+          },
+          {
+            "wall_ms": 9.445724999750382,
+            "cpu_ms": 8.954,
+            "peak_rss_kib": 13568.0,
+            "status": 42,
+            "stderr": ""
+          }
+        ],
+        "median_wall_ms": 6.886469000164652,
+        "median_cpu_ms": 6.242999999999999,
+        "median_peak_rss_kib": 13568.0
+      },
+      "python_over_c_wall_ratio": 15.947319010314116
+    },
+    "branch_dispatch": {
+      "python": {
+        "samples": [
+          {
+            "wall_ms": 785.5669529999432,
+            "cpu_ms": 784.713,
+            "peak_rss_kib": 13568.0,
+            "status": 125,
+            "stderr": "vmfree: Instruction budget exhausted (500000)\n"
+          },
+          {
+            "wall_ms": 715.783523999562,
+            "cpu_ms": 714.9559999999999,
+            "peak_rss_kib": 13568.0,
+            "status": 125,
+            "stderr": "vmfree: Instruction budget exhausted (500000)\n"
+          },
+          {
+            "wall_ms": 676.9570949982153,
+            "cpu_ms": 676.3750000000001,
+            "peak_rss_kib": 13568.0,
+            "status": 125,
+            "stderr": "vmfree: Instruction budget exhausted (500000)\n"
+          },
+          {
+            "wall_ms": 729.3629729992972,
+            "cpu_ms": 728.759,
+            "peak_rss_kib": 13568.0,
+            "status": 125,
+            "stderr": "vmfree: Instruction budget exhausted (500000)\n"
+          },
+          {
+            "wall_ms": 684.65063900112,
+            "cpu_ms": 683.973,
+            "peak_rss_kib": 13568.0,
+            "status": 125,
+            "stderr": "vmfree: Instruction budget exhausted (500000)\n"
+          },
+          {
+            "wall_ms": 682.2015719990304,
+            "cpu_ms": 681.6289999999999,
+            "peak_rss_kib": 13568.0,
+            "status": 125,
+            "stderr": "vmfree: Instruction budget exhausted (500000)\n"
+          },
+          {
+            "wall_ms": 649.2685220000567,
+            "cpu_ms": 647.5629999999999,
+            "peak_rss_kib": 13568.0,
+            "status": 125,
+            "stderr": "vmfree: Instruction budget exhausted (500000)\n"
+          }
+        ],
+        "median_wall_ms": 684.65063900112,
+        "median_cpu_ms": 683.973,
+        "median_peak_rss_kib": 13568.0
+      },
+      "c": {
+        "samples": [
+          {
+            "wall_ms": 10.929808999208035,
+            "cpu_ms": 10.541,
+            "peak_rss_kib": 13568.0,
+            "status": 125,
+            "stderr": "vmfree: Instruction budget exhausted\n"
+          },
+          {
+            "wall_ms": 12.400169000102323,
+            "cpu_ms": 11.862999999999998,
+            "peak_rss_kib": 13568.0,
+            "status": 125,
+            "stderr": "vmfree: Instruction budget exhausted\n"
+          },
+          {
+            "wall_ms": 10.989264001182164,
+            "cpu_ms": 10.460999999999999,
+            "peak_rss_kib": 13568.0,
+            "status": 125,
+            "stderr": "vmfree: Instruction budget exhausted\n"
+          },
+          {
+            "wall_ms": 10.36158799979603,
+            "cpu_ms": 9.998,
+            "peak_rss_kib": 13568.0,
+            "status": 125,
+            "stderr": "vmfree: Instruction budget exhausted\n"
+          },
+          {
+            "wall_ms": 11.39922100082913,
+            "cpu_ms": 11.024,
+            "peak_rss_kib": 13568.0,
+            "status": 125,
+            "stderr": "vmfree: Instruction budget exhausted\n"
+          },
+          {
+            "wall_ms": 12.87355600106821,
+            "cpu_ms": 12.357,
+            "peak_rss_kib": 13568.0,
+            "status": 125,
+            "stderr": "vmfree: Instruction budget exhausted\n"
+          },
+          {
+            "wall_ms": 11.495632999867667,
+            "cpu_ms": 11.049,
+            "peak_rss_kib": 13568.0,
+            "status": 125,
+            "stderr": "vmfree: Instruction budget exhausted\n"
+          }
+        ],
+        "median_wall_ms": 11.39922100082913,
+        "median_cpu_ms": 11.024,
+        "median_peak_rss_kib": 13568.0
+      },
+      "python_over_c_wall_ratio": 60.06117777270232
+    }
+  },
+  "limitations": [
+    "Synthetic microbenchmarks, not Docker workloads or native ARM64 application execution.",
+    "Wall time includes process launch, ELF loading and teardown; branch budget exhaustion is deliberate.",
+    "CPU and peak RSS are OS child-process accounting; inherited spawn memory can set an RSS floor.",
+    "Warm runs; measurements include scheduler noise. No VM baseline or JIT comparison."
+  ]
+}

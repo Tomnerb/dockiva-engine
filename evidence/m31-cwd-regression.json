@@ -1,0 +1,109 @@
+{
+  "passed": true,
+  "checks": [
+    {
+      "mode": [],
+      "cache": [],
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "cwd inheritance, isolation, shared offsets and boundaries passed\n",
+      "stderr": ""
+    },
+    {
+      "mode": [],
+      "cache": [
+        "--no-decode-cache"
+      ],
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "cwd inheritance, isolation, shared offsets and boundaries passed\n",
+      "stderr": ""
+    },
+    {
+      "mode": [],
+      "cache": [
+        "--no-lookup-cache"
+      ],
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "cwd inheritance, isolation, shared offsets and boundaries passed\n",
+      "stderr": ""
+    },
+    {
+      "mode": [
+        "--schedule"
+      ],
+      "cache": [],
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "cwd inheritance, isolation, shared offsets and boundaries passed\n",
+      "stderr": ""
+    },
+    {
+      "mode": [
+        "--schedule"
+      ],
+      "cache": [
+        "--no-decode-cache"
+      ],
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "cwd inheritance, isolation, shared offsets and boundaries passed\n",
+      "stderr": ""
+    },
+    {
+      "mode": [
+        "--schedule"
+      ],
+      "cache": [
+        "--no-lookup-cache"
+      ],
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "cwd inheritance, isolation, shared offsets and boundaries passed\n",
+      "stderr": ""
+    },
+    {
+      "mode": [
+        "--process-tree"
+      ],
+      "cache": [],
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "cwd inheritance, isolation, shared offsets and boundaries passed\n",
+      "stderr": ""
+    },
+    {
+      "mode": [
+        "--process-tree"
+      ],
+      "cache": [
+        "--no-decode-cache"
+      ],
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "cwd inheritance, isolation, shared offsets and boundaries passed\n",
+      "stderr": ""
+    },
+    {
+      "mode": [
+        "--process-tree"
+      ],
+      "cache": [
+        "--no-lookup-cache"
+      ],
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "cwd inheritance, isolation, shared offsets and boundaries passed\n",
+      "stderr": ""
+    },
+    {
+      "name": "upstream_ash_cd",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "/a\n/a/b\n/a\nhi\n",
+      "stderr": ""
+    }
+  ],
+  "runtime_sha256": "4d9e17b66a3fea31ce676f3f38bc004466afd6f8edbc0571427e5f59caa0ce4b"
+}

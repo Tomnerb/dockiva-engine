@@ -1,0 +1,255 @@
+{
+  "runtime_sha256": "e12e07212045c45763d0612af43cbfc57c6c9c395813bdbdaef2965af5371ea8",
+  "scope": "Direct ELF version probes; not stock image, Dockiva, service or persistence acceptance",
+  "expanded_limits": true,
+  "results": [
+    {
+      "database": "postgresql",
+      "image_id": "sha256:d394728dee24b7791f1969c683f8b8410fe57450713a1db2aff5a500f0f98ab0",
+      "repository_digests": [
+        "postgres@sha256:4e6e670bb069649261c9c18031f0aded7bb249a5b6664ddec29c013a89310d50"
+      ],
+      "binary": "/usr/local/bin/postgres",
+      "service_qualified": false,
+      "files": {
+        "/usr/local/bin/postgres": {
+          "sha256": "994e3a2448fd13599d04f5d2e99d11f9b93364abadea0c9662fcd29f10a12c43",
+          "bytes": 10368792
+        },
+        "/lib/libc.musl-aarch64.so.1": {
+          "sha256": "fc61b6e11fd8c6bfee3235865249cd78eea34aa36d88277e6008038031160993",
+          "bytes": 723480
+        },
+        "/usr/lib/libicuuc.so.76": {
+          "sha256": "069f842194b17fac4913a06434ab0478c04924579a6bda77e697e42bcd39b57a",
+          "bytes": 1837096
+        },
+        "/usr/lib/libgcc_s.so.1": {
+          "sha256": "fd240181fecbb70409aa70ccb76671a96ac22be540e6398fe66d6800a16b2b18",
+          "bytes": 133008
+        },
+        "/usr/lib/libstdc++.so.6": {
+          "sha256": "bafcd4d332533ba4b30d09e8e59fd305818abb633742f68151a1efcdc24be213",
+          "bytes": 2820600
+        },
+        "/usr/lib/libicudata.so.76": {
+          "sha256": "59a562e1bb77aa4f93105214b5758c37177e8abeeb0552acd9424565d90dbe07",
+          "bytes": 66296
+        },
+        "/usr/lib/libicui18n.so.76": {
+          "sha256": "77d69a661595c5dad01c22bf5153dc51ce1cd27804c085a1ae50756db3fac1ae",
+          "bytes": 3082536
+        },
+        "/usr/lib/libldap.so.2": {
+          "sha256": "239bab17fcf2ae1b98dd7bedce96b09db6c28d59762bd9dd9357910d72fe73e3",
+          "bytes": 396688
+        },
+        "/usr/lib/libcrypto.so.3": {
+          "sha256": "f4ab81f14f97c1b984e89a3cc57e71e8b9efc7a0cba13f96381553f7fd424cc6",
+          "bytes": 4533144
+        },
+        "/usr/lib/libssl.so.3": {
+          "sha256": "8c50c1b721e0670d92a3cc82f48ddf0fd23ea94f9011a3df869181e29626680b",
+          "bytes": 868240
+        },
+        "/usr/lib/libsasl2.so.3": {
+          "sha256": "ff7a3c7840ce4acd474d72d75cd6b11de1a14f5269db18a938429d957c62537c",
+          "bytes": 133680
+        },
+        "/usr/lib/liblber.so.2": {
+          "sha256": "898072f515acc3b09a902f1fccc12249ce2178fe1f993321c3e584963a8df3f7",
+          "bytes": 67600
+        },
+        "/usr/lib/libz.so.1": {
+          "sha256": "88a9f0b9eae3d367e8cf829a4470614db1fca41faab3da6b18f5a26b7505dcd4",
+          "bytes": 133008
+        },
+        "/usr/lib/libgssapi_krb5.so.2": {
+          "sha256": "4e58c1281a6edb53aa4a87240afd695bf273218de6b49644c133259960f48a05",
+          "bytes": 331952
+        },
+        "/usr/lib/libkrb5support.so.0": {
+          "sha256": "ec00311bc7acec3680fe81dea399f82775e86696d7dd8efa1680296ac3805b24",
+          "bytes": 67648
+        },
+        "/usr/lib/libcom_err.so.2": {
+          "sha256": "3fcc8cf68c432aee7d514ce3edae4ccb31a0cc1cc0895c4ee778bd257ca682c9",
+          "bytes": 67320
+        },
+        "/usr/lib/libk5crypto.so.3": {
+          "sha256": "ab091915abddb1de2513258866d26a3decd7dd3f92e2b875fdaed78e96e2dff2",
+          "bytes": 198736
+        },
+        "/usr/lib/libkrb5.so.3": {
+          "sha256": "62ff5d150e00d413dd8840ccebb50bed2420dfa5bcd3d88755edba59af62b985",
+          "bytes": 726736
+        },
+        "/usr/lib/libkeyutils.so.1": {
+          "sha256": "8311287820ee8db071eaed4f88d1ea41422a37cab3a4c0bfd05b7e043452b194",
+          "bytes": 67400
+        },
+        "/usr/lib/libxml2.so.2": {
+          "sha256": "e73cdfb070ad5735e046e3881a89ffd66ff30e518e54f030be0c57772918a689",
+          "bytes": 1182624
+        },
+        "/usr/lib/liblzma.so.5": {
+          "sha256": "0486cb3dd909c99d768c9d4becdf9285a9abb8e9e9053f1afd4ae8ced491b359",
+          "bytes": 263928
+        },
+        "/usr/lib/liblz4.so.1": {
+          "sha256": "ba67154e7da1874ad0bdac6fa988fd05dd14ad74243f408da7e29871d7907b15",
+          "bytes": 198392
+        },
+        "/usr/lib/libzstd.so.1": {
+          "sha256": "68b829b7761e9bd28dc7f17367d9a82174f0be110bbfbe9cd14066849a64fdf1",
+          "bytes": 657240
+        },
+        "/lib/ld-musl-aarch64.so.1": {
+          "sha256": "fc61b6e11fd8c6bfee3235865249cd78eea34aa36d88277e6008038031160993",
+          "bytes": 723480
+        }
+      },
+      "adaptation": "Direct executable and transitive ELF libraries; archive link targets materialized as regular files. Original ELF bytes unchanged. Image entrypoint, environment and full filesystem are not reproduced.",
+      "interpreter": "/lib/ld-musl-aarch64.so.1",
+      "missing_libraries": [],
+      "default_probe": {
+        "exit_code": 125,
+        "stdout": "",
+        "stderr": "vmfree: Unsupported ELF interpreter\n"
+      },
+      "dynamic_probe": {
+        "exit_code": 125,
+        "stdout": "",
+        "stderr": "syscall=78\nvmfree: Linux syscall is not implemented\n"
+      },
+      "outcome": "blocked before version output; service untested",
+      "linux_reference": {
+        "exit_code": 0,
+        "stdout": "postgres (PostgreSQL) 16.13\n",
+        "stderr": ""
+      }
+    },
+    {
+      "database": "redis",
+      "image_id": "sha256:3b0f54bf27a77c98d319dc3a6706ed500a8985309f0b6c6407599b869f4a2bd9",
+      "repository_digests": [],
+      "binary": "/usr/local/bin/redis-server",
+      "service_qualified": false,
+      "files": {
+        "/usr/local/bin/redis-server": {
+          "sha256": "0861b9b93d67227b1fc87129eaec6cd8dad1317817a0211421fb908edd06fc54",
+          "bytes": 16813640
+        },
+        "/lib/aarch64-linux-gnu/libc.so.6": {
+          "sha256": "52677b742d458f20bdd78cb7dc4c2664b31c46dbd7765aba4bd8c96106f4d2e0",
+          "bytes": 1651408
+        },
+        "/lib/ld-linux-aarch64.so.1": {
+          "sha256": "b45de0f039f84a52cef445b9a1980c65a35199998e992baa026865f2cd3ef303",
+          "bytes": 202912
+        },
+        "/lib/aarch64-linux-gnu/libcrypto.so.3": {
+          "sha256": "0810630ecdd984d37441efd4518d06f5493dc23d259d5b4988c35526e100ba8a",
+          "bytes": 4466856
+        },
+        "/lib/aarch64-linux-gnu/libssl.so.3": {
+          "sha256": "c5c7395da5a6e88d70df1dce511506abdc3cdd9c018c5cd71823c89907108b18",
+          "bytes": 737192
+        },
+        "/lib/aarch64-linux-gnu/libm.so.6": {
+          "sha256": "672425bf2c22adfe1f1cc41dd53b0662c498e40a3f5de79d0cb0e87767d922c9",
+          "bytes": 591960
+        }
+      },
+      "adaptation": "Direct executable and transitive ELF libraries; archive link targets materialized as regular files. Original ELF bytes unchanged. Image entrypoint, environment and full filesystem are not reproduced.",
+      "interpreter": "/lib/ld-linux-aarch64.so.1",
+      "missing_libraries": [],
+      "default_probe": {
+        "exit_code": 125,
+        "stdout": "",
+        "stderr": "vmfree: Input read failed or exceeds 16 MiB\n"
+      },
+      "dynamic_probe": {
+        "exit_code": 125,
+        "stdout": "",
+        "stderr": "instruction=0x6ea41c62 pc=0x201bf5c\nvmfree: Instruction unsupported\n"
+      },
+      "outcome": "blocked before version output; service untested",
+      "linux_reference": {
+        "exit_code": 0,
+        "stdout": "Redis server v=7.4.2 sha=00000000:0 malloc=jemalloc-5.3.0 bits=64 build=3dfb3660d0f5a2e7\n",
+        "stderr": ""
+      }
+    },
+    {
+      "database": "valkey",
+      "image_id": "sha256:d33b8c582a23d02e46689d5d98a19853e1ae9a1215595c68b64da4476911d67e",
+      "repository_digests": [
+        "valkey/valkey@sha256:34ecbbe536de15b4750d0c76701eb6b889c6de9b697f782e73165f3ef9cc17c0"
+      ],
+      "binary": "/usr/local/bin/valkey-server",
+      "service_qualified": false,
+      "files": {
+        "/usr/local/bin/valkey-server": {
+          "sha256": "6b2a952ca8fc22a2c63ccd4b1e831cdc295c64dc4fd13e6f1faaa725aea2ea8b",
+          "bytes": 19174880
+        },
+        "/lib/aarch64-linux-gnu/libc.so.6": {
+          "sha256": "aa58dc4b16a6f9aed418c8447fc5d36a68672c09fd1729361d1df37792ad7a03",
+          "bytes": 1782152
+        },
+        "/lib/ld-linux-aarch64.so.1": {
+          "sha256": "6025f191bab010ad585ca2044f0b3436a376572c0487bbd57848521f7669f46b",
+          "bytes": 201344
+        },
+        "/lib/aarch64-linux-gnu/libcrypto.so.3": {
+          "sha256": "a1f3556dbdd435f1ca0d848b00d0876737ee28789bab3b9699f938777f588dfe",
+          "bytes": 6302952
+        },
+        "/lib/aarch64-linux-gnu/libzstd.so.1": {
+          "sha256": "1279c4edfbfb08878b5b7fb40d392c1bdc9b30100d9b7a019d4aefaf10d2046c",
+          "bytes": 723048
+        },
+        "/lib/aarch64-linux-gnu/libz.so.1": {
+          "sha256": "6fe00acadf8119ff245855e5dcc7f26c6c0ffaf4bfa2baa88feab58f23727d65",
+          "bytes": 133600
+        },
+        "/lib/aarch64-linux-gnu/libssl.so.3": {
+          "sha256": "1f77220d7938b6c77f18ddd55bc51ae4ed5e7ca3f42ad86288797c179ac954e3",
+          "bytes": 1195960
+        },
+        "/lib/aarch64-linux-gnu/libsystemd.so.0": {
+          "sha256": "e0e2f32fb418f779338a6b036590747d94e8236479cf0e9ef7a15b34d8a55dad",
+          "bytes": 1186400
+        },
+        "/lib/aarch64-linux-gnu/libm.so.6": {
+          "sha256": "a8afb2d1f4a0c5e14c0fc82f794ec839eafe29738907aa92895410f57630bbe2",
+          "bytes": 591960
+        },
+        "/lib/aarch64-linux-gnu/libcap.so.2": {
+          "sha256": "c3f03de8984413b0d3f90e5586019538308537604f18880752f065d8d9b2ee90",
+          "bytes": 67792
+        }
+      },
+      "adaptation": "Direct executable and transitive ELF libraries; archive link targets materialized as regular files. Original ELF bytes unchanged. Image entrypoint, environment and full filesystem are not reproduced.",
+      "interpreter": "/lib/ld-linux-aarch64.so.1",
+      "missing_libraries": [],
+      "default_probe": {
+        "exit_code": 125,
+        "stdout": "",
+        "stderr": "vmfree: Input read failed or exceeds 16 MiB\n"
+      },
+      "dynamic_probe": {
+        "exit_code": 125,
+        "stdout": "",
+        "stderr": "instruction=0x4d40845f pc=0x2014ca8\nvmfree: Instruction unsupported\n"
+      },
+      "outcome": "blocked before version output; service untested",
+      "linux_reference": {
+        "exit_code": 0,
+        "stdout": "Valkey server v=9.0.0 sha=00000000:0 malloc=jemalloc-5.3.0 bits=64 build=ac1863d4f29109f7\n",
+        "stderr": ""
+      }
+    }
+  ]
+}

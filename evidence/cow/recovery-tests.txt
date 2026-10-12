@@ -1,0 +1,6 @@
+clean 0 PASS acknowledged keys=201
+clean 1 PASS acknowledged keys=402
+clean 2 PASS acknowledged keys=603
+crash 3 PASS acknowledged keys=627
+crash 4 PASS acknowledged keys=651
+final_recovery 5 PASS acknowledged keys=651

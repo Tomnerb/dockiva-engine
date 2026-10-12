@@ -1,0 +1,60 @@
+Test project /Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/baseline
+    Start 1: test_arm64
+1/3 Test #1: test_arm64 .......................   Passed    0.48 sec
+    Start 2: test_mem
+2/3 Test #2: test_mem .........................***Failed    5.85 sec
+Test test_map_correct...                          Test interrupted by SIGSEGV.
+Test test_map_wrapping...                         Test interrupted by signal 10.
+Test test_mem_protect...                          Test interrupted by SIGSEGV.
+Test test_splitting_mem_unmap...                  Test interrupted by signal 10.
+Test test_splitting_mmio_unmap...                 Test interrupted by SIGSEGV.
+Test test_mem_protect_map_ptr...                  Test interrupted by signal 10.
+Test test_map_at_the_end...                       Test interrupted by SIGSEGV.
+Test test_map_wrap...                             Test interrupted by signal 10.
+Test test_map_big_memory...                       Test interrupted by signal 10.
+Test test_mem_protect_remove_exec...              Test interrupted by SIGSEGV.
+Test test_mem_protect_mmio...                     Test interrupted by SIGSEGV.
+Test test_snapshot...                             Test interrupted by SIGSEGV.
+Test test_snapshot_with_vtlb...                   Test interrupted by SIGSEGV.
+Test test_context_snapshot...                     Test interrupted by signal 10.
+Test test_snapshot_unmap...                       Test interrupted by SIGSEGV.
+Test test_mem_read_and_write_large_memory_block... [ OK ]
+Test test_virtual_to_physical...                  Test interrupted by signal 10.
+Test test_virtual_write...                        Test interrupted by signal 10.
+FAILED: 17 of 18 unit tests have failed.
+
+    Start 3: test_ctl
+3/3 Test #3: test_ctl .........................***Failed    0.58 sec
+Test test_uc_ctl_mode...                        [ FAILED ]
+  test_ctl.c:87: Check __err == UC_ERR_OK... failed
+    Invalid/unsupported architecture (UC_ERR_ARCH)
+  test_ctl.c:87: Check arg == 4... failed
+  Test interrupted by SIGABRT.
+Test test_uc_ctl_page_size...                     Test interrupted by SIGSEGV.
+Test test_uc_ctl_arch...                        [ FAILED ]
+  test_ctl.c:88: Check __err == UC_ERR_OK... failed
+    Invalid/unsupported architecture (UC_ERR_ARCH)
+  test_ctl.c:88: Check arg == 4... failed
+  Test interrupted by SIGABRT.
+Test test_uc_ctl_time_out...                    [ FAILED ]
+  test_ctl.c:90: Check __err == UC_ERR_OK... failed
+    Invalid/unsupported architecture (UC_ERR_ARCH)
+  Test interrupted by SIGABRT.
+Test test_uc_ctl_exits...                         Test interrupted by SIGSEGV.
+Test test_uc_ctl_tb_cache...                      Test interrupted by SIGSEGV.
+Test test_uc_ctl_change_page_size_arm64...      [ OK ]
+Test test_uc_hook_cached_uaf...                   Test interrupted by SIGSEGV.
+Test test_uc_emu_stop_set_ip...                   Test interrupted by SIGSEGV.
+Test test_tlb_clear...                            Test interrupted by SIGSEGV.
+Test test_noexec...                               Test interrupted by SIGSEGV.
+FAILED: 10 of 11 unit tests have failed.
+
+
+33% tests passed, 2 tests failed out of 3
+
+Total Test time (real) =   6.92 sec
+
+The following tests FAILED:
+	  2 - test_mem (Failed)
+	  3 - test_ctl (Failed)
+Errors while running CTest

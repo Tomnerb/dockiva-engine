@@ -1,0 +1,4 @@
+PASS shared image mapping metadata, private registers, detach and final release
+PASS vmfree-c vfork shared writes, suspension, exec detach and wait
+PASS vmfree-c-sanitize vfork shared writes, suspension, exec detach and wait
+PASS Linux vfork reference

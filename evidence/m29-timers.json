@@ -1,0 +1,73 @@
+{
+  "passed": true,
+  "checks": [
+    {
+      "name": "validation",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed": 0.2760772919864394,
+      "stdout": "timer validation and error side effects match Linux\n",
+      "stderr": ""
+    },
+    {
+      "name": "inherit",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed": 0.0018759169906843454,
+      "stdout": "fork clears child timer and preserves parent timer\n",
+      "stderr": ""
+    },
+    {
+      "name": "periodic",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed": 0.050404374982463196,
+      "stdout": "periodic alarm interrupts blocked guest reads\n",
+      "stderr": ""
+    },
+    {
+      "name": "default",
+      "passed": true,
+      "exit_code": 142,
+      "elapsed": 0.06387029201141559,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "name": "cancel",
+      "passed": true,
+      "exit_code": 143,
+      "elapsed": 0.005397958011599258,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "name": "linux_validation",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "timer validation and error side effects match Linux\n",
+      "stderr": ""
+    },
+    {
+      "name": "linux_inherit",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "fork clears child timer and preserves parent timer\n",
+      "stderr": ""
+    },
+    {
+      "name": "linux_periodic",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "periodic alarm interrupts blocked guest reads\n",
+      "stderr": ""
+    },
+    {
+      "name": "linux_default",
+      "passed": true,
+      "exit_code": 142,
+      "stdout": "",
+      "stderr": ""
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+PASS create server-0
+PASS start server-0
+PASS create server-1
+PASS start server-1
+PASS create server-2
+PASS start server-2
+PASS create server-3
+PASS start server-3
+PASS create server-4
+PASS 100 concurrent-dispatch HTTP requests across four containers
+PASS fifth active runtime rejected
+PASS all four workloads survive API shutdown
+PASS new API token after restart
+PASS four running containers rediscovered
+PASS recovered supervisor accepts stop
+PASS freed slot admits fifth container
+PASS fifth container serves HTTP
+PASS recovered supervisor accepts restart
+PASS restarted container serves HTTP
+PASS no remaining store-owned processes
+{
+  "engine_idle": {
+    "stable_process_set": true,
+    "process_count": 1,
+    "summed_rss_mib_median": 44.34375,
+    "summed_rss_mib_max": 44.34375,
+    "cpu_percent_one_core": 0.09423958791456212
+  },
+  "four_servers_idle": {
+    "stable_process_set": true,
+    "process_count": 9,
+    "summed_rss_mib_median": 189.828125,
+    "summed_rss_mib_max": 189.828125,
+    "cpu_percent_one_core": 0.3774234982034959
+  }
+}

@@ -1,0 +1,1604 @@
+Analysis of sampling profile-patched (pid 25012) every 1 millisecond
+Process:         profile-patched [25012]
+Path:            /Users/USER/Documents/*/profile-patched
+Load Address:    0x102384000
+Identifier:      profile-patched
+Version:         ???
+Code Type:       ARM64
+Parent Process:  Python [25009]
+Target Type:     live task
+
+Date/Time:       2026-09-21 21:17:11.521 +0700
+Launch Time:     2026-09-21 21:17:11.486 +0700
+OS Version:      macOS 26.5.1 (25F80)
+Report Version:  7
+Analysis Tool:   /usr/bin/sample
+
+Physical footprint:         2608K
+Physical footprint (peak):  2624K
+Idle exit:                  untracked
+----
+
+Call graph:
+    355 Thread_3858212: Main Thread
+    + 350 _dyld_start  (in dyld) + 0  [0x1029609c0]
+    + 3 start  (in dyld) + 6904  [0x18d107da8]
+    + ! 3 dyld4::start(dyld4::KernelArgs*, void*, void*, unsigned long long)::$_1::operator()() const  (in dyld) + 320  [0x18d10844c]
+    + !   2 dyld4::prepare(dyld4::APIs&, mach_o::UnsafeHeader const*)  (in dyld) + 3692  [0x18d1092d4]
+    + !   : 2 dyld4::RuntimeState::notifyDebuggerLoad(std::span<dyld4::Loader const*, 18446744073709551615ul> const&)  (in dyld) + 528  [0x18d11843c]
+    + !   :   2 dyld4::ExternallyViewableState::addImages(lsl::Allocator&, lsl::Allocator&, std::span<dyld4::ExternallyViewableState::ImageInfo, 18446744073709551615ul> const&)  (in dyld) + 1084  [0x18d1223bc]
+    + !   :     2 dyld4::ExternallyViewableState::triggerNotifications(dyld_image_mode, unsigned int, dyld_image_info const*)  (in dyld) + 296  [0x18d121c60]
+    + !   :       2 dyld4::RemoteNotificationResponder::blockOnSynchronousEvent(unsigned int)  (in dyld) + 48  [0x18d15e6f4]
+    + !   :         2 dyld4::RemoteNotificationResponder::sendMessage(int, unsigned int, mach_msg_header_t*)  (in dyld) + 244  [0x18d15e368]
+    + !   :           2 mach_msg_overwrite  (in dyld) + 244  [0x18d177a40]
+    + !   :             2 mach_msg2_internal  (in dyld) + 76  [0x18d177898]
+    + !   :               2 mach_msg2_trap  (in dyld) + 8  [0x18d0e972c]
+    + !   1 dyld4::prepare(dyld4::APIs&, mach_o::UnsafeHeader const*)  (in dyld) + 1124  [0x18d1088cc]
+    + !     1 dyld4::JustInTimeLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 304  [0x18d127140]
+    + !       1 dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 424  [0x18d157888]
+    + !         1 dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 424  [0x18d157888]
+    + !           1 dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 424  [0x18d157888]
+    + !             1 dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 424  [0x18d157888]
+    + !               1 dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 424  [0x18d157888]
+    + !                 1 dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 424  [0x18d157888]
+    + !                   1 dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 424  [0x18d157888]
+    + !                     1 dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 424  [0x18d157888]
+    + !                       1 dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 424  [0x18d157888]
+    + !                         1 dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 424  [0x18d157888]
+    + !                           1 dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 424  [0x18d157888]
+    + !                             1 dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 424  [0x18d157888]
+    + !                               1 dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 424  [0x18d157888]
+    + !                                 1 dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 424  [0x18d157888]
+    + !                                   1 dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 424  [0x18d157888]
+    + !                                     1 dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 424  [0x18d157888]
+    + !                                       1 dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 424  [0x18d157888]
+    + !                                         1 dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 424  [0x18d157888]
+    + !                                           1 dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 424  [0x18d157888]
+    + !                                             1 dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 424  [0x18d157888]
+    + !                                               1 dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 424  [0x18d157888]
+    + !                                                 1 dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 424  [0x18d157888]
+    + !                                                   1 dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 424  [0x18d157888]
+    + !                                                     1 dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 424  [0x18d157888]
+    + !                                                       1 dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 424  [0x18d157888]
+    + !                                                         1 dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 424  [0x18d157888]
+    + !                                                           1 dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 424  [0x18d157888]
+    + !                                                             1 dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 424  [0x18d157888]
+    + !                                                               1 dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 424  [0x18d157888]
+    + !                                                                 1 dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 424  [0x18d157888]
+    + !                                                                   1 dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 424  [0x18d157888]
+    + !                                                                     1 dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 424  [0x18d157888]
+    + !                                                                       1 dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 424  [0x18d157888]
+    + !                                                                         1 dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 424  [0x18d157888]
+    + !                                                                           1 dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 424  [0x18d157888]
+    + !                                                                             1 dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 424  [0x18d157888]
+    + !                                                                               1 dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 424  [0x18d157888]
+    + !                                                                                 1 dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 424  [0x18d157888]
+    + !                                                                                   1 dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 424  [0x18d157888]
+    + !                                                                                     1 dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 424  [0x18d157888]
+    + !                                                                                       1 dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 264  [0x18d1577e8]
+    + !                                                                                         1 dyld4::PrebuiltLoader::map(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&, bool) const  (in dyld) + 76  [0x18d157288]
+    + 1 start  (in dyld) + 4700  [0x10297b50c]
+    + ! 1 dyld4::ExternallyViewableState::createMinimalInfo(lsl::Allocator&, unsigned long long, char const*, unsigned long long, char const*, DyldSharedCache const*)  (in dyld) + 2116  [0x102995390]
+    + !   1 dyld4::ExternallyViewableState::triggerNotifications(dyld_image_mode, unsigned int, dyld_image_info const*)  (in dyld) + 296  [0x102995c60]
+    + !     1 dyld4::RemoteNotificationResponder::blockOnSynchronousEvent(unsigned int)  (in dyld) + 48  [0x1029d26f4]
+    + !       1 dyld4::RemoteNotificationResponder::sendMessage(int, unsigned int, mach_msg_header_t*)  (in dyld) + 244  [0x1029d2368]
+    + !         1 mach_msg_overwrite  (in dyld) + 244  [0x1029eba40]
+    + !           1 mach_msg2_internal  (in dyld) + 76  [0x1029eb898]
+    + !             1 mach_msg2_trap  (in dyld) + 8  [0x10295d72c]
+    + 1 start  (in dyld) + 6008  [0x10297ba28]
+    +   1 dyld4::ExternallyViewableState::createMinimalInfo(lsl::Allocator&, unsigned long long, char const*, unsigned long long, char const*, DyldSharedCache const*)  (in dyld) + 2116  [0x102995390]
+    +     1 dyld4::ExternallyViewableState::triggerNotifications(dyld_image_mode, unsigned int, dyld_image_info const*)  (in dyld) + 296  [0x102995c60]
+    +       1 dyld4::RemoteNotificationResponder::blockOnSynchronousEvent(unsigned int)  (in dyld) + 48  [0x1029d26f4]
+    +         1 dyld4::RemoteNotificationResponder::sendMessage(int, unsigned int, mach_msg_header_t*)  (in dyld) + 244  [0x1029d2368]
+    +           1 mach_msg_overwrite  (in dyld) + 244  [0x1029eba40]
+    +             1 mach_msg2_internal  (in dyld) + 76  [0x1029eb898]
+    +               1 mach_msg2_trap  (in dyld) + 8  [0x10295d72c]
+    3701 Thread_3858212   DispatchQueue_1: com.apple.main-thread  (serial)
+    + 3701 start  (in dyld) + 6992  [0x18d107e00]
+    +   3700 main  (in profile-patched) + 220  [0x102385640]  profile.c:8
+    +   ! 3699 uc_emu_start  (in profile-patched) + 428  [0x102387768]  uc.c:1228
+    +   ! : 3699 resume_all_vcpus_aarch64  (in profile-patched) + 168  [0x1023980f0]  cpus.c:216
+    +   ! :   3699 cpu_exec_aarch64  (in profile-patched) + 924  [0x1023d28dc]  cpu-exec.c:617
+    +   ! :     562 helper_check_exit_request_aarch64  (in profile-patched) + 44  [0x1023da0c4]  tcg-runtime.c:188
+    +   ! :     500 ???  (in <unknown binary>)  [0x30000057c]
+    +   ! :     369 ???  (in <unknown binary>)  [0x300000524]
+    +   ! :     | 205 helper_check_exit_request_aarch64  (in profile-patched) + 8,0  [0x1023da0a0,0x1023da098]  tcg-runtime.c:168
+    +   ! :     | 164 helper_check_exit_request_aarch64  (in profile-patched) + 32,16,...  [0x1023da0b8,0x1023da0a8,...]  tcg-runtime.c:171
+    +   ! :     346 ???  (in <unknown binary>)  [0x3000004f8]
+    +   ! :     312 ???  (in <unknown binary>)  [0x3000004b4]
+    +   ! :     248 ???  (in <unknown binary>)  [0x300000490]
+    +   ! :     | 133 helper_check_exit_request_aarch64  (in profile-patched) + 32  [0x1023da0b8]  tcg-runtime.c:171
+    +   ! :     | 114 helper_check_exit_request_aarch64  (in profile-patched) + 8,12,...  [0x1023da0a0,0x1023da0a4,...]  tcg-runtime.c:168
+    +   ! :     | 1 helper_check_exit_request_aarch64  (in profile-patched) + 40  [0x1023da0c0]  tcg-runtime.c:188
+    +   ! :     235 ???  (in <unknown binary>)  [0x3000004dc]
+    +   ! :     | 135 helper_check_exit_request_aarch64  (in profile-patched) + 8,12,...  [0x1023da0a0,0x1023da0a4,...]  tcg-runtime.c:168
+    +   ! :     | 100 helper_check_exit_request_aarch64  (in profile-patched) + 32,16  [0x1023da0b8,0x1023da0a8]  tcg-runtime.c:171
+    +   ! :     201 ???  (in <unknown binary>)  [0x300000488]
+    +   ! :     199 ???  (in <unknown binary>)  [0x3000004d4]
+    +   ! :     129 ???  (in <unknown binary>)  [0x30000051c]
+    +   ! :     113 ???  (in <unknown binary>)  [0x300000564]
+    +   ! :     70 ???  (in <unknown binary>)  [0x3000004f4]
+    +   ! :     70 ???  (in <unknown binary>)  [0x300000558]
+    +   ! :     69 ???  (in <unknown binary>)  [0x3000004b0]
+    +   ! :     56 ???  (in <unknown binary>)  [0x300000550]
+    +   ! :     53 ???  (in <unknown binary>)  [0x300000504]
+    +   ! :     43 ???  (in <unknown binary>)  [0x3000004b8]
+    +   ! :     35 ???  (in <unknown binary>)  [0x30000048c]
+    +   ! :     27 ???  (in <unknown binary>)  [0x300000540]
+    +   ! :     25 ???  (in <unknown binary>)  [0x3000004d8]
+    +   ! :     24 ???  (in <unknown binary>)  [0x300000544]
+    +   ! :     6 ???  (in <unknown binary>)  [0x300000554]
+    +   ! :     3 ???  (in <unknown binary>)  [0x300000574]
+    +   ! :     2 ???  (in <unknown binary>)  [0x30000050c]
+    +   ! :     1 ???  (in <unknown binary>)  [0x3000004e0]
+    +   ! :     1 ???  (in <unknown binary>)  [0x3000005a8]
+    +   ! 1 uc_emu_start  (in profile-patched) + 608  [0x10238781c]  uc.c:1246
+    +   !   1 qemu_thread_join  (in profile-patched) + 24  [0x102393048]  qemu-thread-posix.c:75
+    +   !     1 _pthread_join  (in libsystem_pthread.dylib) + 616  [0x18d4c8114]
+    +   !       1 __ulock_wait  (in libsystem_kernel.dylib) + 8  [0x18d483af8]
+    +   1 main  (in profile-patched) + 84  [0x1023855b8]  profile.c:6
+    +     1 engine  (in profile-patched) + 108  [0x102385784]  probe.c:22
+    +       1 uc_mem_map  (in profile-patched) + 476  [0x102388150]  uc.c:1395
+    +         1 uc_init_engine  (in profile-patched) + 156  [0x102385f38]  uc.c:284
+    +           1 machine_initialize  (in profile-patched) + 88  [0x10238aee8]  vl.c:53
+    +             1 tcg_exec_init_aarch64  (in profile-patched) + 40  [0x1023e4610]  translate-all.c:1217
+    +               1 tcg_context_init_aarch64  (in profile-patched) + 588  [0x1023b4754]  tcg.c:773
+    45 Thread_3858284
+    + 45 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   45 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     44 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 44 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   43 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !   : 43 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     !   1 nanosleep  (in libsystem_c.dylib) + 228  [0x18d361cc8]
+    +     !     1 DYLD-STUB$$__error  (in libsystem_c.dylib) + 0  [0x18d3ccf8c]
+    +     1 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       1 DYLD-STUB$$clock_gettime  (in profile-patched) + 0  [0x1024ce41c]
+    45 Thread_3858301
+    + 45 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   45 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     42 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 42 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   41 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !   : 40 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     !   : 1 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     !   :   1 cerror  (in libsystem_kernel.dylib) + 0  [0x18d4835d4]
+    +     !   1 nanosleep  (in libsystem_c.dylib) + 228  [0x18d361cc8]
+    +     !     1 DYLD-STUB$$__error  (in libsystem_c.dylib) + 0  [0x18d3ccf8c]
+    +     3 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       2 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +       : 1 _mach_boottime_usec  (in libsystem_c.dylib) + 32  [0x18d3884a8]
+    +       : | 1 mach_boottime_usec  (in libsystem_kernel.dylib) + 0  [0x18d4968c4]
+    +       : 1 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +       :   1 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +       :     1 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +       :       1 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    +       1 clock_gettime  (in libsystem_c.dylib) + 12  [0x18d362d30]
+    45 Thread_3858330
+    + 45 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   45 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     44 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 44 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   43 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !   : 43 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     !   1 nanosleep  (in libsystem_c.dylib) + 228  [0x18d361cc8]
+    +     1 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       1 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +         1 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +           1 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +             1 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +               1 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    45 Thread_3858340
+    + 45 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   45 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     45 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +       45 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +         44 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +         ! 39 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +         ! 4 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +         ! : 1 _pthread_exit_if_canceled  (in libsystem_pthread.dylib) + 48  [0x18d4bf938]
+    +         ! : 1 cerror  (in libsystem_kernel.dylib) + 44  [0x18d483600]
+    +         ! : | 1 _pthread_exit_if_canceled  (in libsystem_pthread.dylib) + 0  [0x18d4bf908]
+    +         ! : 1 cerror  (in libsystem_kernel.dylib) + 52  [0x18d483608]
+    +         ! : | 1 cerror_nocancel  (in libsystem_kernel.dylib) + 12  [0x18d482600]
+    +         ! : 1 cerror  (in libsystem_kernel.dylib) + 0  [0x18d4835d4]
+    +         ! 1 cerror  (in libsystem_kernel.dylib) + 64  [0x18d483614]
+    +         1 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    45 Thread_3858341
+    + 45 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   45 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     44 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 44 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   43 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !   : 43 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     !   1 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     1 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       1 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +         1 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +           1 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +             1 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +               1 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    45 Thread_3858352
+    + 45 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   45 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     45 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +       44 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +       ! 43 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +       ! : 43 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +       ! 1 nanosleep  (in libsystem_c.dylib) + 228  [0x18d361cc8]
+    +       !   1 DYLD-STUB$$__error  (in libsystem_c.dylib) + 0  [0x18d3ccf8c]
+    +       1 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    45 Thread_3858363
+    + 45 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   45 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     43 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 43 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   43 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !     43 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     2 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       1 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +       : 1 _mach_boottime_usec  (in libsystem_c.dylib) + 32  [0x18d3884a8]
+    +       :   1 mach_boottime_usec  (in libsystem_kernel.dylib) + 8  [0x18d4968cc]
+    +       1 clock_gettime  (in libsystem_c.dylib) + 12  [0x18d362d30]
+    45 Thread_3858394
+    + 45 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   45 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     41 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 40 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     ! : 39 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     ! : | 38 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     ! : | 1 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     ! : |   1 _pthread_exit_if_canceled  (in libsystem_pthread.dylib) + 48  [0x18d4bf938]
+    +     ! : 1 nanosleep  (in libsystem_c.dylib) + 228  [0x18d361cc8]
+    +     ! :   1 DYLD-STUB$$__error  (in libsystem_c.dylib) + 0  [0x18d3ccf8c]
+    +     ! 1 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     3 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +     ! 3 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +     !   3 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +     !     3 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +     !       3 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +     !         3 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    +     1 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1021
+    45 Thread_3858396
+    + 45 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   45 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     43 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 43 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   43 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !     43 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     2 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       2 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +         2 _mach_boottime_usec  (in libsystem_c.dylib) + 32  [0x18d3884a8]
+    +           2 mach_boottime_usec  (in libsystem_kernel.dylib) + 0,8  [0x18d4968c4,0x18d4968cc]
+    44 Thread_3858271
+    + 44 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   44 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     43 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 43 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   42 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !   : 42 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     !   1 nanosleep  (in libsystem_c.dylib) + 60  [0x18d361c20]
+    +     !     1 pthread_testcancel  (in libsystem_pthread.dylib) + 0  [0x18d4c29d0]
+    +     1 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       1 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +         1 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +           1 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +             1 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +               1 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    44 Thread_3858272
+    + 44 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   44 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     41 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 41 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   40 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !   : 39 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     !   : 1 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     !   :   1 _pthread_exit_if_canceled  (in libsystem_pthread.dylib) + 48  [0x18d4bf938]
+    +     !   1 nanosleep  (in libsystem_c.dylib) + 228  [0x18d361cc8]
+    +     !     1 DYLD-STUB$$__error  (in libsystem_c.dylib) + 0  [0x18d3ccf8c]
+    +     2 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +     ! 1 DYLD-STUB$$clock_gettime  (in profile-patched) + 0  [0x1024ce41c]
+    +     ! 1 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +     !   1 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +     !     1 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +     !       1 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +     !         1 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    +     1 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1021
+    44 Thread_3858273
+    + 44 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   44 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     44 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +       43 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +       ! 42 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +       ! : 40 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +       ! : 2 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +       ! :   1 cerror  (in libsystem_kernel.dylib) + 44  [0x18d483600]
+    +       ! :   + 1 _pthread_exit_if_canceled  (in libsystem_pthread.dylib) + 0  [0x18d4bf908]
+    +       ! :   1 cerror  (in libsystem_kernel.dylib) + 52  [0x18d483608]
+    +       ! :     1 cerror_nocancel  (in libsystem_kernel.dylib) + 0  [0x18d4825f4]
+    +       ! 1 nanosleep  (in libsystem_c.dylib) + 228  [0x18d361cc8]
+    +       !   1 DYLD-STUB$$__error  (in libsystem_c.dylib) + 0  [0x18d3ccf8c]
+    +       1 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    44 Thread_3858286
+    + 44 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   44 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     43 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 43 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   43 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !     43 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     1 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       1 clock_gettime  (in libsystem_c.dylib) + 276  [0x18d362e38]
+    44 Thread_3858287
+    + 44 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   44 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     40 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 39 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     ! : 37 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     ! : | 36 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     ! : | 1 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     ! : |   1 cerror  (in libsystem_kernel.dylib) + 44  [0x18d483600]
+    +     ! : |     1 _pthread_exit_if_canceled  (in libsystem_pthread.dylib) + 0  [0x18d4bf908]
+    +     ! : 2 nanosleep  (in libsystem_c.dylib) + 228  [0x18d361cc8]
+    +     ! :   2 DYLD-STUB$$__error  (in libsystem_c.dylib) + 0  [0x18d3ccf8c]
+    +     ! 1 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     4 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       4 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +         2 _mach_boottime_usec  (in libsystem_c.dylib) + 32  [0x18d3884a8]
+    +         : 1 DYLD-STUB$$mach_boottime_usec  (in libsystem_c.dylib) + 0  [0x18d3cd85c]
+    +         : 1 mach_boottime_usec  (in libsystem_kernel.dylib) + 0  [0x18d4968c4]
+    +         2 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +           2 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +             2 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +               2 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    44 Thread_3858297
+    + 44 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   44 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     42 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 41 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     ! : 41 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     ! :   41 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     ! 1 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     2 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       2 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +         2 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +           1 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +           : 1 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +           :   1 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    +           1 gettimeofday  (in libsystem_c.dylib) + 0  [0x18d35ad88]
+    44 Thread_3858300
+    + 44 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   44 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     41 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 39 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     ! : 38 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     ! : | 38 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     ! : 1 nanosleep  (in libsystem_c.dylib) + 228  [0x18d361cc8]
+    +     ! :   1 __error  (in libsystem_kernel.dylib) + 4  [0x18d48261c]
+    +     ! 2 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     2 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +     ! 2 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +     !   2 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +     !     2 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +     !       2 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +     !         2 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    +     1 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1021
+    44 Thread_3858313
+    + 44 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   44 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     40 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 40 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   40 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !     39 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     !     1 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     !       1 cerror  (in libsystem_kernel.dylib) + 52  [0x18d483608]
+    +     !         1 cerror_nocancel  (in libsystem_kernel.dylib) + 0  [0x18d4825f4]
+    +     4 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       4 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +         4 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +           3 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +           : 2 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +           : | 2 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    +           : 1 DYLD-STUB$$__commpage_gettimeofday  (in libsystem_c.dylib) + 8  [0x18d3ccf84]
+    +           1 gettimeofday  (in libsystem_c.dylib) + 16  [0x18d35ad98]
+    44 Thread_3858315
+    + 44 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   44 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     42 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 42 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   42 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !     42 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     1 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1021
+    +     1 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       1 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +         1 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +           1 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +             1 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +               1 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    44 Thread_3858316
+    + 44 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   44 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     39 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 39 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   38 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !   : 37 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     !   : 1 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     !   :   1 cerror  (in libsystem_kernel.dylib) + 44  [0x18d483600]
+    +     !   :     1 _pthread_exit_if_canceled  (in libsystem_pthread.dylib) + 0  [0x18d4bf908]
+    +     !   1 nanosleep  (in libsystem_c.dylib) + 60  [0x18d361c20]
+    +     !     1 pthread_testcancel  (in libsystem_pthread.dylib) + 0  [0x18d4c29d0]
+    +     4 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +     ! 2 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +     ! : 2 _mach_boottime_usec  (in libsystem_c.dylib) + 32  [0x18d3884a8]
+    +     ! :   2 mach_boottime_usec  (in libsystem_kernel.dylib) + 0  [0x18d4968c4]
+    +     ! 1 DYLD-STUB$$clock_gettime  (in profile-patched) + 0  [0x1024ce41c]
+    +     ! 1 clock_gettime  (in libsystem_c.dylib) + 276  [0x18d362e38]
+    +     1 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1021
+    44 Thread_3858323
+    + 44 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   44 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     44 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +       44 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +         44 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +           44 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    44 Thread_3858329
+    + 44 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   44 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     42 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 42 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   41 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !   : 40 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     !   : 1 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     !   :   1 cerror  (in libsystem_kernel.dylib) + 44  [0x18d483600]
+    +     !   :     1 _pthread_exit_if_canceled  (in libsystem_pthread.dylib) + 0  [0x18d4bf908]
+    +     !   1 nanosleep  (in libsystem_c.dylib) + 60  [0x18d361c20]
+    +     !     1 DYLD-STUB$$pthread_testcancel  (in libsystem_c.dylib) + 0  [0x18d3cdcdc]
+    +     2 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       2 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +         1 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +         : 1 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +         :   1 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +         :     1 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    +         1 _mach_boottime_usec  (in libsystem_c.dylib) + 0  [0x18d388488]
+    44 Thread_3858331
+    + 44 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   44 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     42 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 42 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   41 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !   : 41 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     !   1 nanosleep  (in libsystem_c.dylib) + 228  [0x18d361cc8]
+    +     !     1 DYLD-STUB$$__error  (in libsystem_c.dylib) + 0  [0x18d3ccf8c]
+    +     1 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1021
+    +     1 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       1 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +         1 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +           1 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +             1 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +               1 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    44 Thread_3858342
+    + 44 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   44 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     43 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 42 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     ! : 42 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     ! :   41 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     ! :   1 cerror  (in libsystem_kernel.dylib) + 64  [0x18d483614]
+    +     ! 1 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     1 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1021
+    44 Thread_3858344
+    + 44 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   44 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     42 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 42 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   41 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !   : 41 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     !   1 nanosleep  (in libsystem_c.dylib) + 228  [0x18d361cc8]
+    +     !     1 DYLD-STUB$$__error  (in libsystem_c.dylib) + 0  [0x18d3ccf8c]
+    +     2 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       2 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +         2 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +           2 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +             2 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +               2 mach_absolute_time  (in libsystem_kernel.dylib) + 104,108  [0x18d482108,0x18d48210c]
+    44 Thread_3858345
+    + 44 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   44 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     41 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 41 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   40 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !   : 40 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     !   1 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     2 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1021
+    +     1 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       1 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +         1 _mach_boottime_usec  (in libsystem_c.dylib) + 0  [0x18d388488]
+    44 Thread_3858348
+    + 44 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   44 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     43 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 43 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   43 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !     42 __semwait_signal  (in libsystem_kernel.dylib) + 8,28  [0x18d485308,0x18d48531c]
+    +     !     1 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     !       1 cerror  (in libsystem_kernel.dylib) + 0  [0x18d4835d4]
+    +     1 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       1 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +         1 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +           1 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +             1 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +               1 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    44 Thread_3858350
+    + 44 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   44 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     42 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 40 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     ! : 38 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     ! : | 37 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     ! : | 1 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     ! : |   1 cerror  (in libsystem_kernel.dylib) + 0  [0x18d4835d4]
+    +     ! : 2 nanosleep  (in libsystem_c.dylib) + 228  [0x18d361cc8]
+    +     ! :   2 DYLD-STUB$$__error  (in libsystem_c.dylib) + 0,8  [0x18d3ccf8c,0x18d3ccf94]
+    +     ! 2 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     2 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       2 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +         1 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +         : 1 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +         :   1 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +         :     1 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    +         1 _mach_boottime_usec  (in libsystem_c.dylib) + 0  [0x18d388488]
+    44 Thread_3858351
+    + 44 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   44 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     42 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 42 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   41 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !   : 41 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     !   1 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     1 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1021
+    +     1 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       1 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +         1 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +           1 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +             1 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +               1 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    44 Thread_3858362
+    + 44 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   44 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     40 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 39 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     ! : 39 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     ! :   38 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     ! :   1 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     ! :     1 cerror  (in libsystem_kernel.dylib) + 44  [0x18d483600]
+    +     ! :       1 _pthread_exit_if_canceled  (in libsystem_pthread.dylib) + 0  [0x18d4bf908]
+    +     ! 1 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     3 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +     ! 3 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +     !   2 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +     !   : 2 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +     !   :   2 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +     !   :     2 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    +     !   1 _mach_boottime_usec  (in libsystem_c.dylib) + 32  [0x18d3884a8]
+    +     1 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1021
+    44 Thread_3858395
+    + 44 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   44 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     42 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 41 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     ! : 41 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     ! :   40 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     ! :   1 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     ! :     1 cerror  (in libsystem_kernel.dylib) + 52  [0x18d483608]
+    +     ! :       1 cerror_nocancel  (in libsystem_kernel.dylib) + 4  [0x18d4825f8]
+    +     ! 1 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     2 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       2 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +         1 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +         : 1 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +         :   1 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +         :     1 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    +         1 _mach_boottime_usec  (in libsystem_c.dylib) + 76  [0x18d3884d4]
+    43 Thread_3858267
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     41 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 41 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   40 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !   : 37 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     !   : 2 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     !   : | 1 cerror  (in libsystem_kernel.dylib) + 44  [0x18d483600]
+    +     !   : | + 1 _pthread_exit_if_canceled  (in libsystem_pthread.dylib) + 0  [0x18d4bf908]
+    +     !   : | 1 cerror  (in libsystem_kernel.dylib) + 0  [0x18d4835d4]
+    +     !   : 1 cerror  (in libsystem_kernel.dylib) + 64  [0x18d483614]
+    +     !   1 nanosleep  (in libsystem_c.dylib) + 228  [0x18d361cc8]
+    +     !     1 DYLD-STUB$$__error  (in libsystem_c.dylib) + 0  [0x18d3ccf8c]
+    +     2 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       1 DYLD-STUB$$clock_gettime  (in profile-patched) + 0  [0x1024ce41c]
+    +       1 clock_gettime  (in libsystem_c.dylib) + 276  [0x18d362e38]
+    43 Thread_3858269
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     41 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 40 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     ! : 38 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     ! : | 37 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     ! : | 1 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     ! : |   1 cerror  (in libsystem_kernel.dylib) + 28  [0x18d4835f0]
+    +     ! : 1 nanosleep  (in libsystem_c.dylib) + 228  [0x18d361cc8]
+    +     ! : | 1 __error  (in libsystem_kernel.dylib) + 0  [0x18d482618]
+    +     ! : 1 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     ! 1 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     2 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       1 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +       : 1 _mach_boottime_usec  (in libsystem_c.dylib) + 32  [0x18d3884a8]
+    +       :   1 mach_boottime_usec  (in libsystem_kernel.dylib) + 0  [0x18d4968c4]
+    +       1 clock_gettime  (in libsystem_c.dylib) + 0  [0x18d362d24]
+    43 Thread_3858274
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     40 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 40 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   38 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !   : 38 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     !   2 nanosleep  (in libsystem_c.dylib) + 228  [0x18d361cc8]
+    +     !     2 DYLD-STUB$$__error  (in libsystem_c.dylib) + 0  [0x18d3ccf8c]
+    +     3 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       2 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +       : 2 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +       :   2 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +       :     2 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +       :       2 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    +       1 DYLD-STUB$$clock_gettime  (in profile-patched) + 0  [0x1024ce41c]
+    43 Thread_3858275
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     42 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 42 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   42 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !     41 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     !     1 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     !       1 cerror  (in libsystem_kernel.dylib) + 44  [0x18d483600]
+    +     !         1 _pthread_exit_if_canceled  (in libsystem_pthread.dylib) + 44  [0x18d4bf934]
+    +     1 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       1 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +         1 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +           1 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +             1 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +               1 mach_absolute_time  (in libsystem_kernel.dylib) + 112  [0x18d482110]
+    43 Thread_3858276
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     43 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +       42 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +       ! 40 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +       ! : 38 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +       ! : 2 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +       ! :   2 cerror  (in libsystem_kernel.dylib) + 52  [0x18d483608]
+    +       ! :     2 cerror_nocancel  (in libsystem_kernel.dylib) + 12  [0x18d482600]
+    +       ! 1 nanosleep  (in libsystem_c.dylib) + 228  [0x18d361cc8]
+    +       ! : 1 DYLD-STUB$$__error  (in libsystem_c.dylib) + 0  [0x18d3ccf8c]
+    +       ! 1 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +       1 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    43 Thread_3858277
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     39 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 39 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   38 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !   : 37 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     !   : 1 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     !   :   1 cerror  (in libsystem_kernel.dylib) + 44  [0x18d483600]
+    +     !   :     1 _pthread_exit_if_canceled  (in libsystem_pthread.dylib) + 0  [0x18d4bf908]
+    +     !   1 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     4 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       4 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +         2 _mach_boottime_usec  (in libsystem_c.dylib) + 32  [0x18d3884a8]
+    +         : 1 DYLD-STUB$$mach_boottime_usec  (in libsystem_c.dylib) + 0  [0x18d3cd85c]
+    +         : 1 mach_boottime_usec  (in libsystem_kernel.dylib) + 0  [0x18d4968c4]
+    +         2 _mach_boottime_usec  (in libsystem_c.dylib) + 32  [0x18d3884a8]
+    43 Thread_3858280
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     42 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 41 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     ! : 41 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     ! :   39 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     ! :   2 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     ! :     2 cerror  (in libsystem_kernel.dylib) + 44  [0x18d483600]
+    +     ! :       2 _pthread_exit_if_canceled  (in libsystem_pthread.dylib) + 0  [0x18d4bf908]
+    +     ! 1 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     1 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       1 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +         1 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +           1 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +             1 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +               1 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    43 Thread_3858281
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     38 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 38 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   37 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !   : 35 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     !   : 2 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     !   :   2 cerror  (in libsystem_kernel.dylib) + 44  [0x18d483600]
+    +     !   :     2 _pthread_exit_if_canceled  (in libsystem_pthread.dylib) + 0,8  [0x18d4bf908,0x18d4bf910]
+    +     !   1 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     4 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +     ! 2 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +     ! : 2 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +     ! :   2 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +     ! :     2 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +     ! :       2 mach_absolute_time  (in libsystem_kernel.dylib) + 112  [0x18d482110]
+    +     ! 1 DYLD-STUB$$clock_gettime  (in profile-patched) + 0  [0x1024ce41c]
+    +     ! 1 _mach_boottime_usec  (in libsystem_c.dylib) + 112  [0x18d3884f8]
+    +     1 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1021
+    43 Thread_3858283
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     42 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 42 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   42 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !     40 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     !     2 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     !       2 cerror  (in libsystem_kernel.dylib) + 44  [0x18d483600]
+    +     !         2 _pthread_exit_if_canceled  (in libsystem_pthread.dylib) + 0  [0x18d4bf908]
+    +     1 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       1 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +         1 _mach_boottime_usec  (in libsystem_c.dylib) + 32  [0x18d3884a8]
+    +           1 mach_boottime_usec  (in libsystem_kernel.dylib) + 0  [0x18d4968c4]
+    43 Thread_3858288
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     41 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 41 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   40 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !   : 40 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     !   1 nanosleep  (in libsystem_c.dylib) + 228  [0x18d361cc8]
+    +     !     1 DYLD-STUB$$__error  (in libsystem_c.dylib) + 0  [0x18d3ccf8c]
+    +     2 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       1 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +       : 1 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +       :   1 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +       :     1 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +       :       1 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    +       1 clock_gettime  (in libsystem_c.dylib) + 120  [0x18d362d9c]
+    43 Thread_3858289
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     39 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 39 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   38 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !   : 37 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     !   : 1 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     !   :   1 cerror  (in libsystem_kernel.dylib) + 44  [0x18d483600]
+    +     !   :     1 _pthread_exit_if_canceled  (in libsystem_pthread.dylib) + 0  [0x18d4bf908]
+    +     !   1 nanosleep  (in libsystem_c.dylib) + 228  [0x18d361cc8]
+    +     !     1 DYLD-STUB$$__error  (in libsystem_c.dylib) + 0  [0x18d3ccf8c]
+    +     4 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       4 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +         3 _mach_boottime_usec  (in libsystem_c.dylib) + 32  [0x18d3884a8]
+    +         : 2 DYLD-STUB$$mach_boottime_usec  (in libsystem_c.dylib) + 0,12  [0x18d3cd85c,0x18d3cd868]
+    +         : 1 mach_boottime_usec  (in libsystem_kernel.dylib) + 0  [0x18d4968c4]
+    +         1 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +           1 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +             1 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +               1 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    43 Thread_3858290
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     38 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 38 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   37 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !   : 35 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     !   : 2 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     !   :   1 _pthread_exit_if_canceled  (in libsystem_pthread.dylib) + 48  [0x18d4bf938]
+    +     !   :   1 cerror  (in libsystem_kernel.dylib) + 0  [0x18d4835d4]
+    +     !   1 nanosleep  (in libsystem_c.dylib) + 228  [0x18d361cc8]
+    +     !     1 __error  (in libsystem_kernel.dylib) + 4  [0x18d48261c]
+    +     5 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       3 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +       : 2 _mach_boottime_usec  (in libsystem_c.dylib) + 32  [0x18d3884a8]
+    +       : | 1 DYLD-STUB$$mach_boottime_usec  (in libsystem_c.dylib) + 8  [0x18d3cd864]
+    +       : | 1 mach_boottime_usec  (in libsystem_kernel.dylib) + 0  [0x18d4968c4]
+    +       : 1 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +       :   1 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +       :     1 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +       :       1 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    +       1 DYLD-STUB$$clock_gettime  (in profile-patched) + 0  [0x1024ce41c]
+    +       1 clock_gettime  (in libsystem_c.dylib) + 276  [0x18d362e38]
+    43 Thread_3858292
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     40 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 38 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     ! : 38 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     ! :   34 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     ! :   4 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     ! :     2 cerror  (in libsystem_kernel.dylib) + 0  [0x18d4835d4]
+    +     ! :     1 _pthread_exit_if_canceled  (in libsystem_pthread.dylib) + 48  [0x18d4bf938]
+    +     ! :     1 cerror  (in libsystem_kernel.dylib) + 52  [0x18d483608]
+    +     ! :       1 cerror_nocancel  (in libsystem_kernel.dylib) + 4  [0x18d4825f8]
+    +     ! 1 nanosleep  (in libsystem_c.dylib) + 176  [0x18d361c94]
+    +     ! 1 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     3 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       3 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +         2 _mach_boottime_usec  (in libsystem_c.dylib) + 32  [0x18d3884a8]
+    +         : 1 DYLD-STUB$$mach_boottime_usec  (in libsystem_c.dylib) + 0  [0x18d3cd85c]
+    +         : 1 mach_boottime_usec  (in libsystem_kernel.dylib) + 0  [0x18d4968c4]
+    +         1 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +           1 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +             1 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +               1 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    43 Thread_3858294
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     43 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +       42 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +       ! 41 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +       ! : 41 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +       ! 1 nanosleep  (in libsystem_c.dylib) + 228  [0x18d361cc8]
+    +       !   1 DYLD-STUB$$__error  (in libsystem_c.dylib) + 0  [0x18d3ccf8c]
+    +       1 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    43 Thread_3858295
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     42 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 42 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   40 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !   : 39 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     !   : 1 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     !   :   1 cerror  (in libsystem_kernel.dylib) + 44  [0x18d483600]
+    +     !   :     1 _pthread_exit_if_canceled  (in libsystem_pthread.dylib) + 0  [0x18d4bf908]
+    +     !   2 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     1 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       1 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +         1 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +           1 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +             1 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +               1 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    43 Thread_3858302
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     40 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 39 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     ! : 38 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     ! : | 37 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     ! : | 1 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     ! : |   1 cerror  (in libsystem_kernel.dylib) + 52  [0x18d483608]
+    +     ! : |     1 cerror_nocancel  (in libsystem_kernel.dylib) + 4  [0x18d4825f8]
+    +     ! : 1 nanosleep  (in libsystem_c.dylib) + 228  [0x18d361cc8]
+    +     ! 1 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     3 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       3 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +         2 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +         : 2 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +         :   2 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +         :     2 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    +         1 _mach_boottime_usec  (in libsystem_c.dylib) + 32  [0x18d3884a8]
+    +           1 mach_boottime_usec  (in libsystem_kernel.dylib) + 0  [0x18d4968c4]
+    43 Thread_3858305
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     39 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 39 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   39 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !     36 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     !     3 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     !       2 cerror  (in libsystem_kernel.dylib) + 44  [0x18d483600]
+    +     !       | 2 _pthread_exit_if_canceled  (in libsystem_pthread.dylib) + 0,8  [0x18d4bf908,0x18d4bf910]
+    +     !       1 cerror  (in libsystem_kernel.dylib) + 52  [0x18d483608]
+    +     !         1 cerror_nocancel  (in libsystem_kernel.dylib) + 4  [0x18d4825f8]
+    +     3 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +     ! 3 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +     !   3 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +     !     2 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +     !     : 2 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +     !     :   2 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    +     !     1 gettimeofday  (in libsystem_c.dylib) + 16  [0x18d35ad98]
+    +     1 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1021
+    43 Thread_3858309
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     39 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 38 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     ! : 38 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     ! :   38 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     ! 1 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     3 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +     ! 2 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +     ! : 2 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +     ! :   2 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +     ! :     1 DYLD-STUB$$__commpage_gettimeofday  (in libsystem_c.dylib) + 8  [0x18d3ccf84]
+    +     ! :     1 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +     ! :       1 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    +     ! 1 DYLD-STUB$$clock_gettime  (in profile-patched) + 0  [0x1024ce41c]
+    +     1 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1021
+    43 Thread_3858318
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     42 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 42 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   42 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !     41 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     !     1 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     !       1 cerror  (in libsystem_kernel.dylib) + 0  [0x18d4835d4]
+    +     1 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1021
+    43 Thread_3858319
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     39 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 39 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   39 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !     38 __semwait_signal  (in libsystem_kernel.dylib) + 8,32  [0x18d485308,0x18d485320]
+    +     !     1 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     !       1 cerror  (in libsystem_kernel.dylib) + 0  [0x18d4835d4]
+    +     3 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +     ! 2 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +     ! : 2 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +     ! :   2 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +     ! :     2 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +     ! :       2 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    +     ! 1 clock_gettime  (in libsystem_c.dylib) + 280  [0x18d362e3c]
+    +     1 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1021
+    43 Thread_3858320
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     41 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 41 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   41 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !     39 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     !     2 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     !       2 cerror  (in libsystem_kernel.dylib) + 44  [0x18d483600]
+    +     !         2 _pthread_exit_if_canceled  (in libsystem_pthread.dylib) + 0,44  [0x18d4bf908,0x18d4bf934]
+    +     2 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       2 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +         2 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +           2 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +             2 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +               2 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    43 Thread_3858325
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     41 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 40 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     ! : 40 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     ! :   40 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     ! 1 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     1 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1021
+    +     1 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       1 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +         1 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +           1 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +             1 DYLD-STUB$$__commpage_gettimeofday  (in libsystem_c.dylib) + 0  [0x18d3ccf7c]
+    43 Thread_3858327
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     39 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 39 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   39 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !     38 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     !     1 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     !       1 cerror  (in libsystem_kernel.dylib) + 44  [0x18d483600]
+    +     !         1 _pthread_exit_if_canceled  (in libsystem_pthread.dylib) + 0  [0x18d4bf908]
+    +     3 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +     ! 3 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +     !   1 _mach_boottime_usec  (in libsystem_c.dylib) + 32  [0x18d3884a8]
+    +     !   : 1 mach_boottime_usec  (in libsystem_kernel.dylib) + 0  [0x18d4968c4]
+    +     !   1 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +     !   : 1 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +     !   :   1 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +     !   :     1 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    +     !   1 _mach_boottime_usec  (in libsystem_c.dylib) + 0  [0x18d388488]
+    +     1 _timeout_fn  (in profile-patched) + 176  [0x10238ae3c]  uc.c:1024
+    43 Thread_3858332
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     41 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 41 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   38 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !   : 38 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     !   2 nanosleep  (in libsystem_c.dylib) + 228  [0x18d361cc8]
+    +     !   : 2 DYLD-STUB$$__error  (in libsystem_c.dylib) + 0  [0x18d3ccf8c]
+    +     !   1 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     1 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1021
+    +     1 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       1 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +         1 _mach_boottime_usec  (in libsystem_c.dylib) + 0  [0x18d388488]
+    43 Thread_3858333
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     41 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 40 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     ! : 38 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     ! : | 36 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     ! : | 2 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     ! : |   1 _pthread_exit_if_canceled  (in libsystem_pthread.dylib) + 48  [0x18d4bf938]
+    +     ! : |   1 cerror  (in libsystem_kernel.dylib) + 0  [0x18d4835d4]
+    +     ! : 1 nanosleep  (in libsystem_c.dylib) + 228  [0x18d361cc8]
+    +     ! : | 1 DYLD-STUB$$__error  (in libsystem_c.dylib) + 0  [0x18d3ccf8c]
+    +     ! : 1 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     ! 1 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     2 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       2 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +         2 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +           2 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +             2 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +               2 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    43 Thread_3858334
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     39 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 39 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   35 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !   : 34 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     !   : 1 cerror  (in libsystem_kernel.dylib) + 64  [0x18d483614]
+    +     !   4 nanosleep  (in libsystem_c.dylib) + 228  [0x18d361cc8]
+    +     !     4 DYLD-STUB$$__error  (in libsystem_c.dylib) + 0  [0x18d3ccf8c]
+    +     4 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       3 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +       : 3 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +       :   3 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +       :     3 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +       :       3 mach_absolute_time  (in libsystem_kernel.dylib) + 108,20  [0x18d48210c,0x18d4820b4]
+    +       1 DYLD-STUB$$clock_gettime  (in profile-patched) + 0  [0x1024ce41c]
+    43 Thread_3858335
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     41 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 41 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   41 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !     40 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     !     1 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     !       1 cerror  (in libsystem_kernel.dylib) + 44  [0x18d483600]
+    +     !         1 _pthread_exit_if_canceled  (in libsystem_pthread.dylib) + 0  [0x18d4bf908]
+    +     2 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       2 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +         2 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +           2 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +             2 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +               2 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    43 Thread_3858336
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     43 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +       43 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +         43 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +           41 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +           2 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +             1 cerror  (in libsystem_kernel.dylib) + 44  [0x18d483600]
+    +             : 1 _pthread_exit_if_canceled  (in libsystem_pthread.dylib) + 0  [0x18d4bf908]
+    +             1 cerror  (in libsystem_kernel.dylib) + 52  [0x18d483608]
+    +               1 cerror_nocancel  (in libsystem_kernel.dylib) + 4  [0x18d4825f8]
+    43 Thread_3858337
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     43 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +       43 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +         43 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +           41 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +           2 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +             1 _pthread_exit_if_canceled  (in libsystem_pthread.dylib) + 48  [0x18d4bf938]
+    +             1 cerror  (in libsystem_kernel.dylib) + 44  [0x18d483600]
+    +               1 _pthread_exit_if_canceled  (in libsystem_pthread.dylib) + 8  [0x18d4bf910]
+    43 Thread_3858338
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     41 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 40 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     ! : 37 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     ! : | 37 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     ! : 3 nanosleep  (in libsystem_c.dylib) + 228  [0x18d361cc8]
+    +     ! :   3 DYLD-STUB$$__error  (in libsystem_c.dylib) + 0  [0x18d3ccf8c]
+    +     ! 1 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     2 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       1 DYLD-STUB$$clock_gettime  (in profile-patched) + 4  [0x1024ce420]
+    +       1 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +         1 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +           1 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +             1 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +               1 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    43 Thread_3858343
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     43 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +       43 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +         43 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +           43 __semwait_signal  (in libsystem_kernel.dylib) + 8,28  [0x18d485308,0x18d48531c]
+    43 Thread_3858346
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     42 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 42 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   40 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !   : 40 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     !   1 nanosleep  (in libsystem_c.dylib) + 228  [0x18d361cc8]
+    +     !   : 1 DYLD-STUB$$__error  (in libsystem_c.dylib) + 0  [0x18d3ccf8c]
+    +     !   1 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     1 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       1 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +         1 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +           1 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +             1 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +               1 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    43 Thread_3858347
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     41 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 40 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     ! : 39 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     ! : | 38 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     ! : | 1 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     ! : |   1 cerror  (in libsystem_kernel.dylib) + 44  [0x18d483600]
+    +     ! : |     1 _pthread_exit_if_canceled  (in libsystem_pthread.dylib) + 0  [0x18d4bf908]
+    +     ! : 1 nanosleep  (in libsystem_c.dylib) + 228  [0x18d361cc8]
+    +     ! :   1 DYLD-STUB$$__error  (in libsystem_c.dylib) + 0  [0x18d3ccf8c]
+    +     ! 1 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     2 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       2 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +         1 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +         : 1 gettimeofday  (in libsystem_c.dylib) + 0  [0x18d35ad88]
+    +         1 _mach_boottime_usec  (in libsystem_c.dylib) + 0  [0x18d388488]
+    43 Thread_3858353
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     40 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 40 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   38 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !   : 37 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     !   : 1 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     !   :   1 cerror  (in libsystem_kernel.dylib) + 0  [0x18d4835d4]
+    +     !   1 nanosleep  (in libsystem_c.dylib) + 228  [0x18d361cc8]
+    +     !   : 1 DYLD-STUB$$__error  (in libsystem_c.dylib) + 8  [0x18d3ccf94]
+    +     !   1 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     1 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1021
+    +     1 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +     ! 1 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +     !   1 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +     !     1 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +     !       1 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +     !         1 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    +     1 clock_gettime  (in libsystem_c.dylib) + 420  [0x18d362ec8]
+    43 Thread_3858356
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     36 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 35 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     ! : 34 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     ! : | 33 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     ! : | 1 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     ! : |   1 cerror  (in libsystem_kernel.dylib) + 44  [0x18d483600]
+    +     ! : |     1 _pthread_exit_if_canceled  (in libsystem_pthread.dylib) + 0  [0x18d4bf908]
+    +     ! : 1 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     ! 1 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     7 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       6 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +       : 4 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +       : | 3 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +       : | + 2 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +       : | + ! 2 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    +       : | + 1 DYLD-STUB$$__commpage_gettimeofday  (in libsystem_c.dylib) + 8  [0x18d3ccf84]
+    +       : | 1 gettimeofday  (in libsystem_c.dylib) + 16  [0x18d35ad98]
+    +       : 1 _mach_boottime_usec  (in libsystem_c.dylib) + 32  [0x18d3884a8]
+    +       : | 1 mach_boottime_usec  (in libsystem_kernel.dylib) + 0  [0x18d4968c4]
+    +       : 1 _mach_boottime_usec  (in libsystem_c.dylib) + 0  [0x18d388488]
+    +       1 clock_gettime  (in libsystem_c.dylib) + 276  [0x18d362e38]
+    43 Thread_3858357
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     40 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 40 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   39 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !   : 36 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     !   : 3 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     !   :   2 cerror  (in libsystem_kernel.dylib) + 0,52  [0x18d4835d4,0x18d483608]
+    +     !   :   1 cerror  (in libsystem_kernel.dylib) + 44  [0x18d483600]
+    +     !   :     1 _pthread_exit_if_canceled  (in libsystem_pthread.dylib) + 0  [0x18d4bf908]
+    +     !   1 nanosleep  (in libsystem_c.dylib) + 228  [0x18d361cc8]
+    +     !     1 DYLD-STUB$$__error  (in libsystem_c.dylib) + 0  [0x18d3ccf8c]
+    +     2 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +     ! 2 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +     !   2 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +     !     2 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +     !       1 DYLD-STUB$$__commpage_gettimeofday  (in libsystem_c.dylib) + 0  [0x18d3ccf7c]
+    +     !       1 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +     !         1 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    +     1 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1021
+    43 Thread_3858358
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     39 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 37 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     ! : 35 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     ! : | 33 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     ! : | 2 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     ! : |   1 cerror  (in libsystem_kernel.dylib) + 44  [0x18d483600]
+    +     ! : |   ! 1 _pthread_exit_if_canceled  (in libsystem_pthread.dylib) + 0  [0x18d4bf908]
+    +     ! : |   1 cerror  (in libsystem_kernel.dylib) + 52  [0x18d483608]
+    +     ! : |     1 cerror_nocancel  (in libsystem_kernel.dylib) + 4  [0x18d4825f8]
+    +     ! : 1 nanosleep  (in libsystem_c.dylib) + 228  [0x18d361cc8]
+    +     ! : | 1 DYLD-STUB$$__error  (in libsystem_c.dylib) + 0  [0x18d3ccf8c]
+    +     ! : 1 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     ! 2 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     4 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       4 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +         2 _mach_boottime_usec  (in libsystem_c.dylib) + 32  [0x18d3884a8]
+    +         : 2 mach_boottime_usec  (in libsystem_kernel.dylib) + 0  [0x18d4968c4]
+    +         1 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +         : 1 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +         :   1 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +         :     1 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    +         1 _mach_boottime_usec  (in libsystem_c.dylib) + 0  [0x18d388488]
+    43 Thread_3858359
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     41 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 41 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   39 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !   : 39 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     !   1 nanosleep  (in libsystem_c.dylib) + 228  [0x18d361cc8]
+    +     !   : 1 DYLD-STUB$$__error  (in libsystem_c.dylib) + 0  [0x18d3ccf8c]
+    +     !   1 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     1 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1021
+    +     1 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       1 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +         1 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +           1 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +             1 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +               1 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    43 Thread_3858361
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     39 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 39 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   34 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !   : 34 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     !   4 nanosleep  (in libsystem_c.dylib) + 220,0  [0x18d361cc0,0x18d361be4]
+    +     !   1 nanosleep  (in libsystem_c.dylib) + 228  [0x18d361cc8]
+    +     !     1 DYLD-STUB$$__error  (in libsystem_c.dylib) + 0  [0x18d3ccf8c]
+    +     3 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +     ! 2 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +     ! : 2 _mach_boottime_usec  (in libsystem_c.dylib) + 32  [0x18d3884a8]
+    +     ! :   2 DYLD-STUB$$mach_boottime_usec  (in libsystem_c.dylib) + 0,8  [0x18d3cd85c,0x18d3cd864]
+    +     ! 1 clock_gettime  (in libsystem_c.dylib) + 120  [0x18d362d9c]
+    +     1 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1021
+    43 Thread_3858364
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     42 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 42 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   41 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !   : 41 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     !   1 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     1 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1021
+    43 Thread_3858365
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     38 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 38 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   37 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !   : 37 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     !   1 nanosleep  (in libsystem_c.dylib) + 228  [0x18d361cc8]
+    +     !     1 __error  (in libsystem_kernel.dylib) + 4  [0x18d48261c]
+    +     3 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1021
+    +     2 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       2 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +         1 _mach_boottime_usec  (in libsystem_c.dylib) + 32  [0x18d3884a8]
+    +         : 1 DYLD-STUB$$mach_boottime_usec  (in libsystem_c.dylib) + 8  [0x18d3cd864]
+    +         1 _mach_boottime_usec  (in libsystem_c.dylib) + 0  [0x18d388488]
+    43 Thread_3858366
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     39 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 39 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   38 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !   : 38 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     !   1 nanosleep  (in libsystem_c.dylib) + 228  [0x18d361cc8]
+    +     !     1 DYLD-STUB$$__error  (in libsystem_c.dylib) + 0  [0x18d3ccf8c]
+    +     4 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       3 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +       : 1 _mach_boottime_usec  (in libsystem_c.dylib) + 32  [0x18d3884a8]
+    +       : | 1 DYLD-STUB$$mach_boottime_usec  (in libsystem_c.dylib) + 0  [0x18d3cd85c]
+    +       : 1 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +       : | 1 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +       : |   1 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +       : |     1 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    +       : 1 _mach_boottime_usec  (in libsystem_c.dylib) + 0  [0x18d388488]
+    +       1 DYLD-STUB$$clock_gettime  (in profile-patched) + 0  [0x1024ce41c]
+    43 Thread_3858367
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     39 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 37 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     ! : 37 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     ! :   36 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     ! :   1 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     ! :     1 cerror  (in libsystem_kernel.dylib) + 0  [0x18d4835d4]
+    +     ! 2 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     3 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +     ! 3 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +     !   3 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +     !     3 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +     !       3 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +     !         3 mach_absolute_time  (in libsystem_kernel.dylib) + 108,20  [0x18d48210c,0x18d4820b4]
+    +     1 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1021
+    43 Thread_3858389
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     42 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 41 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     ! : 41 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     ! :   41 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     ! 1 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     1 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       1 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +         1 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +           1 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +             1 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +               1 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    43 Thread_3858391
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     40 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 40 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   40 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !     34 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     !     6 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     !       5 cerror  (in libsystem_kernel.dylib) + 0  [0x18d4835d4]
+    +     !       1 cerror  (in libsystem_kernel.dylib) + 52  [0x18d483608]
+    +     !         1 cerror_nocancel  (in libsystem_kernel.dylib) + 4  [0x18d4825f8]
+    +     2 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +     ! 2 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +     !   1 _mach_boottime_usec  (in libsystem_c.dylib) + 32  [0x18d3884a8]
+    +     !   : 1 mach_boottime_usec  (in libsystem_kernel.dylib) + 0  [0x18d4968c4]
+    +     !   1 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +     !     1 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +     !       1 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +     !         1 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    +     1 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1021
+    43 Thread_3858393
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     41 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 40 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     ! : 39 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     ! : | 38 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     ! : | 1 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     ! : |   1 cerror  (in libsystem_kernel.dylib) + 52  [0x18d483608]
+    +     ! : 1 nanosleep  (in libsystem_c.dylib) + 228  [0x18d361cc8]
+    +     ! :   1 DYLD-STUB$$__error  (in libsystem_c.dylib) + 0  [0x18d3ccf8c]
+    +     ! 1 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     1 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1021
+    +     1 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       1 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +         1 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +           1 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +             1 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +               1 mach_absolute_time  (in libsystem_kernel.dylib) + 0  [0x18d4820a0]
+    43 Thread_3858397
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     41 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 40 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     ! : 40 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     ! :   39 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     ! :   1 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     ! :     1 cerror  (in libsystem_kernel.dylib) + 44  [0x18d483600]
+    +     ! :       1 _pthread_exit_if_canceled  (in libsystem_pthread.dylib) + 8  [0x18d4bf910]
+    +     ! 1 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     1 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1021
+    +     1 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       1 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +         1 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +           1 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +             1 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +               1 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    43 Thread_3858398
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     43 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +       42 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +       ! 42 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +       !   42 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +       1 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    43 Thread_3858399
+    + 43 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   43 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     40 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 38 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     ! : 37 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     ! : | 34 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     ! : | 3 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     ! : |   2 cerror  (in libsystem_kernel.dylib) + 44  [0x18d483600]
+    +     ! : |   ! 2 _pthread_exit_if_canceled  (in libsystem_pthread.dylib) + 0,8  [0x18d4bf908,0x18d4bf910]
+    +     ! : |   1 cerror  (in libsystem_kernel.dylib) + 0  [0x18d4835d4]
+    +     ! : 1 nanosleep  (in libsystem_c.dylib) + 228  [0x18d361cc8]
+    +     ! :   1 DYLD-STUB$$__error  (in libsystem_c.dylib) + 8  [0x18d3ccf94]
+    +     ! 2 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     2 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +     ! 2 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +     !   2 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +     !     2 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +     !       2 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +     !         2 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    +     1 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1021
+    42 Thread_3858268
+    + 42 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   42 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     42 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +       41 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +       ! 41 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +       !   39 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +       !   2 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +       !     2 cerror  (in libsystem_kernel.dylib) + 44  [0x18d483600]
+    +       !       2 _pthread_exit_if_canceled  (in libsystem_pthread.dylib) + 0  [0x18d4bf908]
+    +       1 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    42 Thread_3858303
+    + 42 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   42 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     38 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 38 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   36 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !   : 34 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     !   : 2 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     !   :   1 cerror  (in libsystem_kernel.dylib) + 44  [0x18d483600]
+    +     !   :   + 1 _pthread_exit_if_canceled  (in libsystem_pthread.dylib) + 0  [0x18d4bf908]
+    +     !   :   1 cerror  (in libsystem_kernel.dylib) + 52  [0x18d483608]
+    +     !   :     1 cerror_nocancel  (in libsystem_kernel.dylib) + 4  [0x18d4825f8]
+    +     !   1 nanosleep  (in libsystem_c.dylib) + 228  [0x18d361cc8]
+    +     !   : 1 DYLD-STUB$$__error  (in libsystem_c.dylib) + 0  [0x18d3ccf8c]
+    +     !   1 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     2 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1021
+    +     2 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       1 DYLD-STUB$$clock_gettime  (in profile-patched) + 0  [0x1024ce41c]
+    +       1 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +         1 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +           1 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +             1 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +               1 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    42 Thread_3858304
+    + 42 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   42 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     39 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 39 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   39 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !     39 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     3 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       3 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +         2 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +         : 2 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +         :   2 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +         :     2 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    +         1 _mach_boottime_usec  (in libsystem_c.dylib) + 32  [0x18d3884a8]
+    +           1 mach_boottime_usec  (in libsystem_kernel.dylib) + 0  [0x18d4968c4]
+    42 Thread_3858306
+    + 42 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   42 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     40 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 40 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     !   40 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     !     40 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     2 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       1 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +       : 1 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +       :   1 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +       :     1 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +       :       1 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    +       1 clock_gettime  (in libsystem_c.dylib) + 276  [0x18d362e38]
+    42 Thread_3858326
+    + 42 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   42 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     40 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +     ! 39 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     ! : 35 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +     ! : | 34 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +     ! : | 1 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+    +     ! : |   1 cerror  (in libsystem_kernel.dylib) + 44  [0x18d483600]
+    +     ! : |     1 _pthread_exit_if_canceled  (in libsystem_pthread.dylib) + 0  [0x18d4bf908]
+    +     ! : 2 nanosleep  (in libsystem_c.dylib) + 228  [0x18d361cc8]
+    +     ! : | 2 DYLD-STUB$$__error  (in libsystem_c.dylib) + 0  [0x18d3ccf8c]
+    +     ! : 2 nanosleep  (in libsystem_c.dylib) + 0,220  [0x18d361be4,0x18d361cc0]
+    +     ! 1 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +     2 _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+    +       2 clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+    +         1 _mach_boottime_usec  (in libsystem_c.dylib) + 32  [0x18d3884a8]
+    +         : 1 DYLD-STUB$$mach_boottime_usec  (in libsystem_c.dylib) + 8  [0x18d3cd864]
+    +         1 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+    +           1 gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+    +             1 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+    +               1 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x18d48210c]
+    42 Thread_3858354
+    + 42 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+    +   42 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+    +     42 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+    +       42 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+    +         41 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+    +         ! 41 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+    +         1 nanosleep  (in libsystem_c.dylib) + 228  [0x18d361cc8]
+    +           1 DYLD-STUB$$__error  (in libsystem_c.dylib) + 0  [0x18d3ccf8c]
+    11 Thread_3858400
+      11 thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+        11 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+          11 _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+            10 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+            ! 10 nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+            !   9 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x18d485308]
+            !   1 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+            !     1 cerror  (in libsystem_kernel.dylib) + 44  [0x18d483600]
+            !       1 _pthread_exit_if_canceled  (in libsystem_pthread.dylib) + 44  [0x18d4bf934]
+            1 usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+
+Total number in stack (recursive counted multiple, when >=5):
+        86       __semwait_signal  (in libsystem_kernel.dylib) + 0  [0x18d485300]
+        86       _pthread_start  (in libsystem_pthread.dylib) + 136  [0x18d4c5c58]
+        86       _timeout_fn  (in profile-patched) + 168  [0x10238ae34]  uc.c:1019
+        86       nanosleep  (in libsystem_c.dylib) + 220  [0x18d361cc0]
+        86       thread_start  (in libsystem_pthread.dylib) + 8  [0x18d4c0c1c]
+        86       usleep  (in libsystem_c.dylib) + 68  [0x18d361bd8]
+        70       _timeout_fn  (in profile-patched) + 196  [0x10238ae50]  uc.c:1024
+        67       clock_gettime  (in libsystem_c.dylib) + 296  [0x18d362e4c]
+        57       _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x18d3884c8]
+        56       gettimeofday  (in libsystem_c.dylib) + 56  [0x18d35adc0]
+        55       __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x18d483c24]
+        55       mach_absolute_time  (in libsystem_kernel.dylib) + 0  [0x18d4820a0]
+        49       __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x18d48531c]
+        40       dyld4::PrebuiltLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)  (in dyld) + 424  [0x18d157888]
+        37       _pthread_exit_if_canceled  (in libsystem_pthread.dylib) + 0  [0x18d4bf908]
+        37       nanosleep  (in libsystem_c.dylib) + 228  [0x18d361cc8]
+        33       DYLD-STUB$$__error  (in libsystem_c.dylib) + 0  [0x18d3ccf8c]
+        32       usleep  (in libsystem_c.dylib) + 0  [0x18d361b94]
+        30       cerror  (in libsystem_kernel.dylib) + 44  [0x18d483600]
+        29       _timeout_fn  (in profile-patched) + 0  [0x10238ad8c]  uc.c:1021
+        23       nanosleep  (in libsystem_c.dylib) + 0  [0x18d361be4]
+        21       _mach_boottime_usec  (in libsystem_c.dylib) + 32  [0x18d3884a8]
+        21       cerror  (in libsystem_kernel.dylib) + 0  [0x18d4835d4]
+        17       mach_boottime_usec  (in libsystem_kernel.dylib) + 0  [0x18d4968c4]
+        14       _mach_boottime_usec  (in libsystem_c.dylib) + 0  [0x18d388488]
+        13       clock_gettime  (in libsystem_c.dylib) + 0  [0x18d362d24]
+        12       DYLD-STUB$$clock_gettime  (in profile-patched) + 0  [0x1024ce41c]
+        12       cerror  (in libsystem_kernel.dylib) + 52  [0x18d483608]
+        12       cerror_nocancel  (in libsystem_kernel.dylib) + 0  [0x18d4825f4]
+        9       DYLD-STUB$$mach_boottime_usec  (in libsystem_c.dylib) + 0  [0x18d3cd85c]
+        5       DYLD-STUB$$__commpage_gettimeofday  (in libsystem_c.dylib) + 0  [0x18d3ccf7c]
+        5       gettimeofday  (in libsystem_c.dylib) + 0  [0x18d35ad88]
+
+Sort by top of stack, same collapsed (when >= 5):
+        __semwait_signal  (in libsystem_kernel.dylib)        3308
+        helper_check_exit_request_aarch64  (in profile-patched)        1414
+        ???  (in <unknown binary>)  [0x30000057c]        500
+        _dyld_start  (in dyld)        350
+        ???  (in <unknown binary>)  [0x3000004f8]        346
+        ???  (in <unknown binary>)  [0x3000004b4]        312
+        ???  (in <unknown binary>)  [0x300000488]        201
+        ???  (in <unknown binary>)  [0x3000004d4]        199
+        ???  (in <unknown binary>)  [0x30000051c]        129
+        ???  (in <unknown binary>)  [0x300000564]        113
+        mach_absolute_time  (in libsystem_kernel.dylib)        77
+        ???  (in <unknown binary>)  [0x3000004f4]        70
+        ???  (in <unknown binary>)  [0x300000558]        70
+        ???  (in <unknown binary>)  [0x3000004b0]        69
+        ???  (in <unknown binary>)  [0x300000550]        56
+        ???  (in <unknown binary>)  [0x300000504]        53
+        _pthread_exit_if_canceled  (in libsystem_pthread.dylib)        44
+        ???  (in <unknown binary>)  [0x3000004b8]        43
+        DYLD-STUB$$__error  (in libsystem_c.dylib)        43
+        usleep  (in libsystem_c.dylib)        37
+        ???  (in <unknown binary>)  [0x30000048c]        35
+        _timeout_fn  (in profile-patched)        34
+        nanosleep  (in libsystem_c.dylib)        28
+        ???  (in <unknown binary>)  [0x300000540]        27
+        cerror  (in libsystem_kernel.dylib)        27
+        ???  (in <unknown binary>)  [0x3000004d8]        25
+        ???  (in <unknown binary>)  [0x300000544]        24
+        mach_boottime_usec  (in libsystem_kernel.dylib)        20
+        _mach_boottime_usec  (in libsystem_c.dylib)        15
+        cerror_nocancel  (in libsystem_kernel.dylib)        13
+        clock_gettime  (in libsystem_c.dylib)        13
+        DYLD-STUB$$clock_gettime  (in profile-patched)        12
+        DYLD-STUB$$mach_boottime_usec  (in libsystem_c.dylib)        11
+        ???  (in <unknown binary>)  [0x300000554]        6
+        DYLD-STUB$$__commpage_gettimeofday  (in libsystem_c.dylib)        5
+        gettimeofday  (in libsystem_c.dylib)        5
+
+Binary images description not available
+

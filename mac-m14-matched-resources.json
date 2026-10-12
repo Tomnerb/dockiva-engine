@@ -1,0 +1,1068 @@
+{
+  "host": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+  "completed": true,
+  "resources_enabled": true,
+  "target_requests_per_second": 3000.0,
+  "profiling_enabled": false,
+  "whole_vm_resources": "not measured",
+  "order": [
+    {
+      "round": 1,
+      "kind": "vmfree"
+    },
+    {
+      "round": 1,
+      "kind": "linux-vm"
+    },
+    {
+      "round": 2,
+      "kind": "linux-vm"
+    },
+    {
+      "round": 2,
+      "kind": "vmfree"
+    },
+    {
+      "round": 3,
+      "kind": "vmfree"
+    },
+    {
+      "round": 3,
+      "kind": "linux-vm"
+    },
+    {
+      "round": 4,
+      "kind": "linux-vm"
+    },
+    {
+      "round": 4,
+      "kind": "vmfree"
+    }
+  ],
+  "results": [
+    {
+      "name": "VM-free",
+      "kind": "vmfree",
+      "samples": [
+        {
+          "target_requests_per_second": 3000.0,
+          "target_fraction_achieved": 0.985601516376178,
+          "requests": 44353,
+          "elapsed_s": 15.000315125013003,
+          "requests_per_second": 2956.804549128534,
+          "latency_median_ms": 0.1630420156288892,
+          "latency_p95_ms": 0.19145800615660846,
+          "command": [
+            "/Users/macbookpro16m2max/Documents/vmfree-runtime/build/vmfree-c",
+            "run",
+            "/Users/macbookpro16m2max/.vmfree/containers/bench-bind-e6909416/rootfs/app/server",
+            "--root",
+            "/Users/macbookpro16m2max/.vmfree/containers/bench-bind-e6909416/rootfs",
+            "--max-steps",
+            "10000000000",
+            "--",
+            "0"
+          ],
+          "startup_to_first_response_ms": 921.5796669886913,
+          "readiness_attempts": 1,
+          "warmup_s": 2.0,
+          "concurrency": 4,
+          "resources": {
+            "scope": "native process",
+            "samples": [
+              {
+                "elapsed_s": 0.008137208002153784,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 0.66
+              },
+              {
+                "elapsed_s": 0.5211367500014603,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 0.82
+              },
+              {
+                "elapsed_s": 1.0298030000121798,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 0.99
+              },
+              {
+                "elapsed_s": 1.538171041989699,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 1.15
+              },
+              {
+                "elapsed_s": 2.048487916996237,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 1.31
+              },
+              {
+                "elapsed_s": 2.5563764169928618,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 1.47
+              },
+              {
+                "elapsed_s": 3.065865499986103,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 1.63
+              },
+              {
+                "elapsed_s": 3.5782288330083247,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 1.79
+              },
+              {
+                "elapsed_s": 4.089792167011183,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 1.95
+              },
+              {
+                "elapsed_s": 4.6004727499966975,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 2.11
+              },
+              {
+                "elapsed_s": 5.1146126670064405,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 2.27
+              },
+              {
+                "elapsed_s": 5.627184042008594,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 2.44
+              },
+              {
+                "elapsed_s": 6.139822458004346,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 2.6
+              },
+              {
+                "elapsed_s": 6.647620208008448,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 2.76
+              },
+              {
+                "elapsed_s": 7.160499457997503,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 2.92
+              },
+              {
+                "elapsed_s": 7.670094250002876,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 3.08
+              },
+              {
+                "elapsed_s": 8.181485832988983,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 3.24
+              },
+              {
+                "elapsed_s": 8.691784124996047,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 3.4
+              },
+              {
+                "elapsed_s": 9.20350812500692,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 3.56
+              },
+              {
+                "elapsed_s": 9.713389000011375,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 3.72
+              },
+              {
+                "elapsed_s": 10.224908875010442,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 3.88
+              },
+              {
+                "elapsed_s": 10.736342166987015,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 4.05
+              },
+              {
+                "elapsed_s": 11.245371500001056,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 4.21
+              },
+              {
+                "elapsed_s": 11.755808916990645,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 4.38
+              },
+              {
+                "elapsed_s": 12.264697208011057,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 4.54
+              },
+              {
+                "elapsed_s": 12.776752667006804,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 4.7
+              },
+              {
+                "elapsed_s": 13.286684374994365,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 4.86
+              },
+              {
+                "elapsed_s": 13.795108999998774,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 5.02
+              },
+              {
+                "elapsed_s": 14.304226957989158,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 5.18
+              },
+              {
+                "elapsed_s": 14.810871833004057,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 5.34
+              }
+            ],
+            "errors": [],
+            "status": "ok",
+            "sampled_cpu_percent_one_core": 31.615779912013373,
+            "sampled_peak_rss_bytes": 2654208
+          }
+        },
+        {
+          "target_requests_per_second": 3000.0,
+          "target_fraction_achieved": 0.980760753405467,
+          "requests": 44135,
+          "elapsed_s": 15.000260375003563,
+          "requests_per_second": 2942.282260216401,
+          "latency_median_ms": 0.16412499826401472,
+          "latency_p95_ms": 0.18195799202658236,
+          "command": [
+            "/Users/macbookpro16m2max/Documents/vmfree-runtime/build/vmfree-c",
+            "run",
+            "/Users/macbookpro16m2max/.vmfree/containers/bench-bind-e6909416/rootfs/app/server",
+            "--root",
+            "/Users/macbookpro16m2max/.vmfree/containers/bench-bind-e6909416/rootfs",
+            "--max-steps",
+            "10000000000",
+            "--",
+            "0"
+          ],
+          "startup_to_first_response_ms": 9.448750002775341,
+          "readiness_attempts": 1,
+          "warmup_s": 2.0,
+          "concurrency": 4,
+          "resources": {
+            "scope": "native process",
+            "samples": [
+              {
+                "elapsed_s": 0.006281582987867296,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 0.64
+              },
+              {
+                "elapsed_s": 0.5146262499911245,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 0.8
+              },
+              {
+                "elapsed_s": 1.0261942500073928,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 0.97
+              },
+              {
+                "elapsed_s": 1.5383054580015596,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 1.13
+              },
+              {
+                "elapsed_s": 2.0459288329875562,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 1.29
+              },
+              {
+                "elapsed_s": 2.5548340000095777,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 1.45
+              },
+              {
+                "elapsed_s": 3.0629866250092164,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 1.61
+              },
+              {
+                "elapsed_s": 3.5715702080051415,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 1.77
+              },
+              {
+                "elapsed_s": 4.082971958006965,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 1.93
+              },
+              {
+                "elapsed_s": 4.594641582982149,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 2.1
+              },
+              {
+                "elapsed_s": 5.105638167005964,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 2.25
+              },
+              {
+                "elapsed_s": 5.616955125005916,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 2.41
+              },
+              {
+                "elapsed_s": 6.12430445800419,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 2.57
+              },
+              {
+                "elapsed_s": 6.632693749997998,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 2.73
+              },
+              {
+                "elapsed_s": 7.141701791988453,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 2.89
+              },
+              {
+                "elapsed_s": 7.649423082999419,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 3.05
+              },
+              {
+                "elapsed_s": 8.159958874981385,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 3.21
+              },
+              {
+                "elapsed_s": 8.671796042006463,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 3.37
+              },
+              {
+                "elapsed_s": 9.178658582997741,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 3.52
+              },
+              {
+                "elapsed_s": 9.68821541700163,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 3.68
+              },
+              {
+                "elapsed_s": 10.19790158298565,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 3.83
+              },
+              {
+                "elapsed_s": 10.706137832981767,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 3.99
+              },
+              {
+                "elapsed_s": 11.215592916996684,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 4.15
+              },
+              {
+                "elapsed_s": 11.724359541985905,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 4.31
+              },
+              {
+                "elapsed_s": 12.235550791985588,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 4.46
+              },
+              {
+                "elapsed_s": 12.746302041981835,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 4.62
+              },
+              {
+                "elapsed_s": 13.254642499989131,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 4.78
+              },
+              {
+                "elapsed_s": 13.76260916699539,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 4.93
+              },
+              {
+                "elapsed_s": 14.27517429200816,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 5.09
+              },
+              {
+                "elapsed_s": 14.78308970798389,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 5.25
+              }
+            ],
+            "errors": [],
+            "status": "ok",
+            "sampled_cpu_percent_one_core": 31.19753576688769,
+            "sampled_peak_rss_bytes": 2654208
+          }
+        },
+        {
+          "target_requests_per_second": 3000.0,
+          "target_fraction_achieved": 0.9741170791494408,
+          "requests": 43836,
+          "elapsed_s": 15.000250291021075,
+          "requests_per_second": 2922.3512374483225,
+          "latency_median_ms": 0.16510450222995132,
+          "latency_p95_ms": 0.18224999075755477,
+          "command": [
+            "/Users/macbookpro16m2max/Documents/vmfree-runtime/build/vmfree-c",
+            "run",
+            "/Users/macbookpro16m2max/.vmfree/containers/bench-bind-e6909416/rootfs/app/server",
+            "--root",
+            "/Users/macbookpro16m2max/.vmfree/containers/bench-bind-e6909416/rootfs",
+            "--max-steps",
+            "10000000000",
+            "--",
+            "0"
+          ],
+          "startup_to_first_response_ms": 4.881834000116214,
+          "readiness_attempts": 1,
+          "warmup_s": 2.0,
+          "concurrency": 4,
+          "resources": {
+            "scope": "native process",
+            "samples": [
+              {
+                "elapsed_s": 0.006219542003236711,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 0.63
+              },
+              {
+                "elapsed_s": 0.5157684169826098,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 0.78
+              },
+              {
+                "elapsed_s": 1.0258048749819864,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 0.94
+              },
+              {
+                "elapsed_s": 1.5380136249877978,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 1.1
+              },
+              {
+                "elapsed_s": 2.051034667005297,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 1.26
+              },
+              {
+                "elapsed_s": 2.563894041988533,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 1.42
+              },
+              {
+                "elapsed_s": 3.074115791998338,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 1.58
+              },
+              {
+                "elapsed_s": 3.5868549589940812,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 1.74
+              },
+              {
+                "elapsed_s": 4.095868792006513,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 1.9
+              },
+              {
+                "elapsed_s": 4.608685916988179,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 2.05
+              },
+              {
+                "elapsed_s": 5.121224125003209,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 2.22
+              },
+              {
+                "elapsed_s": 5.6288656249816995,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 2.37
+              },
+              {
+                "elapsed_s": 6.1388796249812,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 2.53
+              },
+              {
+                "elapsed_s": 6.651088541984791,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 2.69
+              },
+              {
+                "elapsed_s": 7.161719708994497,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 2.85
+              },
+              {
+                "elapsed_s": 7.67247975000646,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 3.02
+              },
+              {
+                "elapsed_s": 8.184654459008016,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 3.18
+              },
+              {
+                "elapsed_s": 8.697594041994307,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 3.34
+              },
+              {
+                "elapsed_s": 9.204787750000833,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 3.5
+              },
+              {
+                "elapsed_s": 9.715532917005476,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 3.66
+              },
+              {
+                "elapsed_s": 10.226819834002526,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 3.81
+              },
+              {
+                "elapsed_s": 10.734216916986043,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 3.97
+              },
+              {
+                "elapsed_s": 11.24566975000198,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 4.14
+              },
+              {
+                "elapsed_s": 11.758355666999705,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 4.29
+              },
+              {
+                "elapsed_s": 12.269377333985176,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 4.46
+              },
+              {
+                "elapsed_s": 12.781038624991197,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 4.61
+              },
+              {
+                "elapsed_s": 13.291470625001239,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 4.78
+              },
+              {
+                "elapsed_s": 13.800186791981105,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 4.93
+              },
+              {
+                "elapsed_s": 14.311222374992212,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 5.1
+              },
+              {
+                "elapsed_s": 14.823422374989605,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 5.25
+              }
+            ],
+            "errors": [],
+            "status": "ok",
+            "sampled_cpu_percent_one_core": 31.17997406173626,
+            "sampled_peak_rss_bytes": 2654208
+          }
+        },
+        {
+          "target_requests_per_second": 3000.0,
+          "target_fraction_achieved": 0.9802285756553905,
+          "requests": 44111,
+          "elapsed_s": 15.000242832989898,
+          "requests_per_second": 2940.6857269661714,
+          "latency_median_ms": 0.1652910141274333,
+          "latency_p95_ms": 0.18491697846911848,
+          "command": [
+            "/Users/macbookpro16m2max/Documents/vmfree-runtime/build/vmfree-c",
+            "run",
+            "/Users/macbookpro16m2max/.vmfree/containers/bench-bind-e6909416/rootfs/app/server",
+            "--root",
+            "/Users/macbookpro16m2max/.vmfree/containers/bench-bind-e6909416/rootfs",
+            "--max-steps",
+            "10000000000",
+            "--",
+            "0"
+          ],
+          "startup_to_first_response_ms": 8.047332987189293,
+          "readiness_attempts": 1,
+          "warmup_s": 2.0,
+          "concurrency": 4,
+          "resources": {
+            "scope": "native process",
+            "samples": [
+              {
+                "elapsed_s": 0.005897625000216067,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 0.65
+              },
+              {
+                "elapsed_s": 0.5132947500096634,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 0.8
+              },
+              {
+                "elapsed_s": 1.020072415994946,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 0.97
+              },
+              {
+                "elapsed_s": 1.5276872499962337,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 1.12
+              },
+              {
+                "elapsed_s": 2.037369583005784,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 1.29
+              },
+              {
+                "elapsed_s": 2.54769562499132,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 1.45
+              },
+              {
+                "elapsed_s": 3.056307624996407,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 1.61
+              },
+              {
+                "elapsed_s": 3.568532500008587,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 1.77
+              },
+              {
+                "elapsed_s": 4.07937099999981,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 1.93
+              },
+              {
+                "elapsed_s": 4.592062875017291,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 2.09
+              },
+              {
+                "elapsed_s": 5.104106207989389,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 2.26
+              },
+              {
+                "elapsed_s": 5.615957375004655,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 2.41
+              },
+              {
+                "elapsed_s": 6.123557625018293,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 2.57
+              },
+              {
+                "elapsed_s": 6.632256707991473,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 2.73
+              },
+              {
+                "elapsed_s": 7.14456537499791,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 2.89
+              },
+              {
+                "elapsed_s": 7.654282208008226,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 3.04
+              },
+              {
+                "elapsed_s": 8.164634125016164,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 3.21
+              },
+              {
+                "elapsed_s": 8.67557195801055,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 3.37
+              },
+              {
+                "elapsed_s": 9.184570999990683,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 3.53
+              },
+              {
+                "elapsed_s": 9.692528457992012,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 3.69
+              },
+              {
+                "elapsed_s": 10.200764458015328,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 3.85
+              },
+              {
+                "elapsed_s": 10.712097582989372,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 4.01
+              },
+              {
+                "elapsed_s": 11.21994954100228,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 4.17
+              },
+              {
+                "elapsed_s": 11.730811040994013,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 4.32
+              },
+              {
+                "elapsed_s": 12.243310582998674,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 4.49
+              },
+              {
+                "elapsed_s": 12.755172791017685,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 4.65
+              },
+              {
+                "elapsed_s": 13.26431466601207,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 4.81
+              },
+              {
+                "elapsed_s": 13.77597099999548,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 4.97
+              },
+              {
+                "elapsed_s": 14.287184874992818,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 5.13
+              },
+              {
+                "elapsed_s": 14.795849374990212,
+                "rss_bytes": 2654208,
+                "cpu_seconds": 5.29
+              }
+            ],
+            "errors": [],
+            "status": "ok",
+            "sampled_cpu_percent_one_core": 31.372651367866283,
+            "sampled_peak_rss_bytes": 2654208
+          }
+        }
+      ]
+    },
+    {
+      "name": "Docker Linux VM",
+      "kind": "linux-vm",
+      "samples": [
+        {
+          "target_requests_per_second": 3000.0,
+          "target_fraction_achieved": 0.9793793595786507,
+          "requests": 44073,
+          "elapsed_s": 15.000316125020618,
+          "requests_per_second": 2938.138078735952,
+          "latency_median_ms": 0.2722499775700271,
+          "latency_p95_ms": 0.43579100747592747,
+          "command": [
+            "/opt/homebrew/bin/docker",
+            "--context",
+            "orbstack",
+            "run",
+            "--rm",
+            "--name",
+            "vmfree-bench-62dd0dba",
+            "--platform",
+            "linux/arm64",
+            "-p",
+            "127.0.0.1:52622:18080",
+            "vmfree-benchmark:local"
+          ],
+          "startup_to_first_response_ms": 479.8299579997547,
+          "readiness_attempts": 5,
+          "warmup_s": 2.0,
+          "concurrency": 4,
+          "resources": {
+            "scope": "Docker container",
+            "samples": [
+              {
+                "elapsed_s": 1.5242837499827147,
+                "cpu_percent": 3.07,
+                "memory_usage_and_limit": "1.785MiB / 15.66GiB"
+              },
+              {
+                "elapsed_s": 3.5499754159827717,
+                "cpu_percent": 3.18,
+                "memory_usage_and_limit": "1.777MiB / 15.66GiB"
+              },
+              {
+                "elapsed_s": 5.574881000007736,
+                "cpu_percent": 3.07,
+                "memory_usage_and_limit": "1.777MiB / 15.66GiB"
+              },
+              {
+                "elapsed_s": 7.600941749988124,
+                "cpu_percent": 3.02,
+                "memory_usage_and_limit": "1.777MiB / 15.66GiB"
+              },
+              {
+                "elapsed_s": 9.624039791000541,
+                "cpu_percent": 3.07,
+                "memory_usage_and_limit": "968KiB / 15.66GiB"
+              },
+              {
+                "elapsed_s": 11.650359374994878,
+                "cpu_percent": 3.03,
+                "memory_usage_and_limit": "968KiB / 15.66GiB"
+              },
+              {
+                "elapsed_s": 13.672833874996286,
+                "cpu_percent": 3.14,
+                "memory_usage_and_limit": "968KiB / 15.66GiB"
+              }
+            ],
+            "errors": [],
+            "status": "ok"
+          }
+        },
+        {
+          "target_requests_per_second": 3000.0,
+          "target_fraction_achieved": 0.9874695591726096,
+          "requests": 44437,
+          "elapsed_s": 15.00029362499481,
+          "requests_per_second": 2962.408677517829,
+          "latency_median_ms": 0.2708329993765801,
+          "latency_p95_ms": 0.414082984207198,
+          "command": [
+            "/opt/homebrew/bin/docker",
+            "--context",
+            "orbstack",
+            "run",
+            "--rm",
+            "--name",
+            "vmfree-bench-62dd0dba",
+            "--platform",
+            "linux/arm64",
+            "-p",
+            "127.0.0.1:52622:18080",
+            "vmfree-benchmark:local"
+          ],
+          "startup_to_first_response_ms": 346.2490829988383,
+          "readiness_attempts": 5,
+          "warmup_s": 2.0,
+          "concurrency": 4,
+          "resources": {
+            "scope": "Docker container",
+            "samples": [
+              {
+                "elapsed_s": 1.5226043750008103,
+                "cpu_percent": 3.02,
+                "memory_usage_and_limit": "1.164MiB / 15.66GiB"
+              },
+              {
+                "elapsed_s": 3.545392208994599,
+                "cpu_percent": 2.98,
+                "memory_usage_and_limit": "1.164MiB / 15.66GiB"
+              },
+              {
+                "elapsed_s": 5.567505750019336,
+                "cpu_percent": 3.06,
+                "memory_usage_and_limit": "1.164MiB / 15.66GiB"
+              },
+              {
+                "elapsed_s": 7.594457500003045,
+                "cpu_percent": 3.11,
+                "memory_usage_and_limit": "1.164MiB / 15.66GiB"
+              },
+              {
+                "elapsed_s": 9.619319667021045,
+                "cpu_percent": 2.98,
+                "memory_usage_and_limit": "1.164MiB / 15.66GiB"
+              },
+              {
+                "elapsed_s": 11.646024292014772,
+                "cpu_percent": 2.99,
+                "memory_usage_and_limit": "1.164MiB / 15.66GiB"
+              },
+              {
+                "elapsed_s": 13.674669291998725,
+                "cpu_percent": 3.15,
+                "memory_usage_and_limit": "1.164MiB / 15.66GiB"
+              }
+            ],
+            "errors": [],
+            "status": "ok"
+          }
+        },
+        {
+          "target_requests_per_second": 3000.0,
+          "target_fraction_achieved": 0.9829043458464972,
+          "requests": 44232,
+          "elapsed_s": 15.000442374992417,
+          "requests_per_second": 2948.713037539492,
+          "latency_median_ms": 0.2737079921644181,
+          "latency_p95_ms": 0.4182090051472187,
+          "command": [
+            "/opt/homebrew/bin/docker",
+            "--context",
+            "orbstack",
+            "run",
+            "--rm",
+            "--name",
+            "vmfree-bench-62dd0dba",
+            "--platform",
+            "linux/arm64",
+            "-p",
+            "127.0.0.1:52622:18080",
+            "vmfree-benchmark:local"
+          ],
+          "startup_to_first_response_ms": 385.2762909955345,
+          "readiness_attempts": 5,
+          "warmup_s": 2.0,
+          "concurrency": 4,
+          "resources": {
+            "scope": "Docker container",
+            "samples": [
+              {
+                "elapsed_s": 1.5245748750166968,
+                "cpu_percent": 3.18,
+                "memory_usage_and_limit": "1.934MiB / 15.66GiB"
+              },
+              {
+                "elapsed_s": 3.5500284580048174,
+                "cpu_percent": 3.04,
+                "memory_usage_and_limit": "1.934MiB / 15.66GiB"
+              },
+              {
+                "elapsed_s": 5.581655749992933,
+                "cpu_percent": 3.13,
+                "memory_usage_and_limit": "1.934MiB / 15.66GiB"
+              },
+              {
+                "elapsed_s": 7.609220083017135,
+                "cpu_percent": 2.93,
+                "memory_usage_and_limit": "1.934MiB / 15.66GiB"
+              },
+              {
+                "elapsed_s": 9.630590292013949,
+                "cpu_percent": 2.93,
+                "memory_usage_and_limit": "1.934MiB / 15.66GiB"
+              },
+              {
+                "elapsed_s": 11.671944542002166,
+                "cpu_percent": 3.26,
+                "memory_usage_and_limit": "1.93MiB / 15.66GiB"
+              },
+              {
+                "elapsed_s": 13.695966917002806,
+                "cpu_percent": 3.02,
+                "memory_usage_and_limit": "1.93MiB / 15.66GiB"
+              }
+            ],
+            "errors": [],
+            "status": "ok"
+          }
+        },
+        {
+          "target_requests_per_second": 3000.0,
+          "target_fraction_achieved": 0.987132086489616,
+          "requests": 44422,
+          "elapsed_s": 15.000356625008862,
+          "requests_per_second": 2961.3962594688483,
+          "latency_median_ms": 0.26775000151246786,
+          "latency_p95_ms": 0.4121669917367399,
+          "command": [
+            "/opt/homebrew/bin/docker",
+            "--context",
+            "orbstack",
+            "run",
+            "--rm",
+            "--name",
+            "vmfree-bench-62dd0dba",
+            "--platform",
+            "linux/arm64",
+            "-p",
+            "127.0.0.1:52622:18080",
+            "vmfree-benchmark:local"
+          ],
+          "startup_to_first_response_ms": 348.71720799128525,
+          "readiness_attempts": 5,
+          "warmup_s": 2.0,
+          "concurrency": 4,
+          "resources": {
+            "scope": "Docker container",
+            "samples": [
+              {
+                "elapsed_s": 1.5223939169954974,
+                "cpu_percent": 3.02,
+                "memory_usage_and_limit": "776KiB / 15.66GiB"
+              },
+              {
+                "elapsed_s": 3.5460548749833833,
+                "cpu_percent": 2.95,
+                "memory_usage_and_limit": "1.008MiB / 15.66GiB"
+              },
+              {
+                "elapsed_s": 5.570436874986626,
+                "cpu_percent": 2.98,
+                "memory_usage_and_limit": "1.008MiB / 15.66GiB"
+              },
+              {
+                "elapsed_s": 7.594707874988671,
+                "cpu_percent": 3.01,
+                "memory_usage_and_limit": "1.008MiB / 15.66GiB"
+              },
+              {
+                "elapsed_s": 9.61874729199917,
+                "cpu_percent": 3.09,
+                "memory_usage_and_limit": "1.008MiB / 15.66GiB"
+              },
+              {
+                "elapsed_s": 11.642077332973713,
+                "cpu_percent": 3.16,
+                "memory_usage_and_limit": "1.008MiB / 15.66GiB"
+              },
+              {
+                "elapsed_s": 13.661284166999394,
+                "cpu_percent": 3.0,
+                "memory_usage_and_limit": "1.008MiB / 15.66GiB"
+              }
+            ],
+            "errors": [],
+            "status": "ok"
+          }
+        }
+      ]
+    }
+  ],
+  "methodology": "Alternating AB/BA rounds; fresh launch each sample; warmup excluded from throughput; startup includes launcher and forwarding readiness; resources sampled during load; pending final requests included in elapsed time; native budget 10 billion instructions",
+  "limitations": "Native RSS and Docker CLI memory are different metrics. Docker stats excludes whole-VM overhead. Resource polling perturbs timings; use the separate uninstrumented report for performance. Python client can limit throughput.",
+  "matched_rate_achieved": true,
+  "resource_collection_completed": true
+}

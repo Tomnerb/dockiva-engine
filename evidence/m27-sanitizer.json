@@ -1,0 +1,223 @@
+{
+  "passed": true,
+  "checks": [
+    {
+      "probe": "probe",
+      "mode": [],
+      "cache": [],
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "cwd inheritance, isolation, shared offsets and boundaries passed\n",
+      "stderr": ""
+    },
+    {
+      "probe": "probe",
+      "mode": [],
+      "cache": [
+        "--no-decode-cache"
+      ],
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "cwd inheritance, isolation, shared offsets and boundaries passed\n",
+      "stderr": ""
+    },
+    {
+      "probe": "probe",
+      "mode": [],
+      "cache": [
+        "--no-lookup-cache"
+      ],
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "cwd inheritance, isolation, shared offsets and boundaries passed\n",
+      "stderr": ""
+    },
+    {
+      "probe": "probe",
+      "mode": [
+        "--schedule"
+      ],
+      "cache": [],
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "cwd inheritance, isolation, shared offsets and boundaries passed\n",
+      "stderr": ""
+    },
+    {
+      "probe": "probe",
+      "mode": [
+        "--schedule"
+      ],
+      "cache": [
+        "--no-decode-cache"
+      ],
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "cwd inheritance, isolation, shared offsets and boundaries passed\n",
+      "stderr": ""
+    },
+    {
+      "probe": "probe",
+      "mode": [
+        "--schedule"
+      ],
+      "cache": [
+        "--no-lookup-cache"
+      ],
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "cwd inheritance, isolation, shared offsets and boundaries passed\n",
+      "stderr": ""
+    },
+    {
+      "probe": "probe",
+      "mode": [
+        "--process-tree"
+      ],
+      "cache": [],
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "cwd inheritance, isolation, shared offsets and boundaries passed\n",
+      "stderr": ""
+    },
+    {
+      "probe": "probe",
+      "mode": [
+        "--process-tree"
+      ],
+      "cache": [
+        "--no-decode-cache"
+      ],
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "cwd inheritance, isolation, shared offsets and boundaries passed\n",
+      "stderr": ""
+    },
+    {
+      "probe": "probe",
+      "mode": [
+        "--process-tree"
+      ],
+      "cache": [
+        "--no-lookup-cache"
+      ],
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "cwd inheritance, isolation, shared offsets and boundaries passed\n",
+      "stderr": ""
+    },
+    {
+      "probe": "directory",
+      "mode": [],
+      "cache": [],
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "fchdir, shared directory cursor and descriptor lifetime passed\n",
+      "stderr": ""
+    },
+    {
+      "probe": "directory",
+      "mode": [],
+      "cache": [
+        "--no-decode-cache"
+      ],
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "fchdir, shared directory cursor and descriptor lifetime passed\n",
+      "stderr": ""
+    },
+    {
+      "probe": "directory",
+      "mode": [],
+      "cache": [
+        "--no-lookup-cache"
+      ],
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "fchdir, shared directory cursor and descriptor lifetime passed\n",
+      "stderr": ""
+    },
+    {
+      "probe": "directory",
+      "mode": [
+        "--schedule"
+      ],
+      "cache": [],
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "fchdir, shared directory cursor and descriptor lifetime passed\n",
+      "stderr": ""
+    },
+    {
+      "probe": "directory",
+      "mode": [
+        "--schedule"
+      ],
+      "cache": [
+        "--no-decode-cache"
+      ],
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "fchdir, shared directory cursor and descriptor lifetime passed\n",
+      "stderr": ""
+    },
+    {
+      "probe": "directory",
+      "mode": [
+        "--schedule"
+      ],
+      "cache": [
+        "--no-lookup-cache"
+      ],
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "fchdir, shared directory cursor and descriptor lifetime passed\n",
+      "stderr": ""
+    },
+    {
+      "probe": "directory",
+      "mode": [
+        "--process-tree"
+      ],
+      "cache": [],
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "fchdir, shared directory cursor and descriptor lifetime passed\n",
+      "stderr": ""
+    },
+    {
+      "probe": "directory",
+      "mode": [
+        "--process-tree"
+      ],
+      "cache": [
+        "--no-decode-cache"
+      ],
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "fchdir, shared directory cursor and descriptor lifetime passed\n",
+      "stderr": ""
+    },
+    {
+      "probe": "directory",
+      "mode": [
+        "--process-tree"
+      ],
+      "cache": [
+        "--no-lookup-cache"
+      ],
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "fchdir, shared directory cursor and descriptor lifetime passed\n",
+      "stderr": ""
+    },
+    {
+      "name": "upstream_ash_cd",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "/a\n/a/b\n/a\nhi\n",
+      "stderr": ""
+    }
+  ],
+  "runtime_sha256": "dd85433e74d201ee4ffb16da1f2ae8843a9dcf87c75be1e6317f29b8bcbc6fa6"
+}

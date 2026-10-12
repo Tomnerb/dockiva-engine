@@ -1,0 +1,8 @@
+cancelled child; sibling and parent survived
+PASS cancelled task released memory, descriptors and pipe references
+cancelled child; sibling and parent survived
+PASS cancelled task released memory, descriptors and pipe references
+cancelled child; sibling and parent survived
+PASS cancelled task released memory, descriptors and pipe references
+PASS cancelled task released memory, descriptors and pipe references
+PASS cancelled task released memory, descriptors and pipe references

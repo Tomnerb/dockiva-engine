@@ -1,0 +1,183 @@
+{
+  "milestone": 25,
+  "host": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+  "results": [
+    {
+      "name": "fixture_hashes",
+      "passed": true
+    },
+    {
+      "name": "handler",
+      "passed": true,
+      "code": 0,
+      "stdout": "signal frame, registers and SIMD restored\n",
+      "stderr": ""
+    },
+    {
+      "name": "bad-frame",
+      "passed": true,
+      "code": 0,
+      "stdout": "bad signal frame terminated only its guest\n",
+      "stderr": ""
+    },
+    {
+      "name": "stop-continue",
+      "passed": true,
+      "code": 0,
+      "stdout": "stop, continue and exit statuses preserved\n",
+      "stderr": ""
+    },
+    {
+      "name": "interrupt-read",
+      "passed": true,
+      "code": 0,
+      "stdout": "blocked read signal policy preserved\n",
+      "stderr": ""
+    },
+    {
+      "name": "restart-read",
+      "passed": true,
+      "code": 0,
+      "stdout": "blocked read signal policy preserved\n",
+      "stderr": ""
+    },
+    {
+      "name": "handler--no-decode-cache",
+      "passed": true,
+      "code": 0,
+      "stdout": "signal frame, registers and SIMD restored\n",
+      "stderr": ""
+    },
+    {
+      "name": "bad-frame--no-decode-cache",
+      "passed": true,
+      "code": 0,
+      "stdout": "bad signal frame terminated only its guest\n",
+      "stderr": ""
+    },
+    {
+      "name": "stop-continue--no-decode-cache",
+      "passed": true,
+      "code": 0,
+      "stdout": "stop, continue and exit statuses preserved\n",
+      "stderr": ""
+    },
+    {
+      "name": "interrupt-read--no-decode-cache",
+      "passed": true,
+      "code": 0,
+      "stdout": "blocked read signal policy preserved\n",
+      "stderr": ""
+    },
+    {
+      "name": "restart-read--no-decode-cache",
+      "passed": true,
+      "code": 0,
+      "stdout": "blocked read signal policy preserved\n",
+      "stderr": ""
+    },
+    {
+      "name": "handler--no-lookup-cache",
+      "passed": true,
+      "code": 0,
+      "stdout": "signal frame, registers and SIMD restored\n",
+      "stderr": ""
+    },
+    {
+      "name": "bad-frame--no-lookup-cache",
+      "passed": true,
+      "code": 0,
+      "stdout": "bad signal frame terminated only its guest\n",
+      "stderr": ""
+    },
+    {
+      "name": "stop-continue--no-lookup-cache",
+      "passed": true,
+      "code": 0,
+      "stdout": "stop, continue and exit statuses preserved\n",
+      "stderr": ""
+    },
+    {
+      "name": "interrupt-read--no-lookup-cache",
+      "passed": true,
+      "code": 0,
+      "stdout": "blocked read signal policy preserved\n",
+      "stderr": ""
+    },
+    {
+      "name": "restart-read--no-lookup-cache",
+      "passed": true,
+      "code": 0,
+      "stdout": "blocked read signal policy preserved\n",
+      "stderr": ""
+    },
+    {
+      "name": "trap_int",
+      "passed": true,
+      "code": 0,
+      "stdout": "caught\nresumed\n",
+      "stderr": ""
+    },
+    {
+      "name": "trap_usr1",
+      "passed": true,
+      "code": 0,
+      "stdout": "user\ndone\n",
+      "stderr": ""
+    },
+    {
+      "name": "child_handler",
+      "passed": true,
+      "code": 0,
+      "stdout": "hi\nchild\ndone\n",
+      "stderr": ""
+    },
+    {
+      "name": "nested_shell",
+      "passed": true,
+      "code": 0,
+      "stdout": "nested\ndone\n",
+      "stderr": ""
+    },
+    {
+      "name": "ctrl_z_stopped_job",
+      "passed": true
+    },
+    {
+      "name": "background_read_stops_group",
+      "passed": true
+    },
+    {
+      "name": "fg_and_ctrl_c_preserve_shell",
+      "passed": true
+    },
+    {
+      "name": "interactive_exit",
+      "passed": true,
+      "transcript": "/ # cat\r\nforeground-data\r\ncat\r\nforeground-data\r\n^Z[1]+  Stopped                    cat\r\n/ # jobs\r\njobs\r\n[1]+  Stopped                    cat\r\n/ # bg\r\nbg\r\n[1] cat\r\n/ # jobs\r\njobs\r\n[1]+  Stopped (tty input)        cat\r\n/ # fg\r\nfg\r\ncat\r\nresumed-data\r\nresumed-data\r\n^C\r\n/ # echo shell-survived\r\necho shell-survived\r\nshell-survived\r\n/ # exit\r\nexit\r\n"
+    },
+    {
+      "name": "terminal_preserved",
+      "passed": true
+    }
+  ],
+  "passed": true,
+  "linux_reference": "not-run",
+  "runtime_sha256": "155c0e1803578cbff38bb89b7e50de60e7059cbcfedbc0fd7642cda3524b8616",
+  "source_hashes": {
+    "native/compat.h": "59daa0e3aead1a35c2fb5c677f7840395f3f1624f2fc658e471438e5e0c927b1",
+    "native/decode.h": "c148aabeab53c3347b17b8505b92f00bcc0a10edcaa9d2206822a7f7d6c37612",
+    "native/fs.h": "3414dac9a7e75689beb3a1d8831d5f4bfb8b0c87676f84a0bda6ab91fab26ebf",
+    "native/heap.h": "97655ddcfec1ca4d299ec6eca42131cb22c4b0f2b5ca9df3a74e9312ad552d3f",
+    "native/io.h": "585c871add9b6ebbdab26db333d52a1566de353ee98e93f9f84ba568c7210b30",
+    "native/mapping.h": "e325a9fec91b0a72c8f4c8b051109e195cc260b8e452e82268d5b996ca4c9035",
+    "native/net.h": "e7fcdcdfa0cfc9bbb2f8379cb62a56e0cda761c0e33e829946b66efb50740179",
+    "native/process.h": "96ef448705b236117b644859a17cbd44e4fd65d122b53dd30054735bff57150d",
+    "native/profile.h": "d69dbabe6c7a9c2aa35f625f26ede05e95e02e70c0a32da6882ed3689bf0af51",
+    "native/resources.h": "941ba34cf44b05fc8bbbb90f4b5f600de3ac60860e84740f8759b083684f5b8e",
+    "native/runtime.c": "ac978ef12b2fb992bcf8ca4bc87557136871376be64d653e69581151615c887c",
+    "native/scheduler.h": "c31830a52fa5570c21f788c5dd58ed6f15231b74244037046d1c1ca405ddfe3f",
+    "native/signals.h": "58a20facd481c314054d2d05fba1b1e0eb9024f60ee40c02eb314f26a9e12be7",
+    "native/terminal.h": "10f1b04367e1b9ebde1f4888cd1fb85ec4cfc3b4265bde57419cd1bf7594851c"
+  }
+}

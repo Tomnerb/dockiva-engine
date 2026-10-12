@@ -1,0 +1,28 @@
+{
+  "scope": "Prepared unchanged ELF fixtures; no Docker execution or fallback. No persistence qualification.",
+  "runtime_sha256": "2d438cdea89792d59ebc7774219976a5aa06690cbcae0f990fc2ffc153eeba01",
+  "results": [
+    {
+      "database": "redis",
+      "image_id": "sha256:3b0f54bf27a77c98d319dc3a6706ed500a8985309f0b6c6407599b869f4a2bd9",
+      "service_qualified": false,
+      "version": {
+        "exit_code": 125,
+        "stdout": "",
+        "stderr": "instruction=0x1e601821 pc=0x4a0ab0\nvmfree: Instruction unsupported\n",
+        "wall_seconds": 0.5919576250016689
+      },
+      "startup": {
+        "stage": "temporary memory-only server and PING/SET/GET; persistence untested",
+        "ready": false,
+        "queries": [],
+        "process": {
+          "exit_code": 125,
+          "stdout": "",
+          "stderr": "instruction=0x1e601821 pc=0x4a0ab0\nvmfree: Instruction unsupported\n",
+          "wall_seconds": 0.11523416699492373
+        }
+      }
+    }
+  ]
+}

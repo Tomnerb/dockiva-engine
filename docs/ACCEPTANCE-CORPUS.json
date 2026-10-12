@@ -1,0 +1,157 @@
+{
+  "schema_version": 1,
+  "scope": "Apple Silicon macOS, Linux ARM64 developer and local CI workflows",
+  "status": "prototype fixtures pinned; production artifacts not yet pinned",
+  "prototype_fixtures": {
+    "examples/m22/probe.elf": "407e7ab740915a911234d3ebf14a1a70ad774f133681d234bf9c5a591de01b02",
+    "examples/m22/start.S": "253f11a8cfde7262d98005e5dac3b2e8ce2a80e05fe9cb9d9ee91fe189006332",
+    "examples/m22/shell.c": "4bf361b4b126d81f50a2a7eabad1c83dd11cec108e7fbfb8a0fe10f8034b72c7",
+    "examples/m22/shell.elf": "e3dc29bea1998ad474e82ff72b7686624231dee28ca49e4d61a864ddcecb0962",
+    "examples/m22/syscall.h": "f7e9507db910803c0ef72c8b1ea0823fb63c5f2cca1f480f91a8fa762794d969",
+    "examples/m22/probe.c": "1c91362fa93732a28c7e48afd88561c51b6a366bc81afd2c280f54744e4246b0",
+    "examples/m18/busybox.elf": "09c8bba5ddaf0c75128efcbd8df33b54d5062cd5402838ce6b8b746f3b55e3d9"
+  },
+  "production_targets": [
+    {
+      "id": "compose-web-api-database-cache",
+      "milestone": 53,
+      "artifact_digest": null,
+      "status": "unselected; release blocker",
+      "workload": "frontend requests through API to PostgreSQL and Redis; persistence across restart and recreate"
+    },
+    {
+      "id": "python-service",
+      "milestone": 40,
+      "artifact_digest": null,
+      "status": "unselected; release blocker",
+      "workload": "package and native-extension loading, workers, HTTP requests and graceful shutdown"
+    },
+    {
+      "id": "go-service",
+      "milestone": 41,
+      "artifact_digest": null,
+      "status": "unselected; release blocker",
+      "workload": "HTTP requests, goroutines, timers, GC pressure and shutdown"
+    },
+    {
+      "id": "node-service",
+      "milestone": 42,
+      "artifact_digest": null,
+      "status": "unselected; release blocker",
+      "workload": "HTTP requests, workers, native addon, JIT and memory pressure"
+    },
+    {
+      "id": "java-service",
+      "milestone": 43,
+      "artifact_digest": null,
+      "status": "unselected; release blocker",
+      "workload": "HTTP requests, threads, JIT, GC pressure and graceful shutdown"
+    },
+    {
+      "id": "sqlite",
+      "milestone": 46,
+      "artifact_digest": null,
+      "status": "unselected; release blocker",
+      "workload": "concurrent transactions, forced termination, reopen and integrity check"
+    },
+    {
+      "id": "redis",
+      "milestone": 46,
+      "artifact_digest": null,
+      "status": "unselected; release blocker",
+      "workload": "concurrent clients, persistence, forced termination and recovery"
+    },
+    {
+      "id": "postgresql",
+      "milestone": 47,
+      "artifact_digest": null,
+      "status": "unselected; release blocker",
+      "workload": "initialization, transactions, checkpoints, crash recovery and upstream regressions"
+    },
+    {
+      "id": "dockerfile-build",
+      "milestone": 64,
+      "artifact_digest": null,
+      "status": "unselected; release blocker",
+      "workload": "RUN/COPY/ADD, multistage builds, ignore rules and repeated builds"
+    }
+  ],
+  "comparison_requirements": {
+    "baseline": "Docker Desktop on the same Mac; report other VM providers separately",
+    "metrics": [
+      "startup",
+      "throughput",
+      "p50/p95/p99 latency",
+      "build duration",
+      "total host CPU",
+      "total resident and peak RAM",
+      "disk growth",
+      "energy and battery drain"
+    ],
+    "conditions": [
+      "pin images, clients, host OS and hardware",
+      "identical workload and resource limits",
+      "include idle and sustained loads",
+      "account for runtime, supervisors, services and VM overhead",
+      "record raw samples, repetitions and uncertainty",
+      "freeze workload sizes and thresholds before performance qualification"
+    ],
+    "measured_savings": null
+  },
+  "implemented_candidates": [
+    {
+      "id": "upstream-static-ash",
+      "milestone": 24,
+      "manifest": "examples/m24/build-manifest.json",
+      "status": "scoped shell checks passed"
+    },
+    {
+      "id": "dynamic-musl-busybox",
+      "milestone": 28,
+      "manifest": "examples/m28/build-manifest.json",
+      "status": "scoped loader/shell checks passed"
+    },
+    {
+      "id": "loopback-http-artifact-fetcher",
+      "milestone": 29,
+      "manifest": "examples/m29/build-manifest.json",
+      "status": "candidate; not broad application-stack acceptance"
+    }
+  ],
+  "database_probe_candidates": [
+    {
+      "id": "postgresql",
+      "image_id": "sha256:d394728dee24b7791f1969c683f8b8410fe57450713a1db2aff5a500f0f98ab0",
+      "repository_digests": [
+        "postgres@sha256:4e6e670bb069649261c9c18031f0aded7bb249a5b6664ddec29c013a89310d50"
+      ],
+      "binary": "/usr/local/bin/postgres",
+      "binary_sha256": "994e3a2448fd13599d04f5d2e99d11f9b93364abadea0c9662fcd29f10a12c43",
+      "linux_version": "postgres (PostgreSQL) 16.13",
+      "status": "version matches Linux; initdb creates configuration but bootstrap fails on missing /dev/null and process capacity; SQL and persistence unqualified",
+      "probe_evidence": "evidence/database-services.json"
+    },
+    {
+      "id": "redis",
+      "image_id": "sha256:3b0f54bf27a77c98d319dc3a6706ed500a8985309f0b6c6407599b869f4a2bd9",
+      "repository_digests": [],
+      "binary": "/usr/local/bin/redis-server",
+      "binary_sha256": "0861b9b93d67227b1fc87129eaec6cd8dad1317817a0211421fb908edd06fc54",
+      "linux_version": "Redis server v=7.4.2 sha=00000000:0 malloc=jemalloc-5.3.0 bits=64 build=3dfb3660d0f5a2e7",
+      "status": "startup blocked by scalar FDIV 0x1e601821; queries and persistence unqualified",
+      "probe_evidence": "evidence/database-services.json"
+    },
+    {
+      "id": "valkey",
+      "image_id": "sha256:d33b8c582a23d02e46689d5d98a19853e1ae9a1215595c68b64da4476911d67e",
+      "repository_digests": [
+        "valkey/valkey@sha256:34ecbbe536de15b4750d0c76701eb6b889c6de9b697f782e73165f3ef9cc17c0"
+      ],
+      "binary": "/usr/local/bin/valkey-server",
+      "binary_sha256": "6b2a952ca8fc22a2c63ccd4b1e831cdc295c64dc4fd13e6f1faaa725aea2ea8b",
+      "linux_version": "Valkey server v=9.0.0 sha=00000000:0 malloc=jemalloc-5.3.0 bits=64 build=ac1863d4f29109f7",
+      "status": "startup blocked by scalar FDIV 0x1e7f1bde; queries and persistence unqualified",
+      "probe_evidence": "evidence/database-services.json"
+    }
+  ]
+}

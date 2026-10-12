@@ -1,0 +1,1 @@
+PASS classification equivalence, collisions, unknown words, modified code, PC-relative execution, fetch permissions and bounded storage

@@ -1,0 +1,14 @@
+[
+  {
+    "run": 1,
+    "passed": true,
+    "body": "VM-free HTTP server OK\n",
+    "server_exit": 0
+  },
+  {
+    "run": 2,
+    "passed": true,
+    "body": "VM-free HTTP server OK\n",
+    "server_exit": 0
+  }
+]

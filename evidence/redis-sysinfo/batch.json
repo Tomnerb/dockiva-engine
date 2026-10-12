@@ -1,0 +1,33 @@
+{
+  "started_at": "2026-09-22T00:30:22+00:00",
+  "finished_at": "2026-09-22T00:35:53.703097+00:00",
+  "elapsed_seconds": 331.7,
+  "limits": {
+    "tokens": 10000,
+    "seconds": 1800
+  },
+  "token_usage": "Exact per-batch counter unavailable; no measured token total claimed.",
+  "sysinfo_implemented": true,
+  "scope": "Linux ARM64 ABI with guest allocation-budget policy; load averages remain zero placeholders",
+  "service_qualified": false,
+  "next_observed_syscall": 20,
+  "dockiva_modified": false,
+  "validation": {
+    "abi_engines": [
+      "interpreter",
+      "unicorn",
+      "Linux reference"
+    ],
+    "native_sanitizer": "passed",
+    "adapter_tests": 14,
+    "python_tests": 53
+  },
+  "source_hashes": {
+    "native/sysinfo.h": "5942e5f25c1564a250ace4ac3f1d832a8438ee7e3686718122fc63616a0ba02f",
+    "native/syscall.h": "ac8d24e99d2dea202487a46abff750e55e645b783d1ee555b8229f487ddc135f",
+    "native/runtime.c": "bb19027d5f66f3e53774eb18a540a7d57af78198750142ac97565daa49c386cb",
+    "tests/native/sysinfo.c": "6b3f13166fedb7dab1ec86261c9cedb5eacbc23fa444ee8db4457c2ef0977383",
+    "tests/native/sysinfo_guest.c": "706ec25de6ced703639364de4a6c954dedb060932cd8e169431600e1f25848b8",
+    "scripts/verify_sysinfo.py": "537f851e6a95120302fc601a8db2e42e8110ec304ff1b30c0fb413d3df7a9c24"
+  }
+}

@@ -1,0 +1,10 @@
+network, CPU and pipe siblings completed
+PASS 5 network suspensions; guest sockets, tasks and pipes released
+blocked socket cancelled; CPU and pipe siblings survived
+PASS 2 network suspensions; guest sockets, tasks and pipes released
+network, CPU and pipe siblings completed
+PASS 7 network suspensions; guest sockets, tasks and pipes released
+poll timeout completed
+PASS 1 network suspensions; guest sockets, tasks and pipes released
+accept timeout and guest nonblocking flags preserved
+PASS 1 network suspensions; guest sockets, tasks and pipes released

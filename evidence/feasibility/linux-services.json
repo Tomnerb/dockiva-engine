@@ -1,0 +1,171 @@
+{
+  "scope": "Stock pinned images on OrbStack Linux ARM64; no VM-free execution or Docker Desktop performance claim; no load qualification",
+  "results": [
+    {
+      "database": "redis",
+      "image_id": "sha256:3b0f54bf27a77c98d319dc3a6706ed500a8985309f0b6c6407599b869f4a2bd9",
+      "checks": [
+        {
+          "request": [
+            "SET",
+            "feasibility",
+            "persisted"
+          ],
+          "expected": "OK",
+          "stdout": "OK\n",
+          "stderr": "",
+          "exit_code": 0,
+          "passed": true
+        },
+        {
+          "request": [
+            "GET",
+            "feasibility"
+          ],
+          "expected": "persisted",
+          "stdout": "persisted\n",
+          "stderr": "",
+          "exit_code": 0,
+          "passed": true
+        },
+        {
+          "request": [
+            "GET",
+            "feasibility"
+          ],
+          "expected": "persisted",
+          "stdout": "persisted\n",
+          "stderr": "",
+          "exit_code": 0,
+          "passed": true
+        },
+        {
+          "request": [
+            "GET",
+            "feasibility"
+          ],
+          "expected": "persisted",
+          "stdout": "persisted\n",
+          "stderr": "",
+          "exit_code": 0,
+          "passed": true
+        }
+      ],
+      "trace_tool_available": false,
+      "process_snapshot": "PID                 PPID                COMMAND\n15396               15378               redis-server\n",
+      "main_process_status": "Name:\tredis-server\nUmask:\t0077\nState:\tS (sleeping)\nTgid:\t1\nNgid:\t0\nPid:\t1\nPPid:\t0\nTracerPid:\t0\nUid:\t999\t999\t999\t999\nGid:\t999\t999\t999\t999\nFDSize:\t64\nGroups:\t \nNStgid:\t1\nNSpid:\t1\nNSpgid:\t1\nNSsid:\t1\nKthread:\t0\nVmPeak:\t  208140 kB\nVmSize:\t  142604 kB\nVmLck:\t       0 kB\nVmPin:\t       0 kB\nVmHWM:\t   11652 kB\nVmRSS:\t   11652 kB\nRssAnon:\t    4380 kB\nRssFile:\t    7272 kB\nRssShmem:\t       0 kB\nVmData:\t   66008 kB\nVmStk:\t     132 kB\nVmExe:\t    3160 kB\nVmLib:\t    6844 kB\nVmPTE:\t     128 kB\nVmSwap:\t       0 kB\nCoreDumping:\t0\nTHP_enabled:\t1\nuntag_mask:\t0xffffffffffffff\nThreads:\t6\nSigQ:\t0/64280\nSigPnd:\t0000000000000000\nShdPnd:\t0000000000000000\nSigBlk:\t0000000000000000\nSigIgn:\t0000000200001001\nSigCgt:\t0000000100006cea\nCapInh:\t0000000000000000\nCapPrm:\t0000000000000000\nCapEff:\t0000000000000000\nCapBnd:\t00000000a80425fb\nCapAmb:\t0000000000000000\nNoNewPrivs:\t0\nSeccomp:\t2\nSeccomp_filters:\t1\nSpeculation_Store_Bypass:\tvulnerable\nSpeculationIndirectBranch:\tunknown\nCpus_allowed:\tfff\nCpus_allowed_list:\t0-11\nMems_allowed:\t1\nMems_allowed_list:\t0\nvoluntary_ctxt_switches:\t54\nnonvoluntary_ctxt_switches:\t32\n0\n1\n10\n11\n12\n2\n3\n4\n5\n6\n7\n8\n9\n",
+      "result": "pass query, graceful restart and SIGKILL recovery for one acknowledged write",
+      "container_cleanup": 0,
+      "volume_cleanup": 0
+    },
+    {
+      "database": "valkey",
+      "image_id": "sha256:d33b8c582a23d02e46689d5d98a19853e1ae9a1215595c68b64da4476911d67e",
+      "checks": [
+        {
+          "request": [
+            "SET",
+            "feasibility",
+            "persisted"
+          ],
+          "expected": "OK",
+          "stdout": "OK\n",
+          "stderr": "",
+          "exit_code": 0,
+          "passed": true
+        },
+        {
+          "request": [
+            "GET",
+            "feasibility"
+          ],
+          "expected": "persisted",
+          "stdout": "persisted\n",
+          "stderr": "",
+          "exit_code": 0,
+          "passed": true
+        },
+        {
+          "request": [
+            "GET",
+            "feasibility"
+          ],
+          "expected": "persisted",
+          "stdout": "persisted\n",
+          "stderr": "",
+          "exit_code": 0,
+          "passed": true
+        },
+        {
+          "request": [
+            "GET",
+            "feasibility"
+          ],
+          "expected": "persisted",
+          "stdout": "persisted\n",
+          "stderr": "",
+          "exit_code": 0,
+          "passed": true
+        }
+      ],
+      "trace_tool_available": false,
+      "process_snapshot": "PID                 PPID                COMMAND\n15784               15766               valkey-server\n",
+      "main_process_status": "Name:\tvalkey-server\nUmask:\t0077\nState:\tS (sleeping)\nTgid:\t1\nNgid:\t0\nPid:\t1\nPPid:\t0\nTracerPid:\t0\nUid:\t999\t999\t999\t999\nGid:\t999\t999\t999\t999\nFDSize:\t64\nGroups:\t \nNStgid:\t1\nNSpid:\t1\nNSpgid:\t1\nNSsid:\t1\nKthread:\t0\nVmPeak:\t   72676 kB\nVmSize:\t   72676 kB\nVmLck:\t       0 kB\nVmPin:\t       0 kB\nVmHWM:\t   12832 kB\nVmRSS:\t   12832 kB\nRssAnon:\t    3944 kB\nRssFile:\t    8888 kB\nRssShmem:\t       0 kB\nVmData:\t   56552 kB\nVmStk:\t     132 kB\nVmExe:\t    3540 kB\nVmLib:\t   10972 kB\nVmPTE:\t     112 kB\nVmSwap:\t       0 kB\nCoreDumping:\t0\nTHP_enabled:\t1\nuntag_mask:\t0xffffffffffffff\nThreads:\t6\nSigQ:\t0/64280\nSigPnd:\t0000000000000000\nShdPnd:\t0000000000000000\nSigBlk:\t0000000000000000\nSigIgn:\t0000000200001001\nSigCgt:\t0000000100006cea\nCapInh:\t0000000000000000\nCapPrm:\t0000000000000000\nCapEff:\t0000000000000000\nCapBnd:\t00000000a80425fb\nCapAmb:\t0000000000000000\nNoNewPrivs:\t0\nSeccomp:\t2\nSeccomp_filters:\t1\nSpeculation_Store_Bypass:\tvulnerable\nSpeculationIndirectBranch:\tunknown\nCpus_allowed:\tfff\nCpus_allowed_list:\t0-11\nMems_allowed:\t1\nMems_allowed_list:\t0\nvoluntary_ctxt_switches:\t45\nnonvoluntary_ctxt_switches:\t26\n0\n1\n10\n2\n3\n4\n5\n6\n7\n8\n9\n",
+      "result": "pass query, graceful restart and SIGKILL recovery for one acknowledged write",
+      "container_cleanup": 0,
+      "volume_cleanup": 0
+    },
+    {
+      "database": "postgresql",
+      "image_id": "sha256:d394728dee24b7791f1969c683f8b8410fe57450713a1db2aff5a500f0f98ab0",
+      "checks": [
+        {
+          "request": [
+            "CREATE TABLE feasibility(k integer PRIMARY KEY,v text); INSERT INTO feasibility VALUES(1,'persisted');"
+          ],
+          "expected": "CREATE TABLE\nINSERT 0 1",
+          "stdout": "CREATE TABLE\nINSERT 0 1\n",
+          "stderr": "",
+          "exit_code": 0,
+          "passed": true
+        },
+        {
+          "request": [
+            "SELECT v FROM feasibility WHERE k=1"
+          ],
+          "expected": "persisted",
+          "stdout": "persisted\n",
+          "stderr": "",
+          "exit_code": 0,
+          "passed": true
+        },
+        {
+          "request": [
+            "SELECT v FROM feasibility WHERE k=1"
+          ],
+          "expected": "persisted",
+          "stdout": "persisted\n",
+          "stderr": "",
+          "exit_code": 0,
+          "passed": true
+        },
+        {
+          "request": [
+            "SELECT v FROM feasibility WHERE k=1"
+          ],
+          "expected": "persisted",
+          "stdout": "persisted\n",
+          "stderr": "",
+          "exit_code": 0,
+          "passed": true
+        }
+      ],
+      "trace_tool_available": false,
+      "process_snapshot": "PID                 PPID                COMMAND\n16152               16134               postgres\n16289               16152               postgres\n16290               16152               postgres\n16292               16152               postgres\n16293               16152               postgres\n16294               16152               postgres\n",
+      "main_process_status": "Name:\tpostgres\nUmask:\t0077\nState:\tS (sleeping)\nTgid:\t1\nNgid:\t0\nPid:\t1\nPPid:\t0\nTracerPid:\t0\nUid:\t70\t70\t70\t70\nGid:\t70\t70\t70\t70\nFDSize:\t1024\nGroups:\t70 \nNStgid:\t1\nNSpid:\t1\nNSpgid:\t1\nNSsid:\t1\nKthread:\t0\nVmPeak:\t  175624 kB\nVmSize:\t  175616 kB\nVmLck:\t       0 kB\nVmPin:\t       0 kB\nVmHWM:\t   27308 kB\nVmRSS:\t   27308 kB\nRssAnon:\t    1972 kB\nRssFile:\t   14528 kB\nRssShmem:\t   10808 kB\nVmData:\t    1152 kB\nVmStk:\t     132 kB\nVmExe:\t    8944 kB\nVmLib:\t   18144 kB\nVmPTE:\t     128 kB\nVmSwap:\t       0 kB\nCoreDumping:\t0\nTHP_enabled:\t1\nuntag_mask:\t0xffffffffffffff\nThreads:\t1\nSigQ:\t0/64280\nSigPnd:\t0000000000000000\nShdPnd:\t0000000000000000\nSigBlk:\t0000000000400000\nSigIgn:\t0000000201303000\nSigCgt:\t0000000000014a07\nCapInh:\t0000000000000000\nCapPrm:\t0000000000000000\nCapEff:\t0000000000000000\nCapBnd:\t00000000a80425fb\nCapAmb:\t0000000000000000\nNoNewPrivs:\t0\nSeccomp:\t2\nSeccomp_filters:\t1\nSpeculation_Store_Bypass:\tvulnerable\nSpeculationIndirectBranch:\tunknown\nCpus_allowed:\tfff\nCpus_allowed_list:\t0-11\nMems_allowed:\t1\nMems_allowed_list:\t0\nvoluntary_ctxt_switches:\t86\nnonvoluntary_ctxt_switches:\t15\n0\n1\n2\n3\n4\n5\n6\n7\n8\n9\n",
+      "result": "pass query, graceful restart and SIGKILL recovery for one acknowledged write",
+      "container_cleanup": 0,
+      "volume_cleanup": 0
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+Probing postgresql
+postgresql {"default_probe": {"exit_code": 125, "stdout": "", "stderr": "vmfree: Unsupported ELF interpreter\n"}, "dynamic_probe": {"exit_code": 125, "stdout": "", "stderr": "instruction=0x4e821be2 pc=0x1000fec8bc\nvmfree: Instruction unsupported\n"}, "linux_reference": {"exit_code": 0, "stdout": "postgres (PostgreSQL) 16.13\n", "stderr": ""}}
+Probing redis
+redis {"default_probe": {"exit_code": 125, "stdout": "", "stderr": "vmfree: Input read failed or exceeds 16 MiB\n"}, "dynamic_probe": {"exit_code": 125, "stdout": "", "stderr": "vmfree: Linux syscall is not implemented\n"}, "linux_reference": {"exit_code": 0, "stdout": "Redis server v=7.4.2 sha=00000000:0 malloc=jemalloc-5.3.0 bits=64 build=3dfb3660d0f5a2e7\n", "stderr": ""}}
+Probing valkey
+valkey {"default_probe": {"exit_code": 125, "stdout": "", "stderr": "vmfree: Input read failed or exceeds 16 MiB\n"}, "dynamic_probe": {"exit_code": 125, "stdout": "", "stderr": "instruction=0xd503233f pc=0x2015e30\nvmfree: Instruction unsupported\n"}, "linux_reference": {"exit_code": 0, "stdout": "Valkey server v=9.0.0 sha=00000000:0 malloc=jemalloc-5.3.0 bits=64 build=ac1863d4f29109f7\n", "stderr": ""}}

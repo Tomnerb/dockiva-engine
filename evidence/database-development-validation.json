@@ -1,0 +1,51 @@
+{
+  "runtime_sha256": "2d438cdea89792d59ebc7774219976a5aa06690cbcae0f990fc2ffc153eeba01",
+  "database_services_complete": false,
+  "python_unit_tests": {
+    "passed": 53,
+    "evidence": "evidence/database-unit-tests.txt"
+  },
+  "instruction_reference": "evidence/database-instruction-checks.txt",
+  "vfork_reference": "evidence/database-vfork-checks.txt",
+  "sanitized_native_checks_passed": [
+    "verify_m39_native.py",
+    "verify_m44_native.py",
+    "verify_m19_native.py",
+    "verify_m21_native.py",
+    "verify_m22_native.py",
+    "verify_m31_native.py"
+  ],
+  "other_native_checks_passed": [
+    "verify_m18_native.py",
+    "verify_decode_cache.py"
+  ],
+  "cli_identity_rejections": [
+    {
+      "option": "--uid",
+      "value": "-1",
+      "exit_code": 125,
+      "passed": true
+    },
+    {
+      "option": "--uid",
+      "value": "4294967295",
+      "exit_code": 125,
+      "passed": true
+    },
+    {
+      "option": "--gid",
+      "value": "abc",
+      "exit_code": 125,
+      "passed": true
+    },
+    {
+      "option": "--gid",
+      "value": "4294967296",
+      "exit_code": 125,
+      "passed": true
+    }
+  ],
+  "current_service_evidence": "evidence/database-services.json",
+  "sanitized_service_evidence": "evidence/database-services-sanitize.json",
+  "dockiva_repackaged": false
+}

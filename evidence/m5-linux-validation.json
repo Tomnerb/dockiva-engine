@@ -1,0 +1,180 @@
+{
+  "host": "Linux-6.18.44-x86_64-with-glibc2.39",
+  "passed": true,
+  "cases": [
+    {
+      "name": "http_root",
+      "actual": {
+        "response_hex": "485454502f312e3120323030204f4b0d0a436f6e74656e742d547970653a20746578742f706c61696e0d0a436f6e74656e742d4c656e6774683a2032330d0a436f6e6e656374696f6e3a20636c6f73650d0a0d0a564d2d66726565204854545020736572766572204f4b0a",
+        "exit_code": 0,
+        "stderr_hex": "",
+        "passed": true
+      },
+      "passed": true,
+      "linux_reference": {
+        "response_hex": "485454502f312e3120323030204f4b0d0a436f6e74656e742d547970653a20746578742f706c61696e0d0a436f6e74656e742d4c656e6774683a2032330d0a436f6e6e656374696f6e3a20636c6f73650d0a0d0a564d2d66726565204854545020736572766572204f4b0a",
+        "exit_code": 0,
+        "stderr_hex": "",
+        "passed": true
+      }
+    },
+    {
+      "name": "http_missing",
+      "actual": {
+        "response_hex": "485454502f312e3120343034204e6f7420466f756e640d0a436f6e74656e742d547970653a20746578742f706c61696e0d0a436f6e74656e742d4c656e6774683a2031300d0a436f6e6e656374696f6e3a20636c6f73650d0a0d0a4e6f7420666f756e640a",
+        "exit_code": 0,
+        "stderr_hex": "",
+        "passed": true
+      },
+      "passed": true,
+      "linux_reference": {
+        "response_hex": "485454502f312e3120343034204e6f7420466f756e640d0a436f6e74656e742d547970653a20746578742f706c61696e0d0a436f6e74656e742d4c656e6774683a2031300d0a436f6e6e656374696f6e3a20636c6f73650d0a0d0a4e6f7420666f756e640a",
+        "exit_code": 0,
+        "stderr_hex": "",
+        "passed": true
+      }
+    },
+    {
+      "name": "http_method",
+      "actual": {
+        "response_hex": "485454502f312e3120343035204d6574686f64204e6f7420416c6c6f7765640d0a436f6e74656e742d547970653a20746578742f706c61696e0d0a436f6e74656e742d4c656e6774683a2031390d0a436f6e6e656374696f6e3a20636c6f73650d0a0d0a4d6574686f64206e6f7420616c6c6f7765640a",
+        "exit_code": 0,
+        "stderr_hex": "",
+        "passed": true
+      },
+      "passed": true,
+      "linux_reference": {
+        "response_hex": "485454502f312e3120343035204d6574686f64204e6f7420416c6c6f7765640d0a436f6e74656e742d547970653a20746578742f706c61696e0d0a436f6e74656e742d4c656e6774683a2031390d0a436f6e6e656374696f6e3a20636c6f73650d0a0d0a4d6574686f64206e6f7420616c6c6f7765640a",
+        "exit_code": 0,
+        "stderr_hex": "",
+        "passed": true
+      }
+    },
+    {
+      "name": "http_fragmented",
+      "actual": {
+        "response_hex": "485454502f312e3120323030204f4b0d0a436f6e74656e742d547970653a20746578742f706c61696e0d0a436f6e74656e742d4c656e6774683a2032330d0a436f6e6e656374696f6e3a20636c6f73650d0a0d0a564d2d66726565204854545020736572766572204f4b0a",
+        "exit_code": 0,
+        "stderr_hex": "",
+        "passed": true
+      },
+      "passed": true,
+      "linux_reference": {
+        "response_hex": "485454502f312e3120323030204f4b0d0a436f6e74656e742d547970653a20746578742f706c61696e0d0a436f6e74656e742d4c656e6774683a2032330d0a436f6e6e656374696f6e3a20636c6f73650d0a0d0a564d2d66726565204854545020736572766572204f4b0a",
+        "exit_code": 0,
+        "stderr_hex": "",
+        "passed": true
+      }
+    },
+    {
+      "name": "http_large_headers",
+      "actual": {
+        "response_hex": "485454502f312e3120343331205265717565737420486561646572204669656c647320546f6f204c617267650d0a436f6e74656e742d547970653a20746578742f706c61696e0d0a436f6e74656e742d4c656e6774683a2031380d0a436f6e6e656374696f6e3a20636c6f73650d0a0d0a4865616465727320746f6f206c617267650a",
+        "exit_code": 0,
+        "stderr_hex": "",
+        "passed": true
+      },
+      "passed": true,
+      "linux_reference": {
+        "response_hex": "485454502f312e3120343331205265717565737420486561646572204669656c647320546f6f204c617267650d0a436f6e74656e742d547970653a20746578742f706c61696e0d0a436f6e74656e742d4c656e6774683a2031380d0a436f6e6e656374696f6e3a20636c6f73650d0a0d0a4865616465727320746f6f206c617267650a",
+        "exit_code": 0,
+        "stderr_hex": "",
+        "passed": true
+      }
+    },
+    {
+      "name": "client_disconnect",
+      "actual": {
+        "response_hex": "",
+        "exit_code": 4,
+        "stderr_hex": "",
+        "passed": true
+      },
+      "passed": true,
+      "linux_reference": {
+        "response_hex": "",
+        "exit_code": 4,
+        "stderr_hex": "",
+        "passed": true
+      }
+    },
+    {
+      "name": "invalid_fd",
+      "passed": true,
+      "exit_code": 0,
+      "stderr_hex": "",
+      "scope": "linux-comparison",
+      "linux_reference": {
+        "exit_code": 0,
+        "stdout_hex": "",
+        "stderr_hex": ""
+      }
+    },
+    {
+      "name": "close_twice",
+      "passed": true,
+      "exit_code": 0,
+      "stderr_hex": "",
+      "scope": "linux-comparison",
+      "linux_reference": {
+        "exit_code": 0,
+        "stdout_hex": "",
+        "stderr_hex": ""
+      }
+    },
+    {
+      "name": "bind_bad_pointer",
+      "passed": true,
+      "exit_code": 0,
+      "stderr_hex": "",
+      "scope": "linux-comparison",
+      "linux_reference": {
+        "exit_code": 0,
+        "stdout_hex": "",
+        "stderr_hex": ""
+      }
+    },
+    {
+      "name": "read_bad_pointer",
+      "passed": true,
+      "exit_code": 0,
+      "stderr_hex": "",
+      "scope": "runtime-policy"
+    },
+    {
+      "name": "wildcard_policy",
+      "passed": true,
+      "exit_code": 0,
+      "stderr_hex": "",
+      "scope": "runtime-policy"
+    },
+    {
+      "name": "udp_policy",
+      "passed": true,
+      "exit_code": 0,
+      "stderr_hex": "",
+      "scope": "runtime-policy"
+    },
+    {
+      "name": "descriptor_limit",
+      "passed": true,
+      "exit_code": 0,
+      "stderr_hex": "",
+      "scope": "runtime-policy"
+    },
+    {
+      "name": "implicit_bind_policy",
+      "passed": true,
+      "exit_code": 0,
+      "stderr_hex": "",
+      "scope": "runtime-policy"
+    }
+  ],
+  "reference_kind": "qemu-user-linux",
+  "native_sources": {
+    "native/heap.h": "97655ddcfec1ca4d299ec6eca42131cb22c4b0f2b5ca9df3a74e9312ad552d3f",
+    "native/net.h": "86442ca72b00230a8afc19d9e52b3a0abd9425f39f50b095053d359492a7f1da",
+    "native/runtime.c": "2ebad45115f1d764ef09334d84a0b7e9714755e67d005c5f8d63e2453e50fdd9"
+  },
+  "reference_version": "qemu-aarch64 version 7.2.22 (Debian 1:7.2+dfsg-7+deb12u18+b3)"
+}

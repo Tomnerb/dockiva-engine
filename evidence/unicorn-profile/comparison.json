@@ -1,0 +1,1717 @@
+{
+  "runs": [
+    {
+      "index": 0,
+      "flavor": "baseline",
+      "rows": [
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 4,
+          "sample": 1,
+          "seconds": 0.005201
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 3,
+          "sample": 1,
+          "seconds": 0.005048
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 2,
+          "sample": 1,
+          "seconds": 0.004732
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 1,
+          "sample": 1,
+          "seconds": 0.004528
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 0,
+          "sample": 1,
+          "seconds": 0.002493
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 0,
+          "sample": 2,
+          "seconds": 0.002376
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 1,
+          "sample": 2,
+          "seconds": 0.004306
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 2,
+          "sample": 2,
+          "seconds": 0.004078
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 3,
+          "sample": 2,
+          "seconds": 0.004026
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 4,
+          "sample": 2,
+          "seconds": 0.003923
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 4,
+          "sample": 3,
+          "seconds": 0.003974
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 3,
+          "sample": 3,
+          "seconds": 0.003872
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 2,
+          "sample": 3,
+          "seconds": 0.003815
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 1,
+          "sample": 3,
+          "seconds": 0.003783
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 0,
+          "sample": 3,
+          "seconds": 0.002108
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 0,
+          "sample": 4,
+          "seconds": 0.002149
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 1,
+          "sample": 4,
+          "seconds": 0.003838
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 2,
+          "sample": 4,
+          "seconds": 0.003832
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 3,
+          "sample": 4,
+          "seconds": 0.003808
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 4,
+          "sample": 4,
+          "seconds": 0.003594
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 4,
+          "sample": 5,
+          "seconds": 0.003588
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 3,
+          "sample": 5,
+          "seconds": 0.003719
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 2,
+          "sample": 5,
+          "seconds": 0.003822
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 1,
+          "sample": 5,
+          "seconds": 0.003885
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 0,
+          "sample": 5,
+          "seconds": 0.001935
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 4,
+          "sample": 1,
+          "seconds": 0.144142
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 3,
+          "sample": 1,
+          "seconds": 0.143756
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 2,
+          "sample": 1,
+          "seconds": 0.022663
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 1,
+          "sample": 1,
+          "seconds": 0.022485
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 0,
+          "sample": 1,
+          "seconds": 0.000379
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 0,
+          "sample": 2,
+          "seconds": 0.00038
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 1,
+          "sample": 2,
+          "seconds": 0.022811
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 2,
+          "sample": 2,
+          "seconds": 0.022706
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 3,
+          "sample": 2,
+          "seconds": 0.143933
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 4,
+          "sample": 2,
+          "seconds": 0.144838
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 4,
+          "sample": 3,
+          "seconds": 0.143487
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 3,
+          "sample": 3,
+          "seconds": 0.1438
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 2,
+          "sample": 3,
+          "seconds": 0.022656
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 1,
+          "sample": 3,
+          "seconds": 0.022531
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 0,
+          "sample": 3,
+          "seconds": 0.00038
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 0,
+          "sample": 4,
+          "seconds": 0.000379
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 1,
+          "sample": 4,
+          "seconds": 0.022635
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 2,
+          "sample": 4,
+          "seconds": 0.022774
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 3,
+          "sample": 4,
+          "seconds": 0.145539
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 4,
+          "sample": 4,
+          "seconds": 0.145123
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 4,
+          "sample": 5,
+          "seconds": 0.144025
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 3,
+          "sample": 5,
+          "seconds": 0.143963
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 2,
+          "sample": 5,
+          "seconds": 0.022671
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 1,
+          "sample": 5,
+          "seconds": 0.022652
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 0,
+          "sample": 5,
+          "seconds": 0.000391
+        },
+        {
+          "kind": "contexts",
+          "virtual_tlb": 0,
+          "passed": true
+        },
+        {
+          "kind": "faults",
+          "virtual_tlb": 0,
+          "cases": 10,
+          "passed": true
+        },
+        {
+          "kind": "syscalls",
+          "virtual_tlb": 0,
+          "calls": 100000,
+          "seconds": 0.01446,
+          "passed": true
+        },
+        {
+          "kind": "timeout",
+          "virtual_tlb": 0,
+          "seconds": 0.005021,
+          "passed": true
+        },
+        {
+          "kind": "external_cancel",
+          "virtual_tlb": 0,
+          "seconds": 1.9e-05,
+          "passed": true
+        },
+        {
+          "kind": "contexts",
+          "virtual_tlb": 1,
+          "passed": true
+        },
+        {
+          "kind": "faults",
+          "virtual_tlb": 1,
+          "cases": 10,
+          "passed": true
+        },
+        {
+          "kind": "syscalls",
+          "virtual_tlb": 1,
+          "calls": 100000,
+          "seconds": 0.01432,
+          "passed": true
+        },
+        {
+          "kind": "timeout",
+          "virtual_tlb": 1,
+          "seconds": 0.005024,
+          "passed": true
+        },
+        {
+          "kind": "external_cancel",
+          "virtual_tlb": 1,
+          "seconds": 3.4e-05,
+          "passed": true
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "flavor": "patched",
+      "rows": [
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 4,
+          "sample": 1,
+          "seconds": 0.005192
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 3,
+          "sample": 1,
+          "seconds": 0.004864
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 2,
+          "sample": 1,
+          "seconds": 0.004672
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 1,
+          "sample": 1,
+          "seconds": 0.004492
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 0,
+          "sample": 1,
+          "seconds": 0.002482
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 0,
+          "sample": 2,
+          "seconds": 0.002388
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 1,
+          "sample": 2,
+          "seconds": 0.004356
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 2,
+          "sample": 2,
+          "seconds": 0.00408
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 3,
+          "sample": 2,
+          "seconds": 0.00403
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 4,
+          "sample": 2,
+          "seconds": 0.00387
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 4,
+          "sample": 3,
+          "seconds": 0.003829
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 3,
+          "sample": 3,
+          "seconds": 0.003766
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 2,
+          "sample": 3,
+          "seconds": 0.00378
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 1,
+          "sample": 3,
+          "seconds": 0.003764
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 0,
+          "sample": 3,
+          "seconds": 0.002036
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 0,
+          "sample": 4,
+          "seconds": 0.002054
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 1,
+          "sample": 4,
+          "seconds": 0.003583
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 2,
+          "sample": 4,
+          "seconds": 0.003613
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 3,
+          "sample": 4,
+          "seconds": 0.003609
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 4,
+          "sample": 4,
+          "seconds": 0.003635
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 4,
+          "sample": 5,
+          "seconds": 0.003598
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 3,
+          "sample": 5,
+          "seconds": 0.003634
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 2,
+          "sample": 5,
+          "seconds": 0.003627
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 1,
+          "sample": 5,
+          "seconds": 0.003725
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 0,
+          "sample": 5,
+          "seconds": 0.001971
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 4,
+          "sample": 1,
+          "seconds": 0.144446
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 3,
+          "sample": 1,
+          "seconds": 0.145143
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 2,
+          "sample": 1,
+          "seconds": 0.004746
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 1,
+          "sample": 1,
+          "seconds": 0.004796
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 0,
+          "sample": 1,
+          "seconds": 0.00038
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 0,
+          "sample": 2,
+          "seconds": 0.000365
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 1,
+          "sample": 2,
+          "seconds": 0.004771
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 2,
+          "sample": 2,
+          "seconds": 0.004803
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 3,
+          "sample": 2,
+          "seconds": 0.145247
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 4,
+          "sample": 2,
+          "seconds": 0.145079
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 4,
+          "sample": 3,
+          "seconds": 0.144599
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 3,
+          "sample": 3,
+          "seconds": 0.145227
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 2,
+          "sample": 3,
+          "seconds": 0.004966
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 1,
+          "sample": 3,
+          "seconds": 0.004611
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 0,
+          "sample": 3,
+          "seconds": 0.000407
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 0,
+          "sample": 4,
+          "seconds": 0.000378
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 1,
+          "sample": 4,
+          "seconds": 0.004854
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 2,
+          "sample": 4,
+          "seconds": 0.004822
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 3,
+          "sample": 4,
+          "seconds": 0.144914
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 4,
+          "sample": 4,
+          "seconds": 0.144113
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 4,
+          "sample": 5,
+          "seconds": 0.144138
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 3,
+          "sample": 5,
+          "seconds": 0.14378
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 2,
+          "sample": 5,
+          "seconds": 0.004951
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 1,
+          "sample": 5,
+          "seconds": 0.00474
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 0,
+          "sample": 5,
+          "seconds": 0.000354
+        },
+        {
+          "kind": "contexts",
+          "virtual_tlb": 0,
+          "passed": true
+        },
+        {
+          "kind": "faults",
+          "virtual_tlb": 0,
+          "cases": 10,
+          "passed": true
+        },
+        {
+          "kind": "syscalls",
+          "virtual_tlb": 0,
+          "calls": 100000,
+          "seconds": 0.014265,
+          "passed": true
+        },
+        {
+          "kind": "timeout",
+          "virtual_tlb": 0,
+          "seconds": 0.005021,
+          "passed": true
+        },
+        {
+          "kind": "external_cancel",
+          "virtual_tlb": 0,
+          "seconds": 2.4e-05,
+          "passed": true
+        },
+        {
+          "kind": "contexts",
+          "virtual_tlb": 1,
+          "passed": true
+        },
+        {
+          "kind": "faults",
+          "virtual_tlb": 1,
+          "cases": 10,
+          "passed": true
+        },
+        {
+          "kind": "syscalls",
+          "virtual_tlb": 1,
+          "calls": 100000,
+          "seconds": 0.014153,
+          "passed": true
+        },
+        {
+          "kind": "timeout",
+          "virtual_tlb": 1,
+          "seconds": 0.005023,
+          "passed": true
+        },
+        {
+          "kind": "external_cancel",
+          "virtual_tlb": 1,
+          "seconds": 2.1e-05,
+          "passed": true
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "flavor": "patched",
+      "rows": [
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 4,
+          "sample": 1,
+          "seconds": 0.003732
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 3,
+          "sample": 1,
+          "seconds": 0.003715
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 2,
+          "sample": 1,
+          "seconds": 0.003844
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 1,
+          "sample": 1,
+          "seconds": 0.003697
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 0,
+          "sample": 1,
+          "seconds": 0.001985
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 0,
+          "sample": 2,
+          "seconds": 0.00199
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 1,
+          "sample": 2,
+          "seconds": 0.003692
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 2,
+          "sample": 2,
+          "seconds": 0.003671
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 3,
+          "sample": 2,
+          "seconds": 0.003752
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 4,
+          "sample": 2,
+          "seconds": 0.003809
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 4,
+          "sample": 3,
+          "seconds": 0.003674
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 3,
+          "sample": 3,
+          "seconds": 0.003741
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 2,
+          "sample": 3,
+          "seconds": 0.003643
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 1,
+          "sample": 3,
+          "seconds": 0.003647
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 0,
+          "sample": 3,
+          "seconds": 0.002005
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 0,
+          "sample": 4,
+          "seconds": 0.001948
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 1,
+          "sample": 4,
+          "seconds": 0.003657
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 2,
+          "sample": 4,
+          "seconds": 0.003691
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 3,
+          "sample": 4,
+          "seconds": 0.003685
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 4,
+          "sample": 4,
+          "seconds": 0.00364
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 4,
+          "sample": 5,
+          "seconds": 0.003673
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 3,
+          "sample": 5,
+          "seconds": 0.003805
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 2,
+          "sample": 5,
+          "seconds": 0.003671
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 1,
+          "sample": 5,
+          "seconds": 0.00365
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 0,
+          "sample": 5,
+          "seconds": 0.001949
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 4,
+          "sample": 1,
+          "seconds": 0.143674
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 3,
+          "sample": 1,
+          "seconds": 0.14252
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 2,
+          "sample": 1,
+          "seconds": 0.004906
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 1,
+          "sample": 1,
+          "seconds": 0.004838
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 0,
+          "sample": 1,
+          "seconds": 0.000405
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 0,
+          "sample": 2,
+          "seconds": 0.000414
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 1,
+          "sample": 2,
+          "seconds": 0.00476
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 2,
+          "sample": 2,
+          "seconds": 0.004918
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 3,
+          "sample": 2,
+          "seconds": 0.144989
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 4,
+          "sample": 2,
+          "seconds": 0.142639
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 4,
+          "sample": 3,
+          "seconds": 0.143156
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 3,
+          "sample": 3,
+          "seconds": 0.144537
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 2,
+          "sample": 3,
+          "seconds": 0.005009
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 1,
+          "sample": 3,
+          "seconds": 0.004902
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 0,
+          "sample": 3,
+          "seconds": 0.000352
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 0,
+          "sample": 4,
+          "seconds": 0.000363
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 1,
+          "sample": 4,
+          "seconds": 0.004668
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 2,
+          "sample": 4,
+          "seconds": 0.004825
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 3,
+          "sample": 4,
+          "seconds": 0.143965
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 4,
+          "sample": 4,
+          "seconds": 0.142706
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 4,
+          "sample": 5,
+          "seconds": 0.144031
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 3,
+          "sample": 5,
+          "seconds": 0.144892
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 2,
+          "sample": 5,
+          "seconds": 0.004846
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 1,
+          "sample": 5,
+          "seconds": 0.004902
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 0,
+          "sample": 5,
+          "seconds": 0.00038
+        },
+        {
+          "kind": "contexts",
+          "virtual_tlb": 0,
+          "passed": true
+        },
+        {
+          "kind": "faults",
+          "virtual_tlb": 0,
+          "cases": 10,
+          "passed": true
+        },
+        {
+          "kind": "syscalls",
+          "virtual_tlb": 0,
+          "calls": 100000,
+          "seconds": 0.013876,
+          "passed": true
+        },
+        {
+          "kind": "timeout",
+          "virtual_tlb": 0,
+          "seconds": 0.005018,
+          "passed": true
+        },
+        {
+          "kind": "external_cancel",
+          "virtual_tlb": 0,
+          "seconds": 1.8e-05,
+          "passed": true
+        },
+        {
+          "kind": "contexts",
+          "virtual_tlb": 1,
+          "passed": true
+        },
+        {
+          "kind": "faults",
+          "virtual_tlb": 1,
+          "cases": 10,
+          "passed": true
+        },
+        {
+          "kind": "syscalls",
+          "virtual_tlb": 1,
+          "calls": 100000,
+          "seconds": 0.013814,
+          "passed": true
+        },
+        {
+          "kind": "timeout",
+          "virtual_tlb": 1,
+          "seconds": 0.005021,
+          "passed": true
+        },
+        {
+          "kind": "external_cancel",
+          "virtual_tlb": 1,
+          "seconds": 1.8e-05,
+          "passed": true
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "flavor": "baseline",
+      "rows": [
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 4,
+          "sample": 1,
+          "seconds": 0.003775
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 3,
+          "sample": 1,
+          "seconds": 0.003719
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 2,
+          "sample": 1,
+          "seconds": 0.00375
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 1,
+          "sample": 1,
+          "seconds": 0.003701
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 0,
+          "sample": 1,
+          "seconds": 0.001953
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 0,
+          "sample": 2,
+          "seconds": 0.001941
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 1,
+          "sample": 2,
+          "seconds": 0.00368
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 2,
+          "sample": 2,
+          "seconds": 0.003668
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 3,
+          "sample": 2,
+          "seconds": 0.003693
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 4,
+          "sample": 2,
+          "seconds": 0.003673
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 4,
+          "sample": 3,
+          "seconds": 0.003716
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 3,
+          "sample": 3,
+          "seconds": 0.003741
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 2,
+          "sample": 3,
+          "seconds": 0.003696
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 1,
+          "sample": 3,
+          "seconds": 0.003696
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 0,
+          "sample": 3,
+          "seconds": 0.002
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 0,
+          "sample": 4,
+          "seconds": 0.002231
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 1,
+          "sample": 4,
+          "seconds": 0.00367
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 2,
+          "sample": 4,
+          "seconds": 0.003912
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 3,
+          "sample": 4,
+          "seconds": 0.003769
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 4,
+          "sample": 4,
+          "seconds": 0.003999
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 4,
+          "sample": 5,
+          "seconds": 0.003772
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 3,
+          "sample": 5,
+          "seconds": 0.003956
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 2,
+          "sample": 5,
+          "seconds": 0.003714
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 1,
+          "sample": 5,
+          "seconds": 0.003912
+        },
+        {
+          "kind": "benchmark",
+          "workload": "compute",
+          "mode": 0,
+          "sample": 5,
+          "seconds": 0.002084
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 4,
+          "sample": 1,
+          "seconds": 0.142666
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 3,
+          "sample": 1,
+          "seconds": 0.142397
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 2,
+          "sample": 1,
+          "seconds": 0.022762
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 1,
+          "sample": 1,
+          "seconds": 0.022608
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 0,
+          "sample": 1,
+          "seconds": 0.000404
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 0,
+          "sample": 2,
+          "seconds": 0.000357
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 1,
+          "sample": 2,
+          "seconds": 0.022465
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 2,
+          "sample": 2,
+          "seconds": 0.022545
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 3,
+          "sample": 2,
+          "seconds": 0.142531
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 4,
+          "sample": 2,
+          "seconds": 0.142805
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 4,
+          "sample": 3,
+          "seconds": 0.142046
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 3,
+          "sample": 3,
+          "seconds": 0.142197
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 2,
+          "sample": 3,
+          "seconds": 0.022329
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 1,
+          "sample": 3,
+          "seconds": 0.022106
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 0,
+          "sample": 3,
+          "seconds": 0.000379
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 0,
+          "sample": 4,
+          "seconds": 0.000382
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 1,
+          "sample": 4,
+          "seconds": 0.022223
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 2,
+          "sample": 4,
+          "seconds": 0.022264
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 3,
+          "sample": 4,
+          "seconds": 0.141219
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 4,
+          "sample": 4,
+          "seconds": 0.142965
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 4,
+          "sample": 5,
+          "seconds": 0.14291
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 3,
+          "sample": 5,
+          "seconds": 0.141375
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 2,
+          "sample": 5,
+          "seconds": 0.022149
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 1,
+          "sample": 5,
+          "seconds": 0.022511
+        },
+        {
+          "kind": "benchmark",
+          "workload": "memory64k",
+          "mode": 0,
+          "sample": 5,
+          "seconds": 0.000379
+        },
+        {
+          "kind": "contexts",
+          "virtual_tlb": 0,
+          "passed": true
+        },
+        {
+          "kind": "faults",
+          "virtual_tlb": 0,
+          "cases": 10,
+          "passed": true
+        },
+        {
+          "kind": "syscalls",
+          "virtual_tlb": 0,
+          "calls": 100000,
+          "seconds": 0.013728,
+          "passed": true
+        },
+        {
+          "kind": "timeout",
+          "virtual_tlb": 0,
+          "seconds": 0.005024,
+          "passed": true
+        },
+        {
+          "kind": "external_cancel",
+          "virtual_tlb": 0,
+          "seconds": 3e-05,
+          "passed": true
+        },
+        {
+          "kind": "contexts",
+          "virtual_tlb": 1,
+          "passed": true
+        },
+        {
+          "kind": "faults",
+          "virtual_tlb": 1,
+          "cases": 10,
+          "passed": true
+        },
+        {
+          "kind": "syscalls",
+          "virtual_tlb": 1,
+          "calls": 100000,
+          "seconds": 0.013517,
+          "passed": true
+        },
+        {
+          "kind": "timeout",
+          "virtual_tlb": 1,
+          "seconds": 0.005029,
+          "passed": true
+        },
+        {
+          "kind": "external_cancel",
+          "virtual_tlb": 1,
+          "seconds": 2.7e-05,
+          "passed": true
+        }
+      ]
+    }
+  ],
+  "hashes": {
+    "build/unicorn-profile/probe-baseline-hardened": "b1c522988bc148a46632e99ae6d354554c9e4bf0cb925e4ced3bd5da3d9c0eb7",
+    "build/unicorn-profile/regressions-baseline-hardened": "e09b9fd667533135a20a49ece0ba405ce0a8411916ddd2360f217c3fa71bc9c9",
+    "build/unicorn-profile/probe-patched-hardened": "d4c86a7cdc9fd1d96b1483da7222ef99b991a81b4e25ce252ccc9d88c01fa572",
+    "build/unicorn-profile/regressions-patched-hardened": "29590eed1af2ce304e58a3913fae7cd6da2497c63e26d4b554b9c269085191d3",
+    "experiments/unicorn-profile/nonexec-dirty.patch": "37d515ef062ffa9aff9c3b9ba52a9e3bd2c03c821d59b1fc39d03c96e6fce16e",
+    "experiments/unicorn-profile/regressions.c": "6dc0f77f9722c590bc61aabaa718ebe8f810f526a1d9bca53eef87cb9d464a31",
+    "experiments/unicorn-profile/profile.c": "e899332be85225425a118f217eb5697e5cd07dd160b4bbf5d12a6fe52f74b814",
+    "experiments/unicorn-profile/validate.py": "821eb1a39bd6f00fa1d2215053588ab68000e9ba0e2c09723c75ab3bf2f5fa4a",
+    "experiments/unicorn-adapter/probe.c": "b391358f1076ef2a5cace2284580866f438fff56836172443ef64ee9e3fe5a1d",
+    "build/unicorn-profile/baseline/libunicorn.a": "1ca242edfcde721671e527e185eb79b2c3eb473443a28a1c30d9f6bf70f86f5f",
+    "build/unicorn-profile/patched/libunicorn.a": "2cc6a1912ddf4e4aa030685793c8c28a2399355e379ef2033e5ddab34040e37e"
+  },
+  "signing": "ad-hoc hardened runtime; allow-jit only",
+  "medians_seconds": {
+    "baseline": {
+      "compute": {
+        "0": 0.0020959999999999998,
+        "1": 0.0038104999999999997,
+        "2": 0.0038185,
+        "3": 0.0037885,
+        "4": 0.0037735
+      },
+      "memory64k": {
+        "0": 0.0003795,
+        "1": 0.022521,
+        "2": 0.0226595,
+        "3": 0.14314349999999998,
+        "4": 0.14322600000000002
+      }
+    },
+    "patched": {
+      "compute": {
+        "0": 0.0019975,
+        "1": 0.0036945,
+        "2": 0.003681,
+        "3": 0.0037465,
+        "4": 0.003703
+      },
+      "memory64k": {
+        "0": 0.000379,
+        "1": 0.0047834999999999996,
+        "2": 0.004876,
+        "3": 0.144903,
+        "4": 0.14407199999999998
+      }
+    }
+  },
+  "passed": true
+}

@@ -1,0 +1,186 @@
+{
+  "unicorn_version": "2.1.4",
+  "modes": {
+    "0": "native",
+    "1": "default TLB, uc_mem_map",
+    "2": "default TLB, uc_mem_map_ptr",
+    "3": "virtual TLB, uc_mem_map",
+    "4": "virtual TLB, uc_mem_map_ptr"
+  },
+  "ordinary": {
+    "exit": 0,
+    "seconds": 2.752409125008853,
+    "binary_sha256": "7ee4ce2a70518840dddc8fc7bad430e602ff4ce991cba953a205b8265da26452",
+    "passed": true,
+    "medians_seconds": {
+      "compute": {
+        "0": 0.002055,
+        "1": 0.003765,
+        "2": 0.003919,
+        "3": 0.004006,
+        "4": 0.003857
+      },
+      "memory64k": {
+        "0": 0.000379,
+        "1": 0.021658,
+        "2": 0.021702,
+        "3": 0.130281,
+        "4": 0.130998
+      }
+    },
+    "checks": [
+      {
+        "kind": "contexts",
+        "virtual_tlb": 0,
+        "passed": true
+      },
+      {
+        "kind": "faults",
+        "virtual_tlb": 0,
+        "cases": 10,
+        "passed": true
+      },
+      {
+        "kind": "syscalls",
+        "virtual_tlb": 0,
+        "calls": 100000,
+        "seconds": 0.015708,
+        "passed": true
+      },
+      {
+        "kind": "timeout",
+        "virtual_tlb": 0,
+        "seconds": 0.005027,
+        "passed": true
+      },
+      {
+        "kind": "external_cancel",
+        "virtual_tlb": 0,
+        "seconds": 1.9e-05,
+        "passed": true
+      },
+      {
+        "kind": "contexts",
+        "virtual_tlb": 1,
+        "passed": true
+      },
+      {
+        "kind": "faults",
+        "virtual_tlb": 1,
+        "cases": 10,
+        "passed": true
+      },
+      {
+        "kind": "syscalls",
+        "virtual_tlb": 1,
+        "calls": 100000,
+        "seconds": 0.015675,
+        "passed": true
+      },
+      {
+        "kind": "timeout",
+        "virtual_tlb": 1,
+        "seconds": 0.005026,
+        "passed": true
+      },
+      {
+        "kind": "external_cancel",
+        "virtual_tlb": 1,
+        "seconds": 1.8e-05,
+        "passed": true
+      }
+    ]
+  },
+  "hardened": {
+    "exit": 0,
+    "seconds": 2.691844749992015,
+    "binary_sha256": "88ec2653ee93bbe4175d8b7436484be1848d148ec29fc2e3d13cd56ad95cb388",
+    "passed": true,
+    "medians_seconds": {
+      "compute": {
+        "0": 0.002108,
+        "1": 0.004034,
+        "2": 0.003854,
+        "3": 0.00398,
+        "4": 0.003971
+      },
+      "memory64k": {
+        "0": 0.000359,
+        "1": 0.022038,
+        "2": 0.021635,
+        "3": 0.132726,
+        "4": 0.132317
+      }
+    },
+    "checks": [
+      {
+        "kind": "contexts",
+        "virtual_tlb": 0,
+        "passed": true
+      },
+      {
+        "kind": "faults",
+        "virtual_tlb": 0,
+        "cases": 10,
+        "passed": true
+      },
+      {
+        "kind": "syscalls",
+        "virtual_tlb": 0,
+        "calls": 100000,
+        "seconds": 0.015,
+        "passed": true
+      },
+      {
+        "kind": "timeout",
+        "virtual_tlb": 0,
+        "seconds": 0.005029,
+        "passed": true
+      },
+      {
+        "kind": "external_cancel",
+        "virtual_tlb": 0,
+        "seconds": 3.2e-05,
+        "passed": true
+      },
+      {
+        "kind": "contexts",
+        "virtual_tlb": 1,
+        "passed": true
+      },
+      {
+        "kind": "faults",
+        "virtual_tlb": 1,
+        "cases": 10,
+        "passed": true
+      },
+      {
+        "kind": "syscalls",
+        "virtual_tlb": 1,
+        "calls": 100000,
+        "seconds": 0.015751,
+        "passed": true
+      },
+      {
+        "kind": "timeout",
+        "virtual_tlb": 1,
+        "seconds": 0.005023,
+        "passed": true
+      },
+      {
+        "kind": "external_cancel",
+        "virtual_tlb": 1,
+        "seconds": 2.2e-05,
+        "passed": true
+      }
+    ]
+  },
+  "signing": "ad-hoc, hardened runtime, allow-jit only; strict verification passed",
+  "hashes": {
+    "experiments/unicorn-adapter/probe.c": "b391358f1076ef2a5cace2284580866f438fff56836172443ef64ee9e3fe5a1d",
+    "experiments/unicorn-adapter/generate.py": "00271c88685d617fdcf3cf1aaa0b4137b989cf3647c72097f6148a7da4c32b9e",
+    "experiments/unicorn-adapter/run.py": "2570d2340749ddf2148c7419e9c545f7a0be7f563629bb4affb29890456e75a8",
+    "experiments/unicorn-adapter/jit.entitlements.plist": "6c69e033fd2f9ea3a42d63d5e50f94281c704d1267bf18a4b2b9fe9cbb722c7f",
+    "build/feasibility/venv/lib/python3.14/site-packages/unicorn/lib/libunicorn.a": "37de931fc7acaee2bed4d1cf27a3f1660351cf04ee362a9f3b8eff50ac9c6faf"
+  }
+}

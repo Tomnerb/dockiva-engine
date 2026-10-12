@@ -1,0 +1,235 @@
+{
+  "completed": true,
+  "host": "Linux-6.18.44-x86_64-with-glibc2.39",
+  "native_sha256": "f449918b96d10016e6118332b0fa56e385171f5c6edc952c7a03d437bbb78b85",
+  "rate": 100.0,
+  "resources_enabled": false,
+  "profiling_enabled": true,
+  "methodology": "One binary, cache off/on with balanced AB/BA rounds. Warmup excluded from load metrics. Counters include warmup and startup. Native instruction budget 10 billion.",
+  "results": [
+    {
+      "name": "Cache off",
+      "samples": [
+        {
+          "target_requests_per_second": 100.0,
+          "target_fraction_achieved": 0.9992505231348658,
+          "requests": 100,
+          "elapsed_s": 1.000750039002014,
+          "requests_per_second": 99.92505231348659,
+          "latency_median_ms": 0.6505275014205836,
+          "latency_p95_ms": 1.9575839978642762,
+          "command": [
+            "/workspace/scratch/026698cab616/vmfree-runtime/build/vmfree-c",
+            "run",
+            "/workspace/scratch/026698cab616/vmfree-runtime/examples/m11_17/server.elf",
+            "--root",
+            "/tmp/tmp7ozi8izt",
+            "--no-lookup-cache",
+            "--max-steps",
+            "10000000000",
+            "--profile",
+            "--",
+            "0"
+          ],
+          "startup_to_first_response_ms": 16.972978999547195,
+          "readiness_attempts": 1,
+          "warmup_s": 0.0,
+          "concurrency": 4,
+          "profile": {
+            "status": "ok",
+            "scope": "Cumulative startup, warmup, workload and snapshot wait; event counts, not CPU time",
+            "counters": {
+              "instructions": 536184,
+              "memory_lookups": 767855,
+              "segment_probes": 1935699,
+              "syscalls": {
+                "56": 2,
+                "57": 102,
+                "63": 102,
+                "64": 102,
+                "73": 203,
+                "198": 1,
+                "200": 1,
+                "201": 1,
+                "204": 1,
+                "208": 1,
+                "242": 101
+              },
+              "lookup_cache_hits": 0
+            }
+          }
+        },
+        {
+          "target_requests_per_second": 100.0,
+          "target_fraction_achieved": 0.9998638485382481,
+          "requests": 100,
+          "elapsed_s": 1.0001361700014968,
+          "requests_per_second": 99.9863848538248,
+          "latency_median_ms": 0.6019104985170998,
+          "latency_p95_ms": 1.071411999873817,
+          "command": [
+            "/workspace/scratch/026698cab616/vmfree-runtime/build/vmfree-c",
+            "run",
+            "/workspace/scratch/026698cab616/vmfree-runtime/examples/m11_17/server.elf",
+            "--root",
+            "/tmp/tmp7ozi8izt",
+            "--no-lookup-cache",
+            "--max-steps",
+            "10000000000",
+            "--profile",
+            "--",
+            "0"
+          ],
+          "startup_to_first_response_ms": 11.743112998374272,
+          "readiness_attempts": 1,
+          "warmup_s": 0.0,
+          "concurrency": 4,
+          "profile": {
+            "status": "ok",
+            "scope": "Cumulative startup, warmup, workload and snapshot wait; event counts, not CPU time",
+            "counters": {
+              "instructions": 536184,
+              "memory_lookups": 767855,
+              "segment_probes": 1935699,
+              "syscalls": {
+                "56": 2,
+                "57": 102,
+                "63": 102,
+                "64": 102,
+                "73": 203,
+                "198": 1,
+                "200": 1,
+                "201": 1,
+                "204": 1,
+                "208": 1,
+                "242": 101
+              },
+              "lookup_cache_hits": 0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Cache on",
+      "samples": [
+        {
+          "target_requests_per_second": 100.0,
+          "target_fraction_achieved": 0.9998912398325858,
+          "requests": 100,
+          "elapsed_s": 1.0001087719974748,
+          "requests_per_second": 99.98912398325858,
+          "latency_median_ms": 0.615719500274281,
+          "latency_p95_ms": 0.9214569981850218,
+          "command": [
+            "/workspace/scratch/026698cab616/vmfree-runtime/build/vmfree-c",
+            "run",
+            "/workspace/scratch/026698cab616/vmfree-runtime/examples/m11_17/server.elf",
+            "--root",
+            "/tmp/tmp7ozi8izt",
+            "--max-steps",
+            "10000000000",
+            "--profile",
+            "--",
+            "0"
+          ],
+          "startup_to_first_response_ms": 14.886600001773331,
+          "readiness_attempts": 1,
+          "warmup_s": 0.0,
+          "concurrency": 4,
+          "profile": {
+            "status": "ok",
+            "scope": "Cumulative startup, warmup, workload and snapshot wait; event counts, not CPU time",
+            "counters": {
+              "instructions": 536310,
+              "memory_lookups": 768041,
+              "segment_probes": 1184459,
+              "syscalls": {
+                "56": 2,
+                "57": 102,
+                "63": 102,
+                "64": 102,
+                "73": 203,
+                "198": 1,
+                "200": 1,
+                "201": 1,
+                "204": 1,
+                "208": 1,
+                "242": 101
+              },
+              "lookup_cache_hits": 648160
+            }
+          }
+        },
+        {
+          "target_requests_per_second": 100.0,
+          "target_fraction_achieved": 0.9998761213456501,
+          "requests": 100,
+          "elapsed_s": 1.0001238940021722,
+          "requests_per_second": 99.98761213456501,
+          "latency_median_ms": 0.5907189970457694,
+          "latency_p95_ms": 1.1827669986814726,
+          "command": [
+            "/workspace/scratch/026698cab616/vmfree-runtime/build/vmfree-c",
+            "run",
+            "/workspace/scratch/026698cab616/vmfree-runtime/examples/m11_17/server.elf",
+            "--root",
+            "/tmp/tmp7ozi8izt",
+            "--max-steps",
+            "10000000000",
+            "--profile",
+            "--",
+            "0"
+          ],
+          "startup_to_first_response_ms": 12.857727000664454,
+          "readiness_attempts": 1,
+          "warmup_s": 0.0,
+          "concurrency": 4,
+          "profile": {
+            "status": "ok",
+            "scope": "Cumulative startup, warmup, workload and snapshot wait; event counts, not CPU time",
+            "counters": {
+              "instructions": 536100,
+              "memory_lookups": 767731,
+              "segment_probes": 1184149,
+              "syscalls": {
+                "56": 2,
+                "57": 102,
+                "63": 102,
+                "64": 102,
+                "73": 203,
+                "198": 1,
+                "200": 1,
+                "201": 1,
+                "204": 1,
+                "208": 1,
+                "242": 101
+              },
+              "lookup_cache_hits": 647850
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "order": [
+    {
+      "round": 1,
+      "name": "Cache off"
+    },
+    {
+      "round": 1,
+      "name": "Cache on"
+    },
+    {
+      "round": 2,
+      "name": "Cache on"
+    },
+    {
+      "round": 2,
+      "name": "Cache off"
+    }
+  ],
+  "matched_rate_achieved": true,
+  "profile_collection_completed": true
+}

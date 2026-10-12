@@ -1,0 +1,32 @@
+{
+  "started_at": "2026-09-21T14:26:28+00:00",
+  "finished_at": "2026-09-21T14:36:38.387167+00:00",
+  "elapsed_seconds": 610.39,
+  "limits": {
+    "tokens": 10000,
+    "seconds": 1800
+  },
+  "token_usage": "No exact per-batch counter available; no measured token total claimed.",
+  "cpu_adapter": "single-process opt-in implemented",
+  "redis_version_passed": true,
+  "redis_service_qualified": false,
+  "dockiva_modified": false,
+  "validation": {
+    "python_tests": 53,
+    "adapter_tests": 14,
+    "sanitizer_suites": [
+      "m19_process",
+      "m39_startup",
+      "m44_sync_permissions",
+      "m22_cancellation"
+    ]
+  },
+  "source_hashes": {
+    "native/runtime.c": "88d8066c5ff2aa4a9a9382b292d9ae63f68dc57b90c26b557dfd473eea9b617e",
+    "native/syscall.h": "a57c1006f955cd50cff48d414c67a63cdca80d304dac86e301cb8bdf36e53cc9",
+    "native/unicorn_backend.h": "529b3542e2ba28181a8e7b623b02ffb34ea8627726222426e903df810e0d6c0e",
+    "scripts/build_native.py": "4103a2f4dbb235b3463ea776dd9c866f49eee792ebe487e491842fce520f53c7",
+    "scripts/verify_unicorn_backend.py": "efe8e4b9dc471fcb7a55d5db139477d41f2b445a7a6006147225a4e7682cfbb4",
+    "scripts/verify_redis_unicorn.py": "11a1814f0c29e6f49e5d3fdf7b27801edf441dbe30716f3c47b13167e64e1d74"
+  }
+}

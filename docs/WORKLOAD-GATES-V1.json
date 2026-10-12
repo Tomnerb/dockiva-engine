@@ -1,0 +1,205 @@
+{
+  "schema_version": 1,
+  "architecture_baseline": "1.0",
+  "updated": "2026-09-22",
+  "status_rule": "OPEN is not a failure report; no gate is accepted without matching pinned evidence. Prepared Redis results do not satisfy Valkey or PostgreSQL gates.",
+  "workloads": [
+    {
+      "name": "valkey",
+      "image_digest": null,
+      "binary_sha256": null,
+      "configuration_sha256": null,
+      "workload_parameters": null,
+      "runtime_backend": null,
+      "linux_reference": null,
+      "gates": [
+        {
+          "id": "V0",
+          "name": "Server starts",
+          "acceptance": "Pinned unchanged Linux ARM64 executable reaches readiness; record binary and image digests.",
+          "status": "OPEN",
+          "evidence": []
+        },
+        {
+          "id": "V1",
+          "name": "PING",
+          "acceptance": "Protocol response is correct; startup/loading is handled explicitly.",
+          "status": "OPEN",
+          "evidence": []
+        },
+        {
+          "id": "V2",
+          "name": "SET / GET",
+          "acceptance": "Values and missing-key behavior match the reference.",
+          "status": "OPEN",
+          "evidence": []
+        },
+        {
+          "id": "V3",
+          "name": "Concurrent clients",
+          "acceptance": "Concurrent reads/writes and atomic operations retain the expected results.",
+          "status": "OPEN",
+          "evidence": []
+        },
+        {
+          "id": "V4",
+          "name": "Sustained workload",
+          "acceptance": "A predefined duration, dataset and concurrency complete within declared resource limits.",
+          "status": "OPEN",
+          "evidence": []
+        },
+        {
+          "id": "V5",
+          "name": "SAVE",
+          "acceptance": "Synchronous snapshot completes and restores the expected dataset.",
+          "status": "OPEN",
+          "evidence": []
+        },
+        {
+          "id": "V6",
+          "name": "BGSAVE",
+          "acceptance": "Background snapshot validates fork/COW, continued parent writes, child completion, wait/signals and restored contents.",
+          "status": "OPEN",
+          "evidence": []
+        },
+        {
+          "id": "V7",
+          "name": "AOF",
+          "acceptance": "Declared append/fsync policy persists acknowledged writes across the specified restart scenarios.",
+          "status": "OPEN",
+          "evidence": []
+        },
+        {
+          "id": "V8",
+          "name": "AOF rewrite",
+          "acceptance": "Background rewrite with concurrent writes produces a valid recoverable dataset.",
+          "status": "OPEN",
+          "evidence": []
+        },
+        {
+          "id": "V9",
+          "name": "Graceful shutdown",
+          "acceptance": "Guest shutdown completes within the deadline with expected persistence and released resources.",
+          "status": "OPEN",
+          "evidence": []
+        },
+        {
+          "id": "V10",
+          "name": "Forced crash",
+          "acceptance": "Terminate during the pinned write workload; capture acknowledged operations and files for recovery.",
+          "status": "OPEN",
+          "evidence": []
+        },
+        {
+          "id": "V11",
+          "name": "Restart + persistence validation",
+          "acceptance": "Recover after V10 and validate contents against the declared durability policy; no named-application semantic branches.",
+          "status": "OPEN",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "name": "postgresql",
+      "image_digest": null,
+      "binary_sha256": null,
+      "configuration_sha256": null,
+      "workload_parameters": null,
+      "runtime_backend": null,
+      "linux_reference": null,
+      "gates": [
+        {
+          "id": "P0",
+          "name": "postgres --version",
+          "acceptance": "Pinned unchanged Linux ARM64 executable returns the expected version and exit status.",
+          "status": "OPEN",
+          "evidence": []
+        },
+        {
+          "id": "P1",
+          "name": "initdb",
+          "acceptance": "Initialization completes with valid catalog/data files and no hidden fixture substitutions.",
+          "status": "OPEN",
+          "evidence": []
+        },
+        {
+          "id": "P2",
+          "name": "Server startup",
+          "acceptance": "The initialized server reaches readiness with required background processes.",
+          "status": "OPEN",
+          "evidence": []
+        },
+        {
+          "id": "P3",
+          "name": "Single connection",
+          "acceptance": "A real client connects and completes a query.",
+          "status": "OPEN",
+          "evidence": []
+        },
+        {
+          "id": "P4",
+          "name": "CRUD",
+          "acceptance": "Create/read/update/delete and transaction commit/rollback produce expected results.",
+          "status": "OPEN",
+          "evidence": []
+        },
+        {
+          "id": "P5",
+          "name": "Concurrent backends",
+          "acceptance": "Independent sessions and transactions run without cross-process state corruption.",
+          "status": "OPEN",
+          "evidence": []
+        },
+        {
+          "id": "P6",
+          "name": "Shared-memory workloads",
+          "acceptance": "Exercise shared state and inter-process synchronization under pinned contention.",
+          "status": "OPEN",
+          "evidence": []
+        },
+        {
+          "id": "P7",
+          "name": "WAL behavior",
+          "acceptance": "Validate WAL and acknowledged commits under the declared durability settings.",
+          "status": "OPEN",
+          "evidence": []
+        },
+        {
+          "id": "P8",
+          "name": "Checkpoint",
+          "acceptance": "Checkpoint while active workloads run; verify subsequent restart.",
+          "status": "OPEN",
+          "evidence": []
+        },
+        {
+          "id": "P9",
+          "name": "Forced crash during writes",
+          "acceptance": "Crash at recorded write/checkpoint phases and retain the acknowledgement oracle.",
+          "status": "OPEN",
+          "evidence": []
+        },
+        {
+          "id": "P10",
+          "name": "WAL recovery",
+          "acceptance": "Restart from P9 without manual repair and recover according to the declared guarantees.",
+          "status": "OPEN",
+          "evidence": []
+        },
+        {
+          "id": "P11",
+          "name": "Checksum/data validation",
+          "acceptance": "Check recovered contents and enabled checksum/integrity mechanisms; report lost or unexpected committed data.",
+          "status": "OPEN",
+          "evidence": []
+        },
+        {
+          "id": "P12",
+          "name": "Long-running stress test",
+          "acceptance": "A pinned duration/load includes concurrent operations, resource observations and recovery; all preceding gates hold.",
+          "status": "OPEN",
+          "evidence": []
+        }
+      ]
+    }
+  ]
+}

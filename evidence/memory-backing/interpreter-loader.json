@@ -1,0 +1,147 @@
+{
+  "passed": true,
+  "checks": [
+    {
+      "name": "echo",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "dynamic\n",
+      "stderr": ""
+    },
+    {
+      "name": "shell",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "7\na\nb\n",
+      "stderr": ""
+    },
+    {
+      "name": "nested",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "hello\nchild\ndone\n",
+      "stderr": ""
+    },
+    {
+      "name": "files",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "abc\n/bin\n",
+      "stderr": ""
+    },
+    {
+      "name": "echo--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "dynamic\n",
+      "stderr": ""
+    },
+    {
+      "name": "shell--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "7\na\nb\n",
+      "stderr": ""
+    },
+    {
+      "name": "nested--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "hello\nchild\ndone\n",
+      "stderr": ""
+    },
+    {
+      "name": "files--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "abc\n/bin\n",
+      "stderr": ""
+    },
+    {
+      "name": "echo--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "dynamic\n",
+      "stderr": ""
+    },
+    {
+      "name": "shell--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "7\na\nb\n",
+      "stderr": ""
+    },
+    {
+      "name": "nested--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "hello\nchild\ndone\n",
+      "stderr": ""
+    },
+    {
+      "name": "files--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "abc\n/bin\n",
+      "stderr": ""
+    },
+    {
+      "name": "constructor_tls",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "shared library constructor and TLS passed\n",
+      "stderr": ""
+    },
+    {
+      "name": "constructor_tls--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "shared library constructor and TLS passed\n",
+      "stderr": ""
+    },
+    {
+      "name": "constructor_tls--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "shared library constructor and TLS passed\n",
+      "stderr": ""
+    },
+    {
+      "name": "missing",
+      "passed": true,
+      "exit_code": 125,
+      "stderr": "vmfree: Cannot open guest interpreter\n"
+    },
+    {
+      "name": "symlink",
+      "passed": true,
+      "exit_code": 125,
+      "stderr": "vmfree: Cannot open guest interpreter\n"
+    },
+    {
+      "name": "bad-elf",
+      "passed": true,
+      "exit_code": 125,
+      "stderr": "vmfree: Expected little-endian ELF64 version 1\n"
+    },
+    {
+      "name": "relative-interpreter",
+      "passed": true,
+      "exit_code": 125,
+      "stderr": "vmfree: Invalid interpreter path\n"
+    },
+    {
+      "name": "parent-interpreter",
+      "passed": true,
+      "exit_code": 125,
+      "stderr": "vmfree: Cannot open guest interpreter\n"
+    },
+    {
+      "name": "no-opt-in",
+      "passed": true,
+      "exit_code": 125,
+      "stderr": "vmfree: Unsupported ELF interpreter\n"
+    }
+  ],
+  "runtime_sha256": "ccada875ded5660185ddbcf67b5ff69f759425ea7fb2bc7215c3c5f20f66b4de"
+}

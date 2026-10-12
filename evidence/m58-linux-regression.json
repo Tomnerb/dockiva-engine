@@ -1,0 +1,241 @@
+{
+  "schema_version": 1,
+  "passed": true,
+  "linux_reference": true,
+  "reference_image": "sha256:02f8efbefad605a169e89926147edd0676646263268f303c6fb3cdfdbc4a9612",
+  "corpus_sha256": "48d8a3932a6d8ca83bbda639edd894089fe6e41075b79fa44b56213ee8cb8de9",
+  "runtime_sha256": "5efdc3ec8013a3977da1eca02260edc3436f8f1ee96538fddb1a6d4fb347cfc4",
+  "source_hashes": {
+    "native/runtime.c": "db19e386f73ac0b3a32c92fd7a38677aa4f7dca6f7e3fd943453dd6f8d587b32",
+    "native/profile.h": "d69dbabe6c7a9c2aa35f625f26ede05e95e02e70c0a32da6882ed3689bf0af51",
+    "native/net.h": "42b445faaad2d8ab7bde3e0abd0e5bcf7cbd58218b09514de20daa198e1363fc",
+    "native/resources.h": "941ba34cf44b05fc8bbbb90f4b5f600de3ac60860e84740f8759b083684f5b8e",
+    "native/scheduler.h": "c31830a52fa5570c21f788c5dd58ed6f15231b74244037046d1c1ca405ddfe3f",
+    "native/mapping.h": "486dfa12b5a5efc316013027a5ae27558182ae0ac00d812f1d7849da7e0c2f6d",
+    "native/signals.h": "2187c74c0b620550aa64684c1c7caf8bd7aaee6b0390d54a7ae4fb63ed452bea",
+    "native/io.h": "585c871add9b6ebbdab26db333d52a1566de353ee98e93f9f84ba568c7210b30",
+    "native/terminal.h": "10f1b04367e1b9ebde1f4888cd1fb85ec4cfc3b4265bde57419cd1bf7594851c",
+    "native/compat.h": "59daa0e3aead1a35c2fb5c677f7840395f3f1624f2fc658e471438e5e0c927b1",
+    "native/heap.h": "e595f3fd8ba03e898b6be667f6f618ca6198e6958002ec8b00dabb9690214fb5",
+    "native/process.h": "e768a4c638522ca881b02ec453fd1158e163aa59a0cca58b7d844c9f5b803440",
+    "native/fs.h": "b736ddafd408a8df471cdfd3d9adf7ef5185d33dc9a13e56f37992dc4a74db45",
+    "native/decode.h": "83976a2d3c6985658a8ae50d50a78d7f9b613ee1078d1df73228566599b707f0"
+  },
+  "checks": [
+    {
+      "id": "shell-arithmetic",
+      "classification": "matched",
+      "passed": true,
+      "actual": {
+        "exit_code": 0,
+        "stdout": "42\n",
+        "stderr": ""
+      },
+      "reference": {
+        "exit_code": 0,
+        "stdout": "42\n",
+        "stderr": ""
+      },
+      "policy_gap": null
+    },
+    {
+      "id": "pipeline",
+      "classification": "matched",
+      "passed": true,
+      "actual": {
+        "exit_code": 0,
+        "stdout": "hello\n",
+        "stderr": ""
+      },
+      "reference": {
+        "exit_code": 0,
+        "stdout": "hello\n",
+        "stderr": ""
+      },
+      "policy_gap": null
+    },
+    {
+      "id": "nested-exec",
+      "classification": "matched",
+      "passed": true,
+      "actual": {
+        "exit_code": 0,
+        "stdout": "nested\nparent\n",
+        "stderr": ""
+      },
+      "reference": {
+        "exit_code": 0,
+        "stdout": "nested\nparent\n",
+        "stderr": ""
+      },
+      "policy_gap": null
+    },
+    {
+      "id": "cwd-child-isolation",
+      "classification": "matched",
+      "passed": true,
+      "actual": {
+        "exit_code": 0,
+        "stdout": "/lib\n/bin\n",
+        "stderr": ""
+      },
+      "reference": {
+        "exit_code": 0,
+        "stdout": "/lib\n/bin\n",
+        "stderr": ""
+      },
+      "policy_gap": null
+    },
+    {
+      "id": "redirection",
+      "classification": "matched",
+      "passed": true,
+      "actual": {
+        "exit_code": 0,
+        "stdout": "first\nsecond\n",
+        "stderr": ""
+      },
+      "reference": {
+        "exit_code": 0,
+        "stdout": "first\nsecond\n",
+        "stderr": ""
+      },
+      "policy_gap": null
+    },
+    {
+      "id": "exit-status",
+      "classification": "matched",
+      "passed": true,
+      "actual": {
+        "exit_code": 0,
+        "stdout": "7\nrecovered\n",
+        "stderr": ""
+      },
+      "reference": {
+        "exit_code": 0,
+        "stdout": "7\nrecovered\n",
+        "stderr": ""
+      },
+      "policy_gap": null
+    },
+    {
+      "id": "signal-trap",
+      "classification": "matched",
+      "passed": true,
+      "actual": {
+        "exit_code": 0,
+        "stdout": "trapped\nresumed\n",
+        "stderr": ""
+      },
+      "reference": {
+        "exit_code": 0,
+        "stdout": "trapped\nresumed\n",
+        "stderr": ""
+      },
+      "policy_gap": null
+    },
+    {
+      "id": "dso-constructor-tls",
+      "classification": "matched",
+      "passed": true,
+      "actual": {
+        "exit_code": 0,
+        "stdout": "shared library constructor and TLS passed\n",
+        "stderr": ""
+      },
+      "reference": {
+        "exit_code": 0,
+        "stdout": "shared library constructor and TLS passed\n",
+        "stderr": ""
+      },
+      "policy_gap": null
+    },
+    {
+      "id": "parent-directory-policy",
+      "classification": "declared-policy-gap",
+      "passed": true,
+      "actual": {
+        "exit_code": 0,
+        "stdout": "denied\n/bin\n",
+        "stderr": ""
+      },
+      "reference": {
+        "exit_code": 0,
+        "stdout": "allowed\n/\n",
+        "stderr": ""
+      },
+      "policy_gap": "FS-001: parent traversal remains rejected; M27 open"
+    },
+    {
+      "id": "symlink-policy",
+      "classification": "declared-policy-gap",
+      "passed": true,
+      "actual": {
+        "exit_code": 1,
+        "stdout": "",
+        "stderr": "cat: can't open '/link': Permission denied\n"
+      },
+      "reference": {
+        "exit_code": 0,
+        "stdout": "fixture\n",
+        "stderr": ""
+      },
+      "policy_gap": "FS-002: links remain rejected; M27 open"
+    },
+    {
+      "id": "elf-empty",
+      "classification": "bounded-rejection",
+      "passed": true,
+      "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "actual": {
+        "exit_code": 125,
+        "stdout": "",
+        "stderr": "vmfree: Expected little-endian ELF64 version 1\n"
+      }
+    },
+    {
+      "id": "elf-short-header",
+      "classification": "bounded-rejection",
+      "passed": true,
+      "input_sha256": "cefe29527586f5b35d457e6ad5665a76b77d0fee9c86a0c8aec50ea71ee6ca8b",
+      "actual": {
+        "exit_code": 125,
+        "stdout": "",
+        "stderr": "vmfree: Expected little-endian ELF64 version 1\n"
+      }
+    },
+    {
+      "id": "elf-wrong-machine",
+      "classification": "bounded-rejection",
+      "passed": true,
+      "input_sha256": "90d3f9b1cf36964a0ce802ef975ffce79968896367e9f5ae6fdbbdacf32d6dcb",
+      "actual": {
+        "exit_code": 125,
+        "stdout": "",
+        "stderr": "vmfree: Only ARM64 ET_EXEC/static PIE version 1 supported\n"
+      }
+    },
+    {
+      "id": "elf-invalid-ph-count",
+      "classification": "bounded-rejection",
+      "passed": true,
+      "input_sha256": "e73f6c7ece7cb511fe6561e076b1abc9a62881c9c59ec4dbaa153bcd19b36ea5",
+      "actual": {
+        "exit_code": 125,
+        "stdout": "",
+        "stderr": "vmfree: Invalid program header size/count\n"
+      }
+    },
+    {
+      "id": "instruction-budget",
+      "classification": "bounded-rejection",
+      "passed": true,
+      "input_sha256": "6cf8ec49e87141b062c8364a88cccd640a99587d2f6f739990d559a39d38096f",
+      "actual": {
+        "exit_code": 125,
+        "stdout": "",
+        "stderr": "vmfree: Instruction budget exhausted\n"
+      }
+    }
+  ]
+}

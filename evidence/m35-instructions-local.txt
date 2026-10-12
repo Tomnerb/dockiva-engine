@@ -1,0 +1,6 @@
+PASS vmfree-c []
+PASS vmfree-c ['--no-decode-cache']
+PASS vmfree-c ['--no-lookup-cache']
+PASS vmfree-c-sanitize []
+PASS vmfree-c-sanitize ['--no-decode-cache']
+PASS vmfree-c-sanitize ['--no-lookup-cache']

@@ -1,0 +1,192 @@
+{
+  "host": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+  "completed": true,
+  "resources_enabled": false,
+  "target_requests_per_second": 3000.0,
+  "profiling_enabled": true,
+  "whole_vm_resources": "not measured",
+  "order": [
+    {
+      "round": 1,
+      "kind": "vmfree"
+    },
+    {
+      "round": 1,
+      "kind": "linux-vm"
+    },
+    {
+      "round": 2,
+      "kind": "linux-vm"
+    },
+    {
+      "round": 2,
+      "kind": "vmfree"
+    }
+  ],
+  "results": [
+    {
+      "name": "VM-free",
+      "kind": "vmfree",
+      "samples": [
+        {
+          "target_requests_per_second": 3000.0,
+          "target_fraction_achieved": 0.981915045163534,
+          "requests": 29458,
+          "elapsed_s": 10.000186250021216,
+          "requests_per_second": 2945.745135490602,
+          "latency_median_ms": 0.15620799968019128,
+          "latency_p95_ms": 0.18941599410027266,
+          "command": [
+            "/Users/macbookpro16m2max/Documents/vmfree-runtime/build/vmfree-c",
+            "run",
+            "/Users/macbookpro16m2max/.vmfree/containers/bench-bind-e6909416/rootfs/app/server",
+            "--root",
+            "/Users/macbookpro16m2max/.vmfree/containers/bench-bind-e6909416/rootfs",
+            "--max-steps",
+            "10000000000",
+            "--profile",
+            "--",
+            "0"
+          ],
+          "startup_to_first_response_ms": 5.807582987472415,
+          "readiness_attempts": 1,
+          "warmup_s": 2.0,
+          "concurrency": 4,
+          "profile": {
+            "status": "ok",
+            "scope": "Cumulative startup, warmup, workload and snapshot wait; event counts, not CPU time",
+            "counters": {
+              "instructions": 186774962,
+              "memory_lookups": 267441843,
+              "segment_probes": 674126354,
+              "syscalls": {
+                "56": 2,
+                "57": 35408,
+                "63": 35408,
+                "64": 35408,
+                "73": 70689,
+                "198": 1,
+                "200": 1,
+                "201": 1,
+                "204": 1,
+                "208": 1,
+                "242": 35407
+              }
+            }
+          }
+        },
+        {
+          "target_requests_per_second": 3000.0,
+          "target_fraction_achieved": 0.9820761478240051,
+          "requests": 29463,
+          "elapsed_s": 10.000242875015829,
+          "requests_per_second": 2946.2284434720154,
+          "latency_median_ms": 0.15558299492113292,
+          "latency_p95_ms": 0.1840410113800317,
+          "command": [
+            "/Users/macbookpro16m2max/Documents/vmfree-runtime/build/vmfree-c",
+            "run",
+            "/Users/macbookpro16m2max/.vmfree/containers/bench-bind-e6909416/rootfs/app/server",
+            "--root",
+            "/Users/macbookpro16m2max/.vmfree/containers/bench-bind-e6909416/rootfs",
+            "--max-steps",
+            "10000000000",
+            "--profile",
+            "--",
+            "0"
+          ],
+          "startup_to_first_response_ms": 5.7695829891599715,
+          "readiness_attempts": 1,
+          "warmup_s": 2.0,
+          "concurrency": 4,
+          "profile": {
+            "status": "ok",
+            "scope": "Cumulative startup, warmup, workload and snapshot wait; event counts, not CPU time",
+            "counters": {
+              "instructions": 186825524,
+              "memory_lookups": 267515664,
+              "segment_probes": 674312483,
+              "syscalls": {
+                "56": 2,
+                "57": 35423,
+                "63": 35423,
+                "64": 35423,
+                "73": 70670,
+                "198": 1,
+                "200": 1,
+                "201": 1,
+                "204": 1,
+                "208": 1,
+                "242": 35422
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Docker Linux VM",
+      "kind": "linux-vm",
+      "samples": [
+        {
+          "target_requests_per_second": 3000.0,
+          "target_fraction_achieved": 0.9797020848558579,
+          "requests": 29392,
+          "elapsed_s": 10.000318958977005,
+          "requests_per_second": 2939.1062545675736,
+          "latency_median_ms": 0.272916498943232,
+          "latency_p95_ms": 0.44645898742601275,
+          "command": [
+            "/opt/homebrew/bin/docker",
+            "--context",
+            "orbstack",
+            "run",
+            "--rm",
+            "--name",
+            "vmfree-bench-62dd0dba",
+            "--platform",
+            "linux/arm64",
+            "-p",
+            "127.0.0.1:52622:18080",
+            "vmfree-benchmark:local"
+          ],
+          "startup_to_first_response_ms": 435.96437500673346,
+          "readiness_attempts": 5,
+          "warmup_s": 2.0,
+          "concurrency": 4
+        },
+        {
+          "target_requests_per_second": 3000.0,
+          "target_fraction_achieved": 0.9839368861439219,
+          "requests": 29519,
+          "elapsed_s": 10.00030266700196,
+          "requests_per_second": 2951.8106584317657,
+          "latency_median_ms": 0.26887498097494245,
+          "latency_p95_ms": 0.4022089997306466,
+          "command": [
+            "/opt/homebrew/bin/docker",
+            "--context",
+            "orbstack",
+            "run",
+            "--rm",
+            "--name",
+            "vmfree-bench-62dd0dba",
+            "--platform",
+            "linux/arm64",
+            "-p",
+            "127.0.0.1:52622:18080",
+            "vmfree-benchmark:local"
+          ],
+          "startup_to_first_response_ms": 342.2351249901112,
+          "readiness_attempts": 5,
+          "warmup_s": 2.0,
+          "concurrency": 4
+        }
+      ]
+    }
+  ],
+  "methodology": "Alternating AB/BA rounds; fresh launch each sample; warmup excluded from throughput; startup includes launcher and forwarding readiness; resources sampled during load; pending final requests included in elapsed time; native budget 10 billion instructions",
+  "limitations": "Native RSS and Docker CLI memory are different metrics. Docker stats excludes whole-VM overhead. Resource polling perturbs timings; use the separate uninstrumented report for performance. Python client can limit throughput.",
+  "matched_rate_achieved": true,
+  "profile_collection_completed": true
+}

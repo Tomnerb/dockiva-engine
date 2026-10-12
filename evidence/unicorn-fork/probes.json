@@ -1,0 +1,32 @@
+{
+  "runtime_sha256": "7bc89cfb92ec8fff433d446fb1a21cbeaa672408a4e1f45bd8d56312dbf12a93",
+  "results": [
+    {
+      "test": "fork_guest.c",
+      "backend": "unicorn",
+      "passed": true,
+      "exit": 0,
+      "stdout_hex": "666f726b20504153530a",
+      "stderr": "",
+      "elf_sha256": "867797f2c8f9f996508180b786a60b42fe3179eb8195a6346d8b50f03d149211"
+    },
+    {
+      "test": "fork_threads_guest.S",
+      "backend": "unicorn",
+      "passed": true,
+      "exit": 0,
+      "stdout_hex": "",
+      "stderr": "",
+      "elf_sha256": "be249f0336d4b0042fdb396b4b0a5d11f8117152954e110a7f7b0fe788331a2e"
+    },
+    {
+      "test": "fork_exec_guest.c",
+      "backend": "unicorn",
+      "passed": true,
+      "exit": 0,
+      "stdout_hex": "",
+      "stderr": "",
+      "elf_sha256": "a625122313969f11c6225e2c7bdef358acf61b55d2485950ae1c24293358c643"
+    }
+  ]
+}

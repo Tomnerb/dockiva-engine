@@ -1,0 +1,17 @@
+{
+  "image_id": "sha256:3b0f54bf27a77c98d319dc3a6706ed500a8985309f0b6c6407599b869f4a2bd9",
+  "scope": "Prepared pinned Linux ELF; opt-in Unicorn backend; no Docker or native Redis fallback",
+  "runtime_sha256": "4ecd95504021a0b1210434836498893ab99703604dc8551dee47a5b94006fb3b",
+  "service_qualified": false,
+  "cycles": [
+    {
+      "phase": "write",
+      "passed": false,
+      "queries": [],
+      "error": "Redis exited before readiness (125)",
+      "exit": 125,
+      "stdout": "1:C 22 Sep 2026 00:16:11.917 * oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo\n1:C 22 Sep 2026 00:16:11.922 * Redis version=7.4.2, bits=64, commit=00000000, modified=0, pid=1, just started\n1:C 22 Sep 2026 00:16:11.922 * Configuration loaded\n",
+      "stderr": "syscall=179\nvmfree: Linux syscall is not implemented\n"
+    }
+  ]
+}

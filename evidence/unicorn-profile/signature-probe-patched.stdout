@@ -1,0 +1,4 @@
+[Dict]
+	[Key] com.apple.security.cs.allow-jit
+	[Value]
+		[Bool] true

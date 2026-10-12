@@ -1,0 +1,208 @@
+{
+  "passed": true,
+  "checks": [
+    {
+      "name": "48",
+      "passed": true,
+      "profile": {
+        "instructions": 1307,
+        "memory_lookups": 2083,
+        "segment_probes": 2370,
+        "syscalls": {
+          "57": 2,
+          "59": 1,
+          "63": 1,
+          "64": 1,
+          "93": 1,
+          "214": 2,
+          "215": 1,
+          "220": 4,
+          "222": 1
+        },
+        "lookup_cache_hits": 1944,
+        "decode_checks": 2585,
+        "decode_hits": 1139,
+        "decode_misses": 168,
+        "allocated_bytes": 0,
+        "peak_allocated_bytes": 45092219,
+        "allocation_limit_bytes": 50331648,
+        "allocation_denials": 4
+      },
+      "stdout": "aggregate allocation denied; parent and pipe state preserved\n"
+    },
+    {
+      "name": "48--no-decode-cache",
+      "passed": true,
+      "profile": {
+        "instructions": 1307,
+        "memory_lookups": 2083,
+        "segment_probes": 2370,
+        "syscalls": {
+          "57": 2,
+          "59": 1,
+          "63": 1,
+          "64": 1,
+          "93": 1,
+          "214": 2,
+          "215": 1,
+          "220": 4,
+          "222": 1
+        },
+        "lookup_cache_hits": 1944,
+        "decode_checks": 23228,
+        "decode_hits": 0,
+        "decode_misses": 0,
+        "allocated_bytes": 0,
+        "peak_allocated_bytes": 45092219,
+        "allocation_limit_bytes": 50331648,
+        "allocation_denials": 4
+      },
+      "stdout": "aggregate allocation denied; parent and pipe state preserved\n"
+    },
+    {
+      "name": "48--no-lookup-cache",
+      "passed": true,
+      "profile": {
+        "instructions": 1307,
+        "memory_lookups": 2083,
+        "segment_probes": 4815,
+        "syscalls": {
+          "57": 2,
+          "59": 1,
+          "63": 1,
+          "64": 1,
+          "93": 1,
+          "214": 2,
+          "215": 1,
+          "220": 4,
+          "222": 1
+        },
+        "lookup_cache_hits": 0,
+        "decode_checks": 2585,
+        "decode_hits": 1139,
+        "decode_misses": 168,
+        "allocated_bytes": 0,
+        "peak_allocated_bytes": 45092219,
+        "allocation_limit_bytes": 50331648,
+        "allocation_denials": 4
+      },
+      "stdout": "aggregate allocation denied; parent and pipe state preserved\n"
+    },
+    {
+      "name": "96",
+      "passed": true,
+      "profile": {
+        "instructions": 1524,
+        "memory_lookups": 2430,
+        "segment_probes": 2733,
+        "syscalls": {
+          "57": 2,
+          "59": 1,
+          "63": 1,
+          "64": 1,
+          "93": 5,
+          "214": 2,
+          "215": 1,
+          "220": 4,
+          "222": 1,
+          "260": 8
+        },
+        "lookup_cache_hits": 2277,
+        "decode_checks": 2816,
+        "decode_hits": 1332,
+        "decode_misses": 192,
+        "allocated_bytes": 0,
+        "peak_allocated_bytes": 70258059,
+        "allocation_limit_bytes": 100663296,
+        "allocation_denials": 0
+      },
+      "stdout": "bounded child allocation succeeded and cleaned up\n"
+    },
+    {
+      "name": "96--no-decode-cache",
+      "passed": true,
+      "profile": {
+        "instructions": 1524,
+        "memory_lookups": 2430,
+        "segment_probes": 2733,
+        "syscalls": {
+          "57": 2,
+          "59": 1,
+          "63": 1,
+          "64": 1,
+          "93": 5,
+          "214": 2,
+          "215": 1,
+          "220": 4,
+          "222": 1,
+          "260": 8
+        },
+        "lookup_cache_hits": 2277,
+        "decode_checks": 27177,
+        "decode_hits": 0,
+        "decode_misses": 0,
+        "allocated_bytes": 0,
+        "peak_allocated_bytes": 70258059,
+        "allocation_limit_bytes": 100663296,
+        "allocation_denials": 0
+      },
+      "stdout": "bounded child allocation succeeded and cleaned up\n"
+    },
+    {
+      "name": "96--no-lookup-cache",
+      "passed": true,
+      "profile": {
+        "instructions": 1524,
+        "memory_lookups": 2430,
+        "segment_probes": 5661,
+        "syscalls": {
+          "57": 2,
+          "59": 1,
+          "63": 1,
+          "64": 1,
+          "93": 5,
+          "214": 2,
+          "215": 1,
+          "220": 4,
+          "222": 1,
+          "260": 8
+        },
+        "lookup_cache_hits": 0,
+        "decode_checks": 2816,
+        "decode_hits": 1332,
+        "decode_misses": 192,
+        "allocated_bytes": 0,
+        "peak_allocated_bytes": 70258059,
+        "allocation_limit_bytes": 100663296,
+        "allocation_denials": 0
+      },
+      "stdout": "bounded child allocation succeeded and cleaned up\n"
+    },
+    {
+      "name": "budget_0",
+      "passed": true,
+      "stderr": "vmfree: Memory budget must be 1..1024 MiB\n"
+    },
+    {
+      "name": "budget_-1",
+      "passed": true,
+      "stderr": "vmfree: Invalid memory budget\n"
+    },
+    {
+      "name": "budget_1025",
+      "passed": true,
+      "stderr": "vmfree: Memory budget must be 1..1024 MiB\n"
+    },
+    {
+      "name": "budget_x",
+      "passed": true,
+      "stderr": "vmfree: Invalid memory budget\n"
+    },
+    {
+      "name": "budget_1",
+      "passed": true,
+      "stderr": "vmfree: Allocation failed\n"
+    }
+  ],
+  "runtime_sha256": "ff38dff512602f115ab60acf222259913f0d075e8bc19347dccfd23d50422277"
+}

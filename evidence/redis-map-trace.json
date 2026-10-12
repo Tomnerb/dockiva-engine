@@ -1,0 +1,60 @@
+{
+  "runtime_sha256": "dce6b35219c3cbdba9ee38c8b5bc124fc63cc2760a89fff5b890f63b43b67a16",
+  "scope": "Direct ELF version probes; not stock image, Dockiva, service or persistence acceptance",
+  "expanded_limits": true,
+  "results": [
+    {
+      "database": "redis",
+      "image_id": "sha256:3b0f54bf27a77c98d319dc3a6706ed500a8985309f0b6c6407599b869f4a2bd9",
+      "repository_digests": [],
+      "binary": "/usr/local/bin/redis-server",
+      "service_qualified": false,
+      "files": {
+        "/usr/local/bin/redis-server": {
+          "sha256": "0861b9b93d67227b1fc87129eaec6cd8dad1317817a0211421fb908edd06fc54",
+          "bytes": 16813640
+        },
+        "/lib/aarch64-linux-gnu/libc.so.6": {
+          "sha256": "52677b742d458f20bdd78cb7dc4c2664b31c46dbd7765aba4bd8c96106f4d2e0",
+          "bytes": 1651408
+        },
+        "/lib/ld-linux-aarch64.so.1": {
+          "sha256": "b45de0f039f84a52cef445b9a1980c65a35199998e992baa026865f2cd3ef303",
+          "bytes": 202912
+        },
+        "/lib/aarch64-linux-gnu/libcrypto.so.3": {
+          "sha256": "0810630ecdd984d37441efd4518d06f5493dc23d259d5b4988c35526e100ba8a",
+          "bytes": 4466856
+        },
+        "/lib/aarch64-linux-gnu/libssl.so.3": {
+          "sha256": "c5c7395da5a6e88d70df1dce511506abdc3cdd9c018c5cd71823c89907108b18",
+          "bytes": 737192
+        },
+        "/lib/aarch64-linux-gnu/libm.so.6": {
+          "sha256": "672425bf2c22adfe1f1cc41dd53b0662c498e40a3f5de79d0cb0e87767d922c9",
+          "bytes": 591960
+        }
+      },
+      "adaptation": "Direct executable and transitive ELF libraries; archive link targets materialized as regular files. Original ELF bytes unchanged. Image entrypoint, environment and full filesystem are not reproduced.",
+      "interpreter": "/lib/ld-linux-aarch64.so.1",
+      "missing_libraries": [],
+      "default_probe": {
+        "exit_code": 125,
+        "stdout": "",
+        "stderr": "vmfree: Input read failed or exceeds 16 MiB\n"
+      },
+      "max_steps": 200000000,
+      "dynamic_probe": {
+        "exit_code": 127,
+        "stdout": "",
+        "stderr": "syscall 214: x0..5=[0, 0, 0, 0, 33811976, 11]\nsyscall 48: x0..5=[18446744073709551516, 33694448, 4, 257264, 1685382482, 336]\nsyscall 56: x0..5=[18446744073709551516, 33685904, 524288, 0, 33821568, 18446744073709551615]\nsyscall 56: x0..5=[18446744073709551516, 140737487302192, 524288, 0, 140737487302831, 0]\nsyscall 79: x0..5=[18446744073709551516, 140737487302192, 140737487302480, 0, 140737487302831, 0]\nsyscall 56: x0..5=[18446744073709551516, 140737487302192, 524288, 0, 140737487302831, 0]\nsyscall 63: x0..5=[64, 140737487302864, 832, 0, 140737487302831, 0]\nsyscall 79: x0..5=[64, 33690840, 140737487302480, 4096, 33823520, 33821568]\nsyscall 222: x0..5=[0, 8192, 3, 34, 18446744073709551615, 0]\nsyscall 222: x0..5=[0, 655472, 0, 34, 18446744073709551615, 0]\nsyscall 222: x0..5=[68719542272, 589936, 5, 2066, 64, 0]\nsyscall 215: x0..5=[68719484928, 655472, 18446744073709551615, 589935, 64, 0]\nsyscall 57: x0..5=[64, 655472, 18446744073709551615, 589935, 64, 0]\nsyscall 66: x0..5=[2, 140737487301728, 10, 0, 33687075, 1]\n/usr/local/bin/redis-server: error while loading shared libraries: libm.so.6: failed to map segment from shared object\nsyscall 94: x0..5=[127, 140737487301728, 127, 33821504, 33687075, 1]\n"
+      },
+      "outcome": "version probe did not exit successfully; service untested",
+      "linux_reference": {
+        "exit_code": 0,
+        "stdout": "Redis server v=7.4.2 sha=00000000:0 malloc=jemalloc-5.3.0 bits=64 build=3dfb3660d0f5a2e7\n",
+        "stderr": ""
+      }
+    }
+  ]
+}

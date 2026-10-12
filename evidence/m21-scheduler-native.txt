@@ -1,0 +1,1 @@
+PASS scheduler: 6198 switches, 1807 read waits, 773 write waits; all task/pipe resources released

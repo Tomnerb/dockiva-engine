@@ -1,0 +1,22 @@
+{
+  "decision": "redesign; conditional bounded backend research only",
+  "gate_a_complete": false,
+  "gate_b_complete": false,
+  "runtime_changed": false,
+  "dockiva_rebuilt": false,
+  "budget": {
+    "token_cap": 10000,
+    "minutes_cap": 30,
+    "started_utc": "2026-09-21 13:35:45 UTC",
+    "finished_utc": "2026-09-21 13:45:09 UTC",
+    "elapsed_seconds": 564
+  },
+  "artifacts": {
+    "evidence/feasibility/backend.json": "40b636d420ea50f6bd78d584be95bc98f9176221fa6375a698b52bc59d0a2bfe",
+    "evidence/feasibility/linux-services.json": "189f8f98748fec718557570d659f0be16190e0cd77039c89d851bfcc8996b866",
+    "evidence/feasibility/upstream.json": "cf72fba71605606e5d327724e84a4959bc49d59c0e0c9780a685bbf46edcdae1",
+    "docs/FEASIBILITY-DECISION-2026-09-21.md": "e3745edc9899be03b7f2bed2ebb376bc1fad2db18ffa1fcd7e0f390f9aeeb83c"
+  },
+  "evidence_checks_passed": true,
+  "reference_resources_remaining": 0
+}

@@ -1,0 +1,231 @@
+{
+  "milestone": 22,
+  "host": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+  "passed": true,
+  "results": [
+    {
+      "name": "cancel-spin",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "cancelled child; sibling and parent survived\n",
+      "stderr": ""
+    },
+    {
+      "name": "cancel-read",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "cancelled child; sibling and parent survived\n",
+      "stderr": ""
+    },
+    {
+      "name": "cancel-write",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "cancelled child; sibling and parent survived\n",
+      "stderr": ""
+    },
+    {
+      "name": "cancel-wait",
+      "passed": true,
+      "exit_code": 130,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "name": "self-term",
+      "passed": true,
+      "exit_code": 143,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "name": "self-pipe",
+      "passed": true,
+      "exit_code": 141,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "name": "signal-zombie",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "name": "signal-errors",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "name": "cancel-spin--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "cancelled child; sibling and parent survived\n",
+      "stderr": ""
+    },
+    {
+      "name": "cancel-read--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "cancelled child; sibling and parent survived\n",
+      "stderr": ""
+    },
+    {
+      "name": "cancel-write--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "cancelled child; sibling and parent survived\n",
+      "stderr": ""
+    },
+    {
+      "name": "cancel-wait--no-decode-cache",
+      "passed": true,
+      "exit_code": 130,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "name": "self-term--no-decode-cache",
+      "passed": true,
+      "exit_code": 143,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "name": "self-pipe--no-decode-cache",
+      "passed": true,
+      "exit_code": 141,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "name": "signal-zombie--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "name": "signal-errors--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "name": "cancel-spin--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "cancelled child; sibling and parent survived\n",
+      "stderr": ""
+    },
+    {
+      "name": "cancel-read--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "cancelled child; sibling and parent survived\n",
+      "stderr": ""
+    },
+    {
+      "name": "cancel-write--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "cancelled child; sibling and parent survived\n",
+      "stderr": ""
+    },
+    {
+      "name": "cancel-wait--no-lookup-cache",
+      "passed": true,
+      "exit_code": 130,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "name": "self-term--no-lookup-cache",
+      "passed": true,
+      "exit_code": 143,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "name": "self-pipe--no-lookup-cache",
+      "passed": true,
+      "exit_code": 141,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "name": "signal-zombie--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "name": "signal-errors--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "name": "signals_require_scheduler",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "name": "portable_signal_status",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "signal statuses: 2 9 13 15; reaped PIDs absent\n",
+      "stderr": ""
+    },
+    {
+      "name": "probe self-term | busybox cat",
+      "passed": true,
+      "exit_code": 143,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "name": "probe self-term | busybox cat; status",
+      "passed": true,
+      "exit_code": 143,
+      "stdout": "143\n",
+      "stderr": ""
+    },
+    {
+      "name": "probe self-term || busybox echo recovered",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "recovered\n",
+      "stderr": ""
+    },
+    {
+      "name": "oci_cancellation",
+      "passed": true,
+      "exit_code": 0,
+      "stdout": "cancelled child; sibling and parent survived\n",
+      "stderr": ""
+    }
+  ],
+  "runtime_sha256": "1cafa836ffed91344422b03d68b0712ffbd29545c99ffea5c637c3721ec0b4cd",
+  "source_hashes": {
+    "native/compat.h": "4942308092ced51c32b524b10c1b60528635f39ae2e18b762ae489828820f731",
+    "native/decode.h": "6f6ec28223bcd197e9a6535258a2d084ea86f44bda56d8fb4c236cd7ff37477f",
+    "native/fs.h": "4e57c77d9d6ffb7c577d064f75362f99d94a97453adf08d28eb6f345a55ca25f",
+    "native/heap.h": "97655ddcfec1ca4d299ec6eca42131cb22c4b0f2b5ca9df3a74e9312ad552d3f",
+    "native/io.h": "24cbd6d9c2cffea4b2363b8a3d67eaca5600fb3be14b800ddd575a7cf9604026",
+    "native/net.h": "6b6136594441f89fef376f019fded87897fc10ea728db60112f792062e78001d",
+    "native/process.h": "3532df7d3a3d1578f23f988ab6883c4ce10b119552508bd87c89bf9ed89600b6",
+    "native/profile.h": "e5a95845a20852e4912c4ab7ce34f0a8abe51ca3b2c047b449d0b63e452cf0f8",
+    "native/runtime.c": "c265200cac6a40d5194654a5154bb0003ee7e1d17cc855554a57b2b053e03eac",
+    "native/scheduler.h": "7260df3e6b91ebcdb369c0f2d2c76d9d238554d1c8ba012df4956509af42a010"
+  },
+  "linux_reference": "not-run"
+}

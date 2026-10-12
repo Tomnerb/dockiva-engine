@@ -1,0 +1,15 @@
+matched shell-arithmetic
+matched pipeline
+matched nested-exec
+matched cwd-child-isolation
+matched redirection
+matched exit-status
+matched signal-trap
+matched dso-constructor-tls
+declared-policy-gap parent-directory-policy
+declared-policy-gap symlink-policy
+bounded-rejection elf-empty
+bounded-rejection elf-short-header
+bounded-rejection elf-wrong-machine
+bounded-rejection elf-invalid-ph-count
+bounded-rejection instruction-budget

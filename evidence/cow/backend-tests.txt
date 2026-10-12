@@ -1,0 +1,14 @@
+exit_status PASS
+loop_budget PASS
+illegal_instruction PASS
+non_linux_svc PASS
+unmapped_read PASS
+unmapped_write PASS
+mmap_visibility PASS
+mprotect_revoke PASS
+munmap_revoke PASS
+no_execute_data PASS
+clone_rejected PASS
+fp_tls_across_syscall PASS
+futex_wake_no_waiters PASS
+futex_pi_unsupported PASS

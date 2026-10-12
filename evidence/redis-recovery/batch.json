@@ -1,0 +1,56 @@
+{
+  "started_utc": "2026-09-22T01:27:34Z",
+  "finished_utc": "2026-09-22T01:35:29.945998+00:00",
+  "runtime_sha256": "bc0b97b1174f24269a6dc12a95a33ec8274a875d08220c649285a6fe60a51000",
+  "source_hashes": {
+    "native/compat.h": "f2a2eb2bd5927cb8cd9d5a0a59f22abc2f66d93237ffb885f7c7c4d361a54b12",
+    "native/decode.h": "fdc15750c69a7f12c54e1ef9c27ac93c47fd722093958d1190497964a8ff40bd",
+    "native/epoll.h": "d29909bd85a79f2efce680f3bc0e1d291b4040401ce56d453561fd28ca2e4a00",
+    "native/fadvise.h": "6445807c672126a59c6a342f7a636ebbc4c4ddd46375a218ab6c7997c8b2fec9",
+    "native/fs.h": "9a7de1cfe61c607f09417870259b063ea9561e8d036a5fec9cad95f2a5c98bd6",
+    "native/heap.h": "e595f3fd8ba03e898b6be667f6f618ca6198e6958002ec8b00dabb9690214fb5",
+    "native/io.h": "b4ae37be372db8a98c2d40b5c81ce209bb48a3318123b688ed569e21a6cabf01",
+    "native/mapping.h": "ba40e81ad02757ea1f1dff709e752687db02762362cb34aff8d75e3d90e54154",
+    "native/net.h": "c7e4da422ee43215b2539f9258508769db902a0e807f14fc543abe181af8f3ec",
+    "native/process.h": "63c46c76e6beb8adfc446663bda0a7dfeaf8cc1113c22e57bc637756cec14335",
+    "native/profile.h": "d69dbabe6c7a9c2aa35f625f26ede05e95e02e70c0a32da6882ed3689bf0af51",
+    "native/resources.h": "941ba34cf44b05fc8bbbb90f4b5f600de3ac60860e84740f8759b083684f5b8e",
+    "native/runtime.c": "b249ff94e53c4fe616d03d6d10a7f62699f97dbdb1593672bd4bb0c33794db53",
+    "native/scheduler.h": "e33ea5e241b989adccc2b8b8b6fdb9b1cbe9a4cff8a07e0dba875f82a022bf21",
+    "native/signals.h": "2187c74c0b620550aa64684c1c7caf8bd7aaee6b0390d54a7ae4fb63ed452bea",
+    "native/syscall.h": "6779d25d045ffc9def89d8ef7c1db80d6bab2599d9bf0e4a0f68a9ef935dc092",
+    "native/sysinfo.h": "5097e038c6ae4d132bc2493cd81b070639a35fbc2e00b797428bdf3da762d1c9",
+    "native/terminal.h": "10f1b04367e1b9ebde1f4888cd1fb85ec4cfc3b4265bde57419cd1bf7594851c",
+    "native/unicorn_backend.h": "8e11fc7b9dc9d8e112f16014ff59b2f967d07f578506869d2bf44a33eab62ce7",
+    "native/unicorn_threads.h": "2d6be588f76df95780ffd81b5e79a65ac94c048701ccc2ecbfa6054de7149173"
+  },
+  "harness_hashes": {
+    "scripts/verify_redis_recovery.py": "ff6268eba36b764fc072b5324909874944f2de35f8f808bc897183e5ded8b4e2",
+    "scripts/verify_redis_unicorn.py": "117e9d21e69497c650795eb3973a8fb82cd2d8ece212d5a0a418a801fe5a1124",
+    "scripts/verify_accept.py": "9306ed9fa25a2880f6b6281b1d25a614334b419b55d8853f70a0f2725225c835",
+    "tests/test_redis_recovery.py": "d515ea2970a7f53b144ef21ce6a9e8a6275e653d4c121cbe26aac6aa3059dabc",
+    "tests/native/accept_guest.c": "11772c080400ffbdbff54fc1d490ca533614d8c069a1098fa74238b6e1df45f3"
+  },
+  "results": [
+    {
+      "clients": 4,
+      "verified_final_keys": 351,
+      "shared_counter_increments": 300,
+      "crashes": 2
+    },
+    {
+      "clients": 8,
+      "verified_final_keys": 651,
+      "shared_counter_increments": 600,
+      "crashes": 2
+    }
+  ],
+  "peer_checks_per_backend_and_linux": 110,
+  "sanitizer_probes": 2,
+  "adapter_tests": 14,
+  "python_tests": 58,
+  "basic_acceptance": true,
+  "scope": "Prepared Redis; bounded concurrency, clean restart and SIGKILL process recovery. Not power loss, stock-image or production qualification.",
+  "dockiva_built": false,
+  "token_usage": "Exact token usage unavailable"
+}

@@ -1,0 +1,260 @@
+{
+  "milestone": 19,
+  "host": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+  "passed": true,
+  "results": [
+    {
+      "name": "fixture_hashes",
+      "passed": true
+    },
+    {
+      "name": "clone_memory_pid_wait",
+      "passed": true,
+      "code": 0,
+      "stdout": "fork isolation and wait status OK\n",
+      "stderr": ""
+    },
+    {
+      "name": "shared_file_offset_private_fd_table",
+      "passed": true,
+      "code": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "name": "exec_descriptor_cloexec",
+      "passed": true,
+      "code": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "name": "exec_recovery_/missing",
+      "passed": true,
+      "code": 0,
+      "stdout": "exec preserved caller\n",
+      "stderr": ""
+    },
+    {
+      "name": "exec_recovery_/bad",
+      "passed": true,
+      "code": 0,
+      "stdout": "exec preserved caller\n",
+      "stderr": ""
+    },
+    {
+      "name": "exec_recovery_/badentry",
+      "passed": true,
+      "code": 0,
+      "stdout": "exec preserved caller\n",
+      "stderr": ""
+    },
+    {
+      "name": "exec_recovery_/noexec",
+      "passed": true,
+      "code": 0,
+      "stdout": "exec preserved caller\n",
+      "stderr": ""
+    },
+    {
+      "name": "exec_recovery_/link",
+      "passed": true,
+      "code": 0,
+      "stdout": "exec preserved caller\n",
+      "stderr": ""
+    },
+    {
+      "name": "exec_recovery_/dirlink/probe",
+      "passed": true,
+      "code": 0,
+      "stdout": "exec preserved caller\n",
+      "stderr": ""
+    },
+    {
+      "name": "exec_recovery_/../outside",
+      "passed": true,
+      "code": 0,
+      "stdout": "exec preserved caller\n",
+      "stderr": ""
+    },
+    {
+      "name": "exec_limit",
+      "passed": true,
+      "code": 11,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "name": "shell_sequence",
+      "passed": true,
+      "code": 0,
+      "stdout": "hello world\n7\nhello file\n",
+      "stderr": ""
+    },
+    {
+      "name": "shell_conditional",
+      "passed": true,
+      "code": 0,
+      "stdout": "good\n",
+      "stderr": ""
+    },
+    {
+      "name": "shell_quotes",
+      "passed": true,
+      "code": 0,
+      "stdout": "two words empty word  $literal\n",
+      "stderr": ""
+    },
+    {
+      "name": "shell_exit",
+      "passed": true,
+      "code": 23,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "name": "shell_explicit_exit",
+      "passed": true,
+      "code": 9,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "name": "shell_missing",
+      "passed": true,
+      "code": 127,
+      "stdout": "",
+      "stderr": "sh: command not found\n"
+    },
+    {
+      "name": "shell_exec_error",
+      "passed": true,
+      "code": 126,
+      "stdout": "",
+      "stderr": "sh: cannot execute command\n"
+    },
+    {
+      "name": "shell_environment",
+      "passed": true,
+      "code": 0,
+      "stdout": "M19=value\n",
+      "stderr": ""
+    },
+    {
+      "name": "shell_empty",
+      "passed": true,
+      "code": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "name": "clone--no-decode-cache",
+      "passed": true,
+      "code": 0,
+      "stdout": "fork isolation and wait status OK\n",
+      "stderr": ""
+    },
+    {
+      "name": "shell--no-decode-cache",
+      "passed": true,
+      "code": 0,
+      "stdout": "hello world\n7\nhello file\n",
+      "stderr": ""
+    },
+    {
+      "name": "clone--no-lookup-cache",
+      "passed": true,
+      "code": 0,
+      "stdout": "fork isolation and wait status OK\n",
+      "stderr": ""
+    },
+    {
+      "name": "shell--no-lookup-cache",
+      "passed": true,
+      "code": 0,
+      "stdout": "hello world\n7\nhello file\n",
+      "stderr": ""
+    },
+    {
+      "name": "syntax_rejected_busybox echo should-not-run | busybox cat",
+      "passed": true,
+      "code": 2,
+      "stdout": "",
+      "stderr": "sh: unsupported syntax or command limit\n"
+    },
+    {
+      "name": "syntax_rejected_true &",
+      "passed": true,
+      "code": 2,
+      "stdout": "",
+      "stderr": "sh: unsupported syntax or command limit\n"
+    },
+    {
+      "name": "syntax_rejected_true > /out",
+      "passed": true,
+      "code": 2,
+      "stdout": "",
+      "stderr": "sh: unsupported syntax or command limit\n"
+    },
+    {
+      "name": "syntax_rejected_echo $HOME",
+      "passed": true,
+      "code": 2,
+      "stdout": "",
+      "stderr": "sh: unsupported syntax or command limit\n"
+    },
+    {
+      "name": "syntax_rejected_echo 'unterminated",
+      "passed": true,
+      "code": 2,
+      "stdout": "",
+      "stderr": "sh: unsupported syntax or command limit\n"
+    },
+    {
+      "name": "syntax_rejected_true &&",
+      "passed": true,
+      "code": 2,
+      "stdout": "",
+      "stderr": "sh: unsupported syntax or command limit\n"
+    },
+    {
+      "name": "syntax_rejected_true; ; false",
+      "passed": true,
+      "code": 2,
+      "stdout": "",
+      "stderr": "sh: unsupported syntax or command limit\n"
+    },
+    {
+      "name": "child_count_bound",
+      "passed": true,
+      "code": 125,
+      "stdout": "",
+      "stderr": "sh: child limit or unsupported process state\n"
+    },
+    {
+      "name": "shared_instruction_bound",
+      "passed": true,
+      "code": 125,
+      "stdout": "",
+      "stderr": "vmfree: Instruction budget exhausted\n"
+    },
+    {
+      "name": "oci_shell_status",
+      "passed": true,
+      "code": 19,
+      "stderr": ""
+    }
+  ],
+  "linux_reference": "not-run",
+  "runtime_sha256": "3a998320400ab9110277db5b8bfa3fcc0bb6f0c3790a0e5cda7e811b0aa4f64d",
+  "source_hashes": {
+    "native/compat.h": "fe26b6493c006e15c081b7bac7fd76617aa9163a14d49f63a0b6217a924c20a8",
+    "native/decode.h": "6f6ec28223bcd197e9a6535258a2d084ea86f44bda56d8fb4c236cd7ff37477f",
+    "native/fs.h": "cdb98baed1a1ac4d57447195a847dca869a17d91a65eb02b24fdf2cf32a9ca14",
+    "native/heap.h": "97655ddcfec1ca4d299ec6eca42131cb22c4b0f2b5ca9df3a74e9312ad552d3f",
+    "native/net.h": "6b6136594441f89fef376f019fded87897fc10ea728db60112f792062e78001d",
+    "native/process.h": "0458b8dbde78abd2f883fb95e991d26ed1b5e1e021057c11111f9ca812b46d81",
+    "native/profile.h": "e5a95845a20852e4912c4ab7ce34f0a8abe51ca3b2c047b449d0b63e452cf0f8",
+    "native/runtime.c": "9490af4c5f1419b4c255f5a5cf62d6471aef2359c2f9d70b6ac2790ab8f4b495"
+  }
+}

@@ -1,0 +1,103 @@
+{
+  "runtime_sha256": "bc0b97b1174f24269a6dc12a95a33ec8274a875d08220c649285a6fe60a51000",
+  "results": [
+    {
+      "test": "exit_status",
+      "passed": true,
+      "exit": 7,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "test": "loop_budget",
+      "passed": true,
+      "exit": 125,
+      "stdout": "",
+      "stderr": "vmfree: Instruction budget exhausted\n"
+    },
+    {
+      "test": "illegal_instruction",
+      "passed": true,
+      "exit": 125,
+      "stdout": "",
+      "stderr": "vmfree: Unsupported guest CPU exception\n"
+    },
+    {
+      "test": "non_linux_svc",
+      "passed": true,
+      "exit": 125,
+      "stdout": "",
+      "stderr": "vmfree: Only Linux SVC #0 is supported\n"
+    },
+    {
+      "test": "unmapped_read",
+      "passed": true,
+      "exit": 125,
+      "stdout": "",
+      "stderr": "unicorn pc=0x210124\nunicorn: Invalid memory read (UC_ERR_READ_UNMAPPED)\nvmfree: Unicorn backend failure\n"
+    },
+    {
+      "test": "unmapped_write",
+      "passed": true,
+      "exit": 125,
+      "stdout": "",
+      "stderr": "unicorn pc=0x210124\nunicorn: Invalid memory write (UC_ERR_WRITE_UNMAPPED)\nvmfree: Unicorn backend failure\n"
+    },
+    {
+      "test": "mmap_visibility",
+      "passed": true,
+      "exit": 0,
+      "stdout": "*",
+      "stderr": ""
+    },
+    {
+      "test": "mprotect_revoke",
+      "passed": true,
+      "exit": 125,
+      "stdout": "",
+      "stderr": "unicorn pc=0x210160\nunicorn: Write to write-protected memory (UC_ERR_WRITE_PROT)\nvmfree: Unicorn backend failure\n"
+    },
+    {
+      "test": "munmap_revoke",
+      "passed": true,
+      "exit": 125,
+      "stdout": "",
+      "stderr": "unicorn pc=0x21015c\nunicorn: Invalid memory read (UC_ERR_READ_UNMAPPED)\nvmfree: Unicorn backend failure\n"
+    },
+    {
+      "test": "no_execute_data",
+      "passed": true,
+      "exit": 125,
+      "stdout": "",
+      "stderr": "unicorn pc=0x1000000000\nunicorn: Fetch from non-executable memory (UC_ERR_FETCH_PROT)\nvmfree: Unicorn backend failure\n"
+    },
+    {
+      "test": "clone_rejected",
+      "passed": true,
+      "exit": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "test": "fp_tls_across_syscall",
+      "passed": true,
+      "exit": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "test": "futex_wake_no_waiters",
+      "passed": true,
+      "exit": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "test": "futex_pi_unsupported",
+      "passed": true,
+      "exit": 0,
+      "stdout": "",
+      "stderr": ""
+    }
+  ]
+}

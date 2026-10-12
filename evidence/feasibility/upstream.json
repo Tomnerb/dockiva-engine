@@ -1,0 +1,91 @@
+[
+  {
+    "name": "redis-bio",
+    "url": "https://raw.githubusercontent.com/redis/redis/7.4.2/src/bio.c",
+    "sha256": "82a993d755ce590d73c8866f8742dc1f166d420f8cc972aaa8c93318eaa6414a",
+    "matches": [
+      {
+        "line": 170,
+        "text": "if (pthread_create(&thread,&attr,bioProcessBackgroundJobs,arg) != 0) {"
+      },
+      {
+        "line": 281,
+        "text": "pthread_cond_wait(&bio_newjob_cond[worker], &bio_mutex[worker]);"
+      },
+      {
+        "line": 296,
+        "text": "redis_fsync(job->fd_args.fd) == -1 &&"
+      },
+      {
+        "line": 311,
+        "text": "if (redis_fsync(job->fd_args.fd) == -1 &&"
+      },
+      {
+        "line": 357,
+        "text": "* jobs to process we'll block again in pthread_cond_wait(). */"
+      },
+      {
+        "line": 382,
+        "text": "pthread_cond_wait(&bio_newjob_cond[worker], &bio_mutex[worker]);"
+      }
+    ]
+  },
+  {
+    "name": "redis-epoll",
+    "url": "https://raw.githubusercontent.com/redis/redis/7.4.2/src/ae_epoll.c",
+    "sha256": "72c3639fa4428415e009c7a2a5e50b1d8faab8dc3a0e5a849c6f4fc66d8b597d",
+    "matches": [
+      {
+        "line": 27,
+        "text": "state->epfd = epoll_create(1024); /* 1024 is just a hint for the kernel */"
+      },
+      {
+        "line": 66,
+        "text": "if (epoll_ctl(state->epfd,op,fd,&ee) == -1) return -1;"
+      },
+      {
+        "line": 80,
+        "text": "epoll_ctl(state->epfd,EPOLL_CTL_MOD,fd,&ee);"
+      },
+      {
+        "line": 84,
+        "text": "epoll_ctl(state->epfd,EPOLL_CTL_DEL,fd,&ee);"
+      },
+      {
+        "line": 92,
+        "text": "retval = epoll_wait(state->epfd,state->events,eventLoop->setsize,"
+      }
+    ]
+  },
+  {
+    "name": "valkey-bio",
+    "url": "https://raw.githubusercontent.com/valkey-io/valkey/9.0.0/src/bio.c",
+    "sha256": "feab5316a56264c23bab2345a40b8a9fc495d92cb10d9673715dd3fc5a03e712",
+    "matches": [
+      {
+        "line": 162,
+        "text": "int err = pthread_create(&bwd->bio_thread_id, &attr, bioProcessBackgroundJobs, (void *)bwd);"
+      },
+      {
+        "line": 257,
+        "text": "pthread_cond_wait(&bwd->bio_newjob_cond, &bwd->bio_mutex);"
+      },
+      {
+        "line": 271,
+        "text": "if (job->fd_args.need_fsync && valkey_fsync(job->fd_args.fd) == -1 && errno != EBADF && errno != EINVAL) {"
+      },
+      {
+        "line": 284,
+        "text": "if (valkey_fsync(job->fd_args.fd) == -1 && errno != EBADF && errno != EINVAL) {"
+      },
+      {
+        "line": 313,
+        "text": "* jobs to process we'll block again in pthread_cond_wait(). */"
+      },
+      {
+        "line": 338,
+        "text": "pthread_cond_wait(&bwd->bio_newjob_cond, &bwd->bio_mutex);"
+      }
+    ]
+  }
+]

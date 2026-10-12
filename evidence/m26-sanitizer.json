@@ -1,0 +1,175 @@
+{
+  "milestone": 26,
+  "host": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+  "results": [
+    {
+      "name": "roundtrip",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 0.07976683400920592,
+      "stdout": "network, CPU and pipe siblings completed\n",
+      "stderr": ""
+    },
+    {
+      "name": "read-timeout",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 0.19027254200773314,
+      "stdout": "network, CPU and pipe siblings completed\n",
+      "stderr": ""
+    },
+    {
+      "name": "cancel-accept",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 0.07587566602160223,
+      "stdout": "blocked socket cancelled; CPU and pipe siblings survived\n",
+      "stderr": ""
+    },
+    {
+      "name": "poll-timeout",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 0.16136862500570714,
+      "stdout": "poll timeout completed\n",
+      "stderr": ""
+    },
+    {
+      "name": "accept-timeout",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 0.16598474999773316,
+      "stdout": "accept timeout and guest nonblocking flags preserved\n",
+      "stderr": ""
+    },
+    {
+      "name": "socket-boundaries",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 0.0541400829970371,
+      "stdout": "socket isolation boundaries preserved\n",
+      "stderr": ""
+    },
+    {
+      "name": "roundtrip--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 0.07841495898901485,
+      "stdout": "network, CPU and pipe siblings completed\n",
+      "stderr": ""
+    },
+    {
+      "name": "read-timeout--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 0.1918313339992892,
+      "stdout": "network, CPU and pipe siblings completed\n",
+      "stderr": ""
+    },
+    {
+      "name": "cancel-accept--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 0.08354470899212174,
+      "stdout": "blocked socket cancelled; CPU and pipe siblings survived\n",
+      "stderr": ""
+    },
+    {
+      "name": "poll-timeout--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 0.15826512497733347,
+      "stdout": "poll timeout completed\n",
+      "stderr": ""
+    },
+    {
+      "name": "accept-timeout--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 0.16264424999826588,
+      "stdout": "accept timeout and guest nonblocking flags preserved\n",
+      "stderr": ""
+    },
+    {
+      "name": "socket-boundaries--no-decode-cache",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 0.05348304100334644,
+      "stdout": "socket isolation boundaries preserved\n",
+      "stderr": ""
+    },
+    {
+      "name": "roundtrip--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 0.07482320800772868,
+      "stdout": "network, CPU and pipe siblings completed\n",
+      "stderr": ""
+    },
+    {
+      "name": "read-timeout--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 0.18626420802320354,
+      "stdout": "network, CPU and pipe siblings completed\n",
+      "stderr": ""
+    },
+    {
+      "name": "cancel-accept--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 0.07828837499255314,
+      "stdout": "blocked socket cancelled; CPU and pipe siblings survived\n",
+      "stderr": ""
+    },
+    {
+      "name": "poll-timeout--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 0.16210462502203882,
+      "stdout": "poll timeout completed\n",
+      "stderr": ""
+    },
+    {
+      "name": "accept-timeout--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 0.16712225001538172,
+      "stdout": "accept timeout and guest nonblocking flags preserved\n",
+      "stderr": ""
+    },
+    {
+      "name": "socket-boundaries--no-lookup-cache",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 0.056035041983705014,
+      "stdout": "socket isolation boundaries preserved\n",
+      "stderr": ""
+    },
+    {
+      "name": "oci_scheduled_network",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 0.12585483302245848,
+      "stdout": "network, CPU and pipe siblings completed\n",
+      "stderr": ""
+    }
+  ],
+  "passed": true,
+  "linux_reference": "not-run",
+  "runtime_sha256": "21f86acbf32c422efa357ceb96edb6560850ef9436ce57746650af98702ef583",
+  "source_hashes": {
+    "native/compat.h": "6fb8da2aabb63409a2e2f95b07f9d7a3a0eb199e318e7a07389647bbec5c0d54",
+    "native/decode.h": "ede060ffff5d5db6cc957c4cf14c95779ae096e0802ab0815c05ffd9c0a48412",
+    "native/fs.h": "52ddb21a087261238d6530b899b932ce20fb9f4f97d5581de2e96f99eb3f76df",
+    "native/heap.h": "97655ddcfec1ca4d299ec6eca42131cb22c4b0f2b5ca9df3a74e9312ad552d3f",
+    "native/io.h": "585c871add9b6ebbdab26db333d52a1566de353ee98e93f9f84ba568c7210b30",
+    "native/net.h": "e7fcdcdfa0cfc9bbb2f8379cb62a56e0cda761c0e33e829946b66efb50740179",
+    "native/process.h": "a793b1beed49e721de8ec20b8e3a68677d6d4945b086b4f85a8fac45fdd21d6b",
+    "native/profile.h": "e5a95845a20852e4912c4ab7ce34f0a8abe51ca3b2c047b449d0b63e452cf0f8",
+    "native/runtime.c": "61119fd15ea820f71dc3b72f076d9eb9e8afacc6eec515ed1a69813f8ba518ab",
+    "native/scheduler.h": "07ff0de08e00dfab6b66c981b2fe269bb3c451a5e7b7c9c931f30207b3ee021f",
+    "native/signals.h": "b8dc388d498772bafd26489ce01c33a538ded45d4bf2514f6e6ee3556e9d0b82",
+    "native/terminal.h": "10f1b04367e1b9ebde1f4888cd1fb85ec4cfc3b4265bde57419cd1bf7594851c"
+  }
+}

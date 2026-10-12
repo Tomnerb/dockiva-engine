@@ -1,0 +1,2 @@
+Probing postgresql
+postgresql {"default_probe": {"exit_code": 125, "stdout": "", "stderr": "vmfree: Unsupported ELF interpreter\n"}, "dynamic_probe": {"exit_code": 0, "stdout": "postgres (PostgreSQL) 16.13\n", "stderr": ""}, "linux_reference": {"exit_code": 0, "stdout": "postgres (PostgreSQL) 16.13\n", "stderr": ""}}

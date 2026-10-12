@@ -1,0 +1,21 @@
+{
+  "started_at": "2026-09-21T14:11:59+00:00",
+  "finished_at": "2026-09-21T14:20:21.757255+00:00",
+  "elapsed_seconds": 502.76,
+  "limits": {
+    "tokens": 10000,
+    "seconds": 1800,
+    "rule": "whichever first"
+  },
+  "token_usage": "Exact per-batch counter unavailable; no measured token total claimed.",
+  "changed_upstream_files": [
+    "qemu/accel/tcg/cputlb.c"
+  ],
+  "memory_speedup": 4.708058952649734,
+  "memory_time_reduction_percent": 78.7598241641135,
+  "patched_to_native_memory": 12.621372031662268,
+  "decision": "retain isolated experimental patch; not production integration",
+  "runtime_modified": false,
+  "dockiva_modified": false,
+  "database_readiness_changed": false
+}

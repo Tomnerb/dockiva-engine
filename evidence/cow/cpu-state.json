@@ -1,0 +1,49 @@
+{
+  "results": [
+    {
+      "test": "interpreter-sanitize",
+      "passed": true,
+      "exit": 0,
+      "stdout": "PASS: alternating interpreter CPU snapshots, TLS/SIMD preservation, clear and teardown\n",
+      "stderr": "",
+      "binary_sha256": "6093723671274157bcdfa4e5be8ebdb467aa12bbb047d4b678e6d71fa2707545"
+    },
+    {
+      "test": "unicorn",
+      "passed": true,
+      "exit": 0,
+      "stdout": "PASS: alternating interpreter CPU snapshots, TLS/SIMD preservation, clear and teardown\nPASS: alternating Unicorn CPU transfer including GPR, TLS, SIMD, FPCR/FPSR\n",
+      "stderr": "",
+      "binary_sha256": "043f328ff72573cc8052868f656901920b8e7ceb296a5a0d65789087330579af"
+    }
+  ],
+  "source_hashes": {
+    "tests/native/cpu_state_host.c": "4d90259a1b345bf588d101cdd95874605b37eca0296c833e89e7b15622e0e857",
+    "native/address_space.h": "508dba1092038dd91a8fdcf0747a93d67d81b9546172ebc3011256bef70351db",
+    "native/address_space_ops.h": "c49bfdd7d1f1908358c89b6cb3b7a95463b2b22f04b0d58c53d3de1c0517b1e8",
+    "native/compat.h": "a8330b1e66610aaf63b31fa5c1281813e2104ead8b8caeff09875de7f401cc72",
+    "native/cpu_state.h": "d58dc254674399b197e7c305b0dc558f5c38e5879eb43fe3f9db6954a2d8836e",
+    "native/decode.h": "fdc15750c69a7f12c54e1ef9c27ac93c47fd722093958d1190497964a8ff40bd",
+    "native/epoll.h": "9eb6ed6a5a4f9ee7b9555f55560c259271b0017cc82beef790ee1b728d0567ed",
+    "native/fadvise.h": "ca5ffefe679d1847c9b8f6028512e5342b2287fb5337b6630753f57fb0b2ab8d",
+    "native/fs.h": "c843b02549ebc9af66a26e21f31a68d118a662658bd0e8db4b2e5d91c7f7411f",
+    "native/heap.h": "d223275b1dc4c9f3744be82eec2fdfa04e508e5ea9d4043878a416f2cafd538d",
+    "native/io.h": "3f8796c23c7f86f5c472334efad99674c44855edfa29a477aa899420321d4fcc",
+    "native/mapping.h": "f66a89512fb4267c52b81df849c01626d5e52cdd1add44ec3303e48772e5ba84",
+    "native/memory_backing.h": "aa2267bed64e7dbc66037e5cd373bf6cd38427102f4b8bff23f9c54459b1b228",
+    "native/memory_backing_ops.h": "4debdddc2707202c4020a65e8dd4a43b765f900987ec25afca759dbc7d234474",
+    "native/net.h": "67e94e6b9ea7ee875e273b9e86d2098fd344f6009df06cc2c916dbf4ed04edc2",
+    "native/process.h": "23edbdb2a7cfefbc31c79129cf3657bee66c72b3b96340472b07c262068b109f",
+    "native/profile.h": "d69dbabe6c7a9c2aa35f625f26ede05e95e02e70c0a32da6882ed3689bf0af51",
+    "native/resources.h": "941ba34cf44b05fc8bbbb90f4b5f600de3ac60860e84740f8759b083684f5b8e",
+    "native/runtime_context.h": "359d8763832761ee358b9d1380a3211067c9654c3dba2611dd4cf57099f9119f",
+    "native/scheduler.h": "7896939e7b5f75ed99fec1d77c5d354d2d11f92572ea1d2976a3a08d4c141449",
+    "native/signals.h": "453fbbd3e69ae46abaab1a2701258e4b1602f63600fed18ef94c562e913ea5a8",
+    "native/syscall.h": "342080b73d0aa7235dcf29ee21979fc8406d878a351a42f8fd4940307f7b5a5f",
+    "native/sysinfo.h": "50e5742797c013db83e308a543bb4177995f6a99a7b6668b8eacca9a956c5a52",
+    "native/terminal.h": "34211fcb44ee7282a75f916964434b4f8a6077d9985c8a96406c0b53c269b888",
+    "native/unicorn_backend.h": "3bd841149556c081d6c64bb90e85885c19593b29b09e8588486cf4e1c4480356",
+    "native/unicorn_threads.h": "662c9b50ac5b983cfbc82488823d7219bcbcad1d33b8532854d3018a7f5fd9af",
+    "native/runtime.c": "db2be611a0d5920a9d0ac47373942607cd16c9128e06b2863b6652d8f11001e0"
+  }
+}

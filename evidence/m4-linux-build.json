@@ -1,0 +1,17 @@
+{
+  "host": "Linux-6.18.44-x86_64-with-glibc2.39",
+  "compiler": "cc (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0",
+  "flags": [
+    "-std=c11",
+    "-O2",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-pedantic"
+  ],
+  "source_sha256": "307f31c2cbe377f603e4928a2e0aa1662891ca18b5583693fc605ff82221485e",
+  "source_hashes": {
+    "native/heap.h": "97655ddcfec1ca4d299ec6eca42131cb22c4b0f2b5ca9df3a74e9312ad552d3f",
+    "native/runtime.c": "307f31c2cbe377f603e4928a2e0aa1662891ca18b5583693fc605ff82221485e"
+  }
+}

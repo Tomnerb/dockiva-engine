@@ -1,0 +1,27 @@
+{
+  "scope": "fadvise64 ABI, six nonbinding hints, file offset/data preservation, range validation, dup lifetime, pipe errors and directories",
+  "elf_sha256": "d5e8e6030fad89aed652542032aed6cf3c78b55986c03d06eca68d30c88dbeaa",
+  "results": [
+    {
+      "backend": "interpreter",
+      "exit": 0,
+      "stderr": "",
+      "passed": true,
+      "checks": 43
+    },
+    {
+      "backend": "unicorn",
+      "exit": 0,
+      "stderr": "",
+      "passed": true,
+      "checks": 43
+    },
+    {
+      "backend": "Linux reference",
+      "exit": 0,
+      "stderr": "",
+      "passed": true,
+      "checks": 43
+    }
+  ]
+}

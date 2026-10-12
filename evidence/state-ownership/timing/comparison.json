@@ -1,0 +1,33 @@
+{
+  "scope": "Two alternating local query/restart acceptance runs; diagnostic only, not a performance qualification",
+  "results": [
+    {
+      "label": "before",
+      "round": 0,
+      "elapsed_s": 3.515580334002152,
+      "exit": 0,
+      "stderr": ""
+    },
+    {
+      "label": "after",
+      "round": 0,
+      "elapsed_s": 2.845240833994467,
+      "exit": 0,
+      "stderr": ""
+    },
+    {
+      "label": "before",
+      "round": 1,
+      "elapsed_s": 2.8005702079972252,
+      "exit": 0,
+      "stderr": ""
+    },
+    {
+      "label": "after",
+      "round": 1,
+      "elapsed_s": 2.9222480000171345,
+      "exit": 0,
+      "stderr": ""
+    }
+  ]
+}

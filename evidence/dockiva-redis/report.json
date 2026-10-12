@@ -1,0 +1,30 @@
+{
+  "date": "2026-09-22",
+  "artifact": "/Users/macbookpro16m2max/GolandProjects/devstack/devstack/bin/dockiva-redis-test.app",
+  "sha256": {
+    "app": "128eeb85c7292f0b1f2d23236f0901296eee3c22dc11e3cf0c872c5c1b46cbce",
+    "helper": "4077e898ee6d4ae9f688b9dae8174b6327c78133c13f92ac515ef54d4df332de",
+    "unicorn": "bc0b97b1174f24269a6dc12a95a33ec8274a875d08220c649285a6fe60a51000"
+  },
+  "profile": {
+    "name": "vmfree/redis:preview",
+    "digest": "sha256:bab8ae06b593428bbf090c1a6b8c3900f1512d38b3bb0f98f7108273296a0167",
+    "source_image": "sha256:3b0f54bf27a77c98d319dc3a6706ed500a8985309f0b6c6407599b869f4a2bd9",
+    "scope": "Prepared Redis 7.4.2, experimental Unicorn, private container data, loopback TCP"
+  },
+  "verified": [
+    "ad-hoc bundle signature including nested JIT entitlement",
+    "bundled engine auto-start with developer tools absent from PATH",
+    "shell and HTTP lifecycle regression",
+    "Redis PING/SET/GET",
+    "Redis Stop closes listener",
+    "Redis data recovery after Start and Restart",
+    "59 Python regression tests plus 4 profile guard tests"
+  ],
+  "not_verified": [
+    "native GUI button clicks",
+    "stock Redis image",
+    "PostgreSQL and Valkey services",
+    "production isolation, distribution and 8 GB resource qualification"
+  ]
+}

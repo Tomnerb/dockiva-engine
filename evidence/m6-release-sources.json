@@ -1,0 +1,21 @@
+{
+  "host": "Linux-6.18.44-x86_64-with-glibc2.39",
+  "python": "3.12.14 (main, Aug 25 2026, 14:00:49) [Clang 22.1.3 ]",
+  "sha256": {
+    "oci.py": "d82270bc0e9263f6de067aa9bad1de002ee7aa42fc5812e3d0cf677d61a3e894",
+    "native/runtime.c": "d1fdc250f748491c60eda4ca2a870cfa781c5bf05b12dff88c8aa92293964de2",
+    "scripts/build_m6.py": "921d0247cc460a4bbf86681630b26b95ff7e924c969b3465a6fa19e952c7e6ca",
+    "scripts/verify_m6.py": "d72d4f52de861c3af0a75ac6f5a889b764298b059eed6f134fddd30cac2b8f50",
+    "tests/test_oci.py": "80cc8793bdc2f56aef9240444dbf1425341cb4e9fb89f913612ae69dbf20b5d7",
+    "examples/m6/http-image/oci-layout": "18f0797eab35a4597c1e9624aa4f15fd91f6254e5538c1e0d193b2a95dd4acc6",
+    "examples/m6/http-image/index.json": "2229b38839f55077e0362cf3a34346d25b81ac46c9764220626a268aa7f535f8",
+    "examples/m6/args-image/oci-layout": "18f0797eab35a4597c1e9624aa4f15fd91f6254e5538c1e0d193b2a95dd4acc6",
+    "examples/m6/args-image/index.json": "3ebb20e4aeb9c542ff19b23d84cf7268a2014175de6b327b9f8bc9b803c35b49",
+    "examples/m6/http-image/blobs/sha256/6e50cfcc487d5d926f3d9da4db5d5acbbcc81f0eb48951f942f269d2f8100e98": "6e50cfcc487d5d926f3d9da4db5d5acbbcc81f0eb48951f942f269d2f8100e98",
+    "examples/m6/http-image/blobs/sha256/cd7a3556eebdaf61f507915780302bcfc2cf7fc55b82f70c3ac0468fc1919660": "cd7a3556eebdaf61f507915780302bcfc2cf7fc55b82f70c3ac0468fc1919660",
+    "examples/m6/http-image/blobs/sha256/932f09275ea22c968b430b1a857cf15cc41dd6596337460a6ef2f0d5fb153b88": "932f09275ea22c968b430b1a857cf15cc41dd6596337460a6ef2f0d5fb153b88",
+    "examples/m6/args-image/blobs/sha256/1d3d685096cdb4681a9e928b087eceb8e6311a6abf1e563f83ad4c1ee0419daf": "1d3d685096cdb4681a9e928b087eceb8e6311a6abf1e563f83ad4c1ee0419daf",
+    "examples/m6/args-image/blobs/sha256/bfc3dec916cf9d83b1c6b615486d3164dbff4df456b9651289da59315a8150e6": "bfc3dec916cf9d83b1c6b615486d3164dbff4df456b9651289da59315a8150e6",
+    "examples/m6/args-image/blobs/sha256/0284faa97ce317b740563b5d7d6a5cb317caaf062c32aec7f46523a71027519f": "0284faa97ce317b740563b5d7d6a5cb317caaf062c32aec7f46523a71027519f"
+  }
+}

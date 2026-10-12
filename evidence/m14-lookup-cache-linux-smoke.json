@@ -1,0 +1,105 @@
+[
+  {
+    "cache_enabled": false,
+    "result": {
+      "target_requests_per_second": 100,
+      "target_fraction_achieved": 0.9999562504131848,
+      "requests": 200,
+      "elapsed_s": 2.0000875030018506,
+      "requests_per_second": 99.99562504131848,
+      "latency_median_ms": 0.5581405002885731,
+      "latency_p95_ms": 0.8734939983696677,
+      "command": [
+        "/workspace/scratch/026698cab616/vmfree-runtime/build/vmfree-c",
+        "run",
+        "/workspace/scratch/026698cab616/vmfree-runtime/examples/m11_17/server.elf",
+        "--root",
+        "/tmp/tmpbpd0222m",
+        "--no-lookup-cache",
+        "--max-steps",
+        "10000000000",
+        "--profile",
+        "--",
+        "0"
+      ],
+      "startup_to_first_response_ms": 13.4084659985092,
+      "readiness_attempts": 1,
+      "warmup_s": 0.1,
+      "concurrency": 4,
+      "profile": {
+        "status": "ok",
+        "scope": "Cumulative startup, warmup, workload and snapshot wait; event counts, not CPU time",
+        "counters": {
+          "instructions": 1116381,
+          "memory_lookups": 1598612,
+          "segment_probes": 4029693,
+          "syscalls": {
+            "56": 2,
+            "57": 212,
+            "63": 212,
+            "64": 212,
+            "73": 423,
+            "198": 1,
+            "200": 1,
+            "201": 1,
+            "204": 1,
+            "208": 1,
+            "242": 211
+          },
+          "lookup_cache_hits": 0
+        }
+      }
+    }
+  },
+  {
+    "cache_enabled": true,
+    "result": {
+      "target_requests_per_second": 100,
+      "target_fraction_achieved": 0.9999382278163271,
+      "requests": 200,
+      "elapsed_s": 2.0001235519994225,
+      "requests_per_second": 99.99382278163272,
+      "latency_median_ms": 0.5195425001147669,
+      "latency_p95_ms": 0.7435970001097303,
+      "command": [
+        "/workspace/scratch/026698cab616/vmfree-runtime/build/vmfree-c",
+        "run",
+        "/workspace/scratch/026698cab616/vmfree-runtime/examples/m11_17/server.elf",
+        "--root",
+        "/tmp/tmpbpd0222m",
+        "--max-steps",
+        "10000000000",
+        "--profile",
+        "--",
+        "0"
+      ],
+      "startup_to_first_response_ms": 11.051935998693807,
+      "readiness_attempts": 1,
+      "warmup_s": 0.1,
+      "concurrency": 4,
+      "profile": {
+        "status": "ok",
+        "scope": "Cumulative startup, warmup, workload and snapshot wait; event counts, not CPU time",
+        "counters": {
+          "instructions": 1116570,
+          "memory_lookups": 1598891,
+          "segment_probes": 2467849,
+          "syscalls": {
+            "56": 2,
+            "57": 212,
+            "63": 212,
+            "64": 212,
+            "73": 423,
+            "198": 1,
+            "200": 1,
+            "201": 1,
+            "204": 1,
+            "208": 1,
+            "242": 211
+          },
+          "lookup_cache_hits": 1348770
+        }
+      }
+    }
+  }
+]

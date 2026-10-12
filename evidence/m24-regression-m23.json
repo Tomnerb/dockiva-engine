@@ -1,0 +1,112 @@
+{
+  "milestone": 23,
+  "host": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+  "passed": true,
+  "results": [
+    {
+      "name": "canonical_input_eof",
+      "passed": true,
+      "exit_code": 0,
+      "output": "input ready\r\nhello\r\nhello\r\n^D\b\b"
+    },
+    {
+      "name": "canonical_input_eof_terminal_preserved",
+      "passed": true
+    },
+    {
+      "name": "ctrl_c_root",
+      "passed": true,
+      "exit_code": 130,
+      "output": "input ready\r\n^C"
+    },
+    {
+      "name": "ctrl_c_root_terminal_preserved",
+      "passed": true
+    },
+    {
+      "name": "ctrl_c_foreground_child",
+      "passed": true,
+      "exit_code": 0,
+      "output": "foreground ready\r\n^Cparent survived group cancellation\r\n"
+    },
+    {
+      "name": "ctrl_c_foreground_child_terminal_preserved",
+      "passed": true
+    },
+    {
+      "name": "failure_restores_terminal",
+      "passed": true,
+      "exit_code": 125,
+      "output": "vmfree: Instruction budget exhausted\r\n"
+    },
+    {
+      "name": "failure_restores_terminal_terminal_preserved",
+      "passed": true
+    },
+    {
+      "name": "oci_ctrl_c",
+      "passed": true,
+      "exit_code": 130,
+      "output": "input ready\r\n^C"
+    },
+    {
+      "name": "oci_ctrl_c_terminal_preserved",
+      "passed": true
+    },
+    {
+      "name": "oci_foreground_ctrl_c",
+      "passed": true,
+      "exit_code": 0,
+      "output": "foreground ready\r\n^Cparent survived group cancellation\r\n"
+    },
+    {
+      "name": "oci_foreground_ctrl_c_terminal_preserved",
+      "passed": true
+    },
+    {
+      "name": "terminal_errors",
+      "passed": true,
+      "exit_code": 0,
+      "output": "terminal errors OK\r\n"
+    },
+    {
+      "name": "terminal_errors_terminal_preserved",
+      "passed": true
+    },
+    {
+      "name": "guest_group",
+      "passed": true
+    },
+    {
+      "name": "guest_group--no-decode-cache",
+      "passed": true
+    },
+    {
+      "name": "guest_group--no-lookup-cache",
+      "passed": true
+    },
+    {
+      "name": "redirected_stdin",
+      "passed": true
+    },
+    {
+      "name": "default_stdin_eof",
+      "passed": true
+    }
+  ],
+  "runtime_sha256": "58d25c6fe444cf42910f0548b37bd3a93f4a6c6bbe05bd43dd37ff897233f342",
+  "source_hashes": {
+    "native/compat.h": "4942308092ced51c32b524b10c1b60528635f39ae2e18b762ae489828820f731",
+    "native/decode.h": "ede060ffff5d5db6cc957c4cf14c95779ae096e0802ab0815c05ffd9c0a48412",
+    "native/fs.h": "4e57c77d9d6ffb7c577d064f75362f99d94a97453adf08d28eb6f345a55ca25f",
+    "native/heap.h": "97655ddcfec1ca4d299ec6eca42131cb22c4b0f2b5ca9df3a74e9312ad552d3f",
+    "native/io.h": "129cf62a0433f6a7ba137a1c498fc53e13d0379630af3ca7efb1b7e961210944",
+    "native/net.h": "6b6136594441f89fef376f019fded87897fc10ea728db60112f792062e78001d",
+    "native/process.h": "e0093304decdbb654dd2010774b0034b54f8c50d45e5d4fbe007950ed4ebfdff",
+    "native/profile.h": "e5a95845a20852e4912c4ab7ce34f0a8abe51ca3b2c047b449d0b63e452cf0f8",
+    "native/runtime.c": "fea050522d5db02a6a3f8eb88a3622a29c19c98a3f1a05a2a1f42b4575587620",
+    "native/scheduler.h": "691a02b1b0ef1cbcbdd8b95e726b580aebeaf89a76900470a559aba3c616090a",
+    "native/signals.h": "76af0e430bfa6847c00edef6c8671c7cd364739bf06a27610f8caa6baba70b75",
+    "native/terminal.h": "10040e2f5197c44cce92a801ff15b29a61e99fab21adb0f65ba55afa2d9a5d17"
+  }
+}

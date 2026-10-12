@@ -1,0 +1,20 @@
+{
+  "milestone": 22,
+  "passed": true,
+  "host": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+  "reference_kind": "ARM64 Linux via local Docker; validation only",
+  "reference_image": "sha256:7ba17af9930fa300c330afd20fa21094627dc5b436c985cf489561baa9a6391b",
+  "probe_sha256": "407e7ab740915a911234d3ebf14a1a70ad774f133681d234bf9c5a591de01b02",
+  "runtime_sha256": "200eab264702d2830f7ff459e7624dc659c273895c5e8c433f00fc7e6bb7e5a7",
+  "actual": {
+    "exit_code": 0,
+    "stdout": "signal statuses: 2 9 13 15; reaped PIDs absent\n",
+    "stderr": ""
+  },
+  "reference": {
+    "exit_code": 0,
+    "stdout": "signal statuses: 2 9 13 15; reaped PIDs absent\n",
+    "stderr": ""
+  },
+  "scope": "default child termination, raw wait status and reaped PID absence only"
+}

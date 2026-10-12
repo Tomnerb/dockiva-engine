@@ -1,0 +1,2 @@
+{"kind":"guards","virtual_tlb":0,"hook_writes":100,"snapshot_restores":2,"remap_protection":true,"guest_code_rewrite":true,"passed":true}
+{"kind":"guards","virtual_tlb":1,"hook_writes":100,"snapshot_restores":2,"remap_protection":true,"guest_code_rewrite":true,"passed":true}

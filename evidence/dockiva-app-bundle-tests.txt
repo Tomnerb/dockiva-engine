@@ -1,0 +1,26 @@
+# dockiva.test
+ld: warning: object file (/private/var/folders/2y/93d157g95_v18gbfpvsnr1p40000gn/T/go-link-3371518838/000026.o) was built for newer 'macOS' version (26.0) than being linked (11.0)
+ld: warning: object file (/private/var/folders/2y/93d157g95_v18gbfpvsnr1p40000gn/T/go-link-3371518838/000027.o) was built for newer 'macOS' version (26.0) than being linked (11.0)
+ld: warning: object file (/private/var/folders/2y/93d157g95_v18gbfpvsnr1p40000gn/T/go-link-3371518838/000028.o) was built for newer 'macOS' version (26.0) than being linked (11.0)
+ld: warning: object file (/private/var/folders/2y/93d157g95_v18gbfpvsnr1p40000gn/T/go-link-3371518838/000029.o) was built for newer 'macOS' version (26.0) than being linked (11.0)
+ld: warning: object file (/private/var/folders/2y/93d157g95_v18gbfpvsnr1p40000gn/T/go-link-3371518838/000030.o) was built for newer 'macOS' version (26.0) than being linked (11.0)
+ld: warning: object file (/private/var/folders/2y/93d157g95_v18gbfpvsnr1p40000gn/T/go-link-3371518838/000031.o) was built for newer 'macOS' version (26.0) than being linked (11.0)
+ld: warning: object file (/private/var/folders/2y/93d157g95_v18gbfpvsnr1p40000gn/T/go-link-3371518838/000032.o) was built for newer 'macOS' version (26.0) than being linked (11.0)
+ld: warning: object file (/private/var/folders/2y/93d157g95_v18gbfpvsnr1p40000gn/T/go-link-3371518838/000033.o) was built for newer 'macOS' version (26.0) than being linked (11.0)
+ld: warning: object file (/private/var/folders/2y/93d157g95_v18gbfpvsnr1p40000gn/T/go-link-3371518838/000034.o) was built for newer 'macOS' version (26.0) than being linked (11.0)
+ld: warning: object file (/private/var/folders/2y/93d157g95_v18gbfpvsnr1p40000gn/T/go-link-3371518838/000035.o) was built for newer 'macOS' version (26.0) than being linked (11.0)
+ld: warning: object file (/private/var/folders/2y/93d157g95_v18gbfpvsnr1p40000gn/T/go-link-3371518838/000036.o) was built for newer 'macOS' version (26.0) than being linked (11.0)
+ld: warning: object file (/private/var/folders/2y/93d157g95_v18gbfpvsnr1p40000gn/T/go-link-3371518838/000037.o) was built for newer 'macOS' version (26.0) than being linked (11.0)
+ld: warning: object file (/private/var/folders/2y/93d157g95_v18gbfpvsnr1p40000gn/T/go-link-3371518838/000038.o) was built for newer 'macOS' version (26.0) than being linked (11.0)
+ld: warning: object file (/private/var/folders/2y/93d157g95_v18gbfpvsnr1p40000gn/T/go-link-3371518838/000039.o) was built for newer 'macOS' version (26.0) than being linked (11.0)
+ld: warning: object file (/private/var/folders/2y/93d157g95_v18gbfpvsnr1p40000gn/T/go-link-3371518838/000040.o) was built for newer 'macOS' version (26.0) than being linked (11.0)
+ld: warning: object file (/private/var/folders/2y/93d157g95_v18gbfpvsnr1p40000gn/T/go-link-3371518838/000041.o) was built for newer 'macOS' version (26.0) than being linked (11.0)
+ld: warning: object file (/private/var/folders/2y/93d157g95_v18gbfpvsnr1p40000gn/T/go-link-3371518838/000042.o) was built for newer 'macOS' version (26.0) than being linked (11.0)
+=== RUN   TestDefaultAppSettingsPreferNativeEngine
+--- PASS: TestDefaultAppSettingsPreferNativeEngine (0.00s)
+=== RUN   TestRuntimeProviderFollowsEngineIdentity
+--- PASS: TestRuntimeProviderFollowsEngineIdentity (0.00s)
+=== RUN   TestVMFreeBundledAutoStart
+--- PASS: TestVMFreeBundledAutoStart (8.03s)
+PASS
+ok  	dockiva	8.713s

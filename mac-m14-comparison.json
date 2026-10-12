@@ -1,0 +1,84 @@
+{
+  "host": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+  "machine": "arm64",
+  "timing": "wall clock, startup includes launcher",
+  "cpu_memory_comparison": "not measured; do not infer resource savings",
+  "results": [
+    {
+      "name": "VM-free",
+      "kind": "vmfree",
+      "command": [
+        "/Users/macbookpro16m2max/Documents/vmfree-runtime/build/vmfree-c",
+        "run",
+        "/Users/macbookpro16m2max/.vmfree/containers/bench-root-62dd0dba/rootfs/app/server",
+        "--root",
+        "/Users/macbookpro16m2max/.vmfree/containers/bench-root-62dd0dba/rootfs",
+        "--max-steps",
+        "10000000",
+        "--",
+        "0"
+      ],
+      "samples": [
+        {
+          "startup_to_first_response_ms": 645.4328750260174,
+          "requests_per_second": 5303.328370305235,
+          "latency_median_ms": 0.5486044974531978,
+          "latency_p95_ms": 0.678291980875656,
+          "requests": 100,
+          "concurrency": 4
+        },
+        {
+          "startup_to_first_response_ms": 4.781875002663583,
+          "requests_per_second": 8329.515638201668,
+          "latency_median_ms": 0.43072948756162077,
+          "latency_p95_ms": 0.5506659799721092,
+          "requests": 100,
+          "concurrency": 4
+        },
+        {
+          "startup_to_first_response_ms": 4.007999988971278,
+          "requests_per_second": 9210.293767531975,
+          "latency_median_ms": 0.4033540026284754,
+          "latency_p95_ms": 0.4579999949783087,
+          "requests": 100,
+          "concurrency": 4
+        },
+        {
+          "startup_to_first_response_ms": 3.7478750164154917,
+          "requests_per_second": 9839.453564820937,
+          "latency_median_ms": 0.36087498301640153,
+          "latency_p95_ms": 0.5745830130763352,
+          "requests": 100,
+          "concurrency": 4
+        },
+        {
+          "startup_to_first_response_ms": 3.360375005286187,
+          "requests_per_second": 11462.085262544682,
+          "latency_median_ms": 0.30514599347952753,
+          "latency_p95_ms": 0.4212500061839819,
+          "requests": 100,
+          "concurrency": 4
+        }
+      ]
+    },
+    {
+      "name": "Docker Linux VM",
+      "kind": "linux-vm",
+      "command": [
+        "/opt/homebrew/bin/docker",
+        "--context",
+        "orbstack",
+        "run",
+        "--rm",
+        "--name",
+        "vmfree-bench-62dd0dba",
+        "--platform",
+        "linux/arm64",
+        "-p",
+        "127.0.0.1:52622:18080",
+        "vmfree-benchmark:local"
+      ],
+      "samples": []
+    }
+  ]
+}

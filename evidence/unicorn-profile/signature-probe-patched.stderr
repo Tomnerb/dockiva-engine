@@ -1,0 +1,24 @@
+Executable=/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-profile/probe-patched-hardened
+Identifier=probe-patched-hardened-55554944d49b41d5b11437fcb96407116cd0a42d
+Format=Mach-O thin (arm64)
+CodeDirectory v=20500 size=5152 flags=0x10002(adhoc,runtime) hashes=149+7 location=embedded
+VersionPlatform=1
+VersionMin=1703936
+VersionSDK=1705216
+Hash type=sha256 size=32
+CandidateCDHash sha256=67b32b15118f34af2ce11b6f9c518c5daf64f962
+CandidateCDHashFull sha256=67b32b15118f34af2ce11b6f9c518c5daf64f96279ca17dae82a488b0ad527f2
+Hash choices=sha256
+CMSDigest=67b32b15118f34af2ce11b6f9c518c5daf64f96279ca17dae82a488b0ad527f2
+CMSDigestType=2
+Executable Segment base=0
+Executable Segment limit=1458176
+Executable Segment flags=0x1
+Page size=16384
+CDHash=67b32b15118f34af2ce11b6f9c518c5daf64f962
+Signature=adhoc
+Info.plist=not bound
+TeamIdentifier=not set
+Runtime Version=26.5.0
+Sealed Resources=none
+Internal requirements count=0 size=12

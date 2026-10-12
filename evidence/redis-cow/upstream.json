@@ -1,0 +1,10 @@
+[
+  {
+    "url": "https://raw.githubusercontent.com/redis/redis/7.4.2/src/syscheck.c",
+    "sha256": "e8903d6acf16e1cc8a83feb730e5215ce7ef65250a9335af92eecbbc01674e07"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/redis/redis/7.4.2/src/server.c",
+    "sha256": "4d8edc7646d68b292928c34e411bb1be176be50d900f867fff10a6e09ee37d8a"
+  }
+]

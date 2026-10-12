@@ -1,0 +1,94 @@
+{
+  "scope": "LP64 ABI, EFAULT and field invariants; values are guest-policy scoped, not Linux host totals",
+  "elf_sha256": "4a52b66a479d9def086e786664a0fa5d58c2774986f1cfe456caf1209730d569",
+  "results": [
+    {
+      "backend": "interpreter",
+      "exit": 0,
+      "stderr": "",
+      "passed": true,
+      "first": {
+        "uptime": 0,
+        "load1": 0,
+        "load5": 0,
+        "load15": 0,
+        "totalram": 67108864,
+        "freeram": 67053175,
+        "sharedram": 0,
+        "bufferram": 0,
+        "totalswap": 0,
+        "freeswap": 0,
+        "procs": 1,
+        "totalhigh": 0,
+        "freehigh": 0,
+        "mem_unit": 1
+      },
+      "second": {
+        "uptime": 0,
+        "load1": 0,
+        "load5": 0,
+        "load15": 0,
+        "totalram": 67108864,
+        "freeram": 67040823,
+        "sharedram": 0,
+        "bufferram": 0,
+        "totalswap": 0,
+        "freeswap": 0,
+        "procs": 1,
+        "totalhigh": 0,
+        "freehigh": 0,
+        "mem_unit": 1
+      },
+      "pointer_errors": [
+        14,
+        14,
+        14,
+        14
+      ]
+    },
+    {
+      "backend": "hvf",
+      "exit": 0,
+      "stderr": "",
+      "passed": true,
+      "first": {
+        "uptime": 0,
+        "load1": 0,
+        "load5": 0,
+        "load15": 0,
+        "totalram": 67108864,
+        "freeram": 67036367,
+        "sharedram": 0,
+        "bufferram": 0,
+        "totalswap": 0,
+        "freeswap": 0,
+        "procs": 1,
+        "totalhigh": 0,
+        "freehigh": 0,
+        "mem_unit": 1
+      },
+      "second": {
+        "uptime": 0,
+        "load1": 0,
+        "load5": 0,
+        "load15": 0,
+        "totalram": 67108864,
+        "freeram": 67024015,
+        "sharedram": 0,
+        "bufferram": 0,
+        "totalswap": 0,
+        "freeswap": 0,
+        "procs": 1,
+        "totalhigh": 0,
+        "freehigh": 0,
+        "mem_unit": 1
+      },
+      "pointer_errors": [
+        14,
+        14,
+        14,
+        14
+      ]
+    }
+  ]
+}

@@ -1,0 +1,118 @@
+{
+  "host": "Linux-6.18.44-x86_64-with-glibc2.39",
+  "passed": true,
+  "scope": "OCI adapter and native interpreter; no Linux OCI reference run",
+  "cases": [
+    {
+      "name": "blob_digest",
+      "passed": true
+    },
+    {
+      "name": "config_rejections",
+      "passed": true
+    },
+    {
+      "name": "diff_id",
+      "passed": true
+    },
+    {
+      "name": "duplicate_and_case_collision",
+      "passed": true
+    },
+    {
+      "name": "duplicate_json_keys",
+      "passed": true
+    },
+    {
+      "name": "expansion_limit",
+      "passed": true
+    },
+    {
+      "name": "file_directory_replacement",
+      "passed": true
+    },
+    {
+      "name": "gzip_extract_and_command",
+      "passed": true
+    },
+    {
+      "name": "invalid_whiteout",
+      "passed": true
+    },
+    {
+      "name": "layout_symlink",
+      "passed": true
+    },
+    {
+      "name": "links_and_special_files",
+      "passed": true
+    },
+    {
+      "name": "member_limit",
+      "passed": true
+    },
+    {
+      "name": "nonexecutable_entrypoint",
+      "passed": true
+    },
+    {
+      "name": "opaque_directory",
+      "passed": true
+    },
+    {
+      "name": "reference_selection",
+      "passed": true
+    },
+    {
+      "name": "unsafe_paths",
+      "passed": true
+    },
+    {
+      "name": "whiteout_order",
+      "passed": true
+    },
+    {
+      "name": "wrong_platform",
+      "passed": true
+    },
+    {
+      "name": "image_inspect",
+      "passed": true
+    },
+    {
+      "name": "image_http",
+      "passed": true,
+      "actual": {
+        "response_hex": "485454502f312e3120323030204f4b0d0a436f6e74656e742d547970653a20746578742f706c61696e0d0a436f6e74656e742d4c656e6774683a2032330d0a436f6e6e656374696f6e3a20636c6f73650d0a0d0a564d2d66726565204854545020736572766572204f4b0a",
+        "exit_code": 0,
+        "stderr_hex": "",
+        "passed": true
+      }
+    },
+    {
+      "name": "image_http_missing",
+      "passed": true,
+      "actual": {
+        "response_hex": "485454502f312e3120343034204e6f7420466f756e640d0a436f6e74656e742d547970653a20746578742f706c61696e0d0a436f6e74656e742d4c656e6774683a2031300d0a436f6e6e656374696f6e3a20636c6f73650d0a0d0a4e6f7420666f756e640a",
+        "exit_code": 0,
+        "stderr_hex": "",
+        "passed": true
+      }
+    },
+    {
+      "name": "image_cmd_env",
+      "passed": true,
+      "exit_code": 15
+    },
+    {
+      "name": "image_cmd_override",
+      "passed": true,
+      "exit_code": 27
+    },
+    {
+      "name": "signal_cleanup",
+      "passed": true,
+      "exit_code": 143
+    }
+  ]
+}

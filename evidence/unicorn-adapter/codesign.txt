@@ -1,0 +1,28 @@
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-adapter/probe-hardened: valid on disk
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-adapter/probe-hardened: satisfies its Designated Requirement
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>com.apple.security.cs.allow-jit</key><true/></dict></plist>
+Executable=/Users/macbookpro16m2max/Documents/vmfree-runtime/build/unicorn-adapter/probe-hardened
+Identifier=probe-hardened-55554944352433eef31d337ca935f9826e7ea898
+Format=Mach-O thin (arm64)
+CodeDirectory v=20500 size=31288 flags=0x10002(adhoc,runtime) hashes=966+7 location=embedded
+VersionPlatform=1
+VersionMin=1703936
+VersionSDK=1705216
+Hash type=sha256 size=32
+CandidateCDHash sha256=c949f4166dbe74941628a7fd7a30c62c0e2128d0
+CandidateCDHashFull sha256=c949f4166dbe74941628a7fd7a30c62c0e2128d0cb07eee2a77b04c6be672527
+Hash choices=sha256
+CMSDigest=c949f4166dbe74941628a7fd7a30c62c0e2128d0cb07eee2a77b04c6be672527
+CMSDigestType=2
+Executable Segment base=0
+Executable Segment limit=11878400
+Executable Segment flags=0x1
+Page size=16384
+CDHash=c949f4166dbe74941628a7fd7a30c62c0e2128d0
+Signature=adhoc
+Info.plist=not bound
+TeamIdentifier=not set
+Runtime Version=26.5.0
+Sealed Resources=none
+Internal requirements count=0 size=12
+warning: Specifying ':' in the path is deprecated and will not work in a future release

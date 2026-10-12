@@ -1,0 +1,135 @@
+{
+  "host": {
+    "system": "Linux",
+    "machine": "x86_64",
+    "python": "3.12.14"
+  },
+  "reference": [
+    "/tmp/vmfree-qemu/usr/bin/qemu-aarch64-static"
+  ],
+  "cases": [
+    {
+      "name": "stdout",
+      "sha256": "284ccdf22ac23e485d0de6061c3686c0831d55531ba303f2f8d5cef726abd9f1",
+      "runtime": {
+        "stdout_hex": "496e646570656e64656e742041524d3634204c696e75782070726f62650a",
+        "stderr_hex": "",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_hex": "496e646570656e64656e742041524d3634204c696e75782070726f62650a",
+        "stderr_hex": "",
+        "exit_code": 0
+      },
+      "passed": true,
+      "linux_reference": {
+        "stdout_hex": "496e646570656e64656e742041524d3634204c696e75782070726f62650a",
+        "stderr_hex": "",
+        "exit_code": 0
+      }
+    },
+    {
+      "name": "stderr_exit42",
+      "sha256": "ed5454ec8c034f0b457c1568d7ee398d756370c85e6768bb347e8476f3bed1af",
+      "runtime": {
+        "stdout_hex": "",
+        "stderr_hex": "496e646570656e64656e742041524d3634204c696e75782070726f62650a",
+        "exit_code": 42
+      },
+      "expected": {
+        "stdout_hex": "",
+        "stderr_hex": "496e646570656e64656e742041524d3634204c696e75782070726f62650a",
+        "exit_code": 42
+      },
+      "passed": true,
+      "linux_reference": {
+        "stdout_hex": "",
+        "stderr_hex": "496e646570656e64656e742041524d3634204c696e75782070726f62650a",
+        "exit_code": 42
+      }
+    },
+    {
+      "name": "write_return",
+      "sha256": "4aa5b6aca3f16cd37473303659a13d27b219417bb035562b89e2c7cf0bd2bac1",
+      "runtime": {
+        "stdout_hex": "496e646570656e64656e742041524d3634204c696e75782070726f62650a",
+        "stderr_hex": "",
+        "exit_code": 30
+      },
+      "expected": {
+        "stdout_hex": "496e646570656e64656e742041524d3634204c696e75782070726f62650a",
+        "stderr_hex": "",
+        "exit_code": 30
+      },
+      "passed": true,
+      "linux_reference": {
+        "stdout_hex": "496e646570656e64656e742041524d3634204c696e75782070726f62650a",
+        "stderr_hex": "",
+        "exit_code": 30
+      }
+    },
+    {
+      "name": "zero_write",
+      "sha256": "b43c6c8aaf4cd6e7613cdf50ccf149d2aea06e543aa8b5febdcf916d31d041bd",
+      "runtime": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      },
+      "passed": true,
+      "linux_reference": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      }
+    },
+    {
+      "name": "bad_fd",
+      "sha256": "64f8f8466c4922776b78cef20703a5f43ec015264bf1bd9105c7b355401702de",
+      "runtime": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 247
+      },
+      "expected": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 247
+      },
+      "passed": true,
+      "linux_reference": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 247
+      }
+    },
+    {
+      "name": "exit_group",
+      "sha256": "6020baed5bff41fd339ea9976aeaa4af3ae7ab6621bc3e75713becb61f70b1b8",
+      "runtime": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 42
+      },
+      "expected": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 42
+      },
+      "passed": true,
+      "linux_reference": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 42
+      }
+    }
+  ],
+  "passed": true,
+  "reference_kind": "qemu-user-linux",
+  "reference_tool_version": "qemu-aarch64 version 7.2.22 (Debian 1:7.2+dfsg-7+deb12u18+b3)"
+}

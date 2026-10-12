@@ -1,0 +1,457 @@
+{
+  "milestone": 20,
+  "host": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+  "passed": true,
+  "results": [
+    {
+      "name": "fixture_hashes",
+      "passed": true
+    },
+    {
+      "name": "two_stage",
+      "passed": true,
+      "code": 0,
+      "stdout_bytes": 6,
+      "stdout_prefix": "hello\n",
+      "stderr": ""
+    },
+    {
+      "name": "three_stage",
+      "passed": true,
+      "code": 0,
+      "stdout_bytes": 11,
+      "stdout_prefix": "hello file\n",
+      "stderr": ""
+    },
+    {
+      "name": "empty_pipeline",
+      "passed": true,
+      "code": 0,
+      "stdout_bytes": 0,
+      "stdout_prefix": "",
+      "stderr": ""
+    },
+    {
+      "name": "closed_writer_eof",
+      "passed": true,
+      "code": 0,
+      "stdout_bytes": 7,
+      "stdout_prefix": "x\ndone\n",
+      "stderr": ""
+    },
+    {
+      "name": "conditional_group",
+      "passed": true,
+      "code": 0,
+      "stdout_bytes": 5,
+      "stdout_prefix": "good\n",
+      "stderr": ""
+    },
+    {
+      "name": "failed_producer",
+      "passed": true,
+      "code": 7,
+      "stdout_bytes": 0,
+      "stdout_prefix": "",
+      "stderr": ""
+    },
+    {
+      "name": "failed_consumer",
+      "passed": true,
+      "code": 8,
+      "stdout_bytes": 0,
+      "stdout_prefix": "",
+      "stderr": ""
+    },
+    {
+      "name": "pipeline_exit_is_local",
+      "passed": true,
+      "code": 0,
+      "stdout_bytes": 10,
+      "stdout_prefix": "continued\n",
+      "stderr": ""
+    },
+    {
+      "name": "stdin_default_eof",
+      "passed": true,
+      "code": 0,
+      "stdout_bytes": 0,
+      "stdout_prefix": "",
+      "stderr": ""
+    },
+    {
+      "name": "truncate_append_read",
+      "passed": true,
+      "code": 0,
+      "stdout_bytes": 11,
+      "stdout_prefix": "alpha\nbeta\n",
+      "stderr": ""
+    },
+    {
+      "name": "truncate_existing",
+      "passed": true,
+      "code": 0,
+      "stdout_bytes": 12,
+      "stdout_prefix": "replacement\n",
+      "stderr": ""
+    },
+    {
+      "name": "input_into_pipeline",
+      "passed": true,
+      "code": 0,
+      "stdout_bytes": 11,
+      "stdout_prefix": "hello file\n",
+      "stderr": ""
+    },
+    {
+      "name": "quoted_operators",
+      "passed": true,
+      "code": 0,
+      "stdout_bytes": 8,
+      "stdout_prefix": "a|b > c\n",
+      "stderr": ""
+    },
+    {
+      "name": "combined_output",
+      "passed": true,
+      "code": 0,
+      "stdout_bytes": 14,
+      "stdout_prefix": "stdout\nstderr\n",
+      "stderr": ""
+    },
+    {
+      "name": "redir_order",
+      "passed": true,
+      "code": 0,
+      "stdout_bytes": 14,
+      "stdout_prefix": "stderr\nstdout\n",
+      "stderr": ""
+    },
+    {
+      "name": "separate_stderr",
+      "passed": true,
+      "code": 0,
+      "stdout_bytes": 14,
+      "stdout_prefix": "stdout\nstderr\n",
+      "stderr": ""
+    },
+    {
+      "name": "stderr_append",
+      "passed": true,
+      "code": 0,
+      "stdout_bytes": 14,
+      "stdout_prefix": "stderr\nstderr\n",
+      "stderr": ""
+    },
+    {
+      "name": "override_pipe_output",
+      "passed": true,
+      "code": 0,
+      "stdout_bytes": 7,
+      "stdout_prefix": "stored\n",
+      "stderr": ""
+    },
+    {
+      "name": "override_pipe_input",
+      "passed": true,
+      "code": 0,
+      "stdout_bytes": 11,
+      "stdout_prefix": "hello file\n",
+      "stderr": ""
+    },
+    {
+      "name": "builtin_redirect",
+      "passed": true,
+      "code": 0,
+      "stdout_bytes": 2,
+      "stdout_prefix": "1\n",
+      "stderr": ""
+    },
+    {
+      "name": "exit_redirect",
+      "passed": true,
+      "code": 17,
+      "stdout_bytes": 0,
+      "stdout_prefix": "",
+      "stderr": ""
+    },
+    {
+      "name": "repeated_pipelines",
+      "passed": true,
+      "code": 0,
+      "stdout_bytes": 16,
+      "stdout_prefix": "x\nx\nx\nx\nx\nx\nx\nx\n",
+      "stderr": ""
+    },
+    {
+      "name": "medium_pipeline",
+      "passed": true,
+      "code": 0,
+      "stdout_bytes": 65536,
+      "stdout_prefix": "ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ",
+      "stderr": ""
+    },
+    {
+      "name": "capacity_boundary",
+      "passed": true,
+      "code": 0,
+      "stdout_bytes": 1048576,
+      "stdout_prefix": "ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ",
+      "stderr": ""
+    },
+    {
+      "name": "dup_syscall_dispatch",
+      "passed": true,
+      "code": 0,
+      "stdout_bytes": 0,
+      "stdout_prefix": "",
+      "stderr": ""
+    },
+    {
+      "name": "builtin_closed_output",
+      "passed": true,
+      "code": 1,
+      "stdout_bytes": 0,
+      "stdout_prefix": "",
+      "stderr": ""
+    },
+    {
+      "name": "capacity_failure",
+      "passed": true,
+      "code": 1,
+      "stdout_bytes": 0,
+      "stdout_prefix": "",
+      "stderr": "probe: output failed\n"
+    },
+    {
+      "name": "closed_self_dup",
+      "passed": true,
+      "code": 1,
+      "stdout_bytes": 0,
+      "stdout_prefix": "",
+      "stderr": "sh: redirection failed\n"
+    },
+    {
+      "name": "closed_output",
+      "passed": true,
+      "code": 1,
+      "stdout_bytes": 0,
+      "stdout_prefix": "",
+      "stderr": "echo: write error: Bad file descriptor\n"
+    },
+    {
+      "name": "closed_stderr",
+      "passed": true,
+      "code": 0,
+      "stdout_bytes": 7,
+      "stdout_prefix": "stdout\n",
+      "stderr": ""
+    },
+    {
+      "name": "console_stderr_dup",
+      "passed": true,
+      "code": 0,
+      "stdout_bytes": 0,
+      "stdout_prefix": "",
+      "stderr": "stdout\nstderr\n"
+    },
+    {
+      "name": "missing_input",
+      "passed": true,
+      "code": 1,
+      "stdout_bytes": 0,
+      "stdout_prefix": "",
+      "stderr": "sh: redirection failed\n"
+    },
+    {
+      "name": "readonly_output",
+      "passed": true,
+      "code": 1,
+      "stdout_bytes": 0,
+      "stdout_prefix": "",
+      "stderr": "sh: redirection failed\n"
+    },
+    {
+      "name": "symlink_output",
+      "passed": true,
+      "code": 1,
+      "stdout_bytes": 0,
+      "stdout_prefix": "",
+      "stderr": "sh: redirection failed\n"
+    },
+    {
+      "name": "traversal_output",
+      "passed": true,
+      "code": 1,
+      "stdout_bytes": 0,
+      "stdout_prefix": "",
+      "stderr": "sh: redirection failed\n"
+    },
+    {
+      "name": "outside_unchanged",
+      "passed": true
+    },
+    {
+      "name": "reject_busybox echo should-not-run |",
+      "passed": true,
+      "code": 2,
+      "stdout_bytes": 0,
+      "stdout_prefix": "",
+      "stderr": "sh: unsupported syntax or command limit\n"
+    },
+    {
+      "name": "reject_true >",
+      "passed": true,
+      "code": 2,
+      "stdout_bytes": 0,
+      "stdout_prefix": "",
+      "stderr": "sh: unsupported syntax or command limit\n"
+    },
+    {
+      "name": "reject_true << /hello.txt",
+      "passed": true,
+      "code": 2,
+      "stdout_bytes": 0,
+      "stdout_prefix": "",
+      "stderr": "sh: unsupported syntax or command limit\n"
+    },
+    {
+      "name": "reject_true &",
+      "passed": true,
+      "code": 2,
+      "stdout_bytes": 0,
+      "stdout_prefix": "",
+      "stderr": "sh: unsupported syntax or command limit\n"
+    },
+    {
+      "name": "reject_true 2>&9",
+      "passed": true,
+      "code": 2,
+      "stdout_bytes": 0,
+      "stdout_prefix": "",
+      "stderr": "sh: unsupported syntax or command limit\n"
+    },
+    {
+      "name": "reject_true 2>&12",
+      "passed": true,
+      "code": 2,
+      "stdout_bytes": 0,
+      "stdout_prefix": "",
+      "stderr": "sh: unsupported syntax or command limit\n"
+    },
+    {
+      "name": "reject_true >>> /bad",
+      "passed": true,
+      "code": 2,
+      "stdout_bytes": 0,
+      "stdout_prefix": "",
+      "stderr": "sh: unsupported syntax or command limit\n"
+    },
+    {
+      "name": "reject_busybox echo $HOME",
+      "passed": true,
+      "code": 2,
+      "stdout_bytes": 0,
+      "stdout_prefix": "",
+      "stderr": "sh: unsupported syntax or command limit\n"
+    },
+    {
+      "name": "reject_true; | false",
+      "passed": true,
+      "code": 2,
+      "stdout_bytes": 0,
+      "stdout_prefix": "",
+      "stderr": "sh: unsupported syntax or command limit\n"
+    },
+    {
+      "name": "reject_true 3>/bad",
+      "passed": true,
+      "code": 2,
+      "stdout_bytes": 0,
+      "stdout_prefix": "",
+      "stderr": "sh: unsupported syntax or command limit\n"
+    },
+    {
+      "name": "reject_true 12>/bad",
+      "passed": true,
+      "code": 2,
+      "stdout_bytes": 0,
+      "stdout_prefix": "",
+      "stderr": "sh: unsupported syntax or command limit\n"
+    },
+    {
+      "name": "syntax_has_no_side_effects",
+      "passed": true
+    },
+    {
+      "name": "pipeline--no-decode-cache",
+      "passed": true,
+      "code": 0,
+      "stdout_bytes": 6,
+      "stdout_prefix": "cache\n",
+      "stderr": ""
+    },
+    {
+      "name": "pipeline--no-lookup-cache",
+      "passed": true,
+      "code": 0,
+      "stdout_bytes": 6,
+      "stdout_prefix": "cache\n",
+      "stderr": ""
+    },
+    {
+      "name": "shared_budget",
+      "passed": true,
+      "code": 125,
+      "stdout_bytes": 0,
+      "stdout_prefix": "",
+      "stderr": "vmfree: Instruction budget exhausted\n"
+    },
+    {
+      "name": "oci_pipe",
+      "passed": true
+    },
+    {
+      "name": "oci_writable",
+      "passed": true
+    },
+    {
+      "name": "oci_writes_discarded",
+      "passed": true
+    },
+    {
+      "name": "oci_readonly_default",
+      "passed": true
+    },
+    {
+      "name": "container_status_0",
+      "passed": true
+    },
+    {
+      "name": "container_status_1",
+      "passed": true
+    },
+    {
+      "name": "container_redirection_persists",
+      "passed": true
+    },
+    {
+      "name": "container_removed",
+      "passed": true
+    }
+  ],
+  "linux_reference": "not-run",
+  "runtime_sha256": "160b2e84436ed17a9748d97ca4d73c167b4e964becf65e39cd1b564172771654",
+  "source_hashes": {
+    "native/compat.h": "4942308092ced51c32b524b10c1b60528635f39ae2e18b762ae489828820f731",
+    "native/decode.h": "6f6ec28223bcd197e9a6535258a2d084ea86f44bda56d8fb4c236cd7ff37477f",
+    "native/fs.h": "4e57c77d9d6ffb7c577d064f75362f99d94a97453adf08d28eb6f345a55ca25f",
+    "native/heap.h": "97655ddcfec1ca4d299ec6eca42131cb22c4b0f2b5ca9df3a74e9312ad552d3f",
+    "native/io.h": "24cbd6d9c2cffea4b2363b8a3d67eaca5600fb3be14b800ddd575a7cf9604026",
+    "native/net.h": "6b6136594441f89fef376f019fded87897fc10ea728db60112f792062e78001d",
+    "native/process.h": "3532df7d3a3d1578f23f988ab6883c4ce10b119552508bd87c89bf9ed89600b6",
+    "native/profile.h": "e5a95845a20852e4912c4ab7ce34f0a8abe51ca3b2c047b449d0b63e452cf0f8",
+    "native/runtime.c": "6110b633094138e29749227f9a55fc447bc2a3e7b8c8b17ab0b2232903ac2322",
+    "native/scheduler.h": "8e49ba34dc3a6e2bacd44b27acf9dad3101ccc669032bccc1564d50e0908a7a7"
+  }
+}

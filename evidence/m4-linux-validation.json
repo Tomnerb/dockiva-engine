@@ -1,0 +1,314 @@
+{
+  "host": "Linux-6.18.44-x86_64-with-glibc2.39",
+  "passed": true,
+  "cases": [
+    {
+      "name": "demo",
+      "actual": {
+        "stdout_hex": "6865617020616c6c6f636174696f6e204f4b0a",
+        "stderr_hex": "",
+        "exit_code": 0
+      },
+      "passed": true,
+      "sha256": "d547eab4f55875862dac55c8359f873f4d52c70759d7f318abf4bd68ba0f0053",
+      "scope": "linux-comparison",
+      "expected": {
+        "stdout_hex": "6865617020616c6c6f636174696f6e204f4b0a",
+        "stderr_hex": "",
+        "exit_code": 0
+      },
+      "linux_reference": {
+        "stdout_hex": "6865617020616c6c6f636174696f6e204f4b0a",
+        "stderr_hex": "",
+        "exit_code": 0
+      }
+    },
+    {
+      "name": "brk_regrow",
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      },
+      "passed": true,
+      "sha256": "4217daa98d30d888ac0f169d453c402b1f0377814b97515655a54fa078f8e6de",
+      "scope": "linux-comparison",
+      "expected": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      },
+      "linux_reference": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      }
+    },
+    {
+      "name": "partial_unmap",
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      },
+      "passed": true,
+      "sha256": "ea2a16da7376c7b47ef38444525a6ca8b039ba3a32a93a2face14f8aa7148250",
+      "scope": "linux-comparison",
+      "expected": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      },
+      "linux_reference": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      }
+    },
+    {
+      "name": "map_reuse",
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      },
+      "passed": true,
+      "sha256": "f3837e5c933d597c4d461d341665e74cedd8541110fab14ecfb81bd2e2d3eca7",
+      "scope": "linux-comparison",
+      "expected": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      },
+      "linux_reference": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      }
+    },
+    {
+      "name": "zero_length",
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      },
+      "passed": true,
+      "sha256": "da54a2e998fbbbe73e7ea83a0b9fb156c5e0f3db7e31619584a97476d5d41bdf",
+      "scope": "linux-comparison",
+      "expected": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      },
+      "linux_reference": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      }
+    },
+    {
+      "name": "invalid_unmap",
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      },
+      "passed": true,
+      "sha256": "18a5ea77758d62e2bc7b28f5f2a88e53ae9b3adbf2b2e73b8a4e70c628bc21f0",
+      "scope": "linux-comparison",
+      "expected": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      },
+      "linux_reference": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      }
+    },
+    {
+      "name": "readonly_zero",
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      },
+      "passed": true,
+      "sha256": "e00f08ecb38f01aa62f10b8cb0692aeb0fd2b12487bb5993dc59657fd37c1942",
+      "scope": "linux-comparison",
+      "expected": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      },
+      "linux_reference": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      }
+    },
+    {
+      "name": "prot_none",
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      },
+      "passed": true,
+      "sha256": "e5bd150ef387879d338567f196021ef1e72c3ded09dffd3b28a2a6258f4296f8",
+      "scope": "linux-comparison",
+      "expected": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      },
+      "linux_reference": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      }
+    },
+    {
+      "name": "unmap_hole",
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      },
+      "passed": true,
+      "sha256": "4839312156aaa6756979e2c103ff5baf115cb5467b84fe2a0372824dbc050f91",
+      "scope": "linux-comparison",
+      "expected": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      },
+      "linux_reference": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      }
+    },
+    {
+      "name": "brk_below_base",
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      },
+      "passed": true,
+      "sha256": "46a69556e97af9a37c4aedc51ca4a71d22d5f68159b4a442bec7e3da424ccd9f",
+      "scope": "linux-comparison",
+      "expected": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      },
+      "linux_reference": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      }
+    },
+    {
+      "name": "readonly_fault",
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "766d667265653a20477565737420777269746520697320756e6d6170706564206f72207065726d697373696f6e2064656e6965640a",
+        "exit_code": 125
+      },
+      "passed": true,
+      "sha256": "ab56d60f9540e05598078b152c195fc62078c99f794e6bf244f54b3a3fb5125e",
+      "scope": "runtime-rejection"
+    },
+    {
+      "name": "after_unmap_fault",
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "766d667265653a204775657374207265616420697320756e6d6170706564206f72207065726d697373696f6e2064656e6965640a",
+        "exit_code": 125
+      },
+      "passed": true,
+      "sha256": "0fa9294ce6d7842e038f0514930670dffb50c6cd0afff6b5762e0ded7e5ab843",
+      "scope": "runtime-rejection"
+    },
+    {
+      "name": "none_fault",
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "766d667265653a204775657374207265616420697320756e6d6170706564206f72207065726d697373696f6e2064656e6965640a",
+        "exit_code": 125
+      },
+      "passed": true,
+      "sha256": "cc4e08a2f3fc6aadf453d371935ae72ccdd2b7eb8843258a57ce0845a870509e",
+      "scope": "runtime-rejection"
+    },
+    {
+      "name": "map_limit",
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      },
+      "passed": true,
+      "sha256": "37faa617aa1ad056816c7cf8200170f02781fcd5e8552076a19b3fa6eb75f112",
+      "scope": "bounded-policy",
+      "expected": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      }
+    },
+    {
+      "name": "brk_limit",
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      },
+      "passed": true,
+      "sha256": "b125762dcd390d5329a7e4b4991f16666ef50023ad120d72c0d7316bb6cfaec9",
+      "scope": "bounded-policy",
+      "expected": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      }
+    },
+    {
+      "name": "unsupported_flags",
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      },
+      "passed": true,
+      "sha256": "838fe3e76425024209e49f3f1b69fccf3ca08e18412d4afb17440650eb0751eb",
+      "scope": "bounded-policy",
+      "expected": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      }
+    },
+    {
+      "name": "after_shrink_fault",
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "766d667265653a204775657374207265616420697320756e6d6170706564206f72207065726d697373696f6e2064656e6965640a",
+        "exit_code": 125
+      },
+      "passed": true,
+      "sha256": "ac007efbbbc2403df38fca984c04a2dd26a0a57e737ac4a3328d1cb6d9a764bb",
+      "scope": "runtime-rejection"
+    }
+  ],
+  "reference_kind": "qemu-user-linux",
+  "reference_tool_version": "qemu-aarch64 version 7.2.22 (Debian 1:7.2+dfsg-7+deb12u18+b3)",
+  "native_sources": {
+    "native/heap.h": "97655ddcfec1ca4d299ec6eca42131cb22c4b0f2b5ca9df3a74e9312ad552d3f",
+    "native/runtime.c": "307f31c2cbe377f603e4928a2e0aa1662891ca18b5583693fc605ff82221485e"
+  }
+}

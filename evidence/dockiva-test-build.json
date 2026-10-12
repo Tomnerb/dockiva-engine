@@ -1,0 +1,41 @@
+{
+  "app": "/Users/macbookpro16m2max/GolandProjects/devstack/devstack/bin/dockiva-runtime-test.app",
+  "launcher": "/Users/macbookpro16m2max/GolandProjects/devstack/devstack/bin/Launch Dockiva Runtime Test.command",
+  "runtime_source_build": {
+    "host": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+    "compiler": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+    "flags": [
+      "-std=c11",
+      "-O2",
+      "-Wall",
+      "-Wextra",
+      "-Werror",
+      "-pedantic"
+    ],
+    "source_sha256": "db19e386f73ac0b3a32c92fd7a38677aa4f7dca6f7e3fd943453dd6f8d587b32",
+    "source_hashes": {
+      "native/compat.h": "59daa0e3aead1a35c2fb5c677f7840395f3f1624f2fc658e471438e5e0c927b1",
+      "native/decode.h": "83976a2d3c6985658a8ae50d50a78d7f9b613ee1078d1df73228566599b707f0",
+      "native/fs.h": "b736ddafd408a8df471cdfd3d9adf7ef5185d33dc9a13e56f37992dc4a74db45",
+      "native/heap.h": "e595f3fd8ba03e898b6be667f6f618ca6198e6958002ec8b00dabb9690214fb5",
+      "native/io.h": "585c871add9b6ebbdab26db333d52a1566de353ee98e93f9f84ba568c7210b30",
+      "native/mapping.h": "486dfa12b5a5efc316013027a5ae27558182ae0ac00d812f1d7849da7e0c2f6d",
+      "native/net.h": "42b445faaad2d8ab7bde3e0abd0e5bcf7cbd58218b09514de20daa198e1363fc",
+      "native/process.h": "e768a4c638522ca881b02ec453fd1158e163aa59a0cca58b7d844c9f5b803440",
+      "native/profile.h": "d69dbabe6c7a9c2aa35f625f26ede05e95e02e70c0a32da6882ed3689bf0af51",
+      "native/resources.h": "941ba34cf44b05fc8bbbb90f4b5f600de3ac60860e84740f8759b083684f5b8e",
+      "native/runtime.c": "db19e386f73ac0b3a32c92fd7a38677aa4f7dca6f7e3fd943453dd6f8d587b32",
+      "native/scheduler.h": "c31830a52fa5570c21f788c5dd58ed6f15231b74244037046d1c1ca405ddfe3f",
+      "native/signals.h": "2187c74c0b620550aa64684c1c7caf8bd7aaee6b0390d54a7ae4fb63ed452bea",
+      "native/terminal.h": "10f1b04367e1b9ebde1f4888cd1fb85ec4cfc3b4265bde57419cd1bf7594851c"
+    }
+  },
+  "packaged_native_sha256": "136938258eaa5dae59c0e9380b62c2626b991d01e1659dff1340bec01e31c6bd",
+  "test_state": "~/.vmfree-dockiva-runtime-test",
+  "scope": "Local ad-hoc signed test app; database service compatibility remains unqualified",
+  "checks": {
+    "frontend_build": "passed",
+    "packaged_helper_autostart_shell_http_lifecycle": "passed",
+    "codesign_deep_strict": "passed"
+  }
+}

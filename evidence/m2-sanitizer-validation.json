@@ -1,0 +1,195 @@
+{
+  "host": "Linux-6.18.44-x86_64-with-glibc2.39",
+  "native": "/workspace/scratch/026698cab616/vmfree-runtime/build/vmfree-c-sanitize",
+  "passed": true,
+  "cases": [
+    {
+      "name": "stdout",
+      "passed": true,
+      "actual": {
+        "stdout_hex": "496e646570656e64656e742041524d3634204c696e75782070726f62650a",
+        "stderr_hex": "",
+        "exit_code": 0
+      }
+    },
+    {
+      "name": "stderr_exit42",
+      "passed": true,
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "496e646570656e64656e742041524d3634204c696e75782070726f62650a",
+        "exit_code": 42
+      }
+    },
+    {
+      "name": "write_return",
+      "passed": true,
+      "actual": {
+        "stdout_hex": "496e646570656e64656e742041524d3634204c696e75782070726f62650a",
+        "stderr_hex": "",
+        "exit_code": 30
+      }
+    },
+    {
+      "name": "zero_write",
+      "passed": true,
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 0
+      }
+    },
+    {
+      "name": "bad_fd",
+      "passed": true,
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 247
+      }
+    },
+    {
+      "name": "exit_group",
+      "passed": true,
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "",
+        "exit_code": 42
+      }
+    },
+    {
+      "name": "truncated_0",
+      "passed": true,
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "766d667265653a204578706563746564206c6974746c652d656e6469616e20454c4636342076657273696f6e20310a",
+        "exit_code": 125
+      }
+    },
+    {
+      "name": "truncated_6",
+      "passed": true,
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "766d667265653a204578706563746564206c6974746c652d656e6469616e20454c4636342076657273696f6e20310a",
+        "exit_code": 125
+      }
+    },
+    {
+      "name": "truncated_63",
+      "passed": true,
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "766d667265653a204578706563746564206c6974746c652d656e6469616e20454c4636342076657273696f6e20310a",
+        "exit_code": 125
+      }
+    },
+    {
+      "name": "truncated_90",
+      "passed": true,
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "766d667265653a2050726f6772616d2068656164657273206f7574736964652066696c650a",
+        "exit_code": 125
+      }
+    },
+    {
+      "name": "truncated_331",
+      "passed": true,
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "766d667265653a20496e76616c6964206c6f6164207365676d656e7420626f756e64730a",
+        "exit_code": 125
+      }
+    },
+    {
+      "name": "wrong_arch",
+      "passed": true,
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "766d667265653a204f6e6c792041524d36342045545f455845432076657273696f6e203120737570706f727465640a",
+        "exit_code": 125
+      }
+    },
+    {
+      "name": "phoff_overflow",
+      "passed": true,
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "766d667265653a2050726f6772616d2068656164657273206f7574736964652066696c650a",
+        "exit_code": 125
+      }
+    },
+    {
+      "name": "oversize_memory",
+      "passed": true,
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "766d667265653a204775657374206d656d6f72792065786365656473203136204d6942206c696d69740a",
+        "exit_code": 125
+      }
+    },
+    {
+      "name": "nonexec_entry",
+      "passed": true,
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "766d667265653a20456e74727920706f696e74206973206e6f742065786563757461626c650a",
+        "exit_code": 125
+      }
+    },
+    {
+      "name": "unknown_instruction",
+      "passed": true,
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "766d667265653a20496e737472756374696f6e20756e737570706f727465640a",
+        "exit_code": 125
+      }
+    },
+    {
+      "name": "unknown_syscall",
+      "passed": true,
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "766d667265653a204c696e75782073797363616c6c206973206e6f7420696d706c656d656e7465640a",
+        "exit_code": 125
+      }
+    },
+    {
+      "name": "loop_budget",
+      "passed": true,
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "766d667265653a20496e737472756374696f6e20627564676574206578686175737465640a",
+        "exit_code": 125
+      }
+    },
+    {
+      "name": "backward_branch",
+      "passed": true,
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "766d667265653a20496e737472756374696f6e20627564676574206578686175737465640a",
+        "exit_code": 125
+      }
+    },
+    {
+      "name": "reserved_movz",
+      "passed": true,
+      "actual": {
+        "stdout_hex": "",
+        "stderr_hex": "766d667265653a205265736572766564204d4f565a20656e636f64696e670a",
+        "exit_code": 125
+      }
+    }
+  ],
+  "sanitizers": [
+    "address",
+    "undefined"
+  ],
+  "environment": {
+    "ASAN_OPTIONS": "detect_leaks=0"
+  },
+  "leak_check": "not verified: environment cannot inspect proc task entries"
+}

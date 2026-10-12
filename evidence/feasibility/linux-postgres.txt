@@ -1,0 +1,1 @@
+postgresql pass query, graceful restart and SIGKILL recovery for one acknowledged write

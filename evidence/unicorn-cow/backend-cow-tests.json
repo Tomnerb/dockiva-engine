@@ -1,0 +1,92 @@
+{
+  "results": [
+    {
+      "test": "unicorn",
+      "passed": true,
+      "exit": 0,
+      "stdout": "PASS: scalar, post-index, paired, SIMD, cross-page and release stores copy only touched backing; exact instruction budgets\nPASS: heap and mmap write faults isolate their owning address spaces\nPASS: reads allocate no copies; stale COW protection after peer exit retries without copying\nPASS: genuine read-only and unmapped writes remain faults\nPASS: a cross-view SIMD write detaches all local aliases together\nPASS: exclusive load/store retry loop completes without changing peer bytes\nPASS: paired SIMD store across two host COW pages preserves values and exact budget\nPASS: incremental COW synchronization preserves read-only split views and peer bytes\n",
+      "stderr": "",
+      "binary_sha256": "430e4fb8cd24a545060c4ce52b5cea5b1d3a72ac41a4f9dcc8eb653769d1431d"
+    },
+    {
+      "test": "unicorn-oom-store",
+      "passed": true,
+      "exit": 125,
+      "stdout": "",
+      "stderr": "vmfree: Copy-on-write allocation failed\n"
+    },
+    {
+      "test": "unicorn-oom-fork",
+      "passed": true,
+      "exit": 125,
+      "stdout": "",
+      "stderr": "vmfree: Copy-on-write allocation failed\n"
+    },
+    {
+      "test": "production-loop",
+      "passed": true,
+      "exit": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "test": "unicorn-sanitize",
+      "passed": true,
+      "exit": 0,
+      "stdout": "PASS: scalar, post-index, paired, SIMD, cross-page and release stores copy only touched backing; exact instruction budgets\nPASS: heap and mmap write faults isolate their owning address spaces\nPASS: reads allocate no copies; stale COW protection after peer exit retries without copying\nPASS: genuine read-only and unmapped writes remain faults\nPASS: a cross-view SIMD write detaches all local aliases together\nPASS: exclusive load/store retry loop completes without changing peer bytes\nPASS: paired SIMD store across two host COW pages preserves values and exact budget\nPASS: incremental COW synchronization preserves read-only split views and peer bytes\n",
+      "stderr": "",
+      "binary_sha256": "82da726bb546b5182b270aebe6d7c98af115e13188c310265b771681a249054f"
+    },
+    {
+      "test": "unicorn-sanitize-oom-store",
+      "passed": true,
+      "exit": 125,
+      "stdout": "",
+      "stderr": "vmfree: Copy-on-write allocation failed\n"
+    },
+    {
+      "test": "unicorn-sanitize-oom-fork",
+      "passed": true,
+      "exit": 125,
+      "stdout": "",
+      "stderr": "vmfree: Copy-on-write allocation failed\n"
+    },
+    {
+      "test": "production-loop",
+      "passed": true,
+      "exit": 0,
+      "stdout": "",
+      "stderr": ""
+    }
+  ],
+  "source_hashes": {
+    "tests/native/unicorn_cow_host.c": "6af636a1adcf9a95a5a6636bac1c2412d35047a402462e2bd990af3aea36b228",
+    "native/address_space.h": "6cdb485520577fc01e598aa457c1ad760222c1b3a5facc1e5ff8eaf034a7d132",
+    "native/address_space_ops.h": "9e4d83a78cc86f46a66a2d86e5b13711a314ce0b4ab622c4aeee994187e61d9d",
+    "native/compat.h": "e71e30f495be92195c86cdc0f22cbd7cb494524909e6d05801232b743aa9e3eb",
+    "native/cpu_state.h": "d58dc254674399b197e7c305b0dc558f5c38e5879eb43fe3f9db6954a2d8836e",
+    "native/decode.h": "fdc15750c69a7f12c54e1ef9c27ac93c47fd722093958d1190497964a8ff40bd",
+    "native/epoll.h": "e57fe5f6b522fc9d17333abae149aa9384b9e1406e0b07be333ff36f1ef5d8aa",
+    "native/fadvise.h": "ca5ffefe679d1847c9b8f6028512e5342b2287fb5337b6630753f57fb0b2ab8d",
+    "native/fs.h": "c843b02549ebc9af66a26e21f31a68d118a662658bd0e8db4b2e5d91c7f7411f",
+    "native/heap.h": "979e434bfcf0070e2ea92840768aa4898eea68b81de644acf0e0fb7bbf0419e3",
+    "native/io.h": "3f8796c23c7f86f5c472334efad99674c44855edfa29a477aa899420321d4fcc",
+    "native/mapping.h": "289e555414a0fad92556f0b116557280d8dee6f1a84ee972b4520ea37cc0d4c8",
+    "native/memory_backing.h": "ab092e2d68a9da39f117d56c5437718a5b89d59abebe168d6c5034c064b47ae9",
+    "native/memory_backing_mach.h": "1a67eea692a0b37ddbf529e19de5f1340c7fd6acdb9000fb53f29503d9a0df6b",
+    "native/memory_backing_ops.h": "2adf478f28a5883f7156ddc0f99daa9aebcf177459a2064c23a72703607ac3cf",
+    "native/net.h": "caa6154ae7826c01e686a80925cb2fadce3aa511d236aeff2809bb8597c92c25",
+    "native/process.h": "4e8742e77c9087d3add585b7797b683d92b163ed0418c5483b1ebdb526129a2d",
+    "native/profile.h": "d69dbabe6c7a9c2aa35f625f26ede05e95e02e70c0a32da6882ed3689bf0af51",
+    "native/resources.h": "941ba34cf44b05fc8bbbb90f4b5f600de3ac60860e84740f8759b083684f5b8e",
+    "native/runtime_context.h": "359d8763832761ee358b9d1380a3211067c9654c3dba2611dd4cf57099f9119f",
+    "native/scheduler.h": "14e58fe11902e99a025f284fc7f04d8dbcf2922172f8f728890f17399e32a229",
+    "native/signals.h": "453fbbd3e69ae46abaab1a2701258e4b1602f63600fed18ef94c562e913ea5a8",
+    "native/syscall.h": "342080b73d0aa7235dcf29ee21979fc8406d878a351a42f8fd4940307f7b5a5f",
+    "native/sysinfo.h": "50e5742797c013db83e308a543bb4177995f6a99a7b6668b8eacca9a956c5a52",
+    "native/terminal.h": "34211fcb44ee7282a75f916964434b4f8a6077d9985c8a96406c0b53c269b888",
+    "native/unicorn_backend.h": "f8d17c6ae93e5ba8153b21ce71206774ba55ccca208dd289e6cdfa43448eda8f",
+    "native/unicorn_threads.h": "8eb907d35e9eb43ca019a79e1693b39630c8c1b8880ed4622ce129d555809d66",
+    "native/runtime.c": "875bffca7a3d7b4d0558a42204072d665f5e3d7fc98b467ef921b58d90a30568"
+  }
+}

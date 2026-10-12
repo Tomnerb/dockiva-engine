@@ -1,0 +1,55 @@
+{
+  "host": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+  "machine": "arm64",
+  "timing": "wall clock, startup includes launcher and host HTTP readiness retries",
+  "cpu_memory_comparison": "not measured; do not infer resource savings",
+  "results": [
+    {
+      "name": "VM-free",
+      "kind": "vmfree",
+      "command": [
+        "/Users/macbookpro16m2max/Documents/vmfree-runtime/build/vmfree-c",
+        "run",
+        "/Users/macbookpro16m2max/.vmfree/containers/bench-root-62dd0dba/rootfs/app/server",
+        "--root",
+        "/Users/macbookpro16m2max/.vmfree/containers/bench-root-62dd0dba/rootfs",
+        "--max-steps",
+        "10000000",
+        "--",
+        "0"
+      ],
+      "samples": [
+        {
+          "readiness_attempts": 1,
+          "startup_to_first_response_ms": 7.716332998825237,
+          "requests_per_second": 3232.6722431879193,
+          "latency_median_ms": 0.25295797968283296,
+          "latency_p95_ms": 0.26699999580159783,
+          "requests": 5,
+          "concurrency": 1
+        }
+      ]
+    },
+    {
+      "name": "Docker Linux VM",
+      "kind": "linux-vm",
+      "command": [
+        "/opt/homebrew/bin/docker",
+        "--context",
+        "orbstack",
+        "run",
+        "--rm",
+        "--name",
+        "vmfree-bench-62dd0dba",
+        "--platform",
+        "linux/arm64",
+        "-p",
+        "127.0.0.1:52622:18080",
+        "vmfree-benchmark:local"
+      ],
+      "samples": []
+    }
+  ],
+  "completed": false,
+  "error": "Unexpected HTTP workload response on port 52622: b''"
+}

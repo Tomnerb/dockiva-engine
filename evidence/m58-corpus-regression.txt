@@ -1,0 +1,15 @@
+local-only shell-arithmetic
+local-only pipeline
+local-only nested-exec
+local-only cwd-child-isolation
+local-only redirection
+local-only exit-status
+local-only signal-trap
+local-only dso-constructor-tls
+local-only parent-directory-policy
+local-only symlink-policy
+bounded-rejection elf-empty
+bounded-rejection elf-short-header
+bounded-rejection elf-wrong-machine
+bounded-rejection elf-invalid-ph-count
+bounded-rejection instruction-budget

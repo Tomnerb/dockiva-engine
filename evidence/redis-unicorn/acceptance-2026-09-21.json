@@ -1,0 +1,17 @@
+{
+  "image_id": "sha256:3b0f54bf27a77c98d319dc3a6706ed500a8985309f0b6c6407599b869f4a2bd9",
+  "scope": "Prepared pinned Linux ELF; opt-in Unicorn backend; no Docker or native Redis fallback",
+  "runtime_sha256": "03912be0f7342b82296feb43ee1ea75950e782db01e66d156303f6b01a3931c8",
+  "service_qualified": false,
+  "cycles": [
+    {
+      "phase": "write",
+      "passed": false,
+      "queries": [],
+      "error": "Redis did not become ready within the deadline",
+      "exit": 1,
+      "stdout": "1:C 21 Sep 2026 14:34:04.822 # Failed to test the kernel for a bug that could lead to data corruption during background save. Your system could be affected, please report this error.\n1:C 21 Sep 2026 14:34:04.827 # Redis will now exit to prevent data corruption. Note that it is possible to suppress this warning by setting the following config: ignore-warnings ARM64-COW-BUG\n",
+      "stderr": ""
+    }
+  ]
+}

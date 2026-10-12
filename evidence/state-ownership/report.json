@@ -1,0 +1,56 @@
+{
+  "date": "2026-09-22",
+  "scope": "First CPU-state ownership extraction; not full architecture slice A acceptance",
+  "passed": true,
+  "checks": {
+    "cpu-state.json": true,
+    "backend.json": true,
+    "threads.json": true,
+    "interpreter-shell.json": true,
+    "interpreter-loader.json": true,
+    "redis-query.json": true,
+    "redis-recovery.json": true
+  },
+  "python_tests": 63,
+  "dockiva_tests": {
+    "passed": 4,
+    "skipped_external_live_engine": 1
+  },
+  "artifacts": {
+    "build/vmfree-c": "602fbead49821d55c83a91b00929f080f6a4bdbde73d436297eedeed84278387",
+    "build/vmfree-c-unicorn": "5af514beea16ebf19b62a9a785adea9aeb101358fba760dab238057c04b618a6",
+    "build/dockiva-state-ownership/vmfree-engine/vmfree-engine": "4077e898ee6d4ae9f688b9dae8174b6327c78133c13f92ac515ef54d4df332de",
+    "build/dockiva-state-ownership/vmfree-engine/_internal/build/vmfree-c-unicorn": "bec1236c92f9fd86c0fac7166f361df728aac8d8ce27a84581d97e394dc65358"
+  },
+  "source_hashes": {
+    "native/compat.h": "a8330b1e66610aaf63b31fa5c1281813e2104ead8b8caeff09875de7f401cc72",
+    "native/cpu_state.h": "26a9a6d73fa939eff2fbd560f0ad80259c1e638b9795cf19774983820fed8880",
+    "native/decode.h": "fdc15750c69a7f12c54e1ef9c27ac93c47fd722093958d1190497964a8ff40bd",
+    "native/epoll.h": "9eb6ed6a5a4f9ee7b9555f55560c259271b0017cc82beef790ee1b728d0567ed",
+    "native/fadvise.h": "ca5ffefe679d1847c9b8f6028512e5342b2287fb5337b6630753f57fb0b2ab8d",
+    "native/fs.h": "c843b02549ebc9af66a26e21f31a68d118a662658bd0e8db4b2e5d91c7f7411f",
+    "native/heap.h": "e595f3fd8ba03e898b6be667f6f618ca6198e6958002ec8b00dabb9690214fb5",
+    "native/io.h": "3f8796c23c7f86f5c472334efad99674c44855edfa29a477aa899420321d4fcc",
+    "native/mapping.h": "2e539429cfd911b6eb5c6dcfd89d69980bd207e1248a31fda1bff181006e5729",
+    "native/net.h": "67e94e6b9ea7ee875e273b9e86d2098fd344f6009df06cc2c916dbf4ed04edc2",
+    "native/process.h": "03e56083380170b9425ca1e21bb37eeb56d2c9279d2dc94fdd309602d8459776",
+    "native/profile.h": "d69dbabe6c7a9c2aa35f625f26ede05e95e02e70c0a32da6882ed3689bf0af51",
+    "native/resources.h": "941ba34cf44b05fc8bbbb90f4b5f600de3ac60860e84740f8759b083684f5b8e",
+    "native/runtime.c": "377460b13a5280dfe578b37b1bf39d695b950fba9465553dd45ee044f11eb83b",
+    "native/scheduler.h": "7896939e7b5f75ed99fec1d77c5d354d2d11f92572ea1d2976a3a08d4c141449",
+    "native/signals.h": "453fbbd3e69ae46abaab1a2701258e4b1602f63600fed18ef94c562e913ea5a8",
+    "native/syscall.h": "342080b73d0aa7235dcf29ee21979fc8406d878a351a42f8fd4940307f7b5a5f",
+    "native/sysinfo.h": "50e5742797c013db83e308a543bb4177995f6a99a7b6668b8eacca9a956c5a52",
+    "native/terminal.h": "34211fcb44ee7282a75f916964434b4f8a6077d9985c8a96406c0b53c269b888",
+    "native/unicorn_backend.h": "1bdd382cf1729f0bb768c4b7a72837bfb4370827e3c668498239d24568929a30",
+    "native/unicorn_threads.h": "662c9b50ac5b983cfbc82488823d7219bcbcad1d33b8532854d3018a7f5fd9af"
+  },
+  "remaining": [
+    "Address-space, FD and scheduler ownership extraction",
+    "Full backend execution/fault interface",
+    "General Unicorn fork/shared-memory semantics",
+    "PostgreSQL and Valkey service acceptance",
+    "Production isolation and performance qualification"
+  ],
+  "existing_dockiva_app_replaced": false
+}

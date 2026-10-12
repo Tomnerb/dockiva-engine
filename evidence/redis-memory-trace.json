@@ -1,0 +1,60 @@
+{
+  "runtime_sha256": "8dc8a8cb46a47e2d9fe50592c24da03e9ff4620b903bb98dade13752b2d268d5",
+  "scope": "Direct ELF version probes; not stock image, Dockiva, service or persistence acceptance",
+  "expanded_limits": true,
+  "results": [
+    {
+      "database": "redis",
+      "image_id": "sha256:3b0f54bf27a77c98d319dc3a6706ed500a8985309f0b6c6407599b869f4a2bd9",
+      "repository_digests": [],
+      "binary": "/usr/local/bin/redis-server",
+      "service_qualified": false,
+      "files": {
+        "/usr/local/bin/redis-server": {
+          "sha256": "0861b9b93d67227b1fc87129eaec6cd8dad1317817a0211421fb908edd06fc54",
+          "bytes": 16813640
+        },
+        "/lib/aarch64-linux-gnu/libc.so.6": {
+          "sha256": "52677b742d458f20bdd78cb7dc4c2664b31c46dbd7765aba4bd8c96106f4d2e0",
+          "bytes": 1651408
+        },
+        "/lib/ld-linux-aarch64.so.1": {
+          "sha256": "b45de0f039f84a52cef445b9a1980c65a35199998e992baa026865f2cd3ef303",
+          "bytes": 202912
+        },
+        "/lib/aarch64-linux-gnu/libcrypto.so.3": {
+          "sha256": "0810630ecdd984d37441efd4518d06f5493dc23d259d5b4988c35526e100ba8a",
+          "bytes": 4466856
+        },
+        "/lib/aarch64-linux-gnu/libssl.so.3": {
+          "sha256": "c5c7395da5a6e88d70df1dce511506abdc3cdd9c018c5cd71823c89907108b18",
+          "bytes": 737192
+        },
+        "/lib/aarch64-linux-gnu/libm.so.6": {
+          "sha256": "672425bf2c22adfe1f1cc41dd53b0662c498e40a3f5de79d0cb0e87767d922c9",
+          "bytes": 591960
+        }
+      },
+      "adaptation": "Direct executable and transitive ELF libraries; archive link targets materialized as regular files. Original ELF bytes unchanged. Image entrypoint, environment and full filesystem are not reproduced.",
+      "interpreter": "/lib/ld-linux-aarch64.so.1",
+      "missing_libraries": [],
+      "default_probe": {
+        "exit_code": 125,
+        "stdout": "",
+        "stderr": "vmfree: Input read failed or exceeds 16 MiB\n"
+      },
+      "max_steps": 200000000,
+      "dynamic_probe": {
+        "exit_code": 125,
+        "stdout": "",
+        "stderr": "syscall 214: x0..5=[0, 0, 0, 0, 33811976, 11]\nsyscall 48: x0..5=[18446744073709551516, 33694448, 4, 257264, 1685382482, 336]\nsyscall 56: x0..5=[18446744073709551516, 33685904, 524288, 0, 33821568, 18446744073709551615]\nsyscall 56: x0..5=[18446744073709551516, 140737487302192, 524288, 0, 140737487302831, 0]\nsyscall 79: x0..5=[18446744073709551516, 140737487302192, 140737487302480, 0, 140737487302831, 0]\nsyscall 56: x0..5=[18446744073709551516, 140737487302192, 524288, 0, 140737487302831, 0]\nsyscall 63: x0..5=[64, 140737487302864, 832, 0, 140737487302831, 0]\nsyscall 79: x0..5=[64, 33690840, 140737487302480, 4096, 33823520, 33821568]\nsyscall 222: x0..5=[0, 8192, 3, 34, 18446744073709551615, 0]\nsyscall 222: x0..5=[0, 655472, 0, 34, 18446744073709551615, 0]\nsyscall 222: x0..5=[68719542272, 589936, 5, 2066, 64, 0]\nsyscall 215: x0..5=[68719484928, 57344, 68719542272, 68720132208, 64, 0]\nsyscall 215: x0..5=[68720136192, 4208, 68719542272, 68720132208, 68720140400, 0]\nsyscall 226: x0..5=[68720066560, 61440, 0, 68720132208, 68720140400, 0]\nsyscall 222: x0..5=[68720128000, 8192, 3, 2066, 64, 585728]\nsyscall 57: x0..5=[64, 68719542336, 1, 68719542336, 68719476800, 68719542272]\nsyscall 56: x0..5=[18446744073709551516, 140737487302160, 524288, 0, 140737487302799, 0]\nsyscall 63: x0..5=[64, 140737487302832, 832, 0, 140737487302799, 0]\nsyscall 79: x0..5=[64, 33690840, 140737487302448, 4096, 68719478064, 33821568]\nsyscall 222: x0..5=[0, 800824, 0, 34, 18446744073709551615, 0]\nsyscall 222: x0..5=[68720197632, 735288, 5, 2066, 64, 0]\nsyscall 215: x0..5=[68720136192, 61440, 68720197632, 68720932920, 64, 0]\nsyscall 215: x0..5=[68720934912, 2104, 68720197632, 68720932920, 68720937016, 0]\nsyscall 226: x0..5=[68720828416, 49152, 0, 68720932920, 68720937016, 0]\nsyscall 222: x0..5=[68720877568, 57344, 3, 2066, 64, 679936]\nsyscall 57: x0..5=[64, 68720197696, 1, 68720197696, 68719478176, 68720197632]\nsyscall 56: x0..5=[18446744073709551516, 140737487302128, 524288, 0, 140737487302767, 0]\nsyscall 63: x0..5=[64, 140737487302800, 832, 0, 140737487302767, 0]\nsyscall 79: x0..5=[64, 33690840, 140737487302416, 4096, 68719479440, 33821568]\nsyscall 222: x0..5=[0, 4608680, 0, 34, 18446744073709551615, 0]\nsyscall 222: x0..5=[68720984064, 4543144, 5, 2066, 64, 0]\nsyscall 215: x0..5=[68720934912, 49152, 68720984064, 68725527208, 64, 0]\nsyscall 215: x0..5=[68725530624, 12968, 68720984064, 68725527208, 68725543592, 0]\nsyscall 226: x0..5=[68725071872, 61440, 0, 68725527208, 68725543592, 0]\nsyscall 222: x0..5=[68725133312, 385024, 3, 2066, 64, 4083712]\nsyscall 222: x0..5=[68725518336, 8872, 3, 50, 18446744073709551615, 0]\nsyscall 57: x0..5=[64, 68720984128, 1, 68720984128, 68719479552, 68720984064]\nsyscall 56: x0..5=[18446744073709551516, 140737487302096, 524288, 0, 140737487302735, 0]\nsyscall 63: x0..5=[64, 140737487302768, 832, 0, 140737487302735, 0]\nsyscall 79: x0..5=[64, 33690840, 140737487302384, 4096, 68719480816, 33821568]\nsyscall 222: x0..5=[0, 1826912, 0, 34, 18446744073709551615, 0]\nsyscall 222: x0..5=[68725571584, 1761376, 5, 2066, 64, 0]\nsyscall 215: x0..5=[68725530624, 40960, 68725571584, 68727332960, 64, 0]\nsyscall 215: x0..5=[68727336960, 20576, 68725571584, 68727332960, 68727357536, 0]\nsyscall 226: x0..5=[68727173120, 86016, 0, 68727332960, 68727357536, 0]\nsyscall 222: x0..5=[68727259136, 24576, 3, 2066, 64, 1622016]\nsyscall 222: x0..5=[68727283712, 49248, 3, 50, 18446744073709551615, 0]\nsyscall 57: x0..5=[64, 68725571648, 6, 68725571648, 68719480928, 68725571584]\nsyscall 222: x0..5=[0, 8192, 3, 34, 18446744073709551615, 0]\nsyscall 96: x0..5=[68719485712, 33816616, 68719485696, 33821080, 68719485824, 16]\nsyscall 99: x0..5=[68719485728, 24, 68719485728, 1, 0, 68719485776]\nsyscall 293: x0..5=[68719487328, 32, 0, 3559439360, 33812480, 32]\nread address=0x0 bytes=8\nguest pc=0x2018574\ntail pc=0x2016424 instruction=0x390ba001\ntail pc=0x2016428 instruction=0xaa1403e0\ntail pc=0x201642c instruction=0xa94153f3\ntail pc=0x2016430 instruction=0xa8c37bfd\ntail pc=0x2016434 instruction=0xd65f03c0\ntail pc=0x2018f88 instruction=0xf9405ba8\ntail pc=0x2018f8c instruction=0xaa0003e9\ntail pc=0x2018f90 instruction=0x17fffd71\ntail pc=0x2018554 instruction=0x34000195\ntail pc=0x2018558 instruction=0xf0000122\ntail pc=0x201855c instruction=0xf0000120\ntail pc=0x2018560 instruction=0x912e0003\ntail pc=0x2018564 instruction=0xf945b841\ntail pc=0x2018568 instruction=0xf0000124\ntail pc=0x201856c instruction=0xf947e484\ntail pc=0x2018570 instruction=0xa9400420\nx0=0x203f000 x1=0x0 x2=0x203f000 x3=0x203fb80\nx4=0x203fb98 x5=0x20 x6=0xffffffffffffffe0 x7=0x1\nx8=0x2041380 x9=0x1000002980 x10=0x90 x11=0x0\nx12=0x1000001e18 x13=0x41 x14=0x2040028 x15=0xffff\nx16=0x2009820 x17=0x20140a0 x18=0x19c000 x19=0x2041780\nx20=0x0 x21=0x1 x22=0x1 x23=0x2040000\nx24=0x2022000 x25=0x20222f0 x26=0x0 x27=0x1\nx28=0xfff1 x29=0x7fffffeffb00 x30=0x2018f88 \nvmfree: Guest read is unmapped or permission denied\n"
+      },
+      "outcome": "version probe did not exit successfully; service untested",
+      "linux_reference": {
+        "exit_code": 0,
+        "stdout": "Redis server v=7.4.2 sha=00000000:0 malloc=jemalloc-5.3.0 bits=64 build=3dfb3660d0f5a2e7\n",
+        "stderr": ""
+      }
+    }
+  ]
+}

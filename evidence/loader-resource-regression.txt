@@ -1,0 +1,6 @@
+PASS 48
+PASS 48--no-decode-cache
+PASS 48--no-lookup-cache
+PASS 96
+PASS 96--no-decode-cache
+PASS 96--no-lookup-cache

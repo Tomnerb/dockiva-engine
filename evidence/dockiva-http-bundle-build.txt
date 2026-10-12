@@ -1,0 +1,77 @@
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/vmfree-c
+74 INFO: PyInstaller: 6.22.3, contrib hooks: 2026.7
+74 INFO: Python: 3.14.7
+82 INFO: Platform: macOS-26.5.1-arm64-arm-64bit-Mach-O
+83 INFO: Python environment: /private/tmp/dockiva-vmfree-buildenv
+83 INFO: wrote /var/folders/2y/93d157g95_v18gbfpvsnr1p40000gn/T/vmfree-bundle-dn2stwlx/vmfree-engine.spec
+86 INFO: Removing temporary files and cleaning cache in /Users/macbookpro16m2max/Library/Application Support/pyinstaller
+93 INFO: Module search paths (PYTHONPATH):
+['/Users/macbookpro16m2max/Documents/vmfree-runtime',
+ '/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python314.zip',
+ '/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14',
+ '/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload',
+ '/private/tmp/dockiva-vmfree-buildenv/lib/python3.14/site-packages',
+ '/Users/macbookpro16m2max/Documents/vmfree-runtime/scripts',
+ '/Users/macbookpro16m2max/Documents/vmfree-runtime']
+197 INFO: Appending 'binaries' from .spec
+197 INFO: Appending 'datas' from .spec
+199 INFO: checking Analysis
+199 INFO: Building Analysis because Analysis-00.toc is non existent
+199 INFO: Looking for Python shared library...
+201 INFO: Using Python shared library: /opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/Python
+201 INFO: Running Analysis Analysis-00.toc
+201 INFO: Target bytecode optimization level: 0
+201 INFO: Initializing module dependency graph...
+202 INFO: Initializing module graph hook caches...
+210 INFO: Analyzing modules for base_library.zip ...
+535 INFO: Processing standard module hook 'hook-encodings.py' from '/private/tmp/dockiva-vmfree-buildenv/lib/python3.14/site-packages/PyInstaller/hooks'
+1161 INFO: Processing standard module hook 'hook-math.py' from '/private/tmp/dockiva-vmfree-buildenv/lib/python3.14/site-packages/PyInstaller/hooks'
+2055 INFO: Processing standard module hook 'hook-difflib.py' from '/private/tmp/dockiva-vmfree-buildenv/lib/python3.14/site-packages/PyInstaller/hooks'
+2065 INFO: Processing standard module hook 'hook-heapq.py' from '/private/tmp/dockiva-vmfree-buildenv/lib/python3.14/site-packages/PyInstaller/hooks'
+2139 INFO: Processing standard module hook 'hook-pickle.py' from '/private/tmp/dockiva-vmfree-buildenv/lib/python3.14/site-packages/PyInstaller/hooks'
+3110 INFO: Caching module dependency graph...
+3131 INFO: Analyzing /Users/macbookpro16m2max/Documents/vmfree-runtime/scripts/dockiva_engine_entry.py
+3329 INFO: Processing standard module hook 'hook-platform.py' from '/private/tmp/dockiva-vmfree-buildenv/lib/python3.14/site-packages/PyInstaller/hooks'
+3352 INFO: Processing standard module hook 'hook-xml.py' from '/private/tmp/dockiva-vmfree-buildenv/lib/python3.14/site-packages/PyInstaller/hooks'
+3380 INFO: Processing standard module hook 'hook-sysconfig.py' from '/private/tmp/dockiva-vmfree-buildenv/lib/python3.14/site-packages/PyInstaller/hooks'
+3390 INFO: Processing standard module hook 'hook-_osx_support.py' from '/private/tmp/dockiva-vmfree-buildenv/lib/python3.14/site-packages/PyInstaller/hooks'
+3393 INFO: Processing standard module hook 'hook-_ctypes.py' from '/private/tmp/dockiva-vmfree-buildenv/lib/python3.14/site-packages/PyInstaller/hooks'
+3428 INFO: Processing module hooks (post-graph stage)...
+3485 INFO: Performing binary vs. data reclassification (22 entries)
+3491 INFO: Looking for ctypes DLLs
+3498 INFO: Analyzing run-time hooks ...
+3499 INFO: Including run-time hook 'pyi_rth_inspect.py' from '/private/tmp/dockiva-vmfree-buildenv/lib/python3.14/site-packages/PyInstaller/hooks/rthooks'
+3501 INFO: Including run-time hook 'pyi_rth_pkgutil.py' from '/private/tmp/dockiva-vmfree-buildenv/lib/python3.14/site-packages/PyInstaller/hooks/rthooks'
+3504 INFO: Creating base_library.zip...
+3514 INFO: Looking for dynamic libraries
+3570 INFO: Warnings written to /var/folders/2y/93d157g95_v18gbfpvsnr1p40000gn/T/vmfree-bundle-dn2stwlx/work/vmfree-engine/warn-vmfree-engine.txt
+3576 INFO: Graph cross-reference written to /var/folders/2y/93d157g95_v18gbfpvsnr1p40000gn/T/vmfree-bundle-dn2stwlx/work/vmfree-engine/xref-vmfree-engine.html
+3606 INFO: checking PYZ
+3606 INFO: Building PYZ because PYZ-00.toc is non existent
+3606 INFO: Building PYZ (ZlibArchive) /var/folders/2y/93d157g95_v18gbfpvsnr1p40000gn/T/vmfree-bundle-dn2stwlx/work/vmfree-engine/PYZ-00.pyz
+3740 INFO: Building PYZ (ZlibArchive) /var/folders/2y/93d157g95_v18gbfpvsnr1p40000gn/T/vmfree-bundle-dn2stwlx/work/vmfree-engine/PYZ-00.pyz completed successfully.
+3741 INFO: EXE target arch: arm64
+3741 INFO: Code signing identity: None
+3742 INFO: checking PKG
+3742 INFO: Building PKG because PKG-00.toc is non existent
+3742 INFO: Building PKG (CArchive) vmfree-engine.pkg
+3750 INFO: Building PKG (CArchive) vmfree-engine.pkg completed successfully.
+3750 INFO: Bootloader /private/tmp/dockiva-vmfree-buildenv/lib/python3.14/site-packages/PyInstaller/bootloader/Darwin-64bit/run
+3750 INFO: checking EXE
+3750 INFO: Building EXE because EXE-00.toc is non existent
+3750 INFO: Building EXE from EXE-00.toc
+3750 INFO: Copying bootloader EXE to /var/folders/2y/93d157g95_v18gbfpvsnr1p40000gn/T/vmfree-bundle-dn2stwlx/work/vmfree-engine/vmfree-engine
+3751 INFO: Converting EXE to target arch (arm64)
+3763 INFO: Removing signature(s) from EXE
+3775 INFO: Modifying Mach-O image UUID(s) in EXE
+3777 INFO: Appending PKG archive to EXE
+3778 INFO: Fixing EXE headers for code signing
+3781 INFO: Re-signing the EXE
+3795 INFO: Building EXE from EXE-00.toc completed successfully.
+3796 INFO: checking COLLECT
+3796 INFO: Building COLLECT because COLLECT-00.toc is non existent
+3796 INFO: Removing dir /Users/macbookpro16m2max/Documents/vmfree-runtime/build/dockiva/vmfree-engine
+3801 INFO: Building COLLECT COLLECT-00.toc
+5082 INFO: Building COLLECT COLLECT-00.toc completed successfully.
+5083 INFO: Build complete! The results are available in: /Users/macbookpro16m2max/Documents/vmfree-runtime/build/dockiva
+/Users/macbookpro16m2max/Documents/vmfree-runtime/build/dockiva/vmfree-engine/vmfree-engine

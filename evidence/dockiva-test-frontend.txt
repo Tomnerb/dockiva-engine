@@ -1,0 +1,20 @@
+
+> dockiva-frontend@0.2.3 build
+> vue-tsc --noEmit && vite build
+
+vite v7.3.6 building client environment for production...
+transforming...
+✓ 55 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                           0.44 kB │ gzip:   0.28 kB
+dist/assets/dockiva_icon-q9ykvFhG.png   831.87 kB
+dist/assets/dockiva_icon2-DDCL1dwk.png  959.53 kB
+dist/assets/index-Dv8Oc-zV.css          104.80 kB │ gzip:  20.33 kB
+dist/assets/index-bnzbSozR.js           529.09 kB │ gzip: 148.56 kB
+
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 937ms

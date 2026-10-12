@@ -1,0 +1,15 @@
+{
+  "started_at": "2026-09-21T13:58:07+00:00",
+  "finished_at": "2026-09-21T14:06:20.985253+00:00",
+  "elapsed_seconds": 493.99,
+  "limits": {
+    "tokens": 10000,
+    "seconds": 1800,
+    "rule": "whichever first"
+  },
+  "token_usage": "No exact per-batch token counter available; no measured token total claimed.",
+  "decision": "conditional go for isolated compatibility prototype; no-go production/default adoption",
+  "runtime_modified": false,
+  "dockiva_modified": false,
+  "database_readiness_changed": false
+}

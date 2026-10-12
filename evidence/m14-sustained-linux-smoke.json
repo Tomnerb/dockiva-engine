@@ -1,0 +1,33 @@
+{
+  "host": "Linux local smoke only, no Docker comparison",
+  "result": {
+    "requests": 12128,
+    "elapsed_s": 3.0013393400004134,
+    "requests_per_second": 4040.8626370113584,
+    "latency_median_ms": 0.7547080003860174,
+    "latency_p95_ms": 2.4624869984108955,
+    "command": [
+      "/workspace/scratch/026698cab616/vmfree-runtime/build/vmfree-c",
+      "run",
+      "/workspace/scratch/026698cab616/vmfree-runtime/examples/m11_17/server.elf",
+      "--root",
+      "/tmp/tmpsyu6vatv",
+      "--max-steps",
+      "10000000000",
+      "--",
+      "0"
+    ],
+    "startup_to_first_response_ms": 14.11558600011631,
+    "readiness_attempts": 1,
+    "warmup_s": 0.2,
+    "concurrency": 4,
+    "resources": {
+      "scope": "native process",
+      "samples": [],
+      "errors": [
+        "Command '['ps', '-p', '7', '-o', 'rss=', '-o', 'time=']' returned non-zero exit status 1."
+      ],
+      "status": "incomplete"
+    }
+  }
+}

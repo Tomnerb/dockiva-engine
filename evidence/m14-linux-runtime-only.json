@@ -1,0 +1,50 @@
+{
+  "host": "Linux-6.18.44-x86_64-with-glibc2.39",
+  "machine": "x86_64",
+  "timing": "wall clock, startup includes launcher",
+  "cpu_memory_comparison": "not measured; do not infer resource savings",
+  "results": [
+    {
+      "name": "C interpreter on Linux host",
+      "kind": "vmfree",
+      "command": [
+        "/workspace/scratch/026698cab616/vmfree-runtime/build/vmfree-c",
+        "run",
+        "/tmp/tmpnebxfd67/root/app/server",
+        "--root",
+        "/tmp/tmpnebxfd67/root",
+        "--max-steps",
+        "10000000",
+        "--",
+        "0"
+      ],
+      "samples": [
+        {
+          "startup_to_first_response_ms": 13.416402001894312,
+          "requests_per_second": 2739.309352612955,
+          "latency_median_ms": 0.8471385008306243,
+          "latency_p95_ms": 1.5975330024957657,
+          "requests": 50,
+          "concurrency": 4
+        },
+        {
+          "startup_to_first_response_ms": 11.605252999288496,
+          "requests_per_second": 2931.386501978839,
+          "latency_median_ms": 0.9131079987128032,
+          "latency_p95_ms": 2.598129001853522,
+          "requests": 50,
+          "concurrency": 4
+        },
+        {
+          "startup_to_first_response_ms": 10.488355001143645,
+          "requests_per_second": 2113.809356047772,
+          "latency_median_ms": 1.3672390014107805,
+          "latency_p95_ms": 3.979465000156779,
+          "requests": 50,
+          "concurrency": 4
+        }
+      ]
+    }
+  ],
+  "completed": true
+}
