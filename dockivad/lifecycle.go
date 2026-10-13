@@ -28,6 +28,7 @@ type engine struct {
 	Mu                                               sync.Mutex
 	events                                           events
 	exits                                            sync.Map // exit status of auto-removed containers, by name, for a minute
+	execs                                            sync.Map // *execJob by ID
 }
 
 // memoryMiB is a container's guest memory limit: docker run -m, else its profile's.
@@ -283,6 +284,91 @@ func sandboxArgs(native string, args []string, root string, writable bool) []str
 	}
 	return append([]string{"/usr/bin/sandbox-exec", "-p", policy, native}, args...)
 }
+
+// runtimeCommand is the worker's argument list that runs command (its first element
+// an absolute guest path, run as argv0) in container p with config c. A container's
+// own run publishes its ports; an exec beside it does not.
+func runtimeCommand(p, native string, c obj, command []string, argv0 string, env []string, publish bool, extra ...string) []string {
+	validateLaunchProfile(c, native)
+	reject(len(command) > 0 && strings.HasPrefix(command[0], "/"), "Invalid guest command")
+	reject(c["cpu_backend"] == nil || c["cpu_backend"] == "interpreter" || c["cpu_backend"] == "hvf", "Unknown execution backend")
+	root := noLinks(p, "rootfs")
+	// Resolve guest symlinks inside root, then confirm the result is link-free.
+	guest := noLinks(root, resolveGuest(pathName(command[0][1:]), func(p string) (string, bool) {
+		s, e := os.Lstat(filepath.Join(root, p))
+		if e != nil || s.Mode()&os.ModeSymlink == 0 {
+			return "", false
+		}
+		target, e := os.Readlink(filepath.Join(root, p))
+		check(e)
+		return target, true
+	}))
+	validateEnv(env)
+	steps := "10000000"
+	if c["max_steps"] != nil {
+		n, ok := c["max_steps"].(json.Number)
+		reject(ok, "Invalid instruction limit")
+		_, e := strconv.ParseUint(n.String(), 10, 64)
+		check(e)
+		steps = n.String()
+	}
+	memory := memoryMiB(c)
+	reject(memory >= 1 && memory <= 65536, "Invalid memory limit")
+	args := []string{"run", guest, "--root", root, "--argv0", argv0, "--max-steps", steps, "--memory-limit-mib", strconv.FormatInt(memory, 10)}
+	if c["cpu_backend"] == "hvf" {
+		native = regularExecutable(filepath.Join(filepath.Dir(native), "vmfree-c-hvf"))
+		// Like Docker, a container may use every core: one vCPU per host CPU.
+		cpus := min(runtime.NumCPU(), 64)
+		if c["cpus"] != nil {
+			cpus = min(cpus, int(integer(c["cpus"]))) // docker run --cpus
+		}
+		args = append(args, "--cpu-backend", "hvf", "--cpus", strconv.Itoa(cpus))
+	}
+	if wd := workdir(c); wd != "/" {
+		args = append(args, "--cwd", wd)
+	}
+	// Stock server binaries (redis-server is 17 MiB) exceed the 16 MiB ELF default.
+	// The mmap arena is virtual: pages count against --memory-limit-mib on first write.
+	args = append(args, "--elf-limit-mib", "64", "--mmap-limit-mib", "2048")
+	// Like Docker, disk use is left to the host: no storage budget, 4 GiB per file.
+	args = append(args, "--file-limit-mib", "4096", "--storage-limit-mib", "0")
+	reject(c["network"] == nil || c["network"] == "none" || c["network"] == "outbound", "Invalid network mode")
+	if c["network"] != "none" {
+		networkFiles(root, filepath.Base(p))
+		args = append(args, "--outbound")
+	}
+	for _, p := range publishedPorts(c) {
+		if publish {
+			args = append(args, "--publish", strconv.FormatInt(p[0], 10)+":"+strconv.FormatInt(p[1], 10))
+		}
+	}
+	// <home>/containers/<name>: volumes are in <home>/volumes.
+	args = append(args, prepareMounts(filepath.Dir(filepath.Dir(p)), root, c)...)
+	for _, pair := range [][2]string{{"schedule", "--schedule"}, {"process_tree", "--process-tree"}, {"scheduled_network", "--scheduled-network"}, {"dynamic", "--dynamic"}, {"job_control", "--job-control"}, {"writable", "--writable"}} {
+		v := c[pair[0]]
+		reject(v == nil || v == true || v == false, "Invalid runtime flag")
+		if v == true {
+			args = append(args, pair[1])
+		}
+	}
+	// Process trees get Linux signal handlers and docker stop/kill delivery to PID 1;
+	// --job-control adds a terminal on top and already includes them.
+	if c["process_tree"] == true && c["job_control"] != true {
+		args = append(args, "--signals")
+	}
+	for _, v := range env {
+		args = append(args, "--env", v)
+	}
+	args = append(args, userArgs(root, c, env)...)
+	args = append(args, extra...)
+	args = append(args, "--")
+	args = append(args, command[1:]...)
+	if c["host_sandbox"] == true {
+		return sandboxArgs(native, args, root, c["writable"] == true)
+	}
+	return append([]string{native}, args...)
+}
+
 func supervise(p, native, worker, generation string) (result error) {
 	lock := os.NewFile(3, "container-lock")
 	defer lock.Close()
@@ -320,86 +406,12 @@ func supervise(p, native, worker, generation string) (result error) {
 		}
 	}()
 	c := readObject(filepath.Join(p, "config.json"))
-	validateLaunchProfile(c, native)
 	command := stringsOf(c["command"])
-	reject(len(command) > 0 && strings.HasPrefix(command[0], "/"), "Invalid guest command")
-	reject(c["cpu_backend"] == nil || c["cpu_backend"] == "interpreter" || c["cpu_backend"] == "hvf", "Unknown execution backend")
-	root := noLinks(p, "rootfs")
-	// Resolve guest symlinks inside root, then confirm the result is link-free.
-	guest := noLinks(root, resolveGuest(pathName(command[0][1:]), func(p string) (string, bool) {
-		s, e := os.Lstat(filepath.Join(root, p))
-		if e != nil || s.Mode()&os.ModeSymlink == 0 {
-			return "", false
-		}
-		target, e := os.Readlink(filepath.Join(root, p))
-		check(e)
-		return target, true
-	}))
 	env := stringsOf(c["env"])
-	validateEnv(env)
-	steps := "10000000"
-	if c["max_steps"] != nil {
-		n, ok := c["max_steps"].(json.Number)
-		reject(ok, "Invalid instruction limit")
-		_, e := strconv.ParseUint(n.String(), 10, 64)
-		check(e)
-		steps = n.String()
-	}
-	memory := memoryMiB(c)
-	reject(memory >= 1 && memory <= 65536, "Invalid memory limit")
-	args := []string{"run", guest, "--root", root, "--argv0", command[0], "--max-steps", steps, "--memory-limit-mib", strconv.FormatInt(memory, 10)}
-	if c["cpu_backend"] == "hvf" {
-		native = regularExecutable(filepath.Join(filepath.Dir(native), "vmfree-c-hvf"))
-		// Like Docker, a container may use every core: one vCPU per host CPU.
-		cpus := min(runtime.NumCPU(), 64)
-		if c["cpus"] != nil {
-			cpus = min(cpus, int(integer(c["cpus"]))) // docker run --cpus
-		}
-		args = append(args, "--cpu-backend", "hvf", "--cpus", strconv.Itoa(cpus))
-	}
-	if wd := workdir(c); wd != "/" {
-		args = append(args, "--cwd", wd)
-	}
-	// Stock server binaries (redis-server is 17 MiB) exceed the 16 MiB ELF default.
-	// The mmap arena is virtual: pages count against --memory-limit-mib on first write.
-	args = append(args, "--elf-limit-mib", "64", "--mmap-limit-mib", "2048")
-	// Like Docker, disk use is left to the host: no storage budget, 4 GiB per file.
-	args = append(args, "--file-limit-mib", "4096", "--storage-limit-mib", "0")
-	reject(c["network"] == nil || c["network"] == "none" || c["network"] == "outbound", "Invalid network mode")
-	if c["network"] != "none" {
-		networkFiles(root, filepath.Base(p))
-		args = append(args, "--outbound")
-	}
-	for _, p := range publishedPorts(c) {
-		args = append(args, "--publish", strconv.FormatInt(p[0], 10)+":"+strconv.FormatInt(p[1], 10))
-	}
-	// <home>/containers/<name>: volumes are in <home>/volumes.
-	args = append(args, prepareMounts(filepath.Dir(filepath.Dir(p)), root, c)...)
-	for _, pair := range [][2]string{{"schedule", "--schedule"}, {"process_tree", "--process-tree"}, {"scheduled_network", "--scheduled-network"}, {"dynamic", "--dynamic"}, {"job_control", "--job-control"}, {"writable", "--writable"}} {
-		v := c[pair[0]]
-		reject(v == nil || v == true || v == false, "Invalid runtime flag")
-		if v == true {
-			args = append(args, pair[1])
-		}
-	}
-	// Process trees get Linux signal handlers and docker stop/kill delivery to PID 1;
-	// --job-control adds a terminal on top and already includes them.
-	if c["process_tree"] == true && c["job_control"] != true {
-		args = append(args, "--signals")
-	}
+	invocation := runtimeCommand(p, native, c, command, command[0], env, true)
 	stop := syscall.SIGTERM
 	if name, ok := c["stop_signal"].(string); ok && name != "" {
 		stop = stopSignals[stopSignal(name)]
-	}
-	for _, v := range env {
-		args = append(args, "--env", v)
-	}
-	args = append(args, userArgs(root, c, env)...)
-	args = append(args, "--")
-	args = append(args, command[1:]...)
-	invocation := append([]string{native}, args...)
-	if c["host_sandbox"] == true {
-		invocation = sandboxArgs(native, args, root, c["writable"] == true)
 	}
 	listenerErr := error(nil)
 	listener, listenerErr = net.Listen("tcp", "127.0.0.1:0")

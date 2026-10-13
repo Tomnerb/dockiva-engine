@@ -398,7 +398,8 @@ func (b *engine) create(name string, body obj) obj {
 }
 
 var versionPath = regexp.MustCompile(`^/v([0-9]+)\.([0-9]+)(/.*)$`)
-var containerPath = regexp.MustCompile(`^/containers/([^/]+)(?:/(json|start|stop|restart|logs|wait|attach|kill|archive|stats))?$`)
+var containerPath = regexp.MustCompile(`^/containers/([^/]+)(?:/(json|start|stop|restart|logs|wait|attach|kill|archive|stats|exec))?$`)
+var execPath = regexp.MustCompile(`^/exec/([0-9a-f]+)/(start|json|resize)$`)
 
 func send(w http.ResponseWriter, status int, v any) {
 	var raw []byte
@@ -656,6 +657,30 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 			send(w, 200, obj{"status": "Downloaded verified image " + reference})
 			return
 		}
+		if m := execPath.FindStringSubmatch(path); m != nil {
+			switch {
+			case m[2] == "json" && method == "GET":
+				send(w, 200, b.inspectExec(m[1]))
+				return
+			case m[2] == "resize" && method == "POST":
+				h, e := strconv.ParseInt(q.Get("h"), 10, 64)
+				check(e)
+				wd, e := strconv.ParseInt(q.Get("w"), 10, 64)
+				check(e)
+				b.resizeExec(m[1], h, wd)
+				send(w, 200, nil)
+				return
+			case m[2] == "start" && method == "POST":
+				body := obj{}
+				if len(raw) > 0 {
+					body = decode(raw, maxJSON)
+				}
+				stream()
+				defer endStream()
+				b.startExec(w, r, m[1], body)
+				return
+			}
+		}
 		if m := containerPath.FindStringSubmatch(path); m != nil {
 			name := b.resolve(m[1])
 			action := m[2]
@@ -729,6 +754,13 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 				stream()
 				defer endStream()
 				b.attach(w, r, name, yes("stdout"), yes("stderr"))
+				return
+			case action == "exec" && method == "POST":
+				body := obj{}
+				if len(raw) > 0 {
+					body = decode(raw, maxJSON)
+				}
+				send(w, 201, b.createExec(name, body))
 				return
 			case action == "archive" && (method == "GET" || method == "HEAD"):
 				stream()
