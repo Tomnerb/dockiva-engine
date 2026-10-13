@@ -81,7 +81,7 @@ static int guest_syscall_dispatch(void) {
                 unsigned char *out=lookup(cpu->gpr[0],390,2);
                 if(!out)cpu->gpr[0]=linux_error(14);
                 else {
-                    const char *fields[]={"Linux","vmfree","0.0.0-vmfree","VM-free interpreter","aarch64","localdomain"};
+                    const char *fields[]={"Linux",guest_hostname,"0.0.0-vmfree","VM-free interpreter","aarch64","localdomain"};
                     memset(out,0,390);for(unsigned i=0;i<6;i++)memcpy(out+i*65,fields[i],strlen(fields[i]));cpu->gpr[0]=0;
                 }
                 return -3;

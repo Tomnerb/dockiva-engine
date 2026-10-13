@@ -3,6 +3,7 @@
 static int terminal_enabled,terminal_forwarded;
 static int stdin_host; /* --stdin: guest fd 0 reads host fd 0 (a pipe, socket or pty) */
 static unsigned terminal_foreground=1; /* the guest process group that owns the terminal */
+static char guest_hostname[65]="vmfree"; /* uname's nodename (--hostname) */
 static _Thread_local int terminal_waiting;
 static int job_control_enabled;
 static void terminal_pump(int wait);

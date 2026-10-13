@@ -985,6 +985,11 @@ int main(int argc,char **argv) {
         else if(!strcmp(argv[i],"--stdin")) stdin_host=1;
         else if(!strcmp(argv[i],"--trace")) trace=1;
         else if(!strcmp(argv[i],"--outbound")) net_outbound=1;
+        else if(!strcmp(argv[i],"--hostname") && i+1<argc) {
+            const char *name=argv[++i];size_t n=strlen(name);
+            if(!n || n>64 || strspn(name,"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_")!=n)fail("Invalid --hostname");
+            memcpy(guest_hostname,name,n+1);
+        }
         else if(!strcmp(argv[i],"--network") && i+1<argc) {
             const char *dir=argv[++i];struct stat st;
             if(strlen(dir)>=sizeof(net_dir) || dir[0]!='/' || stat(dir,&st) || !S_ISDIR(st.st_mode))fail("--network needs an existing directory");
