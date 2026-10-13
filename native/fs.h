@@ -130,6 +130,44 @@ static int fs_canon_push(char *c,const char *part) {
    Directory descriptors only come from this walk, so ".." cannot leave the root.
    Returns the parent descriptor and leaf (never a symlink when follow is set),
    and the leaf's canonical guest path in canon when it is known. */
+#ifdef O_NOFOLLOW_ANY
+/* fs_walk for a path with no ".." component: one host openat of its directories
+   with O_NOFOLLOW_ANY, which refuses a symlink anywhere on the way, so the result
+   stays beneath base exactly as the component walk would. Returns -2 when the
+   path needs that walk (a symlink, "..", an unusual form or error). */
+static int fs_walk_fast(int base,const char *cur_start,const char *rest,int follow,char leaf[1025],char canon[1025]) {
+    size_t n=strlen(rest);
+    if(!n || rest[n-1]=='/')return -2;
+    for(const char *p=rest;*p;) {                               /* every component: no "..", at most 255 bytes */
+        while(*p=='/')p++;
+        const char *q=p;while(*q && *q!='/')q++;
+        if(q-p>255 || (q-p==2 && p[0]=='.' && p[1]=='.'))return -2;
+        p=q;
+    }
+    const char *slash=strrchr(rest,'/'),*name=slash?slash+1:rest;
+    if(!strcmp(name,"."))return -2;
+    char dirs[1025];size_t d=slash?(size_t)(slash-rest):0;
+    memcpy(dirs,rest,d);dirs[d]=0;
+    const char *relative=dirs;while(*relative=='/')relative++;
+    int fd=*relative?openat(base,relative,O_RDONLY|O_DIRECTORY|O_NOFOLLOW_ANY|O_CLOEXEC):dup(base);
+    if(fd<0)return errno==ENOENT || errno==ENOTDIR?-1:-2;
+    struct stat st;
+    if(follow && fstatat(fd,name,&st,AT_SYMLINK_NOFOLLOW)==0 && S_ISLNK(st.st_mode)) { close(fd);return -2; }
+    if(canon) {
+        strcpy(canon,cur_start);
+        for(char *p=dirs;*p;) {
+            while(*p=='/')p++;
+            char *q=p;while(*q && *q!='/')q++;
+            char saved=*q;*q=0;
+            int bad=*p && strcmp(p,".") && fs_canon_push(canon,p)<0;
+            *q=saved;p=q;
+            if(bad) { close(fd);return -1; }
+        }
+        if(fs_canon_push(canon,name)<0) { close(fd);return -1; }
+    }
+    strcpy(leaf,name);return fd;
+}
+#endif
 static int fs_walk(int base,const char *base_path,const char *input,int follow,char leaf[1025],char canon[1025]) {
     if(fs_root<0) { errno=EACCES;return -1; }
     char rest[4097],cur[1025];size_t length=strlen(input),pos=0;unsigned links=0;
@@ -140,6 +178,9 @@ static int fs_walk(int base,const char *base_path,const char *input,int follow,c
         if(!S_ISDIR(st.st_mode)) { errno=ENOTDIR;return -1; }
     } else base=fs_root;
     strcpy(cur,rest[0]=='/'?"/":base_path);
+#ifdef O_NOFOLLOW_ANY
+    { int fast=fs_walk_fast(base,cur,rest,follow,leaf,canon);if(fast!=-2)return fast; }
+#endif
     int fd=dup(base);if(fd<0)return -1;
     for(;;) {
         while(rest[pos]=='/')pos++;
