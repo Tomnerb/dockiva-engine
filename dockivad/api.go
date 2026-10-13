@@ -2,7 +2,6 @@ package main
 
 import (
 	"crypto/subtle"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -66,7 +65,7 @@ func (b *engine) inspect(name string) obj {
 	}
 	labels := object(c["labels"])
 	bindings, exposed := dockerPorts(c)
-	return obj{"Id": key(name), "Name": "/" + name, "Created": timestamp(c["created_at"]), "Path": cmd[0], "Args": cmd[1:], "Image": c["image"], "State": obj{"Status": state, "Running": running, "Paused": false, "Restarting": false, "OOMKilled": false, "Dead": state == "dead", "Pid": pid, "ExitCode": code, "Error": text(s["error"]), "StartedAt": timestamp(s["started_at"]), "FinishedAt": timestamp(s["finished_at"])}, "Config": obj{"Image": img, "Entrypoint": cmd[:1], "Cmd": cmd[1:], "Env": stringsOf(c["env"]), "Labels": labels, "Tty": false, "WorkingDir": workdir(c), "Hostname": name, "ExposedPorts": exposed}, "HostConfig": obj{"NetworkMode": inspectNetwork(c), "PortBindings": bindings, "ReadonlyRootfs": c["writable"] != true, "RestartPolicy": obj{"Name": "no", "MaximumRetryCount": 0}, "LogConfig": obj{"Type": "json-file", "Config": obj{}}}, "NetworkSettings": obj{"Ports": bindings, "Networks": obj{}}, "Mounts": []any{}, "Driver": "vmfree-private-copy", "Platform": "linux", "RestartCount": 0, "DockivaCompatibility": profileInspection(c)}
+	return obj{"Id": key(name), "Name": "/" + name, "Created": timestamp(c["created_at"]), "Path": cmd[0], "Args": cmd[1:], "Image": c["image"], "State": obj{"Status": state, "Running": running, "Paused": false, "Restarting": false, "OOMKilled": false, "Dead": state == "dead", "Pid": pid, "ExitCode": code, "Error": text(s["error"]), "StartedAt": timestamp(s["started_at"]), "FinishedAt": timestamp(s["finished_at"])}, "Config": obj{"Image": img, "Entrypoint": cmd[:1], "Cmd": cmd[1:], "Env": stringsOf(c["env"]), "Labels": labels, "Tty": false, "WorkingDir": workdir(c), "Hostname": name, "ExposedPorts": exposed}, "HostConfig": obj{"NetworkMode": inspectNetwork(c), "PortBindings": bindings, "ReadonlyRootfs": c["writable"] != true, "AutoRemove": c["auto_remove"] == true, "RestartPolicy": obj{"Name": "no", "MaximumRetryCount": 0}, "LogConfig": obj{"Type": "json-file", "Config": obj{}}}, "NetworkSettings": obj{"Ports": bindings, "Networks": obj{}}, "Mounts": []any{}, "Driver": "vmfree-private-copy", "Platform": "linux", "RestartCount": 0, "DockivaCompatibility": profileInspection(c)}
 }
 func onlyKeys(m obj, allowed ...string) bool {
 	for k := range m {
@@ -169,7 +168,16 @@ func (b *engine) create(name string, body obj) obj {
 		allowed[k] = true
 	}
 	for k, v := range body {
-		if !allowed[k] && !idle(v) {
+		if idle(v) {
+			continue
+		}
+		switch k {
+		case "Tty":
+			panic(apiError{501, "Interactive terminals (docker run -t) are not supported by the VM-free engine"})
+		case "OpenStdin", "AttachStdin", "StdinOnce":
+			panic(apiError{501, "Standard input (docker run -i) is not supported by the VM-free engine"})
+		}
+		if !allowed[k] {
 			panic(apiError{501, "Unsupported container option: " + k})
 		}
 	}
@@ -184,10 +192,11 @@ func (b *engine) create(name string, body obj) obj {
 		panic(apiError{501, "Unsupported NetworkingConfig"})
 	}
 	endpoints := object(network["EndpointsConfig"])
-	if !onlyKeys(endpoints, "host", "bridge") {
+	// The docker CLI names the endpoint after NetworkMode ("default" unless --network).
+	if !onlyKeys(endpoints, "host", "bridge", "default") {
 		panic(apiError{501, "Only host network supported"})
 	}
-	for _, name := range []string{"host", "bridge"} {
+	for _, name := range []string{"host", "bridge", "default"} {
 		for _, v := range object(endpoints[name]) {
 			if !idle(v) {
 				panic(apiError{501, "Host network options unsupported"})
@@ -210,7 +219,7 @@ func (b *engine) create(name string, body obj) obj {
 		case "NetworkMode":
 			// Guests share the Mac's network (as with host networking); "none" keeps them on loopback.
 			ok = v == "host" || v == "default" || v == "bridge" || v == "none"
-		case "ReadonlyRootfs":
+		case "ReadonlyRootfs", "AutoRemove":
 			_, ok = v.(bool)
 		case "PortBindings":
 			ports, ok = portBindings(v), true
@@ -267,6 +276,9 @@ func (b *engine) create(name string, body obj) obj {
 	}
 	command := im.command(override)
 	config := obj{"image": im.Digest, "image_name": imageName, "command": command, "env": im.Env, "writable": host["ReadonlyRootfs"] != true, "cpu_backend": "interpreter", "schedule": false, "process_tree": false, "scheduled_network": false, "dynamic": false, "job_control": false, "memory_limit_mib": 256, "host_sandbox": false, "max_steps": 10000000, "labels": labels, "ports": ports, "workdir": im.WorkingDir, "network": networkMode(host), "stop_signal": im.StopSignal, "created_at": now()}
+	if host["AutoRemove"] == true {
+		config["auto_remove"] = true // docker run --rm: removed once it exits (engine.watch)
+	}
 	profile := loadProfileCatalog(profileCatalogJSON).selectForHost(im.Digest, b.Native)
 	profile.apply(config)
 	validateLaunchProfile(config, b.Native)
@@ -288,7 +300,7 @@ func (b *engine) create(name string, body obj) obj {
 }
 
 var versionPath = regexp.MustCompile(`^/v([0-9]+)\.([0-9]+)(/.*)$`)
-var containerPath = regexp.MustCompile(`^/containers/([^/]+)(?:/(json|start|stop|restart|logs|wait))?$`)
+var containerPath = regexp.MustCompile(`^/containers/([^/]+)(?:/(json|start|stop|restart|logs|wait|attach|kill))?$`)
 
 func send(w http.ResponseWriter, status int, v any) {
 	var raw []byte
@@ -306,8 +318,23 @@ func send(w http.ResponseWriter, status int, v any) {
 	w.WriteHeader(status)
 	_, _ = w.Write(raw)
 }
+
+// handler serves the engine API to clients presenting the engine token.
 func (b *engine) handler(secret string) http.Handler {
+	return b.api(func(r *http.Request) bool {
+		return subtle.ConstantTimeCompare([]byte(r.Header.Get("X-VMFree-Token")), []byte(secret)) == 1
+	})
+}
+
+// socketHandler serves the same API without a token, for the user-only Docker
+// socket (docker.sock in the private engine home): like Docker's own socket, file
+// permissions are the access control, so plain docker and Docker tools work.
+func (b *engine) socketHandler() http.Handler {
+	return b.api(func(*http.Request) bool { return true })
+}
+func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 	slots := make(chan struct{}, 16)
+	streams := make(chan struct{}, 64) // logs -f, attach, wait and events hold a stream slot instead
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("API-Version", "1.45")
 		w.Header().Set("Docker-Experimental", "true")
@@ -324,15 +351,32 @@ func (b *engine) handler(secret string) http.Handler {
 				send(w, status, obj{"message": message})
 			}
 		}()
-		if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-VMFree-Token")), []byte(secret)) != 1 {
+		if !authorized(r) {
 			panic(apiError{401, "Authentication required"})
 		}
 		select {
 		case slots <- struct{}{}:
-			defer func() { <-slots }()
 		default:
 			panic(apiError{503, "Request capacity exceeded"})
 		}
+		held := true
+		defer func() {
+			if held {
+				<-slots
+			}
+		}()
+		// stream moves a long-lived request from the request slots to a stream slot.
+		stream := func() {
+			select {
+			case streams <- struct{}{}:
+			default:
+				panic(apiError{503, "Too many streaming requests"})
+			}
+			<-slots
+			held = false
+			unbounded(w)
+		}
+		endStream := func() { <-streams }
 		if len(r.TransferEncoding) > 0 {
 			panic(apiError{400, "Chunked requests unsupported"})
 		}
@@ -366,7 +410,7 @@ func (b *engine) handler(secret string) http.Handler {
 			send(w, 200, obj{"Version": "0.18.0", "ApiVersion": "1.45", "MinAPIVersion": "1.24", "Os": "linux", "Arch": "arm64", "GitCommit": "preview", "GoVersion": runtime.Version(), "KernelVersion": "vmfree-user-mode", "Experimental": true, "Components": []any{obj{"Name": "dockivad", "Version": "0.18.0", "Details": obj{"ControlPlane": "Go", "PythonRuntime": "false"}}}})
 			return
 		case path == "/info" && method == "GET":
-			send(w, 200, obj{"ID": "vmfree", "Name": "vmfree", "ServerVersion": "0.18.0", "OSType": "linux", "Architecture": "aarch64", "OperatingSystem": "VM-free preview on " + runtime.GOOS, "Driver": "private-copy", "Containers": len(b.names()), "NCPU": 1, "MemTotal": 0, "SecurityOptions": []any{}, "Warnings": []string{"Not a production isolation boundary"}})
+			send(w, 200, obj{"ID": "vmfree", "Name": "vmfree", "ServerVersion": "0.18.0", "OSType": "linux", "Architecture": "aarch64", "OperatingSystem": "VM-free preview on " + runtime.GOOS, "Driver": "private-copy", "Containers": len(b.names()), "NCPU": min(runtime.NumCPU(), 64), "MemTotal": 0, "SecurityOptions": []any{}, "Warnings": []string{"Not a production isolation boundary"}})
 			return
 		case path == "/containers/create" && method == "POST":
 			defer debug.FreeOSMemory()
@@ -466,6 +510,18 @@ func (b *engine) handler(secret string) http.Handler {
 			defer debug.FreeOSMemory()
 			send(w, 200, b.imageInfo(strings.TrimSuffix(strings.TrimPrefix(path, "/images/"), "/json")))
 			return
+		case path == "/events" && method == "GET":
+			if (q.Get("since") != "" && q.Get("since") != "0") || q.Get("until") != "" {
+				panic(apiError{501, "Event history (since/until) unsupported"})
+			}
+			filters := obj{}
+			if q.Get("filters") != "" {
+				filters = decode([]byte(q.Get("filters")), maxJSON)
+			}
+			stream()
+			defer endStream()
+			b.streamEvents(w, r, filters)
+			return
 		case path == "/images/create" && method == "POST":
 			defer debug.FreeOSMemory()
 			reference := q.Get("fromImage")
@@ -497,20 +553,20 @@ func (b *engine) handler(secret string) http.Handler {
 				send(w, 204, nil)
 				return
 			case action == "logs" && method == "GET":
-				if yes("follow") || (q.Get("since") != "" && q.Get("since") != "0") || (q.Get("until") != "" && q.Get("until") != "0") {
-					panic(apiError{501, "Streaming/time-filtered logs unsupported"})
+				if (q.Get("since") != "" && q.Get("since") != "0") || (q.Get("until") != "" && q.Get("until") != "0") || yes("timestamps") {
+					panic(apiError{501, "Time-filtered or timestamped logs unsupported"})
 				}
+				p := b.container(name)
+				sizes := logSizes(p)
 				data := []byte{}
 				for i, stream := range []string{"stdout", "stderr"} {
-					if !yes(stream) {
+					if !yes(stream) || !exists(filepath.Join(p, logNames[i])) {
 						continue
 					}
-					p := b.container(name)
-					file := stream + ".log"
-					if !exists(filepath.Join(p, file)) {
-						continue
+					log := readBounded(p, logNames[i], 16<<20)
+					if int64(len(log)) > sizes[i] {
+						log = log[:sizes[i]] // follow continues from here
 					}
-					log := readBounded(p, file, 16<<20)
 					tail := q.Get("tail")
 					if tail != "" && tail != "all" {
 						n, e := strconv.Atoi(tail)
@@ -525,43 +581,37 @@ func (b *engine) handler(secret string) http.Handler {
 						}
 						log = []byte(strings.Join(lines, ""))
 					}
-					for len(log) > 0 {
-						n := len(log)
-						if n > 16384 {
-							n = 16384
-						}
-						header := make([]byte, 8)
-						header[0] = byte(i + 1)
-						binary.BigEndian.PutUint32(header[4:], uint32(n))
-						data = append(data, header...)
-						data = append(data, log[:n]...)
-						log = log[n:]
-					}
+					data = frame(data, i+1, log)
 				}
-				send(w, 200, data)
+				if !yes("follow") {
+					send(w, 200, data)
+					return
+				}
+				stream()
+				defer endStream()
+				w.Header().Set("Content-Type", "application/vnd.docker.raw-stream")
+				w.WriteHeader(200)
+				_, _ = w.Write(data)
+				b.followLogs(w, r, p, yes("stdout"), yes("stderr"), sizes)
 				return
 			case action == "wait" && method == "POST":
-				if q.Get("condition") != "" && q.Get("condition") != "not-running" {
-					panic(apiError{501, "Only not-running wait supported"})
+				stream()
+				defer endStream()
+				b.wait(w, r, name, q.Get("condition"))
+				return
+			case action == "attach" && method == "POST":
+				if yes("stdin") {
+					panic(apiError{501, "Standard input is not supported by the VM-free engine; use docker attach --no-stdin"})
 				}
-				deadline := time.NewTimer(30 * time.Second)
-				defer deadline.Stop()
-				tick := time.NewTicker(100 * time.Millisecond)
-				defer tick.Stop()
-				for {
-					state := object(b.inspect(name)["State"])
-					if state["Running"] != true {
-						send(w, 200, obj{"StatusCode": state["ExitCode"], "Error": nil})
-						return
-					}
-					select {
-					case <-r.Context().Done():
-						return
-					case <-deadline.C:
-						panic(apiError{408, "Wait exceeded 30-second limit"})
-					case <-tick.C:
-					}
-				}
+				reject(yes("stream") && !yes("logs"), "Attach supports stream=1 without logs replay")
+				stream()
+				defer endStream()
+				b.attach(w, r, name, yes("stdout"), yes("stderr"))
+				return
+			case action == "kill" && method == "POST":
+				b.kill(name, signalNumber(q.Get("signal")))
+				send(w, 204, nil)
+				return
 			case action == "" && method == "DELETE":
 				b.Mu.Lock()
 				defer b.Mu.Unlock()

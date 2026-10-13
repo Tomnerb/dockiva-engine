@@ -25,6 +25,8 @@ var namePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,39}$`)
 type engine struct {
 	Home, State, Cache, Native, Worker, Assets, Self string
 	Mu                                               sync.Mutex
+	events                                           events
+	exits                                            sync.Map // exit status of auto-removed containers, by name, for a minute
 }
 
 func (b *engine) container(name string) string {
@@ -467,12 +469,24 @@ func supervise(p, native, worker, generation string) (result error) {
 		check(e)
 		_ = conn.SetDeadline(time.Now().Add(time.Second))
 		line, e := bufio.NewReaderSize(conn, 128).ReadSlice('\n')
-		valid := e == nil && len(line) <= 128 && subtle.ConstantTimeCompare(line, []byte(secret+" stop\n")) == 1
-		if valid {
+		if e == nil && len(line) <= 128 && subtle.ConstantTimeCompare(line, []byte(secret+" stop\n")) == 1 {
 			terminate()
 			_, _ = conn.Write([]byte("OK"))
 			conn.Close()
 			return nil
+		}
+		// "<token> kill <signal>": docker kill. The runtime forwards the signal to the
+		// container's first process; SIGKILL ends the run (seen as done above).
+		prefix := []byte(secret + " kill ")
+		if e == nil && len(line) > len(prefix) && subtle.ConstantTimeCompare(line[:len(prefix)], prefix) == 1 {
+			n, err := strconv.Atoi(strings.TrimSpace(string(line[len(prefix):])))
+			allowed := err == nil && syscall.Signal(n) == syscall.SIGKILL
+			for _, s := range stopSignals {
+				allowed = allowed || (err == nil && s == syscall.Signal(n) && s != syscall.SIGWINCH)
+			}
+			if allowed && syscall.Kill(-cmd.Process.Pid, syscall.Signal(n)) == nil {
+				_, _ = conn.Write([]byte("OK"))
+			}
 		}
 		conn.Close()
 	}

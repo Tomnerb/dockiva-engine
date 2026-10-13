@@ -177,11 +177,36 @@ func TestAPIContractAndRejectedOptions(t *testing.T) {
 			t.Fatalf("%s: %d %s", path, r.Code, r.Body.String())
 		}
 	}
-	if request(t, h, "GET", "/containers/valid/logs?follow=true", "", "secret").Code != 501 {
-		t.Fatal("streaming falsely supported")
+	// A stopped container: follow returns the existing logs and ends.
+	if r := request(t, h, "GET", "/containers/valid/logs?follow=true&stdout=1", "", "secret"); r.Code != 200 {
+		t.Fatalf("logs follow: %d %s", r.Code, r.Body.String())
+	}
+	if r := request(t, h, "POST", "/containers/valid/wait", "", "secret"); r.Code != 200 || !strings.Contains(r.Body.String(), `"StatusCode":0`) {
+		t.Fatalf("wait on a created container: %d %s", r.Code, r.Body.String())
+	}
+	if r := request(t, h, "POST", "/containers/valid/kill?signal=TERM", "", "secret"); r.Code != 409 {
+		t.Fatalf("kill of a stopped container: %d %s", r.Code, r.Body.String())
+	}
+	if r := request(t, h, "POST", "/containers/valid/kill?signal=SIGSTOP", "", "secret"); r.Code != 400 {
+		t.Fatalf("unsupported signal: %d %s", r.Code, r.Body.String())
 	}
 	if request(t, h, "DELETE", "/containers/valid", "", "secret").Code != 204 {
 		t.Fatal("remove")
+	}
+	for body, message := range map[string]string{`{"Image":"vmfree/shell:demo","Tty":true}`: "docker run -t", `{"Image":"vmfree/shell:demo","OpenStdin":true}`: "docker run -i"} {
+		if r := request(t, h, "POST", "/containers/create?name=interactive", body, "secret"); r.Code != 501 || !strings.Contains(r.Body.String(), message) {
+			t.Fatalf("%s: %d %s", body, r.Code, r.Body.String())
+		}
+	}
+	if r := request(t, h, "POST", "/containers/create?name=once", `{"Image":"vmfree/shell:demo","HostConfig":{"AutoRemove":true}}`, "secret"); r.Code != 201 {
+		t.Fatalf("--rm: %d %s", r.Code, r.Body.String())
+	}
+	if !strings.Contains(request(t, h, "GET", "/containers/once/json", "", "secret").Body.String(), `"AutoRemove":true`) {
+		t.Fatal("AutoRemove not reported")
+	}
+	// The user-only Docker socket's handler needs no token; the engine socket's does.
+	if request(t, b.socketHandler(), "GET", "/containers/json?all=1", "", "").Code != 200 || request(t, h, "GET", "/containers/json", "", "").Code != 401 {
+		t.Fatal("socket authorization")
 	}
 }
 func TestRegistryVerificationAndRedirect(t *testing.T) {
