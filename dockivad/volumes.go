@@ -123,7 +123,7 @@ func mountTarget(t string) string {
 // parseMounts turns HostConfig.Binds, HostConfig.Mounts and Config.Volumes into
 // saved mounts. -v creates a missing host directory (as Docker does); --mount
 // requires the source to exist. Volumes are created on first use.
-func (b *engine) parseMounts(host, body obj) []any {
+func (b *engine) parseMounts(host, body obj, declared []string) []any {
 	mounts := []any{}
 	targets := map[string]bool{}
 	add := func(m obj) {
@@ -203,14 +203,14 @@ func (b *engine) parseMounts(host, body obj) []any {
 			add(m)
 		}
 	}
-	// docker run -v /path (no source) and declared Config.Volumes: anonymous volumes.
-	anonymous := []string{}
+	// docker run -v /path (Config.Volumes) and the image's VOLUMEs: anonymous volumes.
+	anonymous := append([]string{}, declared...)
 	for target := range object(body["Volumes"]) {
 		anonymous = append(anonymous, target)
 	}
 	sort.Strings(anonymous)
 	for _, target := range anonymous {
-		if !targets[target] {
+		if target = filepath.Clean(target); !targets[target] {
 			add(obj{"type": "volume", "source": token(), "target": target, "readonly": false, "anonymous": true})
 		}
 	}

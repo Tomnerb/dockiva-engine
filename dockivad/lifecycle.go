@@ -392,6 +392,7 @@ func supervise(p, native, worker, generation string) (result error) {
 	for _, v := range env {
 		args = append(args, "--env", v)
 	}
+	args = append(args, userArgs(root, c, env)...)
 	args = append(args, "--")
 	args = append(args, command[1:]...)
 	invocation := append([]string{native}, args...)

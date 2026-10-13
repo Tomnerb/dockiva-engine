@@ -37,8 +37,10 @@ type entry struct {
 type image struct {
 	Digest           string
 	Entry, Args, Env []string
-	WorkingDir       string // absolute guest path; "/" when the image sets none
-	StopSignal       string // signal name sent on stop: SIGTERM unless the image sets one
+	WorkingDir       string   // absolute guest path; "/" when the image sets none
+	StopSignal       string   // signal name sent on stop: SIGTERM unless the image sets one
+	User             string   // USER: name or uid, with an optional :group or :gid; "" for root
+	Volumes          []string // declared VOLUME paths, sorted
 	Tree             map[string]entry
 	Blobs            map[string][]byte
 	Descriptor       obj
@@ -267,7 +269,7 @@ func loadImage(root string) *image {
 	c := decode(cr, maxJSON)
 	reject(c["os"] == "linux" && c["architecture"] == "arm64", "Only linux/arm64 supported")
 	settings := object(c["config"])
-	reject(text(settings["User"]) == "", "User unsupported")
+	im.User = validUser(text(settings["User"]))
 	im.StopSignal = stopSignal(text(settings["StopSignal"]))
 	im.Entry = stringsOf(settings["Entrypoint"])
 	im.Args = stringsOf(settings["Cmd"])
@@ -301,15 +303,17 @@ func loadImage(root string) *image {
 		reject(digest(raw) == str(diffs[i]), "Layer DiffID mismatch")
 		applyLayer(im.Tree, raw, &members)
 	}
-	// Docker creates WorkingDir if missing. Declared volumes become ordinary
-	// directories in the private root until volume support exists.
+	// Docker creates WorkingDir if missing. Declared volumes become anonymous
+	// volumes of each container (parseMounts); their directories exist in the root.
 	im.WorkingDir = "/"
 	if wd := text(settings["WorkingDir"]); wd != "" {
 		im.WorkingDir = im.ensureDir(wd)
 	}
 	for v := range object(settings["Volumes"]) {
 		im.ensureDir(v)
+		im.Volumes = append(im.Volumes, v)
 	}
+	sort.Strings(im.Volumes)
 	im.command(nil)
 	return im
 }
