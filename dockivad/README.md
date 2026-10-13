@@ -38,9 +38,27 @@ python3 scripts/verify_dockivad.py \
 ```
 
 State remains compatible with the legacy development tools. Import/pull and daemon
-startup share an exclusive daemon lock. Requests authenticate with the rotating
-private `docker-client/config.json` token. The default endpoint is `engine.sock`;
-`--tcp 0` explicitly selects a loopback test endpoint.
+startup share an exclusive daemon lock. Requests on `engine.sock` (Dockiva's
+endpoint) authenticate with the rotating private `docker-client/config.json`
+token; `--tcp 0` explicitly selects a loopback test endpoint instead.
+
+`docker.sock` serves the same API without the token, for the docker CLI and
+Docker tools: like Docker's own socket, the private (0700) engine home and the
+0600 socket are the access control. For the default home (`~/.vmfree`) the engine
+registers a `dockiva` Docker context, never switching the current one:
+
+```sh
+docker context use dockiva     # or: DOCKER_HOST=unix://$HOME/.vmfree/docker.sock
+docker run --rm redis:7-alpine sh -c 'echo hello'
+```
+
+Supported docker commands: `run` (foreground or `-d`, `--rm`, `-p`, `-e`,
+`--entrypoint`, `-w`), `create`, `start`, `stop`, `restart`, `kill` (TERM, INT,
+QUIT, HUP, USR1, USR2 reach the container's first process; KILL ends it),
+`wait`, `rm`, `ps`, `inspect`, `logs` (with `-f` and `--tail`), `attach
+--no-stdin`, `events` (create, start, die, destroy), `pull`, `images` and
+`version`/`info`. Not supported: `-i`/`-t` and `exec`, builds, volumes and bind
+mounts, networks, `cp`, `stats`.
 
 Current resource policy is four live runtimes and 1024 MiB reserved guest memory
 per state store, not a machine-wide or RSS cap. The C guard applies core=0,

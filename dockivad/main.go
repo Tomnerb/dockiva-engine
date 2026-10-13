@@ -87,20 +87,36 @@ func run() {
 	debug.FreeOSMemory()
 	secret := token()
 	endpoint := filepath.Join(b.Home, "engine.sock")
-	var listener net.Listener
-	var host string
-	if *tcp < 0 {
-		if exists(endpoint) {
-			st, e := os.Lstat(endpoint)
+	// docker.sock serves the same API without the token, for the docker CLI and
+	// Docker tools: the private (0700) engine home and the 0600 socket are the
+	// access control, as with Docker's own socket.
+	userSocket := filepath.Join(b.Home, "docker.sock")
+	unixListener := func(path string) net.Listener {
+		if exists(path) {
+			st, e := os.Lstat(path)
 			check(e)
 			reject(st.Mode()&os.ModeSocket != 0, "Refusing to replace a non-socket endpoint")
-			check(os.Remove(endpoint))
+			check(os.Remove(path))
 		}
-		listener, e = net.Listen("unix", endpoint)
+		l, e := net.Listen("unix", path)
 		check(e)
-		check(os.Chmod(endpoint, 0600))
+		check(os.Chmod(path, 0600))
+		return l
+	}
+	var listener, userListener net.Listener
+	var host string
+	if *tcp < 0 {
+		listener = unixListener(endpoint)
 		host = "unix://" + endpoint
 		defer os.Remove(endpoint)
+		userListener = unixListener(userSocket)
+		defer os.Remove(userSocket)
+		defer userListener.Close()
+		if *home == filepath.Join(homeDefault, ".vmfree") { // not for test or secondary engine homes
+			if e := safeRun(func() { registerDockerContext(userSocket) }); e != nil {
+				fmt.Fprintln(os.Stderr, "dockivad: docker context:", e)
+			}
+		}
 	} else {
 		reject(*tcp <= 65535, "Invalid API port")
 		listener, e = net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", *tcp))
@@ -110,7 +126,11 @@ func run() {
 	defer listener.Close()
 	configdir := private(filepath.Join(b.Home, "docker-client"))
 	save(filepath.Join(configdir, "config.json"), obj{"HttpHeaders": obj{"X-VMFree-Token": secret}})
-	save(filepath.Join(b.Home, "connection.json"), obj{"host": host, "config": configdir, "api_version": "1.45", "engine": "dockivad", "state_format": 1})
+	connection := obj{"host": host, "config": configdir, "api_version": "1.45", "engine": "dockivad", "state_format": 1}
+	if userListener != nil {
+		connection["docker_host"] = "unix://" + userSocket
+	}
+	save(filepath.Join(b.Home, "connection.json"), connection)
 	fmt.Println("API " + host)
 	server := &http.Server{Handler: b.handler(secret), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 40 * time.Second, IdleTimeout: 10 * time.Second, MaxHeaderBytes: 16384}
 	signals := make(chan os.Signal, 1)
@@ -118,6 +138,12 @@ func run() {
 	defer signal.Stop(signals)
 	done := make(chan struct{})
 	defer close(done)
+	go b.watch(done)
+	if userListener != nil {
+		docker := &http.Server{Handler: b.socketHandler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 40 * time.Second, IdleTimeout: 10 * time.Second, MaxHeaderBytes: 16384}
+		go func() { _ = docker.Serve(userListener) }()
+		defer docker.Close()
+	}
 	go func() {
 		select {
 		case <-signals:
