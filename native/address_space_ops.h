@@ -27,6 +27,7 @@ static void address_space_arena_changed(GuestAddressSpace *space,unsigned first,
         if(end>space->arena_dirty_hi)space->arena_dirty_hi=end;
     }
     space->arena_rev=space->generation;
+    if(end>space->map_top)space->map_top=end;
 }
 static int address_space_map_flags(GuestAddressSpace *space) {
     if(!space->map_flags)space->map_flags=calloc(space->map_capacity/4096,1);

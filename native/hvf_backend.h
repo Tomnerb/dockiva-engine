@@ -44,10 +44,14 @@ static _Thread_local int hvf_stale_tlb;
    The scheduler restores a blocked process's image on every resume, which bumps
    the generation without changing anything; comparing the layout (and its
    revision, for the mmap arena) avoids rebuilding the tables then. Page sharing
-   (copy-on-write) can change without the layout changing, so stale forces a
-   rebuild after the process's own fork and after a copy-on-write fault. Other
-   processes can only make pages more private, and a read-only view of a private
-   page merely faults once more. */
+   (copy-on-write) can change without the layout changing, so stale marks the
+   view out of date after the process's own fork and after a copy-on-write fault
+   that replaced a backing. Other processes can only make pages more private, and
+   a read-only view of a private page merely faults once more.
+   HVF_STALE_COW: update in place (hvf_sync_partial). HVF_STALE_NEW: the tables may
+   belong to an earlier process or image in this slot, or ran out: rebuild them. */
+#define HVF_STALE_COW 1
+#define HVF_STALE_NEW 2
 typedef struct {
     uint64_t root;unsigned tables;int stale;  /* root 0: no tables */
     Segment seg[129];unsigned nseg,map_capacity;
@@ -245,18 +249,70 @@ static void hvf_evict(void) {
     }
     if(!worker_threads) { pthread_mutex_lock(&hvf_mutex);while(hvf_nblocks)hvf_block_unmap(hvf_nblocks-1);pthread_mutex_unlock(&hvf_mutex); }
 }
+static void hvf_map_arena_all(GuestAddressSpace *space);
 static void hvf_build(GuestAddressSpace *space) {
     hvf_exhausted=0;hvf_tables_free(hvf_view);
     if(!(hvf_view->root=hvf_table()))return;
     hvf_map_page(HVF_SYSTEM_VA,HVF_IPA_BASE+HVF_TABLE_BYTES,0,1);
     for(unsigned i=0;i<space->nseg;i++)hvf_map_range(space,space->seg[i].base,space->seg[i].size,space->seg[i].flags,space->seg[i].backing,space->seg[i].offset);
     hvf_map_range(space,space->brk_base,space->brk_pages,6,space->brk_backing,0);
+    hvf_map_arena_all(space);
+}
+static int hvf_same_segment(const Segment *a,const Segment *b) {
+    return a->base==b->base && a->size==b->size && a->flags==b->flags && a->backing==b->backing && a->offset==b->offset;
+}
+static void hvf_unmap_range(uint64_t base,uint64_t size) { for(uint64_t p=0;p<size;p+=4096)hvf_unmap_page(base+p); }
+/* The guest-physical address va maps to in the current view, or 0. */
+static uint64_t hvf_mapped_ipa(uint64_t va) {
+    uint64_t *leaf=hvf_leaf(hvf_view,va,0);if(!leaf)return 0;
+    uint64_t descriptor=leaf[(va>>12)&511];
+    return (descriptor&1)?descriptor&UINT64_C(0x0000fffffffff000):0;
+}
+static void hvf_map_arena_all(GuestAddressSpace *space) {
     uint64_t ipa=space->map_flags && space->map_backing?hvf_block_ipa(space->map_backing):0;
-    unsigned pages=space->map_capacity/4096;
+    unsigned pages=space->map_capacity/4096;if(space->map_top<pages)pages=space->map_top;
     if(ipa)for(unsigned i=0;i<pages;i++) {
         if(!(i&7) && i+8<=pages) { uint64_t w;memcpy(&w,space->map_flags+i,8);if(!(w&UINT64_C(0x0707070707070707))) { i+=7;continue; } }
         if(space->map_flags[i]&7)hvf_map_arena_page(space,ipa,i);
     }
+}
+/* Update v to space in place, touching only what changed since v was recorded:
+   removed and changed segments, the brk heap and the mmap arena. After this
+   process's fork or a backing copy (HVF_STALE_COW) every private page is mapped
+   again, as it may be copy-on-write now; shared segments never change permissions
+   and keep their entries. This spares a fork-heavy server from re-mapping all of
+   its memory (Postgres: its shared buffers) several times per new process.
+   Returns 0 when only a full rebuild can do it. */
+static int hvf_sync_partial(GuestAddressSpace *space,HvfView *v) {
+    if(!v->root || v->stale==HVF_STALE_NEW || v->map_capacity!=space->map_capacity || v->tables>HVF_TABLES/4)return 0;
+    if(v->map_backing && !space->map_backing)return 0;
+    int arena_dirty=v->arena_rev!=space->arena_rev;
+    if(arena_dirty && v->arena_rev<space->arena_dirty_since)return 0;   /* arena changes this view did not see */
+    int all=v->stale==HVF_STALE_COW;
+    hvf_view=v;hvf_exhausted=0;hvf_stale_tlb=0;
+    uint64_t removed_low[129],removed_high[129];unsigned removed=0;
+    for(unsigned i=0;i<v->nseg;i++) {
+        int kept=0;
+        for(unsigned j=0;j<space->nseg && !kept;j++)kept=hvf_same_segment(&v->seg[i],&space->seg[j]);
+        if(kept)continue;
+        hvf_unmap_range(v->seg[i].base,v->seg[i].size);
+        removed_low[removed]=v->seg[i].base;removed_high[removed++]=v->seg[i].base+v->seg[i].size;
+    }
+    for(unsigned j=0;j<space->nseg;j++) {
+        const Segment *s=&space->seg[j];int kept=0;
+        for(unsigned i=0;i<v->nseg && !kept;i++)kept=hvf_same_segment(s,&v->seg[i]);
+        for(unsigned r=0;kept && r<removed;r++)if(s->base<removed_high[r] && removed_low[r]<s->base+s->size)kept=0;
+        /* A backing freed and another allocated at its address keeps the pointer, not the block. */
+        if(kept && s->backing && s->flags && s->size && hvf_mapped_ipa(s->base)!=hvf_block_ipa(s->backing)+s->offset)kept=0;
+        if(!kept || (all && !(s->flags&SEG_SHARED)))hvf_map_range(space,s->base,s->size,s->flags,s->backing,s->offset);
+    }
+    if(v->brk_backing!=space->brk_backing || v->brk_base!=space->brk_base || v->brk_pages!=space->brk_pages) {
+        hvf_unmap_range(v->brk_base,v->brk_pages);
+        hvf_map_range(space,space->brk_base,space->brk_pages,6,space->brk_backing,0);
+    } else if(all)hvf_map_range(space,space->brk_base,space->brk_pages,6,space->brk_backing,0);
+    if(arena_dirty)hvf_remap_arena(space);                       /* pages mapped, unmapped or reprotected since */
+    if(all || v->map_backing!=space->map_backing)hvf_map_arena_all(space);
+    return !hvf_exhausted;
 }
 /* Bring the current process's tables up to date; returns whether TLBs need maintenance. */
 static int hvf_sync_tables(GuestAddressSpace *space,HvfView *v) {
@@ -274,6 +330,7 @@ static int hvf_sync_tables(GuestAddressSpace *space,HvfView *v) {
     }
 rebuild:
     if(v->root)hvf_siblings_out();                       /* threads of this process on other vCPUs use these tables */
+    if(hvf_sync_partial(space,v)) { hvf_activate(v);hvf_view_record(v,space);hvf_arena_synced(space);return 1; }
     hvf_view=v;hvf_build(space);
     if(hvf_exhausted) {
         hvf_evict();hvf_build(space);
@@ -308,7 +365,7 @@ static void hvf_remap_host_page(const GuestAddressSpace *space,uint64_t far) {
         unsigned f=space->map_flags && low==MAP_BASE?space->map_flags[(page-MAP_BASE)/4096]&7:flags;
         if(f)hvf_map_page(page,ipa+offset,hvf_effective_flags(space,backing,f,offset),0);
     }
-    if(hvf_exhausted) { hvf_view->stale=1;return; }       /* the next sync rebuilds (and evicts) */
+    if(hvf_exhausted) { hvf_view->stale=HVF_STALE_NEW;return; } /* the next sync rebuilds (and evicts) */
     if(hvf_stale_tlb)hvf_flush();
 }
 /* Register transfer. General registers are read at every exit and written back
@@ -586,7 +643,7 @@ static uint64_t hvf_futex(int *waiting) {
 /* A successful exec in a threaded process ends every other thread; the caller
    becomes the main thread. */
 static void hvf_exec_threads(void) {
-    ScheduledTask *t=hvf_task();hvf_main_clear_tid[process_pid]=0;
+    ScheduledTask *t=hvf_task();hvf_main_clear_tid[process_pid]=0;hvf_views[process_pid].stale=HVF_STALE_NEW;
     if(!t->threads)return;
     for(unsigned i=0;i<t->threads->top;i++)if((int)i!=thread_now)t->threads->thread[i].state=0;
     Thread *th=task_thread(t);th->tid=(unsigned)process_pid;th->clear_tid=0;
@@ -659,7 +716,7 @@ static int hvf_unlocked_exit(void) {
         address_space_touched(address_space);
         if(address_space->layout==layout && hvf_view==&hvf_views[process_pid] && hvf_view_matches(address_space)) {
             hvf_remap_host_page(address_space,far);hvf_view->generation=address_space->generation;
-        } else hvf_views[process_pid].stale=1;
+        } else hvf_views[process_pid].stale=HVF_STALE_COW;
         hvf_resume_el0(elr,spsr);return 1;
     }
     if(ec!=0x15)return 0;                                                     /* SVC from EL0 */
@@ -766,14 +823,16 @@ static int hvf_slice_run(void) {
             uint64_t call=cpu->gpr[8],flags=cpu->gpr[0];unsigned execs=process_exec_count;
             int fork=call==220 && !(flags&0x10000);
             if(call==220 || call==221 || call==139)hvf_fp_pull(); /* clone/fork copy, exec and sigreturn replace the whole CPU state */
-            if(fork)hvf_views[process_pid].stale=1;       /* a fork shares this process's private pages */
+            if(fork)hvf_views[process_pid].stale=HVF_STALE_COW; /* a fork shares this process's private pages */
             int result=hvf_thread_call(call);
             if(result==HVF_UNHANDLED) {
                 /* Sibling threads stay out of guest code while their memory is
                    snapshotted or replaced. */
                 if(fork || call==221)hvf_siblings_out();
                 result=guest_syscall();
-                if(result==-3 && fork && (int64_t)cpu->gpr[0]>0)hvf_main_clear_tid[cpu->gpr[0]]=0; /* the child starts single-threaded */
+                if(result==-3 && fork && (int64_t)cpu->gpr[0]>0) {     /* the child starts single-threaded, on new tables */
+                    hvf_main_clear_tid[cpu->gpr[0]]=0;hvf_views[cpu->gpr[0]].stale=HVF_STALE_NEW;
+                }
                 if(call==221 && process_exec_count!=execs)hvf_exec_threads();
             }
             if(result!=-3) {
@@ -796,7 +855,7 @@ static int hvf_slice_run(void) {
                 address_space_touched(address_space);
                 if(address_space->layout==layout && hvf_view==&hvf_views[process_pid] && hvf_view_matches(address_space)) {
                     hvf_remap_host_page(address_space,far);hvf_view->generation=address_space->generation;
-                } else hvf_views[process_pid].stale=1;
+                } else hvf_views[process_pid].stale=HVF_STALE_COW;
                 hvf_resume_el0(elr,spsr);fast=1;continue;
             }
         }
