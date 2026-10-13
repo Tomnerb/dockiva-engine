@@ -413,12 +413,10 @@ static uint64_t fs_getcwd(void) {
     const char *path=fs_cwd?fs_cwd->path:"/";
     if(fs_cwd) {
         if(!*path)return linux_error(2);
-        int fd=dup(fs_root);char copy[1025];strcpy(copy,path);char *p=copy;
-        while(fd>=0 && *p) {
-            while(*p=='/')p++;if(!*p)break;
-            char *part=p;while(*p && *p!='/')p++;if(*p)*p++=0;
-            int next=openat(fd,part,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);close(fd);fd=next;
-        }
+        /* Walk the path again (through bind mounts) and check it still names the cwd. */
+        char leaf[1025],canon[1025];int parent=fs_walk(fs_root,"/",path,1,leaf,canon);
+        int fd=parent<0?-1:openat(parent,leaf,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
+        if(parent>=0)close(parent);
         struct stat a,b;int same=fd>=0 && !fstat(fd,&a) && !fstat(fs_cwd->fd,&b) && a.st_dev==b.st_dev && a.st_ino==b.st_ino;
         if(fd>=0)close(fd);if(!same)return linux_error(2);
     }

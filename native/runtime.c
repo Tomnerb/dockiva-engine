@@ -982,6 +982,7 @@ int main(int argc,char **argv) {
         else if(!strcmp(argv[i],"--process-tree")) { process_tree_enabled=1;schedule_enabled=1; }
         else if(!strcmp(argv[i],"--forwarded-interrupts"))terminal_forwarded=1;
         else if(!strcmp(argv[i],"--interactive")) { terminal_enabled=1;schedule_enabled=1; }
+        else if(!strcmp(argv[i],"--stdin")) stdin_host=1;
         else if(!strcmp(argv[i],"--trace")) trace=1;
         else if(!strcmp(argv[i],"--outbound")) net_outbound=1;
         else if(!strcmp(argv[i],"--signals")) { job_control_enabled=process_tree_enabled=schedule_enabled=1;signals_forwarded=1; } /* handlers and docker-stop forwarding, without a terminal */
@@ -1057,6 +1058,11 @@ int main(int argc,char **argv) {
     process_steps=steps;
     if(terminal_enabled)terminal_init();
     else if(signals_forwarded)host_signals_install();
+    if(stdin_host && !terminal_enabled) {
+        int flags=fcntl(0,F_GETFL);
+        if(flags<0 || fcntl(0,F_SETFL,flags|O_NONBLOCK)<0)fail("--stdin needs an open standard input");
+        io_fds[0]=(GuestIO){IO_INPUT,0,0,NULL,NULL};
+    }
 #ifdef VMFREE_HVF
     if(use_hvf)return hvf_run(steps);
 #endif

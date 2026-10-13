@@ -1,6 +1,8 @@
 /* M20: bounded nonblocking pipes and duplicated regular/standard descriptors.
    Guest 0..2 and 96..127 belong here; existing filesystem/network ranges stay put. */
 static int terminal_enabled,terminal_forwarded;
+static int stdin_host; /* --stdin: guest fd 0 reads host fd 0 (a pipe, socket or pty) */
+static unsigned terminal_foreground=1; /* the guest process group that owns the terminal */
 static _Thread_local int terminal_waiting;
 static int job_control_enabled;
 static void terminal_pump(int wait);
@@ -45,6 +47,7 @@ static _Thread_local IoTable *io_table=&io_table_first;
 #define io_fds (io_table->fds)
 #define io_guest (io_table->guest)
 static int io_managed(uint64_t fd) { return io_slot(fd)>=0; }
+static int io_input_host(uint64_t guest) { return stdin_host && !terminal_enabled && io_managed(guest) && IO(guest).kind==IO_INPUT?IO(guest).host:-1; }
 static void io_release(GuestIO *f) {
     if(f->kind==IO_FILE)close(f->host);
     if(f->kind==IO_EPOLL)epoll_ref(f->host,-1);
@@ -114,7 +117,7 @@ static uint64_t io_call(uint64_t call) {
     if(io_slot(cpu->gpr[0])<0)return linux_error(9);
     GuestIO *f=&IO(cpu->gpr[0]);if(!f->kind)return linux_error(9);
     if(call==57) { io_release(f);fd_unbind(cpu->gpr[0]);return 0; }
-    if(call==29)return terminal_enabled?terminal_ioctl(f):linux_error(25);
+    if(call==29)return terminal_enabled || stdin_host?terminal_ioctl(f):linux_error(25);
     if(call==25) {
         if(cpu->gpr[1]==1)return f->cloexec;
         if(cpu->gpr[1]==2) { if(cpu->gpr[2]>1)return linux_error(22);f->cloexec=(unsigned)cpu->gpr[2];return 0; }
@@ -172,6 +175,11 @@ static uint64_t io_call(uint64_t call) {
     if(!p)return linux_error(14);if(!count)return 0;
     if(f->kind==IO_OUTPUT) { ssize_t n=write(f->host,p,(size_t)count);return n<0?net_error():(uint64_t)n; }
     if(f->kind==IO_EOF)return 0;
+    if(f->kind==IO_INPUT && !terminal_enabled) { /* --stdin: host fd 0 is nonblocking; wait like a socket */
+        ssize_t n=read(f->host,p,(size_t)count);
+        if(n<0 && (errno==EAGAIN || errno==EINTR))return net_suspend_one(f->host,POLLIN,NET_FOREVER);
+        net_wait.active=0;return n<0?net_error():(uint64_t)n;
+    }
     if(f->kind==IO_INPUT)return terminal_read(p,(size_t)count);
     struct GuestPipe *pipe=f->pipe;
     if(writing)pipe->writes++;else pipe->reads++; /* activity for edge-triggered epoll */

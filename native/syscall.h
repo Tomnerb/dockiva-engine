@@ -87,6 +87,7 @@ static int guest_syscall_dispatch(void) {
                 return -3;
             }
             if(call>=174 && call<=177) { cpu->gpr[0]=call<=175?guest_uid:guest_gid;return -3; } /* One mapped guest identity; no host privilege change. */
+            if(call==151 || call==152) { cpu->gpr[0]=call==151?guest_uid:guest_gid;return -3; } /* setfsuid/setfsgid: file access uses the one identity; report it */
             if(call==144 || call==146 || call==147 || call==149) {
                 /* setgid, setuid, setresuid, setresgid: guest uid 0 may switch to any
                    identity (as with CAP_SETUID/CAP_SETGID); others may only re-assert

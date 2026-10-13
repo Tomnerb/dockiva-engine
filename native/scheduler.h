@@ -254,19 +254,28 @@ static void schedule_vfork(uint64_t pid) {
     schedule_slice=0;
 }
 /* --signals: stop and control signals sent to the runtime (docker stop/kill)
-   go to the container's first process, as Linux delivers them to PID 1. */
+   go to the container's first process, as Linux delivers them to PID 1. With
+   --stdin on a terminal, the terminal's ^C, ^\ and resizes (SIGINT, SIGQUIT,
+   SIGWINCH) go to its foreground process group instead, as a Linux tty sends them. */
 static volatile sig_atomic_t host_signal_pending[32];
 static void host_signal_catch(int number) { if(number>0 && number<32)host_signal_pending[number]=1; }
+static const int host_signal_numbers[]={SIGTERM,SIGINT,SIGQUIT,SIGHUP,SIGUSR1,SIGUSR2,SIGWINCH};
 static void host_signals_install(void) {
-    static const int numbers[]={SIGTERM,SIGINT,SIGQUIT,SIGHUP,SIGUSR1,SIGUSR2};
     struct sigaction action;memset(&action,0,sizeof(action));action.sa_handler=host_signal_catch;sigemptyset(&action.sa_mask);
-    for(unsigned i=0;i<sizeof(numbers)/sizeof(numbers[0]);i++)if(sigaction(numbers[i],&action,NULL))fail("Cannot install host signal handler");
+    for(unsigned i=0;i<sizeof(host_signal_numbers)/sizeof(*host_signal_numbers);i++)
+        if(sigaction(host_signal_numbers[i],&action,NULL))fail("Cannot install host signal handler");
 }
 static void host_signal_pump(void) {
-    static const int host[]={SIGTERM,SIGINT,SIGQUIT,SIGHUP,SIGUSR1,SIGUSR2};
-    static const unsigned linux_number[]={15,2,3,1,10,12};
-    for(unsigned i=0;i<sizeof(host)/sizeof(host[0]);i++)
-        if(host_signal_pending[host[i]]) { host_signal_pending[host[i]]=0;if(schedule_tasks[0].state)schedule_signal(&schedule_tasks[0],linux_number[i]); }
+    static const unsigned linux_number[]={15,2,3,1,10,12,28};
+    static int tty=-1;if(tty<0)tty=stdin_host && isatty(0);
+    for(unsigned i=0;i<sizeof(host_signal_numbers)/sizeof(*host_signal_numbers);i++) {
+        if(!host_signal_pending[host_signal_numbers[i]])continue;
+        host_signal_pending[host_signal_numbers[i]]=0;
+        if(tty && (linux_number[i]==2 || linux_number[i]==3 || linux_number[i]==28)) {
+            for(unsigned t=0;t<=process_count;t++)if(schedule_tasks[t].state && schedule_tasks[t].pgid==terminal_foreground)schedule_signal(&schedule_tasks[t],linux_number[i]);
+        }
+        else if(linux_number[i]!=28 && schedule_tasks[0].state)schedule_signal(&schedule_tasks[0],linux_number[i]);
+    }
 }
 /* Idle workers wait on schedule_idle_cond; one of them (the poller) waits in poll()
    on the blocked tasks' sockets and the poke pipe instead. Whoever makes work

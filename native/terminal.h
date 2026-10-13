@@ -9,7 +9,6 @@ static int terminal_ready(int wait) {
     return select(wait==2?0:1,wait==2?NULL:&input,NULL,NULL,&timeout);
 }
 static volatile sig_atomic_t terminal_interrupt,terminal_terminate,terminal_suspend,terminal_resume;
-static unsigned terminal_foreground=1;
 static struct sigaction terminal_old_actions[6];
 static int terminal_signal_numbers[6],terminal_installed;
 static void terminal_signal(int number) {
@@ -86,7 +85,7 @@ static int terminal_group_exists(uint64_t group) {
     return 0;
 }
 static uint64_t terminal_group(uint64_t call) {
-    if(!terminal_enabled || !schedule_active)return linux_error(95);
+    if(!(terminal_enabled || stdin_host) || !schedule_active)return linux_error(95);
     uint64_t pid=cpu->gpr[0]?cpu->gpr[0]:process_pid;
     if(pid>process_count+1 || !schedule_tasks[pid-1].state)return linux_error(3);
     if(call==155)return schedule_tasks[pid-1].pgid;
@@ -97,21 +96,39 @@ static uint64_t terminal_group(uint64_t call) {
     if(group!=pid && !terminal_group_exists(group))return linux_error(1);
     schedule_tasks[pid-1].pgid=(unsigned)group;io_epoch++;return 0;
 }
+/* Linux termios flags (field 0 iflag, 1 oflag, 3 lflag) and control characters,
+   with their host equivalents: TCGETS/TCSETS pass through to a host terminal. */
+static const struct { unsigned field,linux_bit;tcflag_t host; } terminal_flags[]={
+    {0,1,IGNBRK},{0,2,BRKINT},{0,4,IGNPAR},{0,8,PARMRK},{0,16,INPCK},{0,32,ISTRIP},{0,64,INLCR},{0,128,IGNCR},
+    {0,256,ICRNL},{0,1024,IXON},{0,2048,IXANY},{0,4096,IXOFF},{0,8192,IMAXBEL},{0,16384,IUTF8},{1,1,OPOST},{1,4,ONLCR},
+    {3,1,ISIG},{3,2,ICANON},{3,8,ECHO},{3,16,ECHOE},{3,32,ECHOK},{3,64,ECHONL},{3,128,NOFLSH},{3,256,TOSTOP},
+    {3,512,ECHOCTL},{3,1024,ECHOPRT},{3,2048,ECHOKE},{3,32768,IEXTEN}};
+static const unsigned terminal_cc_host[]={VINTR,VQUIT,VERASE,VKILL,VEOF,VTIME,VMIN,VSTART,VSTOP,VSUSP,VEOL,VREPRINT,VDISCARD,VWERASE,VLNEXT,VEOL2};
+static const unsigned terminal_cc_linux[]={0,1,2,3,4,5,6,8,9,10,11,12,13,14,15,16};
+static tcflag_t *terminal_field(struct termios *t,unsigned field) { return field==0?&t->c_iflag:field==1?&t->c_oflag:&t->c_lflag; }
 static uint64_t terminal_ioctl(GuestIO *fd) {
     if((fd->kind!=IO_INPUT && fd->kind!=IO_OUTPUT) || !isatty(fd->host))return linux_error(25);
     uint64_t request=cpu->gpr[1];
-    if(request==0x5401 && job_control_enabled) {
+    if(request==0x5401) {                                     /* TCGETS */
         unsigned char *p=lookup(cpu->gpr[2],36,2);if(!p)return linux_error(14);
         struct termios host;if(tcgetattr(fd->host,&host))return net_error();
-        memset(p,0,36);
-        unsigned input=((host.c_iflag&ICRNL)?256:0)|((host.c_iflag&IXON)?1024:0);
-        unsigned output=((host.c_oflag&OPOST)?1:0)|((host.c_oflag&ONLCR)?4:0);
-        unsigned local=((host.c_lflag&ISIG)?1:0)|((host.c_lflag&ICANON)?2:0)|((host.c_lflag&ECHO)?8:0)|((host.c_lflag&IEXTEN)?32768:0);
-        fs_pack(p,0,input,4);fs_pack(p,4,output,4);fs_pack(p,8,0x30|0x80,4);fs_pack(p,12,local,4);
-        const unsigned slots[]={VINTR,VQUIT,VERASE,VKILL,VEOF,VTIME,VMIN,VSTART,VSTOP,VSUSP};
-        const unsigned target[]={0,1,2,3,4,5,6,8,9,10};
-        for(unsigned i=0;i<sizeof(slots)/sizeof(*slots);i++)p[17+target[i]]=host.c_cc[slots[i]];
+        unsigned fields[4]={0,0,0x30|0x80|0xf,0};                 /* CS8|CREAD|B38400 */
+        for(unsigned i=0;i<sizeof(terminal_flags)/sizeof(*terminal_flags);i++)
+            if(*terminal_field(&host,terminal_flags[i].field)&terminal_flags[i].host)fields[terminal_flags[i].field]|=terminal_flags[i].linux_bit;
+        memset(p,0,36);for(unsigned i=0;i<4;i++)fs_pack(p,i*4,fields[i],4);
+        for(unsigned i=0;i<sizeof(terminal_cc_host)/sizeof(*terminal_cc_host);i++)p[17+terminal_cc_linux[i]]=host.c_cc[terminal_cc_host[i]];
         return 0;
+    }
+    if(request>=0x5402 && request<=0x5404) {                 /* TCSETS, TCSETSW, TCSETSF */
+        const unsigned char *p=lookup(cpu->gpr[2],36,4);if(!p)return linux_error(14);
+        struct termios host;if(tcgetattr(fd->host,&host))return net_error();
+        for(unsigned i=0;i<sizeof(terminal_flags)/sizeof(*terminal_flags);i++) {
+            tcflag_t *field=terminal_field(&host,terminal_flags[i].field);
+            if(le(p+terminal_flags[i].field*4,4)&terminal_flags[i].linux_bit)*field|=terminal_flags[i].host;else *field&=~terminal_flags[i].host;
+        }
+        for(unsigned i=0;i<sizeof(terminal_cc_host)/sizeof(*terminal_cc_host);i++)host.c_cc[terminal_cc_host[i]]=p[17+terminal_cc_linux[i]];
+        int when=request==0x5402?TCSANOW:request==0x5403?TCSADRAIN:TCSAFLUSH;
+        return tcsetattr(fd->host,when,&host)?net_error():0;
     }
     if(request==0x540f || request==0x5410) {
         unsigned char *p=lookup(cpu->gpr[2],4,request==0x540f?2:4);if(!p)return linux_error(14);

@@ -67,6 +67,7 @@ static int net_outbound; /* --outbound: connect/sendto may reach any IPv4 addres
 #define NET_UDP (1u<<30)  /* net_adopt flag: datagram socket */
 #define NET_UNIX (1u<<29) /* net_adopt flag: AF_UNIX socket */
 static uint64_t net_wait_blocks;
+static int io_input_host(uint64_t guest); /* --stdin's host descriptor, polled like a socket */
 /* targeted: only these sockets, the deadline, a signal, a futex wake or a pipe that
    recorded the task in its waiters can end the wait, so the scheduler wakes the task
    for those alone; other blocked calls retry after any I/O event (io_epoch). */
@@ -518,6 +519,7 @@ static uint64_t net_poll(void) {
     for(unsigned i=0;i<count;i++) {
         int32_t guest=(int32_t)le(in+i*8,4);unsigned events=(unsigned)le(in+i*8+4,2);
         fds[i].fd=guest<0?-1:net_host((uint64_t)guest);
+        if(fds[i].fd<0 && guest>=0)fds[i].fd=io_input_host((uint64_t)guest);
         fds[i].events=(short)(((events&1)?POLLIN:0)|((events&4)?POLLOUT:0));fds[i].revents=0;
         other[i]=0;
         if(guest>=0 && fds[i].fd<0) { other[i]=io_poll_ready((uint64_t)guest,events);if(other[i]<0)other[i]=32;if(other[i])ready_other++; }

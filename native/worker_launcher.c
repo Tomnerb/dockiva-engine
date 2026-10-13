@@ -13,6 +13,7 @@
 #include <unistd.h>
 static volatile sig_atomic_t stopping;
 static void stop(int signal) { (void)signal;stopping=1; }
+static void wake(int signal) { (void)signal; }
 static void limit(int resource,rlim_t value) { struct rlimit lim={value,value};if(setrlimit(resource,&lim)) { perror("worker limit");exit(125); } }
 int main(int argc,char **argv) {
     if(argc<2 || argv[1][0]!='/')return 125;
@@ -25,7 +26,15 @@ int main(int argc,char **argv) {
     for(int i=2;i+1<argc;i++)if(!strcmp(argv[i],"--file-limit-mib")) { long long mib=atoll(argv[i+1]);if(mib>0 && mib<=1048576)file_size=(rlim_t)mib<<20; }
     limit(RLIMIT_CORE,0);limit(RLIMIT_FSIZE,file_size);limit(RLIMIT_NOFILE,4096); /* guest sockets and files of every process; at most NET_DESCRIPTIONS */
     struct sigaction action={0};action.sa_handler=stop;sigemptyset(&action.sa_mask);
-    if(sigaction(SIGTERM,&action,NULL)||sigaction(SIGINT,&action,NULL))return 125;
+    if(sigaction(SIGTERM,&action,NULL))return 125;
+    /* On a terminal (docker exec -t) ^C, ^\ and hangup are the runtime's: it gives them
+       to the guest's foreground job. The guard only waits (a handler is reset by exec,
+       so the runtime keeps the default); job-control stops would freeze the runtime. */
+    int terminal=isatty(0);
+    struct sigaction pass={0};pass.sa_handler=wake;sigemptyset(&pass.sa_mask);
+    if(sigaction(SIGINT,terminal?&pass:&action,NULL))return 125;
+    if(terminal && (sigaction(SIGQUIT,&pass,NULL) || sigaction(SIGHUP,&pass,NULL) || signal(SIGTSTP,SIG_IGN)==SIG_ERR ||
+                    signal(SIGTTIN,SIG_IGN)==SIG_ERR || signal(SIGTTOU,SIG_IGN)==SIG_ERR))return 125;
     pid_t child=fork();if(child<0)return 125;
     if(!child) { close(3);execv(argv[1],argv+1);perror("worker exec");_exit(125); }
     unsigned stopping_ticks=0;
