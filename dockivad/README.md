@@ -57,9 +57,11 @@ Supported docker commands: `run` (foreground or `-d`, `--rm`, `-p`, `-e`,
 `stop`, `restart`, `kill` (TERM, INT, QUIT, HUP, USR1, USR2 reach the
 container's first process; KILL ends it), `wait`, `rm` (with `-v`), `ps`,
 `inspect`, `logs` (with `-f` and `--tail`), `attach --no-stdin`, `events`
-(create, start, die, destroy), `pull`, `images`, `volume` (`create`, `ls`,
-`inspect`, `rm`, `prune`) and `version`/`info`. Not supported: `-i`/`-t` and
-`exec`, builds, tmpfs mounts, networks, `cp`, `stats`.
+(create, start, die, destroy), `pull`, `images`, `tag`, `rmi`, `cp` (both
+ways, including into volumes and bind mounts; read-only paths are refused),
+`stats` (host CPU time and resident memory of the container's processes),
+`volume` (`create`, `ls`, `inspect`, `rm`, `prune`) and `version`/`info`. Not
+supported: `-i`/`-t` and `exec`, builds, tmpfs mounts, networks.
 
 Mounts: `-v /host/path:/path[:ro]` binds a host directory or file (a missing
 host directory is created, as Docker does); `-v name:/path` and `-v /path` use

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
@@ -40,6 +41,62 @@ func (b *engine) imageInfo(name string) obj {
 	check(e)
 	return obj{"Id": im.Digest, "RepoTags": []string{name}, "RepoDigests": []string{strings.Split(name, ":")[0] + "@" + im.Digest}, "Created": st.ModTime().UTC().Format(time.RFC3339Nano), "Size": size, "Architecture": "arm64", "Os": "linux", "Config": obj{"Entrypoint": im.Entry, "Cmd": im.Args, "Env": im.Env, "WorkingDir": im.WorkingDir}, "RootFS": obj{"Type": "layers", "Layers": []string{}}}
 }
+
+var imageID = regexp.MustCompile(`^(sha256:)?[0-9a-f]{4,64}$`)
+
+// removeImage is docker rmi: by name, or by ID when every name it has is removed
+// (with force if it has several). An image a container was created from needs force.
+func (b *engine) removeImage(ref string, force bool) []obj {
+	dirs := map[string]string{} // cache directory: name
+	var digest string
+	if p := filepath.Join(b.Cache, key(ref)); exists(p) || !imageID.MatchString(ref) {
+		p = b.imagePath(ref)
+		meta := readObject(filepath.Join(p, "image.json"))
+		dirs[p], digest = str(meta["name"]), str(meta["digest"])
+	}
+	entries, e := os.ReadDir(b.Cache)
+	check(e)
+	tags := 0
+	for _, entry := range entries {
+		if !entry.IsDir() || len(entry.Name()) != 64 {
+			continue
+		}
+		p := filepath.Join(b.Cache, entry.Name())
+		meta := readObject(filepath.Join(p, "image.json"))
+		d := str(meta["digest"])
+		if digest == "" && strings.HasPrefix(d, "sha256:"+strings.TrimPrefix(ref, "sha256:")) {
+			dirs[p] = str(meta["name"])
+		}
+		if d == digest || digest == "" && dirs[p] != "" {
+			tags++
+		}
+	}
+	if len(dirs) == 0 {
+		panic(apiError{404, "No such image: " + ref})
+	}
+	for p := range dirs {
+		digest = str(readObject(filepath.Join(p, "image.json"))["digest"])
+	}
+	reject(len(dirs) == 1 || force, "Image "+ref+" has several names; remove them by name or use --force")
+	last := tags == len(dirs)
+	if last && !force {
+		for _, name := range b.names() {
+			if readObject(filepath.Join(b.container(name), "config.json"))["image"] == digest {
+				panic(apiError{409, "conflict: unable to remove image " + ref + " (must force) - container " + name + " is using it"})
+			}
+		}
+	}
+	out := []obj{}
+	for p, name := range dirs {
+		check(os.RemoveAll(p))
+		out = append(out, obj{"Untagged": name})
+	}
+	if last {
+		out = append(out, obj{"Deleted": digest})
+	}
+	return out
+}
+
 func nanoCpus(c obj) int64 {
 	if c["cpus"] == nil {
 		return 0
@@ -341,7 +398,7 @@ func (b *engine) create(name string, body obj) obj {
 }
 
 var versionPath = regexp.MustCompile(`^/v([0-9]+)\.([0-9]+)(/.*)$`)
-var containerPath = regexp.MustCompile(`^/containers/([^/]+)(?:/(json|start|stop|restart|logs|wait|attach|kill))?$`)
+var containerPath = regexp.MustCompile(`^/containers/([^/]+)(?:/(json|start|stop|restart|logs|wait|attach|kill|archive|stats))?$`)
 
 func send(w http.ResponseWriter, status int, v any) {
 	var raw []byte
@@ -418,17 +475,6 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 			unbounded(w)
 		}
 		endStream := func() { <-streams }
-		if len(r.TransferEncoding) > 0 {
-			panic(apiError{400, "Chunked requests unsupported"})
-		}
-		if r.ContentLength > maxJSON {
-			panic(apiError{413, "Request exceeds 1 MiB"})
-		}
-		raw, e := io.ReadAll(io.LimitReader(r.Body, maxJSON+1))
-		check(e)
-		if int64(len(raw)) > maxJSON {
-			panic(apiError{413, "Request exceeds 1 MiB"})
-		}
 		path := r.URL.Path
 		if m := versionPath.FindStringSubmatch(path); m != nil {
 			major, e := strconv.Atoi(m[1])
@@ -441,6 +487,25 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 		q := r.URL.Query()
 		method := r.Method
 		yes := func(k string) bool { return q.Get(k) == "1" || q.Get(k) == "true" }
+		// docker cp into a container: a tar of any size, read as it arrives.
+		if m := containerPath.FindStringSubmatch(path); m != nil && m[2] == "archive" && method == "PUT" {
+			stream()
+			defer endStream()
+			b.putArchive(b.resolve(m[1]), q.Get("path"), r.Body, yes("noOverwriteDirNonDir"))
+			send(w, 200, nil)
+			return
+		}
+		if len(r.TransferEncoding) > 0 {
+			panic(apiError{400, "Chunked requests unsupported"})
+		}
+		if r.ContentLength > maxJSON {
+			panic(apiError{413, "Request exceeds 1 MiB"})
+		}
+		raw, e := io.ReadAll(io.LimitReader(r.Body, maxJSON+1))
+		check(e)
+		if int64(len(raw)) > maxJSON {
+			panic(apiError{413, "Request exceeds 1 MiB"})
+		}
 		switch {
 		case path == "/_ping" && (method == "GET" || method == "HEAD"):
 			w.Header().Set("Content-Type", "text/plain")
@@ -551,6 +616,20 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 			defer debug.FreeOSMemory()
 			send(w, 200, b.imageInfo(strings.TrimSuffix(strings.TrimPrefix(path, "/images/"), "/json")))
 			return
+		case strings.HasPrefix(path, "/images/") && strings.HasSuffix(path, "/tag") && method == "POST":
+			b.Mu.Lock()
+			defer b.Mu.Unlock()
+			source := strings.TrimSuffix(strings.TrimPrefix(path, "/images/"), "/tag")
+			target := q.Get("repo") + ":" + cmp.Or(q.Get("tag"), "latest")
+			reject(q.Get("repo") != "" && len(target) <= 512 && !strings.Contains(target, "@"), "Invalid tag")
+			commitImage(b.Cache, target, noLinks(b.imagePath(source), "layout"))
+			send(w, 201, nil)
+			return
+		case strings.HasPrefix(path, "/images/") && method == "DELETE":
+			b.Mu.Lock()
+			defer b.Mu.Unlock()
+			send(w, 200, b.removeImage(strings.TrimPrefix(path, "/images/"), yes("force")))
+			return
 		case path == "/events" && method == "GET":
 			if (q.Get("since") != "" && q.Get("since") != "0") || q.Get("until") != "" {
 				panic(apiError{501, "Event history (since/until) unsupported"})
@@ -650,6 +729,19 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 				stream()
 				defer endStream()
 				b.attach(w, r, name, yes("stdout"), yes("stderr"))
+				return
+			case action == "archive" && (method == "GET" || method == "HEAD"):
+				stream()
+				defer endStream()
+				b.getArchive(w, name, q.Get("path"), method == "HEAD")
+				return
+			case action == "stats" && method == "GET":
+				streaming := q.Get("stream") == "" || yes("stream")
+				if streaming {
+					stream()
+					defer endStream()
+				}
+				b.stats(w, r, name, streaming, yes("one-shot"))
 				return
 			case action == "kill" && method == "POST":
 				b.kill(name, signalNumber(q.Get("signal")))
