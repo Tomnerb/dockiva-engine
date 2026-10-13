@@ -102,7 +102,7 @@ static uint64_t guest_writev(void) {
     if(count>1024)return linux_error(22); /* UIO_MAXIOV */
     if(!count)return 0;
     unsigned char *table=lookup(cpu->gpr[1],count*16,4);if(!table)return linux_error(14);
-    static struct iovec vec[1024];static uint64_t addresses[1024];
+    static _Thread_local struct iovec vec[1024];static _Thread_local uint64_t addresses[1024]; /* per worker */
     for(unsigned i=0;i<count;i++) {
         uint64_t addr=le(table+i*16,8),length=le(table+i*16+8,8);
         if(length>1024*1024-total) { length=1024*1024-total;count=i+1; } /* short transfer past 1 MiB */
@@ -132,7 +132,10 @@ static uint64_t guest_writev(void) {
     cpu->gpr[1]=old1;cpu->gpr[2]=old2;return result;
 }
 /* Validate every destination before consuming stream bytes. Socket readv uses
-   one host read, preserving nonblocking and partial-read behavior. */
+   one host read, preserving nonblocking and partial-read behavior. Files and
+   sockets are read without the runtime lock (guest_syscall_unlocked): because every
+   destination is resolved, and made private, before anything is read, an attempt
+   that must be redone under the lock has consumed nothing. */
 static uint64_t guest_readv(void) {
     uint64_t guestfd=cpu->gpr[0],count=cpu->gpr[2],total=0;
     int file=fs_host(guestfd),network=net_host(guestfd),managed=io_managed(guestfd);
@@ -140,7 +143,7 @@ static uint64_t guest_readv(void) {
     if(managed && (IO(guestfd).kind==IO_WRITE || IO(guestfd).kind==IO_OUTPUT))return linux_error(9);
     if(count>1024)return linux_error(22); /* UIO_MAXIOV */if(!count)return 0;
     unsigned char *table=lookup(cpu->gpr[1],count*16,4);if(!table)return linux_error(14);
-    static struct iovec vec[1024];static uint64_t addresses[1024];
+    static _Thread_local struct iovec vec[1024];static _Thread_local uint64_t addresses[1024]; /* per worker */
     for(unsigned i=0;i<count;i++) {
         uint64_t addr=le(table+i*16,8),length=le(table+i*16+8,8);
         if(length>1024*1024-total) { length=1024*1024-total;count=i+1; } /* short transfer past 1 MiB */

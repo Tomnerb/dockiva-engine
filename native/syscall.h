@@ -271,7 +271,8 @@ static int guest_syscall_dispatch(void) {
    short transfer, as Linux allows, instead of EINVAL. The guest's x2 is preserved. */
 /* The hot calls that touch only the worker's own process (its descriptor tables,
    memory it already owns) and host descriptors, served without the runtime lock:
-   lseek, read and pread on files; read, write, sendto and recvfrom on sockets;
+   lseek, read, readv and pread on files; read, readv, write, sendto and recvfrom
+   on sockets;
    epoll_pwait on an epoll no other process shares. Returns 1 when done (result in
    x0), 0 when the call must run under the lock; an aborted attempt changed nothing. */
 #ifdef VMFREE_HVF
@@ -280,12 +281,12 @@ static int guest_syscall_unlocked(void) {
     if(profiling || trace)return 0;
     int file=fs_host(fd)>=0 && !fs_dirs[fs_slot(fd)],socket=!file && net_host(fd)>=0;
     int epoll=call==22 && io_managed(fd) && IO(fd).kind==IO_EPOLL && epolls[IO(fd).host].refs==1;
-    if(!epoll && !((call==62 || call==63 || call==67) && file) && !((call==63 || call==64 || call==206 || call==207) && socket))return 0;
+    if(!epoll && !((call==62 || call==63 || call==65 || call==67) && file) && !((call==63 || call==64 || call==65 || call==206 || call==207) && socket))return 0;
     cpu->exclusive_valid=0;
     int clamp=(call==63 || call==64 || call==206 || call==207) && count>1024*1024;
     if(clamp)cpu->gpr[2]=1024*1024;
     syscall_unlocked=1;syscall_abort=0;epoll_prepared.valid=0;net_unlocked_wait.count=0;
-    uint64_t result=epoll?guest_epoll(call):file?fs_call(call):net_call(call);
+    uint64_t result=epoll?guest_epoll(call):call==65?guest_readv():file?fs_call(call):net_call(call);
     syscall_unlocked=0;
     if(clamp)cpu->gpr[2]=count;
     if(syscall_abort || result==IO_BLOCK)return 0;

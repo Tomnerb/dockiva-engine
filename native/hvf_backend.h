@@ -722,7 +722,7 @@ static int hvf_unlocked_exit(void) {
     if(ec!=0x15)return 0;                                                     /* SVC from EL0 */
     hvf_check(hv_vcpu_get_reg(hvf_vcpu,HV_REG_X8,&call),"get x8");
     int memory=call==222 || call==215 || call==226 || call==233 || call==214;
-    if(!memory && call!=22 && call!=62 && call!=63 && call!=64 && call!=67 && call!=206 && call!=207)return 0;
+    if(!memory && call!=22 && call!=62 && call!=63 && call!=64 && call!=65 && call!=67 && call!=206 && call!=207)return 0;
     hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_ELR_EL1,&elr),"get elr");
     hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_SPSR_EL1,&spsr),"get spsr");
     hvf_get_regs(1,elr,spsr);
