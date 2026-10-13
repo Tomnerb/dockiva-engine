@@ -6,19 +6,19 @@
       "exit": 0,
       "stdout": "PASS: distinct address spaces, interpreter fetches, snapshot ownership and revision freshness\nPASS: failed protection is atomic; revoke/unmap/remap changes visibility\nPASS: backing allocations released under the existing allocation accounting\n",
       "stderr": "",
-      "binary_sha256": "8ff49f79cebef9f0afdf803dbea3af55d4ca5de9294b9c984623bc0034c7b725"
+      "binary_sha256": "2df5401c7877f9c9bcc11bc4de8ff496484772e6e5cf61b622c4d0d14c010c65"
     }
   ],
   "source_hashes": {
     "tests/native/address_space_host.c": "1557324631cb7c4d3095cbc642c265425860b7a5ea8eec21bd9705faf62d4221",
     "native/address_space.h": "9943d7011752cb60bc79c6006e698ff229b7c6f21540547f079d02cad2f156bc",
     "native/address_space_ops.h": "d2ac36caa48c2273f7c1024b97459b11c59fa3af10bf3409830dfe881b5da10c",
-    "native/compat.h": "19ccd5f1cd6f1516822395ae5ca77ea950a12ca17d5de35b49819fcc15c777b4",
+    "native/compat.h": "c0e9d2e2a384c6a8cf7c5dcc78a5aa710e0a9006d27bfd4c5f044be0d6ed443a",
     "native/cpu_state.h": "d8824d339232e9236239e81cf568fedde83dc9a6637280ea561273c8c7a24eb6",
     "native/decode.h": "fdc15750c69a7f12c54e1ef9c27ac93c47fd722093958d1190497964a8ff40bd",
     "native/epoll.h": "3f88d138950b533636f0849bd4bdfe3cae5889a03295456cb2e5ae348e74460f",
     "native/fadvise.h": "08db7b94b12205e6994a6a2de7632addf04d8a2977878fc41b639257965a91bc",
-    "native/fs.h": "fca0f6500ec2ed74a3511a4b260ecdee80663d801005daac9ad205a0c82d2840",
+    "native/fs.h": "1cf761865bfbf1ab947bc47af1d056f19711276257f074e6daa836ca76489bc6",
     "native/heap.h": "826b33f96993a705182220ada5d7b352a20258e121429104fcaa0f431c3877bd",
     "native/hvf_backend.h": "cb255d4e9e61dbba03f1c7fcf10d4f177e172b618887e3114977ee6e9e5cde23",
     "native/io.h": "04878dc2af8466a6e753084d9d44da170454aae8488ba75e5081adf356a93b65",
@@ -33,10 +33,10 @@
     "native/runtime_context.h": "01197d81e8aa48acff643a170d072ea71783913093253d4549487051d5618fb5",
     "native/scheduler.h": "f888a293498b9c50195e328cd590d32e9856f44965f79942386d8afc35d1d28e",
     "native/signals.h": "2d2732b0aa42bccb822a6bedda1a2c5c7022241c6e4055b471c1e086910f9f54",
-    "native/syscall.h": "84f5224aaba3525d4a21ac21c143146b97af5579697005ca6fc2eaa4c07a44fe",
+    "native/syscall.h": "9ffefd8ff3de0aae82862dcd802673e4de2afb8511f2726c12341e5b55e4f877",
     "native/sysinfo.h": "50e5742797c013db83e308a543bb4177995f6a99a7b6668b8eacca9a956c5a52",
     "native/terminal.h": "22d67e479a0829b5436325e84753f56d78eaa688aa23aceffd384e74a156dace",
     "native/vdso.h": "55ebda26b591fffb3df807a02a24e44ac5d60566ca63c7bf7fcc5cb261a60c4c",
-    "native/runtime.c": "67edc242853d705c8984affc543df722636e911ad84828e794898691b1a21361"
+    "native/runtime.c": "3b82bb99fb82a51060ba0d101fdd51445d087f583b6053664063ad128b777a58"
   }
 }

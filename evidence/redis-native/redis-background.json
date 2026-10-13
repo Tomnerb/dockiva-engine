@@ -1,14 +1,14 @@
 {
   "scope": "Prepared pinned ARM64 Redis ELF; bounded VM-free backend; not stock-image or PostgreSQL qualification",
   "image_id": "sha256:3b0f54bf27a77c98d319dc3a6706ed500a8985309f0b6c6407599b869f4a2bd9",
-  "runtime_sha256": "93a94b3f9fdfba12485af862182bbb3869846271e5dc41e120ed603e28ee3c6f",
+  "runtime_sha256": "404a9dd8144cf7324a62e406fcb3e24551b034832fe9a18b0715ebc82ba8271c",
   "results": [
     {
       "mode": "rdb",
       "phase": "background",
       "passed": true,
       "reply": "Background saving started",
-      "reply_seconds": 0.0025429169763810933,
+      "reply_seconds": 0.0026864580577239394,
       "before": {
         "loading": "0",
         "async_loading": "0",
@@ -20,7 +20,7 @@
         "current_save_keys_total": "0",
         "rdb_changes_since_last_save": "64",
         "rdb_bgsave_in_progress": "0",
-        "rdb_last_save_time": "1791853347",
+        "rdb_last_save_time": "1791902620",
         "rdb_last_bgsave_status": "ok",
         "rdb_last_bgsave_time_sec": "-1",
         "rdb_current_bgsave_time_sec": "-1",
@@ -53,7 +53,7 @@
         "current_save_keys_total": "0",
         "rdb_changes_since_last_save": "32",
         "rdb_bgsave_in_progress": "0",
-        "rdb_last_save_time": "1791853347",
+        "rdb_last_save_time": "1791902620",
         "rdb_last_bgsave_status": "ok",
         "rdb_last_bgsave_time_sec": "0",
         "rdb_current_bgsave_time_sec": "-1",
@@ -74,11 +74,11 @@
         "module_fork_in_progress": "0",
         "module_fork_last_cow_size": "0"
       },
-      "background_seconds": 0.06666833395138383,
+      "background_seconds": 0.0798289580270648,
       "verified_keys": 80,
-      "seconds": 0.150536666973494,
+      "seconds": 0.15246554091572762,
       "exit": 0,
-      "stdout": "1:C 13 Oct 2026 01:02:27.083 * oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo\n1:C 13 Oct 2026 01:02:27.083 * Redis version=7.4.2, bits=64, commit=00000000, modified=0, pid=1, just started\n1:C 13 Oct 2026 01:02:27.083 * Configuration loaded\n1:M 13 Oct 2026 01:02:27.084 # You requested maxclients of 10000 requiring at least 10032 max file descriptors.\n1:M 13 Oct 2026 01:02:27.084 # Server can't set maximum open files to 10032 because of OS error: Operation not supported.\n1:M 13 Oct 2026 01:02:27.084 # Current maximum open files is 4096. maxclients has been reduced to 4064 to compensate for low ulimit. If you need higher maxclients increase 'ulimit -n'.\n1:M 13 Oct 2026 01:02:27.084 * monotonic clock: POSIX clock_gettime\n1:M 13 Oct 2026 01:02:27.085 * Running mode=standalone, port=54786.\n1:M 13 Oct 2026 01:02:27.085 * Server initialized\n1:M 13 Oct 2026 01:02:27.085 * Ready to accept connections tcp\n1:M 13 Oct 2026 01:02:27.144 * Background saving started by pid 2\n2:C 13 Oct 2026 01:02:27.146 * DB saved on disk\n2:C 13 Oct 2026 01:02:27.146 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB\n1:M 13 Oct 2026 01:02:27.188 * Background saving terminated with success\n1:M 13 Oct 2026 01:02:27.217 * User requested shutdown...\n1:M 13 Oct 2026 01:02:27.217 # Redis is now ready to exit, bye bye...\n",
+      "stdout": "1:C 13 Oct 2026 14:43:40.178 * oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo\n1:C 13 Oct 2026 14:43:40.178 * Redis version=7.4.2, bits=64, commit=00000000, modified=0, pid=1, just started\n1:C 13 Oct 2026 14:43:40.178 * Configuration loaded\n1:M 13 Oct 2026 14:43:40.178 # You requested maxclients of 10000 requiring at least 10032 max file descriptors.\n1:M 13 Oct 2026 14:43:40.178 # Server can't set maximum open files to 10032 because of OS error: Operation not supported.\n1:M 13 Oct 2026 14:43:40.178 # Current maximum open files is 4096. maxclients has been reduced to 4064 to compensate for low ulimit. If you need higher maxclients increase 'ulimit -n'.\n1:M 13 Oct 2026 14:43:40.178 * monotonic clock: POSIX clock_gettime\n1:M 13 Oct 2026 14:43:40.179 * Running mode=standalone, port=61564.\n1:M 13 Oct 2026 14:43:40.180 * Server initialized\n1:M 13 Oct 2026 14:43:40.180 * Ready to accept connections tcp\n1:M 13 Oct 2026 14:43:40.230 * Background saving started by pid 2\n2:C 13 Oct 2026 14:43:40.232 * DB saved on disk\n2:C 13 Oct 2026 14:43:40.232 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB\n1:M 13 Oct 2026 14:43:40.283 * Background saving terminated with success\n1:M 13 Oct 2026 14:43:40.315 * User requested shutdown...\n1:M 13 Oct 2026 14:43:40.315 # Redis is now ready to exit, bye bye...\n",
       "stderr": ""
     },
     {
@@ -86,9 +86,9 @@
       "phase": "restart",
       "passed": true,
       "verified_keys": 64,
-      "seconds": 0.07236383302370086,
+      "seconds": 0.06719774997327477,
       "exit": 0,
-      "stdout": "1:C 13 Oct 2026 01:02:27.235 * oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo\n1:C 13 Oct 2026 01:02:27.235 * Redis version=7.4.2, bits=64, commit=00000000, modified=0, pid=1, just started\n1:C 13 Oct 2026 01:02:27.235 * Configuration loaded\n1:M 13 Oct 2026 01:02:27.236 # You requested maxclients of 10000 requiring at least 10032 max file descriptors.\n1:M 13 Oct 2026 01:02:27.236 # Server can't set maximum open files to 10032 because of OS error: Operation not supported.\n1:M 13 Oct 2026 01:02:27.236 # Current maximum open files is 4096. maxclients has been reduced to 4064 to compensate for low ulimit. If you need higher maxclients increase 'ulimit -n'.\n1:M 13 Oct 2026 01:02:27.236 * monotonic clock: POSIX clock_gettime\n1:M 13 Oct 2026 01:02:27.237 * Running mode=standalone, port=54786.\n1:M 13 Oct 2026 01:02:27.237 * Server initialized\n1:M 13 Oct 2026 01:02:27.237 * Loading RDB produced by version 7.4.2\n1:M 13 Oct 2026 01:02:27.237 * RDB age 0 seconds\n1:M 13 Oct 2026 01:02:27.237 * RDB memory usage when created 1.06 Mb\n1:M 13 Oct 2026 01:02:27.238 * Done loading RDB, keys loaded: 64, keys expired: 0.\n1:M 13 Oct 2026 01:02:27.238 * DB loaded from disk: 0.001 seconds\n1:M 13 Oct 2026 01:02:27.238 * Ready to accept connections tcp\n1:M 13 Oct 2026 01:02:27.290 * User requested shutdown...\n1:M 13 Oct 2026 01:02:27.290 # Redis is now ready to exit, bye bye...\n",
+      "stdout": "1:C 13 Oct 2026 14:43:40.334 * oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo\n1:C 13 Oct 2026 14:43:40.334 * Redis version=7.4.2, bits=64, commit=00000000, modified=0, pid=1, just started\n1:C 13 Oct 2026 14:43:40.334 * Configuration loaded\n1:M 13 Oct 2026 14:43:40.335 # You requested maxclients of 10000 requiring at least 10032 max file descriptors.\n1:M 13 Oct 2026 14:43:40.335 # Server can't set maximum open files to 10032 because of OS error: Operation not supported.\n1:M 13 Oct 2026 14:43:40.335 # Current maximum open files is 4096. maxclients has been reduced to 4064 to compensate for low ulimit. If you need higher maxclients increase 'ulimit -n'.\n1:M 13 Oct 2026 14:43:40.335 * monotonic clock: POSIX clock_gettime\n1:M 13 Oct 2026 14:43:40.335 * Running mode=standalone, port=61564.\n1:M 13 Oct 2026 14:43:40.336 * Server initialized\n1:M 13 Oct 2026 14:43:40.336 * Loading RDB produced by version 7.4.2\n1:M 13 Oct 2026 14:43:40.336 * RDB age 0 seconds\n1:M 13 Oct 2026 14:43:40.336 * RDB memory usage when created 1.06 Mb\n1:M 13 Oct 2026 14:43:40.337 * Done loading RDB, keys loaded: 64, keys expired: 0.\n1:M 13 Oct 2026 14:43:40.337 * DB loaded from disk: 0.001 seconds\n1:M 13 Oct 2026 14:43:40.337 * Ready to accept connections tcp\n1:M 13 Oct 2026 14:43:40.383 * User requested shutdown...\n1:M 13 Oct 2026 14:43:40.383 # Redis is now ready to exit, bye bye...\n",
       "stderr": ""
     },
     {
@@ -96,7 +96,7 @@
       "phase": "background",
       "passed": true,
       "reply": "Background append only file rewriting started",
-      "reply_seconds": 0.002936125034466386,
+      "reply_seconds": 0.003263333928771317,
       "before": {
         "loading": "0",
         "async_loading": "0",
@@ -108,7 +108,7 @@
         "current_save_keys_total": "0",
         "rdb_changes_since_last_save": "64",
         "rdb_bgsave_in_progress": "0",
-        "rdb_last_save_time": "1791853347",
+        "rdb_last_save_time": "1791902620",
         "rdb_last_bgsave_status": "ok",
         "rdb_last_bgsave_time_sec": "-1",
         "rdb_current_bgsave_time_sec": "-1",
@@ -147,7 +147,7 @@
         "current_save_keys_total": "0",
         "rdb_changes_since_last_save": "96",
         "rdb_bgsave_in_progress": "0",
-        "rdb_last_save_time": "1791853347",
+        "rdb_last_save_time": "1791902620",
         "rdb_last_bgsave_status": "ok",
         "rdb_last_bgsave_time_sec": "-1",
         "rdb_current_bgsave_time_sec": "-1",
@@ -174,11 +174,11 @@
         "aof_pending_bio_fsync": "0",
         "aof_delayed_fsync": "0"
       },
-      "background_seconds": 0.0663459170027636,
+      "background_seconds": 0.054642083938233554,
       "verified_keys": 80,
-      "seconds": 0.14669266698183492,
+      "seconds": 0.13005770894233137,
       "exit": 0,
-      "stdout": "1:C 13 Oct 2026 01:02:27.330 * oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo\n1:C 13 Oct 2026 01:02:27.330 * Redis version=7.4.2, bits=64, commit=00000000, modified=0, pid=1, just started\n1:C 13 Oct 2026 01:02:27.330 * Configuration loaded\n1:M 13 Oct 2026 01:02:27.331 # You requested maxclients of 10000 requiring at least 10032 max file descriptors.\n1:M 13 Oct 2026 01:02:27.331 # Server can't set maximum open files to 10032 because of OS error: Operation not supported.\n1:M 13 Oct 2026 01:02:27.331 # Current maximum open files is 4096. maxclients has been reduced to 4064 to compensate for low ulimit. If you need higher maxclients increase 'ulimit -n'.\n1:M 13 Oct 2026 01:02:27.331 * monotonic clock: POSIX clock_gettime\n1:M 13 Oct 2026 01:02:27.332 * Running mode=standalone, port=54789.\n1:M 13 Oct 2026 01:02:27.332 * Server initialized\n1:M 13 Oct 2026 01:02:27.332 * Creating AOF base file appendonly.aof.1.base.rdb on server start\n1:M 13 Oct 2026 01:02:27.333 * Creating AOF incr file appendonly.aof.1.incr.aof on server start\n1:M 13 Oct 2026 01:02:27.333 * Ready to accept connections tcp\n1:M 13 Oct 2026 01:02:27.382 * Creating AOF incr file appendonly.aof.2.incr.aof on background rewrite\n1:M 13 Oct 2026 01:02:27.384 * Background append only file rewriting started by pid 2\n2:C 13 Oct 2026 01:02:27.386 * Successfully created the temporary AOF base file temp-rewriteaof-bg-2.aof\n2:C 13 Oct 2026 01:02:27.386 * Fork CoW for AOF rewrite: current 0 MB, peak 0 MB, average 0 MB\n1:M 13 Oct 2026 01:02:27.437 * Background AOF rewrite terminated with success\n1:M 13 Oct 2026 01:02:27.437 * Successfully renamed the temporary AOF base file temp-rewriteaof-bg-2.aof into appendonly.aof.2.base.rdb\n1:M 13 Oct 2026 01:02:27.438 * Removing the history file appendonly.aof.1.incr.aof in the background\n1:M 13 Oct 2026 01:02:27.438 * Removing the history file appendonly.aof.1.base.rdb in the background\n1:M 13 Oct 2026 01:02:27.438 * Background AOF rewrite finished successfully\n1:M 13 Oct 2026 01:02:27.456 * User requested shutdown...\n1:M 13 Oct 2026 01:02:27.456 * Calling fsync() on the AOF file.\n1:M 13 Oct 2026 01:02:27.456 # Redis is now ready to exit, bye bye...\n",
+      "stdout": "1:C 13 Oct 2026 14:43:40.409 * oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo\n1:C 13 Oct 2026 14:43:40.409 * Redis version=7.4.2, bits=64, commit=00000000, modified=0, pid=1, just started\n1:C 13 Oct 2026 14:43:40.409 * Configuration loaded\n1:M 13 Oct 2026 14:43:40.410 # You requested maxclients of 10000 requiring at least 10032 max file descriptors.\n1:M 13 Oct 2026 14:43:40.410 # Server can't set maximum open files to 10032 because of OS error: Operation not supported.\n1:M 13 Oct 2026 14:43:40.410 # Current maximum open files is 4096. maxclients has been reduced to 4064 to compensate for low ulimit. If you need higher maxclients increase 'ulimit -n'.\n1:M 13 Oct 2026 14:43:40.410 * monotonic clock: POSIX clock_gettime\n1:M 13 Oct 2026 14:43:40.410 * Running mode=standalone, port=61567.\n1:M 13 Oct 2026 14:43:40.411 * Server initialized\n1:M 13 Oct 2026 14:43:40.411 * Creating AOF base file appendonly.aof.1.base.rdb on server start\n1:M 13 Oct 2026 14:43:40.412 * Creating AOF incr file appendonly.aof.1.incr.aof on server start\n1:M 13 Oct 2026 14:43:40.412 * Ready to accept connections tcp\n1:M 13 Oct 2026 14:43:40.463 * Creating AOF incr file appendonly.aof.2.incr.aof on background rewrite\n1:M 13 Oct 2026 14:43:40.465 * Background append only file rewriting started by pid 2\n2:C 13 Oct 2026 14:43:40.467 * Successfully created the temporary AOF base file temp-rewriteaof-bg-2.aof\n2:C 13 Oct 2026 14:43:40.467 * Fork CoW for AOF rewrite: current 0 MB, peak 0 MB, average 0 MB\n1:M 13 Oct 2026 14:43:40.514 * Background AOF rewrite terminated with success\n1:M 13 Oct 2026 14:43:40.515 * Successfully renamed the temporary AOF base file temp-rewriteaof-bg-2.aof into appendonly.aof.2.base.rdb\n1:M 13 Oct 2026 14:43:40.515 * Removing the history file appendonly.aof.1.incr.aof in the background\n1:M 13 Oct 2026 14:43:40.515 * Removing the history file appendonly.aof.1.base.rdb in the background\n1:M 13 Oct 2026 14:43:40.516 * Background AOF rewrite finished successfully\n1:M 13 Oct 2026 14:43:40.523 * User requested shutdown...\n1:M 13 Oct 2026 14:43:40.523 * Calling fsync() on the AOF file.\n1:M 13 Oct 2026 14:43:40.523 # Redis is now ready to exit, bye bye...\n",
       "stderr": ""
     },
     {
@@ -186,9 +186,9 @@
       "phase": "restart",
       "passed": true,
       "verified_keys": 80,
-      "seconds": 0.07262941700173542,
+      "seconds": 0.06448183301836252,
       "exit": 0,
-      "stdout": "1:C 13 Oct 2026 01:02:27.474 * oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo\n1:C 13 Oct 2026 01:02:27.474 * Redis version=7.4.2, bits=64, commit=00000000, modified=0, pid=1, just started\n1:C 13 Oct 2026 01:02:27.474 * Configuration loaded\n1:M 13 Oct 2026 01:02:27.475 # You requested maxclients of 10000 requiring at least 10032 max file descriptors.\n1:M 13 Oct 2026 01:02:27.475 # Server can't set maximum open files to 10032 because of OS error: Operation not supported.\n1:M 13 Oct 2026 01:02:27.475 # Current maximum open files is 4096. maxclients has been reduced to 4064 to compensate for low ulimit. If you need higher maxclients increase 'ulimit -n'.\n1:M 13 Oct 2026 01:02:27.475 * monotonic clock: POSIX clock_gettime\n1:M 13 Oct 2026 01:02:27.476 * Running mode=standalone, port=54789.\n1:M 13 Oct 2026 01:02:27.476 * Server initialized\n1:M 13 Oct 2026 01:02:27.477 * Reading RDB base file on AOF loading...\n1:M 13 Oct 2026 01:02:27.477 * Loading RDB produced by version 7.4.2\n1:M 13 Oct 2026 01:02:27.477 * RDB age 0 seconds\n1:M 13 Oct 2026 01:02:27.477 * RDB memory usage when created 1.06 Mb\n1:M 13 Oct 2026 01:02:27.477 * RDB is base AOF\n1:M 13 Oct 2026 01:02:27.477 * Done loading RDB, keys loaded: 64, keys expired: 0.\n1:M 13 Oct 2026 01:02:27.477 * DB loaded from base file appendonly.aof.2.base.rdb: 0.001 seconds\n1:M 13 Oct 2026 01:02:27.477 * DB loaded from incr file appendonly.aof.2.incr.aof: 0.000 seconds\n1:M 13 Oct 2026 01:02:27.478 * DB loaded from append only file: 0.001 seconds\n1:M 13 Oct 2026 01:02:27.478 * Opening AOF incr file appendonly.aof.2.incr.aof on server start\n1:M 13 Oct 2026 01:02:27.478 * Ready to accept connections tcp\n1:M 13 Oct 2026 01:02:27.529 * User requested shutdown...\n1:M 13 Oct 2026 01:02:27.529 * Calling fsync() on the AOF file.\n1:M 13 Oct 2026 01:02:27.529 # Redis is now ready to exit, bye bye...\n",
+      "stdout": "1:C 13 Oct 2026 14:43:40.540 * oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo\n1:C 13 Oct 2026 14:43:40.540 * Redis version=7.4.2, bits=64, commit=00000000, modified=0, pid=1, just started\n1:C 13 Oct 2026 14:43:40.540 * Configuration loaded\n1:M 13 Oct 2026 14:43:40.540 # You requested maxclients of 10000 requiring at least 10032 max file descriptors.\n1:M 13 Oct 2026 14:43:40.540 # Server can't set maximum open files to 10032 because of OS error: Operation not supported.\n1:M 13 Oct 2026 14:43:40.540 # Current maximum open files is 4096. maxclients has been reduced to 4064 to compensate for low ulimit. If you need higher maxclients increase 'ulimit -n'.\n1:M 13 Oct 2026 14:43:40.540 * monotonic clock: POSIX clock_gettime\n1:M 13 Oct 2026 14:43:40.541 * Running mode=standalone, port=61567.\n1:M 13 Oct 2026 14:43:40.542 * Server initialized\n1:M 13 Oct 2026 14:43:40.542 * Reading RDB base file on AOF loading...\n1:M 13 Oct 2026 14:43:40.542 * Loading RDB produced by version 7.4.2\n1:M 13 Oct 2026 14:43:40.542 * RDB age 0 seconds\n1:M 13 Oct 2026 14:43:40.542 * RDB memory usage when created 1.06 Mb\n1:M 13 Oct 2026 14:43:40.542 * RDB is base AOF\n1:M 13 Oct 2026 14:43:40.543 * Done loading RDB, keys loaded: 64, keys expired: 0.\n1:M 13 Oct 2026 14:43:40.543 * DB loaded from base file appendonly.aof.2.base.rdb: 0.001 seconds\n1:M 13 Oct 2026 14:43:40.543 * DB loaded from incr file appendonly.aof.2.incr.aof: 0.000 seconds\n1:M 13 Oct 2026 14:43:40.543 * DB loaded from append only file: 0.001 seconds\n1:M 13 Oct 2026 14:43:40.543 * Opening AOF incr file appendonly.aof.2.incr.aof on server start\n1:M 13 Oct 2026 14:43:40.543 * Ready to accept connections tcp\n1:M 13 Oct 2026 14:43:40.588 * User requested shutdown...\n1:M 13 Oct 2026 14:43:40.588 * Calling fsync() on the AOF file.\n1:M 13 Oct 2026 14:43:40.588 # Redis is now ready to exit, bye bye...\n",
       "stderr": ""
     }
   ],
