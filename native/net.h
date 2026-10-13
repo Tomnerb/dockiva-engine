@@ -3,6 +3,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <arpa/inet.h>
 #include <sys/un.h>
 #include <sys/time.h>
 #include <signal.h>
@@ -55,11 +56,54 @@ static void net_publish(const char *spec) {
         if(net_publish_guest[i]==guest || net_publish_host[i]==host) fail("Duplicate published port");
     net_publish_guest[net_publish_count]=(uint16_t)guest;net_publish_host[net_publish_count++]=(uint16_t)host;
 }
+/* --network DIR --ip A.B.C.D: a private bridge network. The container's TCP ports
+   become private host-loopback ports (unless published); DIR holds a file per
+   listening port, "<ip>:<port>", with its host port, so the container's own
+   loopback and its peers (by address) reach it. <subnet>.1 is the gateway: the Mac. */
+static char net_dir[1024];
+static uint32_t net_ip; /* host byte order; 0: the Mac's network, shared */
+#define NET_PRIVATE_LIMIT 256
+static struct { uint16_t guest,host; } net_private[NET_PRIVATE_LIMIT]; /* this runtime's listening ports, network byte order */
+static unsigned net_private_count;
+static _Thread_local uint16_t net_binding_port; /* guest port of the bind in progress (private network) */
+static void net_port_file(char *out,size_t size,uint32_t ip,uint16_t port) {
+    snprintf(out,size,"%s/%u.%u.%u.%u:%u",net_dir,ip>>24,(ip>>16)&255,(ip>>8)&255,ip&255,(unsigned)ntohs(port));
+}
+static uint16_t net_private_file(uint32_t ip,uint16_t port) { /* the host port in a port file, or 0 */
+    char path[1100];net_port_file(path,sizeof path,ip,port);
+    int fd=open(path,O_RDONLY|O_NOFOLLOW|O_CLOEXEC);if(fd<0)return 0;
+    char text[16];ssize_t n=read(fd,text,sizeof text-1);close(fd);if(n<=0)return 0;text[n]=0;
+    unsigned long value=strtoul(text,NULL,10);return value && value<65536?htons((uint16_t)value):0;
+}
+static uint16_t net_private_lookup(uint32_t ip,uint16_t port) {
+    if(ip==net_ip)for(unsigned i=0;i<net_private_count;i++)if(net_private[i].guest==port)return net_private[i].host;
+    return net_private_file(ip,port);
+}
+static void net_private_record(uint16_t guest,uint16_t host) {
+    if(net_private_count<NET_PRIVATE_LIMIT) { net_private[net_private_count].guest=guest;net_private[net_private_count++].host=host; }
+    char path[1100],temp[1120];net_port_file(path,sizeof path,net_ip,guest);snprintf(temp,sizeof temp,"%s.%d",path,(int)getpid());
+    int fd=open(temp,O_WRONLY|O_CREAT|O_TRUNC|O_NOFOLLOW|O_CLOEXEC,0600);if(fd<0)return;
+    char text[16];int n=snprintf(text,sizeof text,"%u\n",(unsigned)ntohs(host));
+    int ok=write(fd,text,(size_t)n)==n;close(fd);
+    if(!ok || rename(temp,path)<0)unlink(temp);
+}
+static void net_private_forget(uint16_t guest) {
+    for(unsigned i=0;i<net_private_count;i++)if(net_private[i].guest==guest) {
+        uint16_t host=net_private[i].host;net_private[i]=net_private[--net_private_count];
+        if(net_private_file(net_ip,guest)==host) { char path[1100];net_port_file(path,sizeof path,net_ip,guest);unlink(path); }
+        return;
+    }
+}
+static uint16_t net_published(uint16_t port) { /* host port for a published guest port, or 0 */
+    for(unsigned i=0;i<net_publish_count;i++)if(ntohs(port)==net_publish_guest[i])return htons(net_publish_host[i]);
+    return 0;
+}
 /* Ports in network byte order. */
 static uint16_t net_port_map(uint16_t port,int to_host) {
     uint16_t value=ntohs(port);
     for(unsigned i=0;i<net_publish_count;i++)
         if(value==(to_host?net_publish_guest[i]:net_publish_host[i])) return htons(to_host?net_publish_host[i]:net_publish_guest[i]);
+    if(!to_host)for(unsigned i=0;i<net_private_count;i++)if(net_private[i].host==port)return net_private[i].guest;
     return port;
 }
 static int net_scheduled;
@@ -127,7 +171,7 @@ static uint64_t net_error(void) {
 /* reads/writes count guest read-side (read, readv, accept) and write-side calls;
    edge-triggered epoll treats a change as new activity. */
 /* unix: AF_UNIX; named: 2 bound, 4 connected, to the guest path in path. */
-static struct NetDescription { int host;unsigned refs,flags,connecting,read_timeout,write_timeout,reads,writes,udp,unix_socket,named;char path[108]; } net_descriptions[NET_DESCRIPTIONS];
+static struct NetDescription { int host;unsigned refs,flags,connecting,read_timeout,write_timeout,reads,writes,udp,unix_socket,named;char path[108];uint16_t private_port; } net_descriptions[NET_DESCRIPTIONS];
 static struct NetDescription *net_host_description(int host) {
     return host>=0 && (unsigned)host<NET_DESCRIPTIONS && net_descriptions[host].refs?&net_descriptions[host]:NULL;
 }
@@ -138,7 +182,10 @@ static struct NetDescription *net_description(unsigned slot) {
 }
 static int net_release(unsigned slot) {
     struct NetDescription *description=net_description(slot);int result=0;
-    if(!--description->refs) { epoll_forget_socket(description->host);result=close(description->host);memset(description,0,sizeof(*description)); }
+    if(!--description->refs) {
+        if(description->private_port)net_private_forget(description->private_port);
+        epoll_forget_socket(description->host);result=close(description->host);memset(description,0,sizeof(*description));
+    }
     fd_unbind(net_guest[slot]);net_fd[slot]=0;net_flags[slot]=0;return result;
 }
 static void net_retain_all(void) {
@@ -158,7 +205,7 @@ static uint64_t net_adopt(int host,unsigned guest_flags) {
     if((unsigned)host>=NET_DESCRIPTIONS || net_descriptions[host].refs) { close(host);return linux_error(24); }
     int guest=fd_lowest(0);
     if(guest>=0)for(unsigned i=0;i<NET_SLOTS;i++) if(!net_fd[i]) {
-        net_descriptions[host]=(struct NetDescription){host,1,guest_flags&2048,0,NET_FOREVER,NET_FOREVER,0,0,(guest_flags&NET_UDP)!=0,(guest_flags&NET_UNIX)!=0,0,{0}};
+        net_descriptions[host]=(struct NetDescription){host,1,guest_flags&2048,0,NET_FOREVER,NET_FOREVER,0,0,(guest_flags&NET_UDP)!=0,(guest_flags&NET_UNIX)!=0,0,{0},0};
         net_fd[i]=host+1;net_flags[i]=guest_flags&524288;net_guest[i]=(unsigned short)guest;fd_bind((uint64_t)guest,FD_NET,i);return (uint64_t)guest; }
     close(host);return linux_error(24);
 }
@@ -209,6 +256,23 @@ static uint64_t net_address(uint64_t guest,uint64_t length,struct sockaddr_in *a
     address->sin_len=sizeof(*address);
 #endif
     address->sin_family=AF_INET;
+    if(net_ip && !udp) {
+        uint32_t to=(uint32_t)p[4]<<24|(uint32_t)p[5]<<16|(uint32_t)p[6]<<8|p[7];
+        int own=loopback || wildcard || to==net_ip,peer=(to&0xffffff00u)==(net_ip&0xffffff00u);
+        address->sin_addr.s_addr=htonl(INADDR_LOOPBACK);
+        if(binding) {
+            if(!own)return linux_error(99);                                          /* EADDRNOTAVAIL */
+            if(port && net_private_lookup(net_ip,port) && !net_published(port))return linux_error(98);
+            net_binding_port=port;address->sin_port=net_published(port);              /* else a private port */
+            return 0;
+        }
+        if(peer && (to&255)==1) { address->sin_port=port;return 0; }                 /* the gateway: the Mac */
+        if(own || peer) {
+            uint16_t host=net_private_lookup(own?net_ip:to,port);
+            if(!host)return linux_error(111);                                        /* ECONNREFUSED */
+            address->sin_port=host;return 0;
+        }
+    }
     if(loopback || wildcard) {
         address->sin_port=net_port_map(port,1);address->sin_addr.s_addr=htonl(INADDR_LOOPBACK);
         if(binding && wildcard && udp && !port && net_outbound)address->sin_addr.s_addr=htonl(INADDR_ANY);
@@ -338,6 +402,7 @@ static uint64_t net_call(uint64_t number) {
         return result;
     }
     if(number==200 || number==203) {
+        net_binding_port=0;
         struct sockaddr_in address;uint64_t invalid=net_address(cpu->gpr[1],cpu->gpr[2],&address,number==200,(int)net_description(slot)->udp);
         if(invalid) return invalid;
         if(number==203 && net_scheduled && net_description(slot)->connecting) {
@@ -353,6 +418,10 @@ static uint64_t net_call(uint64_t number) {
             if(error) { errno=error;return net_error(); }return 0;
         }
         int result=number==200?bind(fd,(struct sockaddr *)&address,sizeof(address)):connect(fd,(struct sockaddr *)&address,sizeof(address));
+        if(!result && number==200 && net_ip && net_binding_port && !net_description(slot)->udp) {
+            struct sockaddr_in bound;socklen_t size=sizeof(bound);
+            if(!getsockname(fd,(struct sockaddr *)&bound,&size)) { net_private_record(net_binding_port,bound.sin_port);net_description(slot)->private_port=net_binding_port; }
+        }
         if(result<0 && number==203 && net_scheduled && (errno==EINPROGRESS || errno==EALREADY)) {
             net_description(slot)->connecting=1;
             if(net_description(slot)->flags&2048)return linux_error(115);

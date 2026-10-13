@@ -985,6 +985,15 @@ int main(int argc,char **argv) {
         else if(!strcmp(argv[i],"--stdin")) stdin_host=1;
         else if(!strcmp(argv[i],"--trace")) trace=1;
         else if(!strcmp(argv[i],"--outbound")) net_outbound=1;
+        else if(!strcmp(argv[i],"--network") && i+1<argc) {
+            const char *dir=argv[++i];struct stat st;
+            if(strlen(dir)>=sizeof(net_dir) || dir[0]!='/' || stat(dir,&st) || !S_ISDIR(st.st_mode))fail("--network needs an existing directory");
+            strcpy(net_dir,dir);
+        }
+        else if(!strcmp(argv[i],"--ip") && i+1<argc) {
+            struct in_addr value;if(inet_pton(AF_INET,argv[++i],&value)!=1)fail("Invalid --ip");
+            net_ip=ntohl(value.s_addr);
+        }
         else if(!strcmp(argv[i],"--signals")) { job_control_enabled=process_tree_enabled=schedule_enabled=1;signals_forwarded=1; } /* handlers and docker-stop forwarding, without a terminal */
         else if((!strcmp(argv[i],"--file-limit-mib") || !strcmp(argv[i],"--storage-limit-mib")) && i+1<argc) {
             int storage=!strcmp(argv[i],"--storage-limit-mib");const char *s=argv[++i];char *end;errno=0;
@@ -1041,6 +1050,7 @@ int main(int argc,char **argv) {
     if(fs_root>=0 && fs_storage_limit && fs_scan_budget(fs_root,0)<0)fail("Guest root exceeds storage, entry or traversal budget");
     if(start_cwd && fs_start_cwd(start_cwd)<0)fail("Cannot enter guest working directory");
     if(terminal_forwarded && !terminal_enabled)fail("Forwarded interrupts require interactive mode");
+    if(!net_dir[0]!=!net_ip || (net_ip && ((net_ip&255)<2 || (net_ip&255)==255)))fail("--network and --ip go together, with a host address (x.y.z.2..254)");
     if(profiling && signal(SIGUSR1,profile_signal)==SIG_ERR) fail("Cannot configure profiling signal");
 #ifdef VMFREE_HVF
     if(use_hvf)vdso_build();
