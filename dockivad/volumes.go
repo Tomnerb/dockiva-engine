@@ -361,7 +361,7 @@ func (b *engine) volumesAPI(w http.ResponseWriter, method, path string, q map[st
 		if f := query("filters"); f != "" {
 			filters = decode([]byte(f), maxJSON)
 		}
-		reject(onlyKeys(filters, "name", "dangling"), "Unsupported volume filter")
+		reject(onlyKeys(filters, "name", "dangling", "label"), "Unsupported volume filter")
 		rows := []any{}
 		for _, name := range b.volumeNames() {
 			if names := filterValues(filters["name"]); len(names) > 0 && !anyContains(names, name) {
@@ -373,7 +373,11 @@ func (b *engine) volumesAPI(w http.ResponseWriter, method, path string, q map[st
 					continue
 				}
 			}
-			rows = append(rows, b.volumeInfo(name))
+			info := b.volumeInfo(name)
+			if !labelsMatch(filterValues(filters["label"]), object(info["Labels"])) {
+				continue
+			}
+			rows = append(rows, info)
 		}
 		send(w, 200, obj{"Volumes": rows, "Warnings": []any{}})
 	case path == "/volumes/create" && method == "POST":

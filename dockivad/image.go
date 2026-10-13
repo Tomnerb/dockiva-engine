@@ -41,6 +41,7 @@ type image struct {
 	StopSignal       string   // signal name sent on stop: SIGTERM unless the image sets one
 	User             string   // USER: name or uid, with an optional :group or :gid; "" for root
 	Volumes          []string // declared VOLUME paths, sorted
+	Healthcheck      obj      // HEALTHCHECK, as Config.Healthcheck (Test, Interval, ...)
 	Tree             map[string]entry
 	Blobs            map[string][]byte
 	Descriptor       obj
@@ -271,6 +272,7 @@ func loadImage(root string) *image {
 	settings := object(c["config"])
 	im.User = validUser(text(settings["User"]))
 	im.StopSignal = stopSignal(text(settings["StopSignal"]))
+	im.Healthcheck = object(settings["Healthcheck"])
 	im.Entry = stringsOf(settings["Entrypoint"])
 	im.Args = stringsOf(settings["Cmd"])
 	im.Env = stringsOf(settings["Env"])

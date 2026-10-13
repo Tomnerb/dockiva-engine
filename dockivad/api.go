@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -98,6 +99,52 @@ func (b *engine) removeImage(ref string, force bool) []obj {
 	return out
 }
 
+func restartPolicy(c obj) obj {
+	r := object(c["restart"])
+	if r["name"] == nil {
+		return obj{"Name": "no", "MaximumRetryCount": 0}
+	}
+	return obj{"Name": r["name"], "MaximumRetryCount": cmp.Or(r["max"], any(0))}
+}
+
+// psStatus is docker ps's STATUS: the state, with the health while it has one.
+func psStatus(state obj) string {
+	if h, ok := state["Health"].(obj); ok && h["Status"] != nil && state["Running"] == true {
+		return str(state["Status"]) + " (" + str(h["Status"]) + ")"
+	}
+	return str(state["Status"])
+}
+func restartCount(s obj) any             { return cmp.Or(s["restart_count"], any(0)) }
+func hostname(name string, c obj) string { return cmp.Or(text(c["hostname"]), name) }
+func extraHostList(c obj) []string {
+	out := []string{}
+	if c["extra_hosts"] != nil {
+		for _, v := range array(c["extra_hosts"]) {
+			pair := stringsOf(v)
+			out = append(out, pair[0]+":"+pair[1])
+		}
+	}
+	return out
+}
+
+// health is State.Health: absent without a healthcheck.
+func health(p string, c obj) any {
+	if c["healthcheck"] == nil {
+		return nil
+	}
+	if path := filepath.Join(p, "health.json"); exists(path) {
+		return readObject(path)
+	}
+	return obj{"Status": "starting", "FailingStreak": 0, "Log": []any{}}
+}
+func healthConfig(c obj) any {
+	hc := object(c["healthcheck"])
+	if c["healthcheck"] == nil {
+		return nil
+	}
+	return obj{"Test": append([]string{"CMD"}, stringsOf(hc["test"])...), "Interval": hc["interval"], "Timeout": hc["timeout"], "StartPeriod": hc["start_period"], "StartInterval": hc["start_interval"], "Retries": hc["retries"]}
+}
+
 func nanoCpus(c obj) int64 {
 	if c["cpus"] == nil {
 		return 0
@@ -134,7 +181,7 @@ func (b *engine) inspect(name string) obj {
 	if c["binds"] != nil {
 		binds = stringsOf(c["binds"])
 	}
-	return obj{"Id": key(name), "Name": "/" + name, "Created": timestamp(c["created_at"]), "Path": cmd[0], "Args": cmd[1:], "Image": c["image"], "State": obj{"Status": state, "Running": running, "Paused": false, "Restarting": false, "OOMKilled": false, "Dead": state == "dead", "Pid": pid, "ExitCode": code, "Error": text(s["error"]), "StartedAt": timestamp(s["started_at"]), "FinishedAt": timestamp(s["finished_at"])}, "Config": obj{"Image": img, "Entrypoint": cmd[:1], "Cmd": cmd[1:], "Env": stringsOf(c["env"]), "Labels": labels, "User": text(c["user"]), "Tty": c["tty"] == true, "OpenStdin": c["open_stdin"] == true, "StdinOnce": c["stdin_once"] == true, "WorkingDir": workdir(c), "Hostname": name, "ExposedPorts": exposed}, "HostConfig": obj{"NetworkMode": inspectNetwork(c), "PortBindings": bindings, "ReadonlyRootfs": c["writable"] != true, "AutoRemove": c["auto_remove"] == true, "Binds": binds, "Memory": memoryMiB(c) << 20, "NanoCpus": nanoCpus(c), "RestartPolicy": obj{"Name": "no", "MaximumRetryCount": 0}, "LogConfig": obj{"Type": "json-file", "Config": obj{}}}, "NetworkSettings": obj{"Ports": bindings, "Networks": b.containerNetworks(name, c), "IPAddress": text(c["ip"]), "Gateway": gatewayOf(c)}, "Mounts": b.inspectMounts(c), "Driver": "vmfree-private-copy", "Platform": "linux", "RestartCount": 0, "DockivaCompatibility": profileInspection(c)}
+	return obj{"Id": key(name), "Name": "/" + name, "Created": timestamp(c["created_at"]), "Path": cmd[0], "Args": cmd[1:], "Image": c["image"], "State": obj{"Status": state, "Running": running, "Paused": false, "Restarting": s["state"] == "restarting", "Health": health(p, c), "OOMKilled": false, "Dead": state == "dead", "Pid": pid, "ExitCode": code, "Error": text(s["error"]), "StartedAt": timestamp(s["started_at"]), "FinishedAt": timestamp(s["finished_at"])}, "Config": obj{"Image": img, "Entrypoint": cmd[:1], "Cmd": cmd[1:], "Env": stringsOf(c["env"]), "Labels": labels, "User": text(c["user"]), "Tty": c["tty"] == true, "OpenStdin": c["open_stdin"] == true, "StdinOnce": c["stdin_once"] == true, "WorkingDir": workdir(c), "Hostname": hostname(name, c), "Healthcheck": healthConfig(c), "ExposedPorts": exposed}, "HostConfig": obj{"NetworkMode": inspectNetwork(c), "PortBindings": bindings, "ReadonlyRootfs": c["writable"] != true, "AutoRemove": c["auto_remove"] == true, "Binds": binds, "Memory": memoryMiB(c) << 20, "NanoCpus": nanoCpus(c), "RestartPolicy": restartPolicy(c), "ExtraHosts": extraHostList(c), "LogConfig": obj{"Type": "json-file", "Config": obj{}}}, "NetworkSettings": obj{"Ports": bindings, "Networks": b.containerNetworks(name, c), "IPAddress": text(c["ip"]), "Gateway": gatewayOf(c)}, "Mounts": b.inspectMounts(c), "Driver": "vmfree-private-copy", "Platform": "linux", "RestartCount": restartCount(s), "DockivaCompatibility": profileInspection(c)}
 }
 func onlyKeys(m obj, allowed ...string) bool {
 	for k := range m {
@@ -233,7 +280,7 @@ func (b *engine) create(name string, body obj) obj {
 		panic(apiError{409, "Container name already exists"})
 	}
 	allowed := map[string]bool{}
-	for _, k := range []string{"Image", "Cmd", "Entrypoint", "Env", "Labels", "HostConfig", "WorkingDir", "AttachStdout", "AttachStderr", "NetworkingConfig", "ExposedPorts", "Volumes", "User", "Tty", "OpenStdin", "StdinOnce", "AttachStdin"} {
+	for _, k := range []string{"Image", "Cmd", "Entrypoint", "Env", "Labels", "HostConfig", "WorkingDir", "AttachStdout", "AttachStderr", "NetworkingConfig", "ExposedPorts", "Volumes", "User", "Tty", "OpenStdin", "StdinOnce", "AttachStdin", "Healthcheck", "Hostname", "Domainname", "StopTimeout", "StopSignal"} {
 		allowed[k] = true
 	}
 	for k, v := range body {
@@ -306,7 +353,15 @@ func (b *engine) create(name string, body obj) obj {
 			ok = onlyKeys(m, "Type", "Config") && (idle(m["Type"]) || m["Type"] == "json-file") && idle(m["Config"])
 		case "RestartPolicy":
 			m := object(v)
-			ok = onlyKeys(m, "Name", "MaximumRetryCount") && (idle(m["Name"]) || m["Name"] == "no") && idle(m["MaximumRetryCount"])
+			name := text(m["Name"])
+			ok = onlyKeys(m, "Name", "MaximumRetryCount") && slices.Contains([]string{"", "no", "always", "unless-stopped", "on-failure"}, name) &&
+				(idle(m["MaximumRetryCount"]) || name == "on-failure" && integer(m["MaximumRetryCount"]) > 0)
+		case "ExtraHosts":
+			ok = true // extraHosts validates them
+		case "Init":
+			// ponytail: there is no docker-init; the runtime already gives PID 1 Linux
+			// signal handling and reaps orphans, so --init changes nothing here.
+			_, ok = v.(bool)
 		}
 		if !ok {
 			panic(apiError{501, "Unsupported HostConfig: " + k})
@@ -368,6 +423,38 @@ func (b *engine) create(name string, body obj) obj {
 		}
 		b.network(mode)
 		config["net_name"], config["ip"], config["aliases"] = mode, b.assignIP(mode), aliases
+	}
+	if v := text(body["Hostname"]); v != "" { // docker run -h
+		reject(hostnamePattern.MatchString(v), "Invalid hostname")
+		config["hostname"] = v
+	}
+	reject(idle(body["Domainname"]), "Domainname is not supported")
+	if body["StopTimeout"] != nil { // docker run --stop-timeout, Compose's stop_grace_period
+		t := integer(body["StopTimeout"])
+		reject(t >= 0 && t <= 3600, "StopTimeout must be 0 to 3600 seconds")
+		config["stop_timeout"] = json.Number(strconv.FormatInt(t, 10))
+	}
+	if v := text(body["StopSignal"]); v != "" {
+		config["stop_signal"] = stopSignal(v)
+	}
+	if hc := healthcheck(object(body["Healthcheck"]), im.Healthcheck); hc != nil {
+		config["healthcheck"] = hc
+	}
+	if hosts := stringsOf(host["ExtraHosts"]); len(hosts) > 0 { // --add-host name:ip (host-gateway: the Mac)
+		reject(len(hosts) <= 64, "Too many extra hosts")
+		pairs := []any{}
+		for _, h := range hosts {
+			name, ip, ok := strings.Cut(h, ":")
+			if !ok {
+				name, ip, ok = strings.Cut(h, "=")
+			}
+			reject(ok && hostnamePattern.MatchString(name) && (ip == "host-gateway" || net.ParseIP(ip) != nil), "Invalid extra host: "+h)
+			pairs = append(pairs, []any{name, ip})
+		}
+		config["extra_hosts"] = pairs
+	}
+	if rp := object(host["RestartPolicy"]); !idle(rp["Name"]) && rp["Name"] != "no" {
+		config["restart"] = obj{"name": rp["Name"], "max": rp["MaximumRetryCount"]}
 	}
 	if body["Tty"] == true { // docker run -t: the container's stdio is a terminal
 		config["tty"] = true
@@ -619,7 +706,7 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 					created, e := time.Parse(time.RFC3339Nano, str(item["Created"]))
 					check(e)
 					cmd := append([]string{str(item["Path"])}, item["Args"].([]string)...)
-					rows = append(rows, obj{"Id": item["Id"], "Names": []any{item["Name"]}, "Image": config["Image"], "ImageID": item["Image"], "Command": strings.Join(cmd, " "), "Created": created.Unix(), "State": state["Status"], "Status": state["Status"], "Labels": labels, "Ports": portRows(item), "HostConfig": obj{"NetworkMode": object(item["HostConfig"])["NetworkMode"]}, "NetworkSettings": obj{"Networks": object(item["NetworkSettings"])["Networks"]}, "Mounts": item["Mounts"]})
+					rows = append(rows, obj{"Id": item["Id"], "Names": []any{item["Name"]}, "Image": config["Image"], "ImageID": item["Image"], "Command": strings.Join(cmd, " "), "Created": created.Unix(), "State": state["Status"], "Status": psStatus(state), "Labels": labels, "Ports": portRows(item), "HostConfig": obj{"NetworkMode": object(item["HostConfig"])["NetworkMode"]}, "NetworkSettings": obj{"Networks": object(item["NetworkSettings"])["Networks"]}, "Mounts": item["Mounts"]})
 				}
 			}
 			send(w, 200, rows)
@@ -722,8 +809,18 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 			case (action == "start" || action == "stop" || action == "restart") && method == "POST":
 				b.Mu.Lock()
 				defer b.Mu.Unlock()
+				unbounded(w) // a long stop grace period
 				if action == "stop" || action == "restart" {
-					b.stop(name)
+					if t := q.Get("t"); t != "" {
+						n, e := strconv.Atoi(t)
+						reject(e == nil && n >= -1 && n <= 3600, "Invalid stop timeout")
+						if n < 0 {
+							n = 3600 // -1: wait for the container
+						}
+						b.stop(name, n)
+					} else {
+						b.stop(name)
+					}
 				}
 				if action == "start" || action == "restart" {
 					b.start(name)

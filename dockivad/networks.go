@@ -165,11 +165,26 @@ func gatewayOf(c obj) string {
 // on a user network, every other container on it by name and alias.
 func hostsFile(home, name string, c obj, members []obj) string {
 	ip, _ := c["ip"].(string)
-	if ip == "" { // the Mac's network
-		return "127.0.0.1\tlocalhost\n127.0.0.1\t" + name + "\n127.0.0.1\thost.docker.internal\n"
+	self := name
+	if h := text(c["hostname"]); h != "" && h != name {
+		self = h + " " + name
 	}
-	out := "127.0.0.1\tlocalhost\n" + ip + "\t" + name + "\n" + gateway(ip) + "\thost.docker.internal gateway.docker.internal\n"
-	if c["net_name"] == "bridge" {
+	mac := "127.0.0.1"
+	out := "127.0.0.1\tlocalhost\n127.0.0.1\t" + self + "\n127.0.0.1\thost.docker.internal\n"
+	if ip != "" {
+		mac = gateway(ip)
+		out = "127.0.0.1\tlocalhost\n" + ip + "\t" + self + "\n" + mac + "\thost.docker.internal gateway.docker.internal\n"
+	}
+	if c["extra_hosts"] != nil { // --add-host
+		for _, v := range array(c["extra_hosts"]) {
+			pair := stringsOf(v)
+			if pair[1] == "host-gateway" {
+				pair[1] = mac
+			}
+			out += pair[1] + "\t" + pair[0] + "\n"
+		}
+	}
+	if ip == "" || c["net_name"] == "bridge" {
 		return out
 	}
 	for _, m := range members {

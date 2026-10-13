@@ -52,7 +52,9 @@ func (b *engine) container(name string) string {
 	}
 	return p
 }
-func live(s obj) bool { return s["state"] == "running" || s["state"] == "starting" }
+func live(s obj) bool {
+	return s["state"] == "running" || s["state"] == "starting" || s["state"] == "restarting"
+}
 func workerAlive(s obj) bool {
 	if !live(s) && s["state"] != "failed" {
 		return false
@@ -202,7 +204,10 @@ func (b *engine) start(name string) {
 	_ = cmd.Process.Signal(syscall.SIGTERM)
 	panic(apiError{409, "Start status timeout; inspect state before retrying"})
 }
-func (b *engine) stop(name string) {
+
+// stop ends a container's run: its stop signal, then SIGKILL after the grace period
+// (seconds, docker stop -t; else Config.StopTimeout or 10 s).
+func (b *engine) stop(name string, seconds ...int) {
 	p := b.container(name)
 	s := b.status(p)
 	if !live(s) {
@@ -230,8 +235,13 @@ func (b *engine) stop(name string) {
 	conn, e := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.FormatInt(port, 10)), 5*time.Second)
 	check(e)
 	defer conn.Close()
-	check(conn.SetDeadline(time.Now().Add(15 * time.Second))) // the supervisor replies after the 10 s grace period at most
-	_, e = fmt.Fprintf(conn, "%s stop\n", str(control["token"]))
+	grace := 3600 // the supervisor replies once the grace period is over at most
+	command := "stop"
+	if len(seconds) > 0 {
+		grace, command = seconds[0], fmt.Sprintf("stop %d", seconds[0])
+	}
+	check(conn.SetDeadline(time.Now().Add(time.Duration(grace+5) * time.Second)))
+	_, e = fmt.Fprintf(conn, "%s %s\n", str(control["token"]), command)
 	check(e)
 	var reply [2]byte
 	n, e := io.ReadFull(conn, reply[:])
@@ -245,6 +255,25 @@ func (b *engine) stop(name string) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	panic(apiError{409, "Stop status timeout"})
+}
+
+// restartOnBoot starts, as the engine starts, the containers whose run ended without
+// it (the Mac restarted, say) and whose policy asks for it: "always", and
+// "unless-stopped" unless the user stopped them.
+func (b *engine) restartOnBoot() {
+	for _, name := range b.names() {
+		_ = safeRun(func() {
+			p := b.container(name)
+			policy := object(readObject(filepath.Join(p, "config.json"))["restart"])["name"]
+			s := b.status(p)
+			if live(s) || s["state"] == "created" || !(policy == "always" || policy == "unless-stopped" && s["stopped_by_user"] != true) {
+				return
+			}
+			b.Mu.Lock()
+			defer b.Mu.Unlock()
+			b.start(name)
+		})
+	}
 }
 
 // control opens a command connection to a running container's supervisor.
@@ -402,6 +431,7 @@ func runtimeCommand(p, native string, c obj, command []string, argv0 string, env
 		networkFiles(root, hostsFile(home, name, c, members))
 		args = append(args, "--outbound")
 	}
+	args = append(args, "--hostname", hostname(filepath.Base(p), c))
 	if ip, ok := c["ip"].(string); ok && c["network"] != "none" {
 		args = append(args, "--network", networkPorts(home, str(c["net_name"])), "--ip", ip)
 	}
@@ -497,58 +527,74 @@ func supervise(p, native, worker, generation string) (result error) {
 	errout, e := os.OpenFile(filepath.Join(p, "stderr.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	check(e)
 	defer errout.Close()
-	reader, w, e := os.Pipe()
-	check(e)
-	writer = w
-	defer reader.Close()
 	signals := make(chan os.Signal, 2)
 	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(signals)
-	cmd = exec.Command(worker, invocation...)
-	cmd.ExtraFiles = []*os.File{reader}
-	cmd.Stdout = out
-	cmd.Stderr = errout
-	cmd.Env = []string{"PATH=/usr/bin:/bin", "LANG=C"}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	grace := 10 * time.Second // Docker's default; Config.StopTimeout or docker stop -t
+	if c["stop_timeout"] != nil {
+		grace = time.Duration(integer(c["stop_timeout"])) * time.Second
+	}
 	// docker run -i/-t: the supervisor holds the container's input, and a terminal's
 	// output, which it appends to stdout.log; attach and resize reach it by control.
-	var input, terminal, child *os.File
-	if c["tty"] == true {
-		terminal, child = openTerminal()
-		input = terminal
-		if a, ok := c["console_size"].([]any); ok && len(a) == 2 {
-			resizeTerminal(terminal, uint16(integer(a[0])), uint16(integer(a[1])))
-		}
-		cmd.Stdin, cmd.Stdout, cmd.Stderr = child, child, child
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
-	} else if c["open_stdin"] == true {
-		pair, e := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+	var input, terminal *os.File
+	var copied, healthStop chan struct{}
+	var started time.Time
+	// launch starts a run: the first, or a restart under the container's policy.
+	launch := func() {
+		finished = false
+		reader, w, e := os.Pipe() // the worker's liveness pipe: it ends the run if we go
 		check(e)
-		input, child = os.NewFile(uintptr(pair[0]), "stdin"), os.NewFile(uintptr(pair[1]), "container-stdin")
-		cmd.Stdin = child
+		writer = w
+		defer reader.Close()
+		cmd = exec.Command(worker, invocation...)
+		cmd.ExtraFiles = []*os.File{reader}
+		cmd.Stdout = out
+		cmd.Stderr = errout
+		cmd.Env = []string{"PATH=/usr/bin:/bin", "LANG=C"}
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		var child *os.File
+		if c["tty"] == true {
+			terminal, child = openTerminal()
+			input = terminal
+			if a, ok := c["console_size"].([]any); ok && len(a) == 2 {
+				resizeTerminal(terminal, uint16(integer(a[0])), uint16(integer(a[1])))
+			}
+			cmd.Stdin, cmd.Stdout, cmd.Stderr = child, child, child
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
+		} else if c["open_stdin"] == true {
+			pair, e := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+			check(e)
+			input, child = os.NewFile(uintptr(pair[0]), "stdin"), os.NewFile(uintptr(pair[1]), "container-stdin")
+			cmd.Stdin = child
+		}
+		check(cmd.Start())
+		if child != nil {
+			child.Close()
+		}
+		copied = make(chan struct{})
+		if terminal != nil {
+			go func(terminal *os.File, copied chan struct{}) { _, _ = io.Copy(out, terminal); close(copied) }(terminal, copied) // ends (EIO) once the run closes it
+		} else {
+			close(copied)
+		}
+		done = make(chan error, 1)
+		go func(cmd *exec.Cmd, done chan error) { done <- cmd.Wait() }(cmd, done)
+		started = time.Now()
+		status["state"] = "running"
+		status["pid"] = cmd.Process.Pid
+		status["started_at"] = now()
+		save(filepath.Join(p, "status.json"), status)
+		if c["healthcheck"] != nil {
+			healthStop = make(chan struct{})
+			go watchHealth(p, native, worker, c, healthStop)
+		}
 	}
-	check(cmd.Start())
-	reader.Close()
-	if child != nil {
-		child.Close()
-	}
-	if input != nil {
-		defer input.Close()
-	}
-	copied := make(chan struct{})
-	if terminal != nil {
-		go func() { _, _ = io.Copy(out, terminal); close(copied) }() // ends (EIO) once the run closes the terminal
-	} else {
-		close(copied)
-	}
-	done = make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-	status["state"] = "running"
-	status["pid"] = cmd.Process.Pid
-	status["started_at"] = now()
-	save(filepath.Join(p, "status.json"), status)
-	finish := func() {
+	finish := func() int {
 		finished = true
+		if healthStop != nil {
+			close(healthStop)
+			healthStop = nil
+		}
 		select { // a terminal's last output reaches the log before the run is reported over
 		case <-copied:
 		case <-time.After(2 * time.Second):
@@ -560,28 +606,52 @@ func supervise(p, native, worker, generation string) (result error) {
 			code = 128 + int(cmd.ProcessState.Sys().(syscall.WaitStatus).Signal())
 		}
 		clearPorts(filepath.Dir(filepath.Dir(p)), c)
+		if input != nil {
+			input.Close()
+			input, terminal = nil, nil
+		}
+		writer.Close()
+		writer = nil
 		status["state"] = "exited"
 		status["exit_code"] = code
 		status["finished_at"] = now()
+		return code
 	}
-	terminate := func() {
-		// The image's StopSignal, then SIGKILL after Docker's default 10 s grace period.
+	terminate := func(grace time.Duration) {
+		if finished { // between restarts: nothing runs
+			return
+		}
+		// The image's StopSignal, then SIGKILL after the grace period.
 		_ = syscall.Kill(-cmd.Process.Pid, stop)
 		select {
 		case <-done:
-		case <-time.After(10 * time.Second):
+		case <-time.After(grace):
 			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 			<-done
 		}
 		finish()
 	}
+	launch()
+	restarts, delay := 0, time.Duration(0)
+	var restartAt <-chan time.Time
 	for {
 		select {
 		case <-done:
-			finish()
-			return nil
+			code := finish()
+			var again bool
+			if delay, again = restartDelay(c, code, restarts, time.Since(started), delay); !again {
+				return nil
+			}
+			status["state"] = "restarting"
+			save(filepath.Join(p, "status.json"), status)
+			restartAt = time.After(delay)
+		case <-restartAt:
+			restartAt = nil
+			restarts++
+			status["restart_count"] = restarts
+			launch()
 		case <-signals:
-			terminate()
+			terminate(grace)
 			return nil
 		default:
 		}
@@ -597,13 +667,13 @@ func supervise(p, native, worker, generation string) (result error) {
 		// "<token> stdin": the rest of the connection is input for the container.
 		if e == nil && input != nil && subtle.ConstantTimeCompare(line, []byte(secret+" stdin\n")) == 1 {
 			_ = conn.SetDeadline(time.Time{})
-			go func(conn net.Conn) {
+			go func(conn net.Conn, input *os.File, tty bool) {
 				defer conn.Close()
 				_, _ = io.Copy(input, lines)
-				if c["stdin_once"] == true && terminal == nil { // the attached client is done: end of input
+				if c["stdin_once"] == true && !tty { // the attached client is done: end of input
 					_ = syscall.Shutdown(int(input.Fd()), syscall.SHUT_WR)
 				}
-			}(conn)
+			}(conn, input, terminal != nil)
 			continue
 		}
 		// "<token> resize <rows> <columns>": the attached terminal's size.
@@ -617,8 +687,16 @@ func supervise(p, native, worker, generation string) (result error) {
 			conn.Close()
 			continue
 		}
-		if e == nil && len(line) <= 128 && subtle.ConstantTimeCompare(line, []byte(secret+" stop\n")) == 1 {
-			terminate()
+		// "<token> stop [seconds]": docker stop, with its grace period (-t).
+		stopping := []byte(secret + " stop")
+		if e == nil && len(line) <= 128 && len(line) > len(stopping) && subtle.ConstantTimeCompare(line[:len(stopping)], stopping) == 1 {
+			wait := grace
+			if n, err := strconv.Atoi(strings.TrimSpace(string(line[len(stopping):]))); err == nil && n >= 0 && n <= 3600 {
+				wait = time.Duration(n) * time.Second
+			}
+			terminate(wait)
+			status["state"] = "exited" // also between restarts
+			status["stopped_by_user"] = true
 			_, _ = conn.Write([]byte("OK"))
 			conn.Close()
 			return nil
@@ -626,7 +704,7 @@ func supervise(p, native, worker, generation string) (result error) {
 		// "<token> kill <signal>": docker kill. The runtime forwards the signal to the
 		// container's first process; SIGKILL ends the run (seen as done above).
 		prefix := []byte(secret + " kill ")
-		if e == nil && len(line) > len(prefix) && subtle.ConstantTimeCompare(line[:len(prefix)], prefix) == 1 {
+		if e == nil && !finished && len(line) > len(prefix) && subtle.ConstantTimeCompare(line[:len(prefix)], prefix) == 1 {
 			n, err := strconv.Atoi(strings.TrimSpace(string(line[len(prefix):])))
 			allowed := err == nil && syscall.Signal(n) == syscall.SIGKILL
 			for _, s := range stopSignals {

@@ -54,15 +54,28 @@ docker run --rm redis:7-alpine sh -c 'echo hello'
 
 Supported docker commands: `run` (foreground or `-d`, `-i`, `-t`, `--rm`,
 `-p`, `-e`, `-u`, `-m`, `--cpus`, `--entrypoint`, `-w`, `-v`, `--mount`,
-`--read-only`), `exec` (`-i`, `-t`, `-u`, `-w`, `-e`, `-d`), `create`, `start`,
+`--read-only`, `--network`, `--network-alias`, `-h`, `--add-host`, `--restart`,
+`--health-*`, `--stop-timeout`, `--init`), `exec` (`-i`, `-t`, `-u`, `-w`, `-e`, `-d`), `create`, `start`,
 `stop`, `restart`, `kill` (TERM, INT, QUIT, HUP, USR1, USR2 reach the
 container's first process; KILL ends it), `wait`, `rm` (with `-v`), `ps`,
 `inspect`, `logs` (with `-f` and `--tail`), `attach`, `events`
 (create, start, die, destroy), `pull`, `images`, `tag`, `rmi`, `cp` (both
 ways, including into volumes and bind mounts; read-only paths are refused),
 `stats` (host CPU time and resident memory of the container's processes),
-`volume` (`create`, `ls`, `inspect`, `rm`, `prune`) and `version`/`info`. Not
-supported: builds, tmpfs mounts, networks.
+`volume` (`create`, `ls`, `inspect`, `rm`, `prune`), `network` (`create`, `ls`,
+`inspect`, `rm`, `prune`, `connect`, `disconnect`), `docker compose` (`up`,
+`down`, `ps`, `logs`, `exec`, `start`, `stop`, `restart`, healthchecks and
+`depends_on` conditions) and `version`/`info`. Not supported: builds, tmpfs
+mounts.
+
+Networks: the default bridge and user networks give each container an address
+in 10.89.N.0/24 and private ports (two containers can both listen on 5432, and
+unpublished ports stay off the Mac). On a user network (Compose's default)
+containers find each other by name and alias; `host.docker.internal` is the
+Mac; `--network host` shares the Mac's network as before. One network per
+container. Restart policies and healthchecks are run by each container's
+supervisor; `always` and `unless-stopped` containers start again with the
+engine.
 
 `-t` gives the container (or exec) a pseudo-terminal: line editing, ^C to the
 foreground job and resizes work. `docker exec` runs a second runtime on the

@@ -141,6 +141,7 @@ func run() {
 	done := make(chan struct{})
 	defer close(done)
 	go b.watch(done)
+	go b.restartOnBoot()
 	if userListener != nil {
 		docker := &http.Server{Handler: b.socketHandler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 40 * time.Second, IdleTimeout: 10 * time.Second, MaxHeaderBytes: 16384}
 		go func() { _ = docker.Serve(userListener) }()
