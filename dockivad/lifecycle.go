@@ -311,7 +311,9 @@ func (b *engine) remove(name string) {
 	defer f.Close()
 	s := readObject(filepath.Join(p, "status.json"))
 	reject(!workerAlive(s), "Previous worker is still alive")
+	network := text(readObject(filepath.Join(p, "config.json"))["net_name"])
 	check(os.RemoveAll(p))
+	b.refreshHosts(network)
 }
 func sandboxArgs(native string, args []string, root string, writable bool) []string {
 	literal := func(s string) string {
@@ -390,9 +392,18 @@ func runtimeCommand(p, native string, c obj, command []string, argv0 string, env
 	// Like Docker, disk use is left to the host: no storage budget, 4 GiB per file.
 	args = append(args, "--file-limit-mib", "4096", "--storage-limit-mib", "0")
 	reject(c["network"] == nil || c["network"] == "none" || c["network"] == "outbound", "Invalid network mode")
+	home := filepath.Dir(filepath.Dir(p)) // <home>/containers/<name>
 	if c["network"] != "none" {
-		networkFiles(root, filepath.Base(p))
+		name := filepath.Base(p)
+		members := []obj{}
+		if n, ok := c["net_name"].(string); ok && n != "bridge" {
+			members = membersOn(home, n)
+		}
+		networkFiles(root, hostsFile(home, name, c, members))
 		args = append(args, "--outbound")
+	}
+	if ip, ok := c["ip"].(string); ok && c["network"] != "none" {
+		args = append(args, "--network", networkPorts(home, str(c["net_name"])), "--ip", ip)
 	}
 	for _, p := range publishedPorts(c) {
 		if publish {
@@ -465,6 +476,7 @@ func supervise(p, native, worker, generation string) (result error) {
 	c := readObject(filepath.Join(p, "config.json"))
 	command := stringsOf(c["command"])
 	env := stringsOf(c["env"])
+	clearPorts(filepath.Dir(filepath.Dir(p)), c) // left by a run that did not end cleanly
 	extra := []string{}
 	if c["tty"] == true || c["open_stdin"] == true {
 		extra = append(extra, "--stdin")
@@ -547,6 +559,7 @@ func supervise(p, native, worker, generation string) (result error) {
 		if code < 0 {
 			code = 128 + int(cmd.ProcessState.Sys().(syscall.WaitStatus).Signal())
 		}
+		clearPorts(filepath.Dir(filepath.Dir(p)), c)
 		status["state"] = "exited"
 		status["exit_code"] = code
 		status["finished_at"] = now()
@@ -630,10 +643,10 @@ func supervise(p, native, worker, generation string) (result error) {
 // networkFiles gives the container Docker's /etc/resolv.conf and /etc/hosts.
 // Guest sockets are host sockets, so the Mac's IPv4 nameservers (loopback ones
 // included) work unchanged, and host.docker.internal is the shared loopback.
-func networkFiles(root, hostname string) {
+func networkFiles(root, hosts string) {
 	host, _ := os.ReadFile("/etc/resolv.conf") // macOS keeps it current; missing means fallback
 	writeGuestFile(root, "etc/resolv.conf", resolvConf(host))
-	writeGuestFile(root, "etc/hosts", "127.0.0.1\tlocalhost\n127.0.0.1\t"+hostname+"\n127.0.0.1\thost.docker.internal\n")
+	writeGuestFile(root, "etc/hosts", hosts)
 }
 
 // resolvConf keeps the host's IPv4 nameservers and search domains. Without any,

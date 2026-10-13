@@ -490,7 +490,7 @@ func TestNetworkModeAndDNSFiles(t *testing.T) {
 	check(os.WriteFile(outside, []byte("keep"), 0600))
 	check(os.MkdirAll(filepath.Join(root, "etc"), 0755))
 	check(os.Symlink(outside, filepath.Join(root, "etc", "hosts")))
-	networkFiles(root, "web")
+	networkFiles(root, hostsFile("", "web", obj{}, nil))
 	if data, _ := os.ReadFile(outside); string(data) != "keep" {
 		t.Fatal("symlink followed")
 	}
@@ -499,7 +499,7 @@ func TestNetworkModeAndDNSFiles(t *testing.T) {
 	}
 	link := t.TempDir()
 	check(os.Symlink(t.TempDir(), filepath.Join(link, "etc")))
-	mustReject(t, func() { networkFiles(link, "web") }) // a symlinked /etc is refused
+	mustReject(t, func() { networkFiles(link, "") }) // a symlinked /etc is refused
 }
 
 func TestResourceLimits(t *testing.T) {

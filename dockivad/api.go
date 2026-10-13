@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -133,7 +134,7 @@ func (b *engine) inspect(name string) obj {
 	if c["binds"] != nil {
 		binds = stringsOf(c["binds"])
 	}
-	return obj{"Id": key(name), "Name": "/" + name, "Created": timestamp(c["created_at"]), "Path": cmd[0], "Args": cmd[1:], "Image": c["image"], "State": obj{"Status": state, "Running": running, "Paused": false, "Restarting": false, "OOMKilled": false, "Dead": state == "dead", "Pid": pid, "ExitCode": code, "Error": text(s["error"]), "StartedAt": timestamp(s["started_at"]), "FinishedAt": timestamp(s["finished_at"])}, "Config": obj{"Image": img, "Entrypoint": cmd[:1], "Cmd": cmd[1:], "Env": stringsOf(c["env"]), "Labels": labels, "User": text(c["user"]), "Tty": c["tty"] == true, "OpenStdin": c["open_stdin"] == true, "StdinOnce": c["stdin_once"] == true, "WorkingDir": workdir(c), "Hostname": name, "ExposedPorts": exposed}, "HostConfig": obj{"NetworkMode": inspectNetwork(c), "PortBindings": bindings, "ReadonlyRootfs": c["writable"] != true, "AutoRemove": c["auto_remove"] == true, "Binds": binds, "Memory": memoryMiB(c) << 20, "NanoCpus": nanoCpus(c), "RestartPolicy": obj{"Name": "no", "MaximumRetryCount": 0}, "LogConfig": obj{"Type": "json-file", "Config": obj{}}}, "NetworkSettings": obj{"Ports": bindings, "Networks": obj{}}, "Mounts": b.inspectMounts(c), "Driver": "vmfree-private-copy", "Platform": "linux", "RestartCount": 0, "DockivaCompatibility": profileInspection(c)}
+	return obj{"Id": key(name), "Name": "/" + name, "Created": timestamp(c["created_at"]), "Path": cmd[0], "Args": cmd[1:], "Image": c["image"], "State": obj{"Status": state, "Running": running, "Paused": false, "Restarting": false, "OOMKilled": false, "Dead": state == "dead", "Pid": pid, "ExitCode": code, "Error": text(s["error"]), "StartedAt": timestamp(s["started_at"]), "FinishedAt": timestamp(s["finished_at"])}, "Config": obj{"Image": img, "Entrypoint": cmd[:1], "Cmd": cmd[1:], "Env": stringsOf(c["env"]), "Labels": labels, "User": text(c["user"]), "Tty": c["tty"] == true, "OpenStdin": c["open_stdin"] == true, "StdinOnce": c["stdin_once"] == true, "WorkingDir": workdir(c), "Hostname": name, "ExposedPorts": exposed}, "HostConfig": obj{"NetworkMode": inspectNetwork(c), "PortBindings": bindings, "ReadonlyRootfs": c["writable"] != true, "AutoRemove": c["auto_remove"] == true, "Binds": binds, "Memory": memoryMiB(c) << 20, "NanoCpus": nanoCpus(c), "RestartPolicy": obj{"Name": "no", "MaximumRetryCount": 0}, "LogConfig": obj{"Type": "json-file", "Config": obj{}}}, "NetworkSettings": obj{"Ports": bindings, "Networks": b.containerNetworks(name, c), "IPAddress": text(c["ip"]), "Gateway": gatewayOf(c)}, "Mounts": b.inspectMounts(c), "Driver": "vmfree-private-copy", "Platform": "linux", "RestartCount": 0, "DockivaCompatibility": profileInspection(c)}
 }
 func onlyKeys(m obj, allowed ...string) bool {
 	for k := range m {
@@ -255,13 +256,22 @@ func (b *engine) create(name string, body obj) obj {
 	}
 	endpoints := object(network["EndpointsConfig"])
 	// The docker CLI names the endpoint after NetworkMode ("default" unless --network).
-	if !onlyKeys(endpoints, "host", "bridge", "default") {
-		panic(apiError{501, "Only host network supported"})
+	if len(endpoints) > 1 {
+		panic(apiError{501, "One network per container is supported"})
 	}
-	for _, name := range []string{"host", "bridge", "default"} {
-		for _, v := range object(endpoints[name]) {
-			if !idle(v) {
-				panic(apiError{501, "Host network options unsupported"})
+	aliases := []string{}
+	for _, endpoint := range endpoints {
+		for k, v := range object(endpoint) {
+			switch {
+			case k == "Aliases" || k == "DNSNames": // --network-alias; Compose's service names
+				for _, a := range stringsOf(v) {
+					reject(namePattern.MatchString(a) || hostnamePattern.MatchString(a), "Invalid network alias: "+a)
+					if a != name && !slices.Contains(aliases, a) {
+						aliases = append(aliases, a)
+					}
+				}
+			case !idle(v):
+				panic(apiError{501, "Unsupported network endpoint option: " + k})
 			}
 		}
 	}
@@ -283,8 +293,8 @@ func (b *engine) create(name string, body obj) obj {
 			a := array(v)
 			ok = len(a) == 2 && (idle(a[0]) && idle(a[1]) || integer(a[0]) > 0 && integer(a[0]) < 65536 && integer(a[1]) > 0 && integer(a[1]) < 65536)
 		case "NetworkMode":
-			// Guests share the Mac's network (as with host networking); "none" keeps them on loopback.
-			ok = v == "host" || v == "default" || v == "bridge" || v == "none"
+			mode, isText := v.(string)
+			ok = isText && !strings.HasPrefix(mode, "container:")
 		case "ReadonlyRootfs", "AutoRemove":
 			_, ok = v.(bool)
 		case "Binds", "Mounts":
@@ -344,6 +354,21 @@ func (b *engine) create(name string, body obj) obj {
 	}
 	command := im.command(override)
 	config := obj{"image": im.Digest, "image_name": imageName, "command": command, "env": im.Env, "writable": host["ReadonlyRootfs"] != true, "cpu_backend": "interpreter", "schedule": false, "process_tree": false, "scheduled_network": false, "dynamic": false, "job_control": false, "memory_limit_mib": 256, "host_sandbox": false, "max_steps": 10000000, "labels": labels, "ports": ports, "workdir": im.WorkingDir, "network": networkMode(host), "stop_signal": im.StopSignal, "created_at": now()}
+	// The default bridge or a user network: a private address and ports. "host" shares
+	// the Mac's network; "none" keeps the container to its own loopback.
+	mode := text(host["NetworkMode"])
+	for k := range endpoints {
+		if k != mode && k != "default" && !(k == "bridge" && (mode == "" || mode == "default")) {
+			panic(apiError{501, "Endpoint " + k + " does not match the container's network"})
+		}
+	}
+	if mode != "host" && mode != "none" {
+		if mode == "" || mode == "default" {
+			mode = "bridge"
+		}
+		b.network(mode)
+		config["net_name"], config["ip"], config["aliases"] = mode, b.assignIP(mode), aliases
+	}
 	if body["Tty"] == true { // docker run -t: the container's stdio is a terminal
 		config["tty"] = true
 		if a, ok := host["ConsoleSize"].([]any); ok && !idle(a[0]) {
@@ -397,7 +422,8 @@ func (b *engine) create(name string, body obj) obj {
 	save(filepath.Join(stage, "status.json"), obj{"state": "created"})
 	check(os.Rename(stage, p))
 	committed = true
-	return obj{"Id": key(name), "Warnings": []string{"VM-free preview: bounded Linux compatibility; containers share the Mac's network"}}
+	b.refreshHosts(text(config["net_name"]))
+	return obj{"Id": key(name), "Warnings": []string{"VM-free preview: bounded Linux compatibility"}}
 }
 
 var versionPath = regexp.MustCompile(`^/v([0-9]+)\.([0-9]+)(/.*)$`)
@@ -593,7 +619,7 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 					created, e := time.Parse(time.RFC3339Nano, str(item["Created"]))
 					check(e)
 					cmd := append([]string{str(item["Path"])}, item["Args"].([]string)...)
-					rows = append(rows, obj{"Id": item["Id"], "Names": []any{item["Name"]}, "Image": config["Image"], "ImageID": item["Image"], "Command": strings.Join(cmd, " "), "Created": created.Unix(), "State": state["Status"], "Status": state["Status"], "Labels": labels, "Ports": portRows(item), "HostConfig": obj{"NetworkMode": "host"}, "NetworkSettings": obj{"Networks": obj{}}, "Mounts": item["Mounts"]})
+					rows = append(rows, obj{"Id": item["Id"], "Names": []any{item["Name"]}, "Image": config["Image"], "ImageID": item["Image"], "Command": strings.Join(cmd, " "), "Created": created.Unix(), "State": state["Status"], "Status": state["Status"], "Labels": labels, "Ports": portRows(item), "HostConfig": obj{"NetworkMode": object(item["HostConfig"])["NetworkMode"]}, "NetworkSettings": obj{"Networks": object(item["NetworkSettings"])["Networks"]}, "Mounts": item["Mounts"]})
 				}
 			}
 			send(w, 200, rows)
@@ -647,6 +673,8 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 			b.streamEvents(w, r, filters)
 			return
 		case strings.HasPrefix(path, "/volumes") && b.volumesAPI(w, method, path, q, raw):
+			return
+		case strings.HasPrefix(path, "/networks") && b.networksAPI(w, method, path, q, raw):
 			return
 		case path == "/images/create" && method == "POST":
 			defer debug.FreeOSMemory()
@@ -824,5 +852,10 @@ func inspectNetwork(c obj) string {
 	if c["network"] == "none" {
 		return "none"
 	}
+	if n, ok := c["net_name"].(string); ok {
+		return n
+	}
 	return "host"
 }
+
+var hostnamePattern = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9.-]{0,62})$`)
