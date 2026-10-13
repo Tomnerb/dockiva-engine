@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
@@ -245,6 +246,62 @@ func (b *engine) stop(name string) {
 	}
 	panic(apiError{409, "Stop status timeout"})
 }
+
+// control opens a command connection to a running container's supervisor.
+func (b *engine) control(p, command string) net.Conn {
+	control := readObject(filepath.Join(p, "control.json"))
+	port := integer(control["port"])
+	reject(port > 0 && port <= 65535, "Invalid control port")
+	conn, e := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.FormatInt(port, 10)), 5*time.Second)
+	check(e)
+	if _, e := fmt.Fprintf(conn, "%s %s\n", str(control["token"]), command); e != nil {
+		conn.Close()
+		check(e)
+	}
+	return conn
+}
+
+// resize sets a running terminal container's size (docker run -t; best effort).
+func (b *engine) resize(name string, rows, columns int64) {
+	p := b.container(name)
+	if !live(b.status(p)) || readObject(filepath.Join(p, "config.json"))["tty"] != true {
+		return
+	}
+	_ = safeRun(func() {
+		conn := b.control(p, fmt.Sprintf("resize %d %d", rows, columns))
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+		_, _ = io.ReadFull(conn, make([]byte, 2))
+	})
+}
+
+// feedStdin waits for the container's run (the one in progress, or the next) and
+// copies in to its standard input, then ends the input with a half-close.
+func (b *engine) feedStdin(ctx context.Context, p string, initial obj, in io.Reader) error {
+	for {
+		s := b.statusOf(p)
+		if s == nil {
+			return nil
+		}
+		if live(s) && (live(initial) || s["generation"] != initial["generation"]) && exists(filepath.Join(p, "control.json")) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	var conn net.Conn
+	if e := safeRun(func() { conn = b.control(p, "stdin") }); e != nil {
+		return nil // the run ended first
+	}
+	defer conn.Close()
+	_, e := io.Copy(conn, in)
+	_ = conn.(*net.TCPConn).CloseWrite()
+	return e
+}
+
 func (b *engine) remove(name string) {
 	p := b.container(name)
 	f, e := settledContainerLock(p)
@@ -408,7 +465,11 @@ func supervise(p, native, worker, generation string) (result error) {
 	c := readObject(filepath.Join(p, "config.json"))
 	command := stringsOf(c["command"])
 	env := stringsOf(c["env"])
-	invocation := runtimeCommand(p, native, c, command, command[0], env, true)
+	extra := []string{}
+	if c["tty"] == true || c["open_stdin"] == true {
+		extra = append(extra, "--stdin")
+	}
+	invocation := runtimeCommand(p, native, c, command, command[0], env, true, extra...)
 	stop := syscall.SIGTERM
 	if name, ok := c["stop_signal"].(string); ok && name != "" {
 		stop = stopSignals[stopSignal(name)]
@@ -437,8 +498,37 @@ func supervise(p, native, worker, generation string) (result error) {
 	cmd.Stderr = errout
 	cmd.Env = []string{"PATH=/usr/bin:/bin", "LANG=C"}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// docker run -i/-t: the supervisor holds the container's input, and a terminal's
+	// output, which it appends to stdout.log; attach and resize reach it by control.
+	var input, terminal, child *os.File
+	if c["tty"] == true {
+		terminal, child = openTerminal()
+		input = terminal
+		if a, ok := c["console_size"].([]any); ok && len(a) == 2 {
+			resizeTerminal(terminal, uint16(integer(a[0])), uint16(integer(a[1])))
+		}
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = child, child, child
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
+	} else if c["open_stdin"] == true {
+		pair, e := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+		check(e)
+		input, child = os.NewFile(uintptr(pair[0]), "stdin"), os.NewFile(uintptr(pair[1]), "container-stdin")
+		cmd.Stdin = child
+	}
 	check(cmd.Start())
 	reader.Close()
+	if child != nil {
+		child.Close()
+	}
+	if input != nil {
+		defer input.Close()
+	}
+	copied := make(chan struct{})
+	if terminal != nil {
+		go func() { _, _ = io.Copy(out, terminal); close(copied) }() // ends (EIO) once the run closes the terminal
+	} else {
+		close(copied)
+	}
 	done = make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	status["state"] = "running"
@@ -447,6 +537,10 @@ func supervise(p, native, worker, generation string) (result error) {
 	save(filepath.Join(p, "status.json"), status)
 	finish := func() {
 		finished = true
+		select { // a terminal's last output reaches the log before the run is reported over
+		case <-copied:
+		case <-time.After(2 * time.Second):
+		}
 		// Also cover an externally killed guard: no worker may outlive its run.
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		code := cmd.ProcessState.ExitCode()
@@ -485,7 +579,31 @@ func supervise(p, native, worker, generation string) (result error) {
 		}
 		check(e)
 		_ = conn.SetDeadline(time.Now().Add(time.Second))
-		line, e := bufio.NewReaderSize(conn, 128).ReadSlice('\n')
+		lines := bufio.NewReaderSize(conn, 128)
+		line, e := lines.ReadSlice('\n')
+		// "<token> stdin": the rest of the connection is input for the container.
+		if e == nil && input != nil && subtle.ConstantTimeCompare(line, []byte(secret+" stdin\n")) == 1 {
+			_ = conn.SetDeadline(time.Time{})
+			go func(conn net.Conn) {
+				defer conn.Close()
+				_, _ = io.Copy(input, lines)
+				if c["stdin_once"] == true && terminal == nil { // the attached client is done: end of input
+					_ = syscall.Shutdown(int(input.Fd()), syscall.SHUT_WR)
+				}
+			}(conn)
+			continue
+		}
+		// "<token> resize <rows> <columns>": the attached terminal's size.
+		resize := []byte(secret + " resize ")
+		if e == nil && terminal != nil && len(line) > len(resize) && subtle.ConstantTimeCompare(line[:len(resize)], resize) == 1 {
+			var rows, columns uint16
+			if _, err := fmt.Sscanf(string(line[len(resize):]), "%d %d", &rows, &columns); err == nil {
+				resizeTerminal(terminal, rows, columns)
+				_, _ = conn.Write([]byte("OK"))
+			}
+			conn.Close()
+			continue
+		}
 		if e == nil && len(line) <= 128 && subtle.ConstantTimeCompare(line, []byte(secret+" stop\n")) == 1 {
 			terminate()
 			_, _ = conn.Write([]byte("OK"))

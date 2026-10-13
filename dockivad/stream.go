@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -46,6 +47,8 @@ type logReader struct {
 	want    [2]bool
 	files   [2]*os.File
 	offsets [2]int64
+	raw     bool          // a terminal's output: unframed
+	every   time.Duration // polling interval (default 100 ms)
 }
 
 var logNames = [2]string{"stdout.log", "stderr.log"}
@@ -81,7 +84,11 @@ func (l *logReader) next() []byte {
 				break
 			}
 			l.offsets[i] += int64(n)
-			out = frame(out, i+1, buf[:n])
+			if l.raw {
+				out = append(out, buf[:n]...)
+			} else {
+				out = frame(out, i+1, buf[:n])
+			}
 		}
 	}
 	return out
@@ -114,7 +121,7 @@ func (l *logReader) close() {
 // drains what is left) or ctx ends. done must not panic.
 func (l *logReader) follow(ctx context.Context, write func([]byte) error, done func() bool) {
 	defer l.close()
-	tick := time.NewTicker(100 * time.Millisecond)
+	tick := time.NewTicker(cmp.Or(l.every, 100*time.Millisecond))
 	defer tick.Stop()
 	for {
 		finished := done()
@@ -149,11 +156,17 @@ func (b *engine) statusOf(p string) (s obj) {
 // attach streams a container's output from now on to a hijacked connection:
 // until the run in progress ends (docker attach), or, for a container not yet
 // running (docker run without -d), until the run that starts after the attach ends.
-// Standard input is not supported.
-func (b *engine) attach(w http.ResponseWriter, r *http.Request, name string, stdout, stderr bool) {
+// With stdin, the client's input goes to the container's standard input (docker
+// run -i, attach) once its run has started; a terminal's output is sent raw.
+func (b *engine) attach(w http.ResponseWriter, r *http.Request, name string, stdin, stdout, stderr bool) {
 	p := b.container(name)
 	initial := b.status(p)
-	reader := &logReader{dir: p, want: [2]bool{stdout, stderr}}
+	c := readObject(filepath.Join(p, "config.json"))
+	tty := c["tty"] == true
+	reader := &logReader{dir: p, want: [2]bool{stdout, stderr && !tty}, raw: tty}
+	if tty {
+		reader.every = 15 * time.Millisecond // keystroke echo
+	}
 	reader.openNow()
 	hijacker, ok := w.(http.Hijacker)
 	reject(ok, "Attach requires a hijackable connection")
@@ -162,9 +175,13 @@ func (b *engine) attach(w http.ResponseWriter, r *http.Request, name string, std
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Time{})
 	upgrade := r.Header.Get("Upgrade") != ""
+	content := "application/vnd.docker.multiplexed-stream"
+	if tty {
+		content = "application/vnd.docker.raw-stream"
+	}
 	header := "HTTP/1.1 200 OK\r\nContent-Type: application/vnd.docker.raw-stream\r\n\r\n"
 	if upgrade {
-		header = "HTTP/1.1 101 UPGRADED\r\nContent-Type: application/vnd.docker.multiplexed-stream\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n"
+		header = "HTTP/1.1 101 UPGRADED\r\nContent-Type: " + content + "\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n"
 	}
 	if _, e := rw.WriteString(header); e != nil || rw.Flush() != nil {
 		return
@@ -172,6 +189,13 @@ func (b *engine) attach(w http.ResponseWriter, r *http.Request, name string, std
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() {
+		if stdin && c["open_stdin"] == true {
+			// The client's input, then its half-close (end of input with docker run -i).
+			if e := b.feedStdin(ctx, p, initial, rw.Reader); e != nil {
+				cancel()
+			}
+			return
+		}
 		// Without stdin the docker CLI half-closes its side at once (EOF): the stream
 		// goes on until the run ends or a write fails. Any other read error ends it.
 		if _, e := rw.ReadByte(); e != nil && e != io.EOF {
@@ -191,8 +215,8 @@ func (b *engine) attach(w http.ResponseWriter, r *http.Request, name string, std
 
 // followLogs streams existing output (already written by the caller) and then
 // new output until the container is no longer running.
-func (b *engine) followLogs(w http.ResponseWriter, r *http.Request, p string, stdout, stderr bool, offsets [2]int64) {
-	reader := &logReader{dir: p, want: [2]bool{stdout, stderr}, offsets: offsets}
+func (b *engine) followLogs(w http.ResponseWriter, r *http.Request, p string, stdout, stderr bool, offsets [2]int64, raw bool) {
+	reader := &logReader{dir: p, want: [2]bool{stdout, stderr}, offsets: offsets, raw: raw}
 	flusher, _ := w.(http.Flusher)
 	reader.follow(r.Context(), func(chunk []byte) error {
 		if _, e := w.Write(chunk); e != nil {

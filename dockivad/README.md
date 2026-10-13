@@ -52,16 +52,23 @@ docker context use dockiva     # or: DOCKER_HOST=unix://$HOME/.vmfree/docker.soc
 docker run --rm redis:7-alpine sh -c 'echo hello'
 ```
 
-Supported docker commands: `run` (foreground or `-d`, `--rm`, `-p`, `-e`,
-`--entrypoint`, `-w`, `-v`, `--mount`, `--read-only`), `create`, `start`,
+Supported docker commands: `run` (foreground or `-d`, `-i`, `-t`, `--rm`,
+`-p`, `-e`, `-u`, `-m`, `--cpus`, `--entrypoint`, `-w`, `-v`, `--mount`,
+`--read-only`), `exec` (`-i`, `-t`, `-u`, `-w`, `-e`, `-d`), `create`, `start`,
 `stop`, `restart`, `kill` (TERM, INT, QUIT, HUP, USR1, USR2 reach the
 container's first process; KILL ends it), `wait`, `rm` (with `-v`), `ps`,
-`inspect`, `logs` (with `-f` and `--tail`), `attach --no-stdin`, `events`
+`inspect`, `logs` (with `-f` and `--tail`), `attach`, `events`
 (create, start, die, destroy), `pull`, `images`, `tag`, `rmi`, `cp` (both
 ways, including into volumes and bind mounts; read-only paths are refused),
 `stats` (host CPU time and resident memory of the container's processes),
 `volume` (`create`, `ls`, `inspect`, `rm`, `prune`) and `version`/`info`. Not
-supported: `-i`/`-t` and `exec`, builds, tmpfs mounts, networks.
+supported: builds, tmpfs mounts, networks.
+
+`-t` gives the container (or exec) a pseudo-terminal: line editing, ^C to the
+foreground job and resizes work. `docker exec` runs a second runtime on the
+container's root, mounts and network, so it shares files, volumes, localhost
+ports and Unix sockets (`psql`, `redis-cli` and shells work) but cannot see or
+signal the container's own processes (`ps`, `kill` inside an exec).
 
 Mounts: `-v /host/path:/path[:ro]` binds a host directory or file (a missing
 host directory is created, as Docker does); `-v name:/path` and `-v /path` use

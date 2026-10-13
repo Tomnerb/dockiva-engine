@@ -133,7 +133,7 @@ func (b *engine) inspect(name string) obj {
 	if c["binds"] != nil {
 		binds = stringsOf(c["binds"])
 	}
-	return obj{"Id": key(name), "Name": "/" + name, "Created": timestamp(c["created_at"]), "Path": cmd[0], "Args": cmd[1:], "Image": c["image"], "State": obj{"Status": state, "Running": running, "Paused": false, "Restarting": false, "OOMKilled": false, "Dead": state == "dead", "Pid": pid, "ExitCode": code, "Error": text(s["error"]), "StartedAt": timestamp(s["started_at"]), "FinishedAt": timestamp(s["finished_at"])}, "Config": obj{"Image": img, "Entrypoint": cmd[:1], "Cmd": cmd[1:], "Env": stringsOf(c["env"]), "Labels": labels, "User": text(c["user"]), "Tty": false, "WorkingDir": workdir(c), "Hostname": name, "ExposedPorts": exposed}, "HostConfig": obj{"NetworkMode": inspectNetwork(c), "PortBindings": bindings, "ReadonlyRootfs": c["writable"] != true, "AutoRemove": c["auto_remove"] == true, "Binds": binds, "Memory": memoryMiB(c) << 20, "NanoCpus": nanoCpus(c), "RestartPolicy": obj{"Name": "no", "MaximumRetryCount": 0}, "LogConfig": obj{"Type": "json-file", "Config": obj{}}}, "NetworkSettings": obj{"Ports": bindings, "Networks": obj{}}, "Mounts": b.inspectMounts(c), "Driver": "vmfree-private-copy", "Platform": "linux", "RestartCount": 0, "DockivaCompatibility": profileInspection(c)}
+	return obj{"Id": key(name), "Name": "/" + name, "Created": timestamp(c["created_at"]), "Path": cmd[0], "Args": cmd[1:], "Image": c["image"], "State": obj{"Status": state, "Running": running, "Paused": false, "Restarting": false, "OOMKilled": false, "Dead": state == "dead", "Pid": pid, "ExitCode": code, "Error": text(s["error"]), "StartedAt": timestamp(s["started_at"]), "FinishedAt": timestamp(s["finished_at"])}, "Config": obj{"Image": img, "Entrypoint": cmd[:1], "Cmd": cmd[1:], "Env": stringsOf(c["env"]), "Labels": labels, "User": text(c["user"]), "Tty": c["tty"] == true, "OpenStdin": c["open_stdin"] == true, "StdinOnce": c["stdin_once"] == true, "WorkingDir": workdir(c), "Hostname": name, "ExposedPorts": exposed}, "HostConfig": obj{"NetworkMode": inspectNetwork(c), "PortBindings": bindings, "ReadonlyRootfs": c["writable"] != true, "AutoRemove": c["auto_remove"] == true, "Binds": binds, "Memory": memoryMiB(c) << 20, "NanoCpus": nanoCpus(c), "RestartPolicy": obj{"Name": "no", "MaximumRetryCount": 0}, "LogConfig": obj{"Type": "json-file", "Config": obj{}}}, "NetworkSettings": obj{"Ports": bindings, "Networks": obj{}}, "Mounts": b.inspectMounts(c), "Driver": "vmfree-private-copy", "Platform": "linux", "RestartCount": 0, "DockivaCompatibility": profileInspection(c)}
 }
 func onlyKeys(m obj, allowed ...string) bool {
 	for k := range m {
@@ -232,18 +232,12 @@ func (b *engine) create(name string, body obj) obj {
 		panic(apiError{409, "Container name already exists"})
 	}
 	allowed := map[string]bool{}
-	for _, k := range []string{"Image", "Cmd", "Entrypoint", "Env", "Labels", "HostConfig", "WorkingDir", "AttachStdout", "AttachStderr", "NetworkingConfig", "ExposedPorts", "Volumes", "User"} {
+	for _, k := range []string{"Image", "Cmd", "Entrypoint", "Env", "Labels", "HostConfig", "WorkingDir", "AttachStdout", "AttachStderr", "NetworkingConfig", "ExposedPorts", "Volumes", "User", "Tty", "OpenStdin", "StdinOnce", "AttachStdin"} {
 		allowed[k] = true
 	}
 	for k, v := range body {
 		if idle(v) {
 			continue
-		}
-		switch k {
-		case "Tty":
-			panic(apiError{501, "Interactive terminals (docker run -t) are not supported by the VM-free engine"})
-		case "OpenStdin", "AttachStdin", "StdinOnce":
-			panic(apiError{501, "Standard input (docker run -i) is not supported by the VM-free engine"})
 		}
 		if !allowed[k] {
 			panic(apiError{501, "Unsupported container option: " + k})
@@ -287,7 +281,7 @@ func (b *engine) create(name string, body obj) obj {
 			ok = integer(v) >= -1 // there is no swap; the limit is -m
 		case "ConsoleSize":
 			a := array(v)
-			ok = len(a) == 2 && idle(a[0]) && idle(a[1])
+			ok = len(a) == 2 && (idle(a[0]) && idle(a[1]) || integer(a[0]) > 0 && integer(a[0]) < 65536 && integer(a[1]) > 0 && integer(a[1]) < 65536)
 		case "NetworkMode":
 			// Guests share the Mac's network (as with host networking); "none" keeps them on loopback.
 			ok = v == "host" || v == "default" || v == "bridge" || v == "none"
@@ -350,6 +344,15 @@ func (b *engine) create(name string, body obj) obj {
 	}
 	command := im.command(override)
 	config := obj{"image": im.Digest, "image_name": imageName, "command": command, "env": im.Env, "writable": host["ReadonlyRootfs"] != true, "cpu_backend": "interpreter", "schedule": false, "process_tree": false, "scheduled_network": false, "dynamic": false, "job_control": false, "memory_limit_mib": 256, "host_sandbox": false, "max_steps": 10000000, "labels": labels, "ports": ports, "workdir": im.WorkingDir, "network": networkMode(host), "stop_signal": im.StopSignal, "created_at": now()}
+	if body["Tty"] == true { // docker run -t: the container's stdio is a terminal
+		config["tty"] = true
+		if a, ok := host["ConsoleSize"].([]any); ok && !idle(a[0]) {
+			config["console_size"] = a
+		}
+	}
+	if body["OpenStdin"] == true { // docker run -i
+		config["open_stdin"], config["stdin_once"] = true, body["StdinOnce"] == true
+	}
 	if !idle(host["Memory"]) {
 		mib := (integer(host["Memory"]) + 1<<20 - 1) >> 20
 		reject(mib >= 6 && mib <= 65536, "Memory limit must be 6 MiB to 64 GiB")
@@ -398,7 +401,7 @@ func (b *engine) create(name string, body obj) obj {
 }
 
 var versionPath = regexp.MustCompile(`^/v([0-9]+)\.([0-9]+)(/.*)$`)
-var containerPath = regexp.MustCompile(`^/containers/([^/]+)(?:/(json|start|stop|restart|logs|wait|attach|kill|archive|stats|exec))?$`)
+var containerPath = regexp.MustCompile(`^/containers/([^/]+)(?:/(json|start|stop|restart|logs|wait|attach|kill|archive|stats|exec|resize))?$`)
 var execPath = regexp.MustCompile(`^/exec/([0-9a-f]+)/(start|json|resize)$`)
 
 func send(w http.ResponseWriter, status int, v any) {
@@ -704,6 +707,7 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 					panic(apiError{501, "Time-filtered or timestamped logs unsupported"})
 				}
 				p := b.container(name)
+				tty := readObject(filepath.Join(p, "config.json"))["tty"] == true
 				sizes := logSizes(p)
 				data := []byte{}
 				for i, stream := range []string{"stdout", "stderr"} {
@@ -728,7 +732,11 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 						}
 						log = []byte(strings.Join(lines, ""))
 					}
-					data = frame(data, i+1, log)
+					if tty { // a terminal's output is one raw stream
+						data = append(data, log...)
+					} else {
+						data = frame(data, i+1, log)
+					}
 				}
 				if !yes("follow") {
 					send(w, 200, data)
@@ -739,7 +747,7 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 				w.Header().Set("Content-Type", "application/vnd.docker.raw-stream")
 				w.WriteHeader(200)
 				_, _ = w.Write(data)
-				b.followLogs(w, r, p, yes("stdout"), yes("stderr"), sizes)
+				b.followLogs(w, r, p, yes("stdout"), yes("stderr"), sizes, tty)
 				return
 			case action == "wait" && method == "POST":
 				stream()
@@ -747,13 +755,19 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 				b.wait(w, r, name, q.Get("condition"))
 				return
 			case action == "attach" && method == "POST":
-				if yes("stdin") {
-					panic(apiError{501, "Standard input is not supported by the VM-free engine; use docker attach --no-stdin"})
-				}
 				reject(yes("stream") && !yes("logs"), "Attach supports stream=1 without logs replay")
 				stream()
 				defer endStream()
-				b.attach(w, r, name, yes("stdout"), yes("stderr"))
+				b.attach(w, r, name, yes("stdin"), yes("stdout"), yes("stderr"))
+				return
+			case action == "resize" && method == "POST":
+				h, e := strconv.ParseInt(q.Get("h"), 10, 64)
+				check(e)
+				wd, e := strconv.ParseInt(q.Get("w"), 10, 64)
+				check(e)
+				reject(h > 0 && h < 65536 && wd > 0 && wd < 65536, "Invalid terminal size")
+				b.resize(name, h, wd)
+				send(w, 200, nil)
 				return
 			case action == "exec" && method == "POST":
 				body := obj{}

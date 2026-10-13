@@ -193,10 +193,12 @@ func TestAPIContractAndRejectedOptions(t *testing.T) {
 	if request(t, h, "DELETE", "/containers/valid", "", "secret").Code != 204 {
 		t.Fatal("remove")
 	}
-	for body, message := range map[string]string{`{"Image":"vmfree/shell:demo","Tty":true}`: "docker run -t", `{"Image":"vmfree/shell:demo","OpenStdin":true}`: "docker run -i"} {
-		if r := request(t, h, "POST", "/containers/create?name=interactive", body, "secret"); r.Code != 501 || !strings.Contains(r.Body.String(), message) {
-			t.Fatalf("%s: %d %s", body, r.Code, r.Body.String())
-		}
+	// docker run -it: a terminal and standard input, shown by inspect.
+	if r := request(t, h, "POST", "/containers/create?name=interactive", `{"Image":"vmfree/shell:demo","Tty":true,"OpenStdin":true,"StdinOnce":true,"AttachStdin":true,"HostConfig":{"ConsoleSize":[24,80]}}`, "secret"); r.Code != 201 {
+		t.Fatalf("-it: %d %s", r.Code, r.Body.String())
+	}
+	if config := b.inspect("interactive")["Config"].(obj); config["Tty"] != true || config["OpenStdin"] != true || config["StdinOnce"] != true {
+		t.Fatalf("-it inspect: %v", config)
 	}
 	if r := request(t, h, "POST", "/containers/create?name=once", `{"Image":"vmfree/shell:demo","HostConfig":{"AutoRemove":true}}`, "secret"); r.Code != 201 {
 		t.Fatalf("--rm: %d %s", r.Code, r.Body.String())
