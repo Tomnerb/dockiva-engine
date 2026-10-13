@@ -27,7 +27,10 @@ def main():
         parser.error('Build on Apple Silicon macOS')
     for flags in ([], ['--with-hvf']):
         subprocess.run([sys.executable, str(ROOT/'scripts/build_native.py'), *flags], check=True)
-    subprocess.run([sys.executable, str(ROOT/'scripts/build_redis_preview.py')], check=True)
+    # The prepared Redis image is committed; rebuild it only where its pinned fixture
+    # exists (a developer checkout). The digest check below covers both cases.
+    if (ROOT/'build/database-fixtures-current/redis.json').exists():
+        subprocess.run([sys.executable, str(ROOT/'scripts/build_redis_preview.py')], check=True)
     layouts = ('examples/m19/shell-image', 'examples/m11_17/http-image', 'examples/redis-preview/image')
     fixture_digests = {json.loads((ROOT/path/'index.json').read_text())['manifests'][0]['digest'] for path in layouts}
     validate_profile_pins(json.loads((ROOT/'dockivad/profiles.json').read_text()), fixture_digests)
