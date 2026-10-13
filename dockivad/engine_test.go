@@ -128,7 +128,7 @@ func testEngine(t *testing.T) *engine {
 	t.Helper()
 	home := t.TempDir()
 	check(os.Chmod(home, 0700))
-	b := &engine{Home: home, State: private(filepath.Join(home, "containers")), Cache: private(filepath.Join(home, "images")), Assets: "..", Native: "../build/vmfree-c"}
+	b := &engine{Home: home, State: private(filepath.Join(home, "containers")), Cache: private(filepath.Join(home, "images")), Assets: "..", Native: "../build/vmfree-c", MaxContainers: 64}
 	commitImage(b.Cache, "vmfree/shell:demo", "../examples/m19/shell-image")
 	// Hermetic default: the host's hypervisor availability must not change test results.
 	nativeProbe.Lock()
@@ -498,4 +498,21 @@ func TestNetworkModeAndDNSFiles(t *testing.T) {
 	link := t.TempDir()
 	check(os.Symlink(t.TempDir(), filepath.Join(link, "etc")))
 	mustReject(t, func() { networkFiles(link, "web") }) // a symlinked /etc is refused
+}
+
+func TestResourceLimits(t *testing.T) {
+	b := testEngine(t)
+	b.create("small", decode([]byte(`{"Image":"vmfree/shell:demo","HostConfig":{"Memory":104857601,"MemorySwap":-1,"NanoCpus":1500000000}}`), maxJSON))
+	host := b.inspect("small")["HostConfig"].(obj)
+	if host["Memory"] != int64(101<<20) || host["NanoCpus"] != int64(2e9) {
+		t.Fatalf("limits: %v %v", host["Memory"], host["NanoCpus"])
+	}
+	// The docker CLI sends zeros when -m and --cpus are absent: the profile's limits apply.
+	b.create("plain", decode([]byte(`{"Image":"vmfree/shell:demo","HostConfig":{"Memory":0,"NanoCpus":0,"MemorySwap":0}}`), maxJSON))
+	if host := b.inspect("plain")["HostConfig"].(obj); host["Memory"] == int64(0) || host["NanoCpus"] != int64(0) {
+		t.Fatalf("defaults: %v %v", host["Memory"], host["NanoCpus"])
+	}
+	for _, bad := range []string{`{"Memory":1024}`, `{"Memory":70000000000000}`, `{"NanoCpus":65000000000}`, `{"MemorySwap":-2}`} {
+		mustReject(t, func() { b.create("bad", decode([]byte(`{"Image":"vmfree/shell:demo","HostConfig":`+bad+`}`), maxJSON)) })
+	}
 }

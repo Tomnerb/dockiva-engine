@@ -40,6 +40,13 @@ func (b *engine) imageInfo(name string) obj {
 	check(e)
 	return obj{"Id": im.Digest, "RepoTags": []string{name}, "RepoDigests": []string{strings.Split(name, ":")[0] + "@" + im.Digest}, "Created": st.ModTime().UTC().Format(time.RFC3339Nano), "Size": size, "Architecture": "arm64", "Os": "linux", "Config": obj{"Entrypoint": im.Entry, "Cmd": im.Args, "Env": im.Env, "WorkingDir": im.WorkingDir}, "RootFS": obj{"Type": "layers", "Layers": []string{}}}
 }
+func nanoCpus(c obj) int64 {
+	if c["cpus"] == nil {
+		return 0
+	}
+	return integer(c["cpus"]) * 1e9
+}
+
 func (b *engine) inspect(name string) obj {
 	p := b.container(name)
 	c := readObject(filepath.Join(p, "config.json"))
@@ -69,7 +76,7 @@ func (b *engine) inspect(name string) obj {
 	if c["binds"] != nil {
 		binds = stringsOf(c["binds"])
 	}
-	return obj{"Id": key(name), "Name": "/" + name, "Created": timestamp(c["created_at"]), "Path": cmd[0], "Args": cmd[1:], "Image": c["image"], "State": obj{"Status": state, "Running": running, "Paused": false, "Restarting": false, "OOMKilled": false, "Dead": state == "dead", "Pid": pid, "ExitCode": code, "Error": text(s["error"]), "StartedAt": timestamp(s["started_at"]), "FinishedAt": timestamp(s["finished_at"])}, "Config": obj{"Image": img, "Entrypoint": cmd[:1], "Cmd": cmd[1:], "Env": stringsOf(c["env"]), "Labels": labels, "User": text(c["user"]), "Tty": false, "WorkingDir": workdir(c), "Hostname": name, "ExposedPorts": exposed}, "HostConfig": obj{"NetworkMode": inspectNetwork(c), "PortBindings": bindings, "ReadonlyRootfs": c["writable"] != true, "AutoRemove": c["auto_remove"] == true, "Binds": binds, "RestartPolicy": obj{"Name": "no", "MaximumRetryCount": 0}, "LogConfig": obj{"Type": "json-file", "Config": obj{}}}, "NetworkSettings": obj{"Ports": bindings, "Networks": obj{}}, "Mounts": b.inspectMounts(c), "Driver": "vmfree-private-copy", "Platform": "linux", "RestartCount": 0, "DockivaCompatibility": profileInspection(c)}
+	return obj{"Id": key(name), "Name": "/" + name, "Created": timestamp(c["created_at"]), "Path": cmd[0], "Args": cmd[1:], "Image": c["image"], "State": obj{"Status": state, "Running": running, "Paused": false, "Restarting": false, "OOMKilled": false, "Dead": state == "dead", "Pid": pid, "ExitCode": code, "Error": text(s["error"]), "StartedAt": timestamp(s["started_at"]), "FinishedAt": timestamp(s["finished_at"])}, "Config": obj{"Image": img, "Entrypoint": cmd[:1], "Cmd": cmd[1:], "Env": stringsOf(c["env"]), "Labels": labels, "User": text(c["user"]), "Tty": false, "WorkingDir": workdir(c), "Hostname": name, "ExposedPorts": exposed}, "HostConfig": obj{"NetworkMode": inspectNetwork(c), "PortBindings": bindings, "ReadonlyRootfs": c["writable"] != true, "AutoRemove": c["auto_remove"] == true, "Binds": binds, "Memory": memoryMiB(c) << 20, "NanoCpus": nanoCpus(c), "RestartPolicy": obj{"Name": "no", "MaximumRetryCount": 0}, "LogConfig": obj{"Type": "json-file", "Config": obj{}}}, "NetworkSettings": obj{"Ports": bindings, "Networks": obj{}}, "Mounts": b.inspectMounts(c), "Driver": "vmfree-private-copy", "Platform": "linux", "RestartCount": 0, "DockivaCompatibility": profileInspection(c)}
 }
 func onlyKeys(m obj, allowed ...string) bool {
 	for k := range m {
@@ -217,6 +224,10 @@ func (b *engine) create(name string, body obj) obj {
 		switch k {
 		case "MemorySwappiness":
 			ok = v == json.Number("-1")
+		case "Memory", "NanoCpus":
+			ok = integer(v) > 0 // docker run -m, --cpus
+		case "MemorySwap":
+			ok = integer(v) >= -1 // there is no swap; the limit is -m
 		case "ConsoleSize":
 			a := array(v)
 			ok = len(a) == 2 && idle(a[0]) && idle(a[1])
@@ -282,6 +293,17 @@ func (b *engine) create(name string, body obj) obj {
 	}
 	command := im.command(override)
 	config := obj{"image": im.Digest, "image_name": imageName, "command": command, "env": im.Env, "writable": host["ReadonlyRootfs"] != true, "cpu_backend": "interpreter", "schedule": false, "process_tree": false, "scheduled_network": false, "dynamic": false, "job_control": false, "memory_limit_mib": 256, "host_sandbox": false, "max_steps": 10000000, "labels": labels, "ports": ports, "workdir": im.WorkingDir, "network": networkMode(host), "stop_signal": im.StopSignal, "created_at": now()}
+	if !idle(host["Memory"]) {
+		mib := (integer(host["Memory"]) + 1<<20 - 1) >> 20
+		reject(mib >= 6 && mib <= 65536, "Memory limit must be 6 MiB to 64 GiB")
+		config["memory_mib"] = json.Number(strconv.FormatInt(mib, 10))
+	}
+	if !idle(host["NanoCpus"]) {
+		// ponytail: --cpus sets the vCPU count, rounded up, not a CFS quota.
+		cpus := (integer(host["NanoCpus"]) + 1e9 - 1) / 1e9
+		reject(cpus <= 64, "At most 64 CPUs")
+		config["cpus"] = json.Number(strconv.FormatInt(cpus, 10))
+	}
 	if host["AutoRemove"] == true {
 		config["auto_remove"] = true // docker run --rm: removed once it exits (engine.watch)
 	}

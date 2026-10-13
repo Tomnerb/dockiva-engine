@@ -24,9 +24,20 @@ var namePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,39}$`)
 
 type engine struct {
 	Home, State, Cache, Native, Worker, Assets, Self string
+	MaxContainers                                    int
 	Mu                                               sync.Mutex
 	events                                           events
 	exits                                            sync.Map // exit status of auto-removed containers, by name, for a minute
+}
+
+// memoryMiB is a container's guest memory limit: docker run -m, else its profile's.
+func memoryMiB(c obj) int64 {
+	for _, k := range []string{"memory_mib", "memory_limit_mib"} {
+		if c[k] != nil {
+			return integer(c[k])
+		}
+	}
+	return 256
 }
 
 func (b *engine) container(name string) string {
@@ -139,10 +150,6 @@ func (b *engine) start(name string) {
 	count := 1
 	c := readObject(filepath.Join(p, "config.json"))
 	validateLaunchProfile(c, b.Native)
-	memory := int64(256)
-	if c["memory_limit_mib"] != nil {
-		memory = integer(c["memory_limit_mib"])
-	}
 	for _, other := range b.names() {
 		if other == name {
 			continue
@@ -157,16 +164,10 @@ func (b *engine) start(name string) {
 			check(e)
 		}
 		count++
-		cc := readObject(filepath.Join(q, "config.json"))
-		m := int64(256)
-		if cc["memory_limit_mib"] != nil {
-			m = integer(cc["memory_limit_mib"])
-		}
-		memory += m
 	}
-	// Budgets are upper bounds; guest memory is committed only as it is touched.
-	if count > 8 || memory > 4096 {
-		panic(apiError{409, "State-store capacity exceeded: at most 8 active runtimes and 4096 MiB of reserved guest allocations"})
+	// Like Docker, memory limits are caps, not reservations: guest memory is committed as it is touched.
+	if count > b.MaxContainers {
+		panic(apiError{409, "At most " + strconv.Itoa(b.MaxContainers) + " running containers (vmfree-engine --max-containers)"})
 	}
 	generation := token()
 	log, e := os.OpenFile(filepath.Join(p, "supervisor.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
@@ -344,16 +345,17 @@ func supervise(p, native, worker, generation string) (result error) {
 		check(e)
 		steps = n.String()
 	}
-	memory := int64(256)
-	if c["memory_limit_mib"] != nil {
-		memory = integer(c["memory_limit_mib"])
-	}
-	reject(memory >= 1 && memory <= 1024, "Invalid memory limit")
+	memory := memoryMiB(c)
+	reject(memory >= 1 && memory <= 65536, "Invalid memory limit")
 	args := []string{"run", guest, "--root", root, "--argv0", command[0], "--max-steps", steps, "--memory-limit-mib", strconv.FormatInt(memory, 10)}
 	if c["cpu_backend"] == "hvf" {
 		native = regularExecutable(filepath.Join(filepath.Dir(native), "vmfree-c-hvf"))
 		// Like Docker, a container may use every core: one vCPU per host CPU.
-		args = append(args, "--cpu-backend", "hvf", "--cpus", strconv.Itoa(min(runtime.NumCPU(), 64)))
+		cpus := min(runtime.NumCPU(), 64)
+		if c["cpus"] != nil {
+			cpus = min(cpus, int(integer(c["cpus"]))) // docker run --cpus
+		}
+		args = append(args, "--cpu-backend", "hvf", "--cpus", strconv.Itoa(cpus))
 	}
 	if wd := workdir(c); wd != "/" {
 		args = append(args, "--cwd", wd)

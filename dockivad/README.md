@@ -68,8 +68,11 @@ receives what the image has at its mount point (unless `nocopy`). Mount points
 are created in the container root, resolving its symlinks; the runtime serves
 them with `--bind`/`--bind-ro`, keeping symlinks and `..` inside the container.
 
-Current resource policy is four live runtimes and 1024 MiB reserved guest memory
-per state store, not a machine-wide or RSS cap. The C guard applies core=0,
+Resources: `-m` caps a container's guest memory (6 MiB to 64 GiB; otherwise
+its profile's limit, 512 MiB) and is what `free`, `/proc/meminfo` and sysinfo
+report; a process that exceeds it is killed. `--cpus N` sets the vCPU count,
+rounded up (default: one per host CPU), not a CFS quota. At most 64 containers
+run at once (`vmfree-engine --max-containers`). Limits are caps, not reservations. The C guard applies core=0,
 file size=16 MiB, descriptors=128 and CPU=60 seconds to workers. Cross-store/JIT
 accounting, pressure feedback, production confinement and broader workload
 compatibility remain separate architecture gates.

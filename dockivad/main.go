@@ -55,9 +55,11 @@ func run() {
 	pull := flags.String("pull", "", "registry reference then exit")
 	insecure := flags.Bool("insecure-local", false, "allow literal loopback registry")
 	tokenEnv := flags.String("token-env", "", "registry token environment variable")
+	maxContainers := flags.Int("max-containers", 64, "running containers at once")
 	check(flags.Parse(os.Args[1:]))
 	reject(flags.NArg() == 0, "Unexpected arguments")
-	b := &engine{Home: private(*home), Self: self, Assets: *assetRoot}
+	reject(*maxContainers >= 1 && *maxContainers <= 1024, "--max-containers must be 1..1024")
+	b := &engine{Home: private(*home), Self: self, Assets: *assetRoot, MaxContainers: *maxContainers}
 	b.State = private(filepath.Join(b.Home, "containers"))
 	b.Cache = private(filepath.Join(b.Home, "images"))
 	lock, e := lockFile(filepath.Join(b.Home, "daemon.lock"), true)

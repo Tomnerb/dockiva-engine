@@ -70,7 +70,7 @@ def main():
             return raw
         def launch():
             with (home/'engine.log').open('ab') as log:
-                p = subprocess.Popen([str(helper), '--home', str(home)], stdout=log, stderr=log,
+                p = subprocess.Popen([str(helper), '--home', str(home), '--max-containers', '8'], stdout=log, stderr=log,
                                      env=dict(os.environ, PATH='/usr/bin:/bin'))
             def ready():
                 if p.poll() is not None:
@@ -150,7 +150,7 @@ def main():
                        {'Image':'vmfree/server:demo', 'Cmd':['0'], 'HostConfig':{'ReadonlyRootfs':True}})
             with ThreadPoolExecutor(max_workers=9) as pool:
                 results = list(pool.map(lambda i: api('POST', f'/containers/server-{i}/start')[0], range(9)))
-            check('concurrent admission: exactly eight runs, ninth rejected', sorted(results) == [204]*8+[409])
+            check('concurrent admission: --max-containers 8 admits eight runs, ninth rejected', sorted(results) == [204]*8+[409])
             active = [f'server-{i}' for i, code in enumerate(results) if code == 204]
             ports = {n:until(lambda n=n: port(n)) for n in active}
             old_states = {n:status(n) for n in active}
