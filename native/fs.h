@@ -447,6 +447,19 @@ static uint64_t fs_open(void) {
     if((flags & ~allowed) || (flags&3)==3) return linux_error(95);
     unsigned slot=0;while(slot<FS_SLOTS && fs_fd[slot]) slot++;
     if(slot==FS_SLOTS || fd_lowest(0)<0) return linux_error(24);
+    char path[1025];
+    if(fs_string(cpu->gpr[1],path)==0 && !strcmp(path,"/proc/meminfo")) {
+        /* The memory budget (docker run -m), as sysinfo reports it; read from a pipe. */
+        if(flags&(3|64|512|1024|16384))return linux_error(13);
+        uint64_t total=resource_limit>>10,used=resource_used>>10,available=used<total?total-used:0;
+        char text[256];int length=snprintf(text,sizeof text,"MemTotal:       %llu kB\nMemFree:        %llu kB\nMemAvailable:   %llu kB\n"
+            "Buffers:        0 kB\nCached:         0 kB\nSwapTotal:      0 kB\nSwapFree:       0 kB\n",
+            (unsigned long long)total,(unsigned long long)available,(unsigned long long)available);
+        int ends[2];if(pipe(ends)<0)return fs_error();
+        int wrote=(int)write(ends[1],text,(size_t)length);close(ends[1]);
+        if(wrote!=length || fcntl(ends[0],F_SETFD,FD_CLOEXEC)<0) { close(ends[0]);return linux_error(5); }
+        fs_fd[slot]=ends[0]+1;fs_cloexec[slot]=(flags&524288)!=0;fs_ro[slot]=1;{ int guest=fd_lowest(0);fs_guest[slot]=(unsigned short)guest;fd_bind((uint64_t)guest,FD_FILE,slot);return (uint64_t)guest; }
+    }
     /* Linux follows a final symlink unless O_NOFOLLOW (32768) or O_CREAT|O_EXCL. */
     int follow=!(flags&32768) && (flags&(64|128))!=(64|128);
     char leaf[1025],canon[1025];int parent=fs_lookup(cpu->gpr[0],cpu->gpr[1],leaf,follow,canon);if(parent<0) return fs_error();

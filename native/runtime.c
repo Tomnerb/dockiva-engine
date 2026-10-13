@@ -1019,7 +1019,7 @@ int main(int argc,char **argv) {
             const char *s=argv[++i];char *end;errno=0;
             if(*s<'0' || *s>'9')fail("Invalid memory budget");
             unsigned long value=strtoul(s,&end,10);
-            if(errno || *end || !value || value>1024)fail("Memory budget must be 1..1024 MiB");
+            if(errno || *end || !value || value>65536)fail("Memory budget must be 1..65536 MiB");
             resource_limit=(uint64_t)value*1024*1024;
         }
         else if(!strcmp(argv[i],"--profile")) profiling=1;
