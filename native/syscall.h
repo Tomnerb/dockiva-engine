@@ -237,7 +237,7 @@ static int guest_syscall_dispatch(void) {
             if(call==222) { cpu->gpr[0]=dynamic_enabled?guest_dynamic_mmap():guest_mmap(cpu->gpr[1],cpu->gpr[2],cpu->gpr[3],cpu->gpr[5]); return -3; }
             if(call==226 && dynamic_enabled) { cpu->gpr[0]=guest_mprotect();return -3; }
             if(call==215) { cpu->gpr[0]=guest_munmap(cpu->gpr[0],cpu->gpr[1]); return -3; }
-            if(call==166 || call==52 || call==53 || call==78 || call==48 || call==439 || call==45 || call==82 || call==83 || call==61 || (call==25 && fs_host(cpu->gpr[0])>=0) || call==79 || call==56 || call==34 || call==35 || call==38 || call==46 || call==62 || call==80 || ((call==57 || call==63 || call==64 || call==67 || call==68 || call==69 || call==70 || call==286 || call==287 || call==47 || call==84) && fs_host(cpu->gpr[0])>=0)) { cpu->gpr[0]=fs_call(call); return -3; }
+            if(call==166 || call==52 || call==53 || call==78 || call==88 || call==36 || call==37 || call==48 || call==439 || call==45 || call==82 || call==83 || call==61 || (call==25 && fs_host(cpu->gpr[0])>=0) || call==79 || call==56 || call==34 || call==35 || call==38 || call==46 || call==62 || call==80 || ((call==57 || call==63 || call==64 || call==67 || call==68 || call==69 || call==70 || call==286 || call==287 || call==47 || call==84) && fs_host(cpu->gpr[0])>=0)) { cpu->gpr[0]=fs_call(call); return -3; }
             if((call>=67 && call<=70) || call==286 || call==287 || call==47 || call==84) { /* positioned I/O needs a regular file */
                 uint64_t fd=cpu->gpr[0];cpu->gpr[0]=net_host(fd)>=0 || (io_managed(fd) && IO(fd).kind)?linux_error(29):linux_error(9);return -3;
             }

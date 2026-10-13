@@ -494,8 +494,11 @@ static void fs_stat_pack(unsigned char *out,const struct stat *st) {
     memset(out,0,128);fs_pack(out,8,st->st_ino,8);
     fs_pack(out,16,(S_ISDIR(st->st_mode)?0040000:S_ISLNK(st->st_mode)?0120000:S_ISCHR(st->st_mode)?0020000:S_ISSOCK(st->st_mode)?0140000:S_ISFIFO(st->st_mode)?0010000:0100000)|(st->st_mode&0777),4);
     fs_pack(out,24,guest_uid,4);fs_pack(out,28,guest_gid,4);
-    fs_pack(out,20,1,4);fs_pack(out,48,(uint64_t)st->st_size,8);
+    fs_pack(out,20,st->st_nlink?st->st_nlink:1,4);fs_pack(out,48,(uint64_t)st->st_size,8);
     fs_pack(out,56,4096,4);fs_pack(out,64,((uint64_t)st->st_size+511)/512,8);
+    /* Linux arm64 st_atime, st_mtime and st_ctime, each seconds then nanoseconds. */
+    const struct timespec *times[3]={&st->st_atimespec,&st->st_mtimespec,&st->st_ctimespec};
+    for(unsigned i=0;i<3;i++) { fs_pack(out,72+i*16,(uint64_t)times[i]->tv_sec,8);fs_pack(out,80+i*16,(uint64_t)times[i]->tv_nsec,8); }
 }
 /* read/write at the file position, or at offset (pread/pwrite) when it is >= 0. */
 static uint64_t fs_transfer_at(int fd,uint64_t call,int64_t offset) {
@@ -559,6 +562,54 @@ static uint64_t fs_call(uint64_t call) {
         /* Read the final link's text; ancestors are resolved inside the root. */
         ssize_t result=readlinkat(parent,leaf,(char *)out,(size_t)cpu->gpr[3]);
         int saved=errno;close(parent);errno=saved;return result<0?fs_error():(uint64_t)result;
+    }
+    if(call==36) { /* symlinkat(target, dirfd, path): the target is kept verbatim and resolved inside the root */
+        char target[1025];if(fs_string(cpu->gpr[0],target)<0)return fs_error();
+        if(fs_created>=4096 || fs_entries>=8192)return linux_error(28);
+        char leaf[1025];int parent=fs_parent_nofollow(cpu->gpr[1],cpu->gpr[2],leaf);if(parent<0)return fs_error();
+        if(!fs_path_writable()) { close(parent);return linux_error(30); }
+        if(!strcmp(leaf,".")) { close(parent);return linux_error(17); }
+        int result=symlinkat(target,parent,leaf);int saved=errno;close(parent);errno=saved;
+        if(result<0)return fs_error();
+        fs_created++;fs_entries++;return 0;
+    }
+    if(call==37) { /* linkat(olddirfd, old, newdirfd, new, flags): a hard link within one mount */
+        uint64_t flags=cpu->gpr[4];if(flags&~UINT64_C(0x400))return linux_error(22);   /* AT_SYMLINK_FOLLOW */
+        if(fs_created>=4096 || fs_entries>=8192)return linux_error(28);
+        char from[1025];int source=fs_lookup(cpu->gpr[0],cpu->gpr[1],from,(flags&0x400)!=0,NULL);if(source<0)return fs_error();
+        int where=fs_where;
+        char leaf[1025];int parent=fs_parent_nofollow(cpu->gpr[2],cpu->gpr[3],leaf);if(parent<0) { uint64_t e=fs_error();close(source);return e; }
+        uint64_t error=0;
+        if(!fs_path_writable())error=linux_error(30);
+        else if(where!=fs_where || where<0)error=linux_error(18);   /* EXDEV: never across a mount boundary */
+        else if(!strcmp(from,".") || !strcmp(leaf,"."))error=linux_error(!strcmp(leaf,".")?17:1);
+        else if(linkat(source,from,parent,leaf,0)<0)error=fs_error();
+        close(parent);close(source);
+        if(!error) { fs_created++;fs_entries++; }
+        return error;
+    }
+    if(call==88) { /* utimensat(dirfd, path, times, flags); a NULL path acts on dirfd itself (futimens) */
+        uint64_t flags=cpu->gpr[3];if(flags&~UINT64_C(0x100))return linux_error(22); /* AT_SYMLINK_NOFOLLOW */
+        const unsigned char *in=cpu->gpr[2]?lookup(cpu->gpr[2],32,4):NULL;if(cpu->gpr[2] && !in)return linux_error(14);
+        struct timespec times[2];
+        for(unsigned i=0;i<2;i++) {                    /* Linux UTIME_NOW/UTIME_OMIT differ from the host's */
+            uint64_t sec=in?le(in+i*16,8):0,nsec=in?le(in+i*16+8,8):(UINT64_C(1)<<30)-1;
+            times[i].tv_sec=(time_t)sec;
+            if(nsec==(UINT64_C(1)<<30)-1)times[i].tv_nsec=UTIME_NOW;
+            else if(nsec==(UINT64_C(1)<<30)-2)times[i].tv_nsec=UTIME_OMIT;
+            else if(nsec<1000000000)times[i].tv_nsec=(long)nsec;
+            else return linux_error(22);
+        }
+        if(!cpu->gpr[1]) {
+            int fd=fs_host(cpu->gpr[0]);if(fd<0)return linux_error(9);
+            if(fs_ro[fs_slot(cpu->gpr[0])])return linux_error(30);
+            return futimens(fd,times)<0?fs_error():0;
+        }
+        char leaf[1025];int parent=fs_lookup(cpu->gpr[0],cpu->gpr[1],leaf,!(flags&0x100),NULL);if(parent<0)return fs_error();
+        if(!fs_path_writable()) { close(parent);return linux_error(30); }
+        /* The leaf is never followed by the host: a final symlink is followed by fs_lookup already. */
+        int result=utimensat(parent,leaf,times,AT_SYMLINK_NOFOLLOW);int saved=errno;close(parent);errno=saved;
+        return result<0?fs_error():0;
     }
     if(call==45) { /* truncate(path, length): ftruncate of the resolved regular file */
         uint64_t length=cpu->gpr[1];
