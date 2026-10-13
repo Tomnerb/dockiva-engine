@@ -6,13 +6,13 @@
       "exit": 0,
       "stdout": "PASS: mprotect splits retain offset views without copying or double charging\nPASS: COW fork retains offsets/heap/mmap, copying only page flags; reference overflow rolls back\nPASS: retained view survives original-owner teardown; final release frees backing exactly once\nPASS: startup arguments, environment and random bytes use backing data offsets\n",
       "stderr": "",
-      "binary_sha256": "229aefbfc48a357a007375f1f97d0356bc5127ed62e8a7643f97abf446bcad95"
+      "binary_sha256": "cf389062817013eca3815181bc8bd2a9ca7b2efaff6434e5540da58dd096c090"
     }
   ],
   "source_hashes": {
     "tests/native/memory_backing_host.c": "2e30b2b1b4ec26067f70316cfc0b6b8932ac93c0710fabab2e013f5c4e2a0dc9",
-    "native/address_space.h": "fc53dc86ab8a25cee7ae8cc3807e530169e14ae34f6584f8dccba5295c07e1ff",
-    "native/address_space_ops.h": "6d796c5da24f776877b8914e06d31dde7315ec472e6b50ee5f0ee1eb52762665",
+    "native/address_space.h": "9943d7011752cb60bc79c6006e698ff229b7c6f21540547f079d02cad2f156bc",
+    "native/address_space_ops.h": "d2ac36caa48c2273f7c1024b97459b11c59fa3af10bf3409830dfe881b5da10c",
     "native/compat.h": "b5d7ba87e7f7223f721d4960c5cbcc2da2c03cbfa779594203a87f93ace30ef8",
     "native/cpu_state.h": "d8824d339232e9236239e81cf568fedde83dc9a6637280ea561273c8c7a24eb6",
     "native/decode.h": "fdc15750c69a7f12c54e1ef9c27ac93c47fd722093958d1190497964a8ff40bd",
@@ -20,7 +20,7 @@
     "native/fadvise.h": "08db7b94b12205e6994a6a2de7632addf04d8a2977878fc41b639257965a91bc",
     "native/fs.h": "12e31280b1942babbfcaf3fe8db6587d83cf133ddd73ac0eeb7b62a7ebc0ffef",
     "native/heap.h": "826b33f96993a705182220ada5d7b352a20258e121429104fcaa0f431c3877bd",
-    "native/hvf_backend.h": "694802adaffd9366347cae0cb2188e9965a9ea46dfd386891c9834a5f4b738c8",
+    "native/hvf_backend.h": "d400a477adf984dbe526624eec77b9a0c70fa6081c29c3b0ec78d6cd09132dcf",
     "native/io.h": "04878dc2af8466a6e753084d9d44da170454aae8488ba75e5081adf356a93b65",
     "native/mapping.h": "adece70376f8280e44183f6b9d24f152ab96b9a6691d3fce1c556e5e461644c6",
     "native/memory_backing.h": "8dfe3b1c31d6e0e0b90f3f1bb3be11955f03e909fa55c47390e681e15b395f99",
