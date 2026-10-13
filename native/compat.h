@@ -224,7 +224,7 @@ static uint64_t net_unix_address(int fd,uint64_t address,uint64_t length,int bin
     int base=fs_cwd?fs_cwd->fd:fs_root;const char *base_path=fs_cwd?fs_cwd->path:"/";
     char leaf[1025],canon[1025];
     int parent=fs_walk(base,base_path,guest,!binding,leaf,canon);if(parent<0)return fs_error();
-    if(binding && !fs_writable) { close(parent);return linux_error(30); }
+    if(binding && !fs_path_writable()) { close(parent);return linux_error(30); }
     if(!strcmp(leaf,".") || strlen(leaf)>=sizeof(((struct sockaddr_un *)0)->sun_path)) { close(parent);return linux_error(binding?22:111); }
     struct sockaddr_un host;memset(&host,0,sizeof(host));host.sun_family=AF_UNIX;strcpy(host.sun_path,leaf);
 #ifdef __APPLE__

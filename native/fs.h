@@ -7,12 +7,14 @@
 #define FS_SLOTS 1024u /* open files and directories per process */
 /* Open files and directories of the current process (see the descriptor map in
    net.h); guest: slot -> guest descriptor. */
-typedef struct { int fd[FS_SLOTS];unsigned char cloexec[FS_SLOTS];struct GuestDirectory *dirs[FS_SLOTS];unsigned short guest[FS_SLOTS]; } FsTable;
+/* ro: the file lives where writes are refused (a read-only root or bind mount). */
+typedef struct { int fd[FS_SLOTS];unsigned char cloexec[FS_SLOTS],ro[FS_SLOTS];struct GuestDirectory *dirs[FS_SLOTS];unsigned short guest[FS_SLOTS]; } FsTable;
 static FsTable fs_table_first;
 static _Thread_local FsTable *fs_table=&fs_table_first;
 #define fs_fd (fs_table->fd)
 #define fs_cloexec (fs_table->cloexec)
 #define fs_dirs (fs_table->dirs)
+#define fs_ro (fs_table->ro)
 #define fs_guest (fs_table->guest)
 static int fs_slot(uint64_t guest) { return fd_slot(guest,FD_FILE); }
 #define FS_FILE_LIMIT (16u*1024u*1024u)
@@ -112,6 +114,70 @@ static int fs_string(uint64_t ptr,char path[1025]) {
 static int fs_is_root(int fd) {
     struct stat a,b;return !fstat(fd,&a) && !fstat(fs_root,&b) && a.st_dev==b.st_dev && a.st_ino==b.st_ino;
 }
+/* Bind mounts (--bind HOST GUEST, --bind-ro): a guest path served by a host
+   directory, or a single host file. fs_walk switches to the mount's descriptor
+   when it reaches the guest path, and ".." at the top of a mounted directory
+   returns to the guest parent, never the host's. Paths beneath a mount are
+   resolved like the rest of the root: symlinks never reach the host kernel. */
+#define FS_MOUNTS 32
+static struct { char path[1025],name[256];int fd,directory,readonly;dev_t dev;ino_t ino; } fs_mounts[FS_MOUNTS];
+static unsigned fs_mount_count;
+/* Where the last fs_walk resolved its leaf: 0 the container root, 1+i mount i,
+   -1 unknown (a directory whose guest path is not known). */
+static _Thread_local int fs_where;
+static int fs_mount_index(const char *path) {
+    for(unsigned i=0;*path && i<fs_mount_count;i++)if(!strcmp(fs_mounts[i].path,path))return (int)i;
+    return -1;
+}
+static int fs_mount_of(const char *canon) {
+    if(!*canon)return -1;
+    int best=0;size_t longest=0;
+    for(unsigned i=0;i<fs_mount_count;i++) {
+        size_t n=strlen(fs_mounts[i].path);
+        if(n>longest && !strncmp(canon,fs_mounts[i].path,n) && (canon[n]==0 || canon[n]=='/')) { best=(int)i+1;longest=n; }
+    }
+    return best;
+}
+/* The mounted directory fd is the top of, or -1. */
+static int fs_mount_root(int fd) {
+    struct stat st;if(fstat(fd,&st))return -1;
+    for(unsigned i=0;i<fs_mount_count;i++)if(fs_mounts[i].directory && fs_mounts[i].dev==st.st_dev && fs_mounts[i].ino==st.st_ino)return (int)i;
+    return -1;
+}
+/* Whether the last fs_walk's leaf may be created, changed or removed. */
+static int fs_path_writable(void) {
+    if(fs_where>0)return !fs_mounts[fs_where-1].readonly;
+    if(fs_where<0)
+        for(unsigned i=0;i<fs_mount_count;i++)if(fs_mounts[i].readonly)return 0; /* it might lie in one */
+    return fs_writable;
+}
+/* Add a bind mount before the guest starts; -1 with errno on a bad request. */
+static int fs_add_mount(const char *host,const char *guest,int readonly) {
+    size_t n=strlen(guest);
+    if(fs_mount_count==FS_MOUNTS || guest[0]!='/' || n<2 || n>1024 || guest[n-1]=='/') { errno=EINVAL;return -1; }
+    for(const char *p=guest+1;*p;) {                      /* clean absolute path: no empty, "." or ".." parts */
+        const char *q=p;while(*q && *q!='/')q++;
+        if(q==p || q-p>255 || (q-p==1 && p[0]=='.') || (q-p==2 && p[0]=='.' && p[1]=='.')) { errno=EINVAL;return -1; }
+        for(const char *c=p;c<q;c++)if(*c<32 || *c>=127 || *c=='\\' || *c==':') { errno=EINVAL;return -1; }
+        p=*q?q+1:q;
+    }
+    if(fs_mount_index(guest)>=0) { errno=EEXIST;return -1; }
+    int fd=open(host,O_RDONLY|O_CLOEXEC);if(fd<0)return -1;
+    struct stat st;if(fstat(fd,&st)) { int saved=errno;close(fd);errno=saved;return -1; }
+    char name[256]="";
+    if(S_ISREG(st.st_mode)) {                              /* a file: keep its directory and name */
+        close(fd);
+        char real[PATH_MAX];if(!realpath(host,real))return -1;
+        char *slash=strrchr(real,'/');if(!slash || strlen(slash+1)>255) { errno=EINVAL;return -1; }
+        strcpy(name,slash+1);
+        if(slash==real)slash[1]=0;else *slash=0;
+        if((fd=open(real,O_RDONLY|O_DIRECTORY|O_CLOEXEC))<0)return -1;
+    } else if(!S_ISDIR(st.st_mode)) { close(fd);errno=ENOTDIR;return -1; }
+    fs_mounts[fs_mount_count].fd=fd;fs_mounts[fs_mount_count].directory=!name[0];fs_mounts[fs_mount_count].readonly=readonly;
+    fs_mounts[fs_mount_count].dev=st.st_dev;fs_mounts[fs_mount_count].ino=st.st_ino;
+    strcpy(fs_mounts[fs_mount_count].path,guest);strcpy(fs_mounts[fs_mount_count].name,name);
+    fs_mount_count++;return 0;
+}
 /* Canonical guest paths ("" when unknown, e.g. after a stale cwd). */
 static void fs_canon_pop(char *c) {
     char *s=strrchr(c,'/');if(!*c || !s)return;
@@ -136,6 +202,7 @@ static int fs_canon_push(char *c,const char *part) {
    stays beneath base exactly as the component walk would. Returns -2 when the
    path needs that walk (a symlink, "..", an unusual form or error). */
 static int fs_walk_fast(int base,const char *cur_start,const char *rest,int follow,char leaf[1025],char canon[1025]) {
+    /* (canon receives the leaf's canonical path; it is always computed) */
     size_t n=strlen(rest);
     if(!n || rest[n-1]=='/')return -2;
     for(const char *p=rest;*p;) {                               /* every component: no "..", at most 255 bytes */
@@ -148,26 +215,35 @@ static int fs_walk_fast(int base,const char *cur_start,const char *rest,int foll
     if(!strcmp(name,"."))return -2;
     char dirs[1025];size_t d=slash?(size_t)(slash-rest):0;
     memcpy(dirs,rest,d);dirs[d]=0;
+    strcpy(canon,cur_start);
+    for(char *p=dirs;*p;) {
+        while(*p=='/')p++;
+        char *q=p;while(*q && *q!='/')q++;
+        char saved=*q;*q=0;
+        int bad=*p && strcmp(p,".") && fs_canon_push(canon,p)<0;
+        *q=saved;p=q;
+        if(bad)return -1;
+    }
+    if(fs_canon_push(canon,name)<0)return -1;
+    /* A path into (or across) a mount needs the component walk, even where the
+       root has nothing at the mount's path. */
+    if(fs_mount_count && fs_mount_of(canon)!=fs_mount_of(cur_start))return -2;
     const char *relative=dirs;while(*relative=='/')relative++;
     int fd=*relative?openat(base,relative,O_RDONLY|O_DIRECTORY|O_NOFOLLOW_ANY|O_CLOEXEC):dup(base);
     if(fd<0)return errno==ENOENT || errno==ENOTDIR?-1:-2;
     struct stat st;
     if(follow && fstatat(fd,name,&st,AT_SYMLINK_NOFOLLOW)==0 && S_ISLNK(st.st_mode)) { close(fd);return -2; }
-    if(canon) {
-        strcpy(canon,cur_start);
-        for(char *p=dirs;*p;) {
-            while(*p=='/')p++;
-            char *q=p;while(*q && *q!='/')q++;
-            char saved=*q;*q=0;
-            int bad=*p && strcmp(p,".") && fs_canon_push(canon,p)<0;
-            *q=saved;p=q;
-            if(bad) { close(fd);return -1; }
-        }
-        if(fs_canon_push(canon,name)<0) { close(fd);return -1; }
-    }
     strcpy(leaf,name);return fd;
 }
 #endif
+static int fs_walk(int base,const char *base_path,const char *input,int follow,char leaf[1025],char canon[1025]);
+/* A guest directory by canonical path, as a descriptor (a mount's own, if it is one). */
+static int fs_open_dir(const char *path) {
+    char leaf[1025];int parent=fs_walk(fs_root,"/",path,1,leaf,NULL);if(parent<0)return -1;
+    if(!strcmp(leaf,"."))return parent;
+    int fd=openat(parent,leaf,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);int saved=errno;close(parent);errno=saved;
+    return fd;
+}
 static int fs_walk(int base,const char *base_path,const char *input,int follow,char leaf[1025],char canon[1025]) {
     if(fs_root<0) { errno=EACCES;return -1; }
     char rest[4097],cur[1025];size_t length=strlen(input),pos=0;unsigned links=0;
@@ -179,12 +255,18 @@ static int fs_walk(int base,const char *base_path,const char *input,int follow,c
     } else base=fs_root;
     strcpy(cur,rest[0]=='/'?"/":base_path);
 #ifdef O_NOFOLLOW_ANY
-    { int fast=fs_walk_fast(base,cur,rest,follow,leaf,canon);if(fast!=-2)return fast; }
+    {   /* The fast path stays in base's host directory tree: not across a mount. */
+        char full[1025];int fast=fs_walk_fast(base,cur,rest,follow,leaf,full);
+        if(fast!=-2) {
+            if(fast>=0) { fs_where=fs_mount_of(full);if(canon)strcpy(canon,full); }
+            return fast;
+        }
+    }
 #endif
     int fd=dup(base);if(fd<0)return -1;
     for(;;) {
         while(rest[pos]=='/')pos++;
-        if(!rest[pos]) { strcpy(leaf,".");if(canon)strcpy(canon,cur);return fd; }
+        if(!rest[pos]) { strcpy(leaf,".");if(canon)strcpy(canon,cur);fs_where=fs_mount_of(cur);return fd; }
         size_t start=pos;while(rest[pos] && rest[pos]!='/')pos++;
         char part[256];size_t m=pos-start;
         if(m>255) { close(fd);errno=ENAMETOOLONG;return -1; }
@@ -193,12 +275,34 @@ static int fs_walk(int base,const char *base_path,const char *input,int follow,c
         int last=!rest[after];
         if(!strcmp(part,"."))continue;
         if(!strcmp(part,"..")) {
+            if(fs_mount_count && fs_mount_root(fd)>=0) {   /* the top of a mount: back to its guest parent */
+                if(!*cur)continue;                          /* position unknown: stay, as at "/" */
+                fs_canon_pop(cur);
+                int parent=fs_open_dir(cur);int saved=errno;close(fd);fd=parent;errno=saved;if(fd<0)return -1;
+                continue;
+            }
             if(!fs_is_root(fd)) {
                 int next=openat(fd,"..",O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
                 int saved=errno;close(fd);fd=next;errno=saved;if(fd<0)return -1;
                 fs_canon_pop(cur);
             }
             continue;
+        }
+        if(fs_mount_count && *cur) {                        /* a mount at this path replaces what the root has */
+            char at[1025];strcpy(at,cur);
+            if(fs_canon_push(at,part)<0) { close(fd);return -1; }
+            int m=fs_mount_index(at);
+            if(m>=0) {
+                if(!fs_mounts[m].directory && !last) { close(fd);errno=ENOTDIR;return -1; }
+                close(fd);fd=dup(fs_mounts[m].fd);if(fd<0)return -1;
+                strcpy(cur,at);
+                if(last) {
+                    strcpy(leaf,fs_mounts[m].directory?".":fs_mounts[m].name);
+                    if(canon)strcpy(canon,at);
+                    fs_where=m+1;return fd;
+                }
+                continue;
+            }
         }
         struct stat st;
         if((!last || follow) && fstatat(fd,part,&st,AT_SYMLINK_NOFOLLOW)==0 && S_ISLNK(st.st_mode)) {
@@ -219,7 +323,7 @@ static int fs_walk(int base,const char *base_path,const char *input,int follow,c
         if(last) {
             strcpy(leaf,part);
             if(canon) { strcpy(canon,cur);if(fs_canon_push(canon,part)<0) { close(fd);return -1; } }
-            return fd;
+            fs_where=fs_mount_of(cur);return fd;
         }
         int next=openat(fd,part,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
         int saved=errno;close(fd);fd=next;errno=saved;if(fd<0)return -1;
@@ -352,9 +456,10 @@ static uint64_t fs_open(void) {
         close(parent);
         if(flags&16384)return linux_error(20);
         int fd=open(device,options|O_CLOEXEC);if(fd<0)return fs_error();
-        fs_fd[slot]=fd+1;fs_cloexec[slot]=(flags&524288)!=0;{ int guest=fd_lowest(0);fs_guest[slot]=(unsigned short)guest;fd_bind((uint64_t)guest,FD_FILE,slot);return (uint64_t)guest; }
+        fs_fd[slot]=fd+1;fs_cloexec[slot]=(flags&524288)!=0;fs_ro[slot]=0;{ int guest=fd_lowest(0);fs_guest[slot]=(unsigned short)guest;fd_bind((uint64_t)guest,FD_FILE,slot);return (uint64_t)guest; }
     }
-    if(!fs_writable && (flags&(3|64|512|1024))) { close(parent);return linux_error(30); }
+    int read_only=!fs_path_writable();
+    if(read_only && (flags&(3|64|512|1024))) { close(parent);return linux_error(30); }
     options|=O_NOFOLLOW|O_CLOEXEC|O_NONBLOCK;
     if(flags&64) options|=O_CREAT;
     if(flags&128) options|=O_EXCL;
@@ -380,7 +485,7 @@ static uint64_t fs_open(void) {
         fs_dirs[slot]=directory;
     }
     if(flags&64) { fs_created++;fs_entries++; }
-    fs_fd[slot]=fd+1;fs_cloexec[slot]=(flags&524288)!=0;{ int guest=fd_lowest(0);fs_guest[slot]=(unsigned short)guest;fd_bind((uint64_t)guest,FD_FILE,slot);return (uint64_t)guest; }
+    fs_fd[slot]=fd+1;fs_cloexec[slot]=(flags&524288)!=0;fs_ro[slot]=(unsigned char)read_only;{ int guest=fd_lowest(0);fs_guest[slot]=(unsigned short)guest;fd_bind((uint64_t)guest,FD_FILE,slot);return (uint64_t)guest; }
 }
 static void fs_pack(unsigned char *p,unsigned offset,uint64_t value,unsigned size) {
     for(unsigned i=0;i<size;i++) p[offset+i]=(unsigned char)(value>>(i*8));
@@ -404,7 +509,8 @@ static uint64_t fs_transfer_at(int fd,uint64_t call,int64_t offset) {
         }
         uint64_t previous_size=0,write_position=0;
         if(call==64) {
-            if(!fs_writable) return linux_error(30);
+            int slot=fs_slot(cpu->gpr[0]);    /* a file slot knows its location; stdio files follow the root */
+            if(slot>=0?fs_ro[slot]:!fs_writable) return linux_error(30);
             struct stat st;if(fstat(fd,&st)<0) return fs_error();
             off_t position=offset>=0?(off_t)offset:lseek(fd,0,SEEK_CUR);if(position<0) return fs_error();
             if(offset<0 && (fcntl(fd,F_GETFL)&O_APPEND)) position=st.st_size;
@@ -423,11 +529,12 @@ static uint64_t fs_transfer(int fd,uint64_t call) { return fs_transfer_at(fd,cal
 static uint64_t fs_call(uint64_t call) {
     if(call==166) { unsigned previous=fs_umask;fs_umask=(unsigned)cpu->gpr[0]&0777;return previous; }
     if(call==52 || call==53) {
-        if(!fs_writable)return linux_error(30);
         uint64_t mode=cpu->gpr[call==52?1:2];if(mode&~UINT64_C(07777))return linux_error(22); /* setuid/setgid/sticky allowed, as on Linux */
         int fd=fs_host(cpu->gpr[0]),owned=0;
+        if(call==52 && fs_slot(cpu->gpr[0])>=0 && fs_ro[fs_slot(cpu->gpr[0])])return linux_error(30);
         if(call==53) {
             char leaf[1025];int parent=fs_parent(cpu->gpr[0],cpu->gpr[1],leaf);if(parent<0)return fs_error();
+            if(!fs_path_writable()) { close(parent);return linux_error(30); }
             struct stat link;
             if(fstatat(parent,leaf,&link,AT_SYMLINK_NOFOLLOW)==0 && S_ISSOCK(link.st_mode)) { /* sockets cannot be opened */
                 int result=fchmodat(parent,leaf,(mode_t)mode,AT_SYMLINK_NOFOLLOW);
@@ -454,11 +561,11 @@ static uint64_t fs_call(uint64_t call) {
         int saved=errno;close(parent);errno=saved;return result<0?fs_error():(uint64_t)result;
     }
     if(call==45) { /* truncate(path, length): ftruncate of the resolved regular file */
-        if(!fs_writable)return linux_error(30);
         uint64_t length=cpu->gpr[1];
         if((int64_t)length<0)return linux_error(22);
         if(length>fs_file_limit)return linux_error(27);
         char leaf[1025];int parent=fs_parent((uint64_t)-100,cpu->gpr[0],leaf);if(parent<0)return fs_error();
+        if(!fs_path_writable()) { close(parent);return linux_error(30); }
         int fd=openat(parent,leaf,O_WRONLY|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC);int saved=errno;close(parent);errno=saved;
         if(fd<0)return fs_error();
         struct stat st;if(fstat(fd,&st)<0 || !S_ISREG(st.st_mode)) { saved=S_ISDIR(st.st_mode)?EISDIR:EINVAL;close(fd);errno=saved;return fs_error(); }
@@ -471,10 +578,11 @@ static uint64_t fs_call(uint64_t call) {
     if(call==48 || call==439) { /* faccessat(2); synthetic uid 0; no-link namespace policy still applies. */
         if(cpu->gpr[2]&~UINT64_C(7) || (call==439 && (cpu->gpr[3]&~UINT64_C(0x300))))return linux_error(22); /* AT_EACCESS, AT_SYMLINK_NOFOLLOW */
         char leaf[1025];int parent=fs_parent(cpu->gpr[0],cpu->gpr[1],leaf);if(parent<0)return fs_error();
+        int writable=fs_path_writable();
         struct stat st;int result=fstatat(parent,leaf,&st,AT_SYMLINK_NOFOLLOW);
         int saved=errno;close(parent);errno=saved;if(result<0)return fs_error();
         if(!S_ISREG(st.st_mode) && !S_ISDIR(st.st_mode) && !S_ISSOCK(st.st_mode))return linux_error(13);
-        if((cpu->gpr[2]&2) && !fs_writable)return linux_error(30);
+        if((cpu->gpr[2]&2) && !writable)return linux_error(30);
         if(guest_uid && (cpu->gpr[2]&~((unsigned)st.st_mode>>6)))return linux_error(13);
         if((cpu->gpr[2]&1) && S_ISREG(st.st_mode) && !(st.st_mode&0111))return linux_error(13);
         return 0;
@@ -513,19 +621,20 @@ static uint64_t fs_call(uint64_t call) {
         }
     }
     if(call==34 || call==35 || call==38) {
-        if(!fs_writable) return linux_error(30);
         if(call==34 && (fs_created>=4096 || fs_entries>=8192)) return linux_error(28);
         if(call==35 && cpu->gpr[2]!=0 && cpu->gpr[2]!=512) return linux_error(22);
         /* These act on a final symlink itself, never its target. */
         char leaf[1025];int parent=fs_parent_nofollow(cpu->gpr[0],cpu->gpr[1],leaf);if(parent<0) return fs_error();
-        if(!strcmp(leaf,".")) { close(parent);return linux_error(13); }
+        if(!fs_path_writable()) { close(parent);return linux_error(30); }
+        if(!strcmp(leaf,".")) { close(parent);return linux_error(fs_where>0?16:13); } /* a mount point is busy */
         int result;
         if(call==34) { result=mkdirat(parent,leaf,(mode_t)(cpu->gpr[2]&0777&~fs_umask));if(!result) { fs_created++;fs_entries++; } }
         else if(call==35) result=unlinkat(parent,leaf,cpu->gpr[2]?AT_REMOVEDIR:0);
         else {
             char target[1025];int other=fs_parent_nofollow(cpu->gpr[2],cpu->gpr[3],target);
             if(other<0) { uint64_t e=fs_error();close(parent);return e; }
-            if(!strcmp(target,".")) { close(other);close(parent);return linux_error(13); }
+            if(!fs_path_writable()) { close(other);close(parent);return linux_error(30); }
+            if(!strcmp(target,".")) { close(other);close(parent);return linux_error(fs_where>0?16:13); }
             result=renameat(parent,leaf,other,target);int saved=errno;close(other);errno=saved;
         }
         uint64_t e=result<0?fs_error():0;close(parent);return e;
@@ -581,7 +690,7 @@ static uint64_t fs_call(uint64_t call) {
         return result<0?fs_error():(uint64_t)result;
     }
     if(call==46) {
-        if(!fs_writable) return linux_error(30);
+        if(fs_ro[slot]) return linux_error(30);
         if(cpu->gpr[1]>fs_file_limit || (fs_write_limit && cpu->gpr[1]>fs_write_limit-fs_written)) return linux_error(27);
         struct stat st;if(fstat(fd,&st)<0)return fs_error();
         uint64_t growth=cpu->gpr[1]>(uint64_t)st.st_size?cpu->gpr[1]-(uint64_t)st.st_size:0;
@@ -621,7 +730,7 @@ static uint64_t fs_call(uint64_t call) {
         return (cpu->gpr[3]&4) && fsync(fd)<0?fs_error():0;
     }
     if(call==47) { /* fallocate: mode 0 grows the file (zero-filled); other modes are unsupported */
-        if(!fs_writable)return linux_error(30);
+        if(fs_ro[slot])return linux_error(30);
         if(cpu->gpr[1])return linux_error(95);
         uint64_t offset=cpu->gpr[2],length=cpu->gpr[3];
         if((int64_t)offset<0 || (int64_t)length<=0 || length>UINT64_MAX-offset)return linux_error(22);

@@ -52,7 +52,7 @@ static uint64_t guest_dup(uint64_t oldfd,int64_t target,uint64_t min,int cloexec
     if(kind==FD_FILE) {
         int host=dup(fs_fd[from]-1);if(host<0)return fs_error();
         if(target>=0 && fd_kind[fd])(void)guest_close((uint64_t)fd);
-        fs_fd[slot]=host+1;fs_cloexec[slot]=(unsigned char)(cloexec!=0);fs_dirs[slot]=fs_dirs[from];
+        fs_fd[slot]=host+1;fs_cloexec[slot]=(unsigned char)(cloexec!=0);fs_ro[slot]=fs_ro[from];fs_dirs[slot]=fs_dirs[from];
         if(fs_dirs[slot])fs_dirs[slot]->refs++;
         fs_guest[slot]=(unsigned short)fd;
     } else if(kind==FD_NET) {
@@ -111,17 +111,19 @@ static int guest_syscall_dispatch(void) {
                 /* fchownat/fchown: ownership is not tracked (every file shows the current
                    identity), so a valid request by root succeeds without effect. */
                 int fd=-1;struct stat st;
-                if(call==55) { fd=fs_host(cpu->gpr[0]);if(fd<0) { cpu->gpr[0]=linux_error(9);return -3; } }
+                int writable;
+                if(call==55) { fd=fs_host(cpu->gpr[0]);if(fd<0) { cpu->gpr[0]=linux_error(9);return -3; }writable=!fs_ro[fs_slot(cpu->gpr[0])]; }
                 else {
                     if(cpu->gpr[4]&~UINT64_C(256|4096)) { cpu->gpr[0]=linux_error(22);return -3; }
                     char leaf[1025];int parent=fs_lookup(cpu->gpr[0],cpu->gpr[1],leaf,!(cpu->gpr[4]&256),NULL);
                     if(parent<0) { cpu->gpr[0]=fs_error();return -3; }
+                    writable=fs_path_writable();
                     int r=fstatat(parent,leaf,&st,AT_SYMLINK_NOFOLLOW);int saved=errno;close(parent);errno=saved;
                     if(r<0) { cpu->gpr[0]=fs_error();return -3; }
                 }
                 if(fd>=0 && fstat(fd,&st)<0) { cpu->gpr[0]=fs_error();return -3; }
                 uint32_t owner=(uint32_t)cpu->gpr[call==54?2:1],group=(uint32_t)cpu->gpr[call==54?3:2];
-                if(!fs_writable)cpu->gpr[0]=linux_error(30);
+                if(!writable)cpu->gpr[0]=linux_error(30);
                 else if(guest_uid && ((owner!=UINT32_MAX && owner!=guest_uid) || (group!=UINT32_MAX && group!=guest_gid)))cpu->gpr[0]=linux_error(1);
                 else cpu->gpr[0]=0;
                 return -3;

@@ -962,6 +962,11 @@ int main(int argc,char **argv) {
             if(fs_root<0) fail("Cannot open guest root");
         } else if(!strcmp(argv[i],"--writable")) {
             fs_writable=1;
+        } else if((!strcmp(argv[i],"--bind") || !strcmp(argv[i],"--bind-ro")) && i+2<argc) {
+            /* --bind HOST GUEST: the host directory or file appears at GUEST (absolute). */
+            int readonly=!strcmp(argv[i],"--bind-ro");
+            if(fs_add_mount(argv[i+1],argv[i+2],readonly)<0) { fprintf(stderr,"vmfree: --bind %s %s: %s\n",argv[i+1],argv[i+2],strerror(errno));fail("Invalid bind mount"); }
+            i+=2;
         } else if(!strcmp(argv[i],"--argv0") && i+1<argc) {
             guestargv[0]=argv[++i];
         } else if(!strcmp(argv[i],"--env") && i+1<argc) {
