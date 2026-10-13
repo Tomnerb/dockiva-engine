@@ -65,7 +65,11 @@ func (b *engine) inspect(name string) obj {
 	}
 	labels := object(c["labels"])
 	bindings, exposed := dockerPorts(c)
-	return obj{"Id": key(name), "Name": "/" + name, "Created": timestamp(c["created_at"]), "Path": cmd[0], "Args": cmd[1:], "Image": c["image"], "State": obj{"Status": state, "Running": running, "Paused": false, "Restarting": false, "OOMKilled": false, "Dead": state == "dead", "Pid": pid, "ExitCode": code, "Error": text(s["error"]), "StartedAt": timestamp(s["started_at"]), "FinishedAt": timestamp(s["finished_at"])}, "Config": obj{"Image": img, "Entrypoint": cmd[:1], "Cmd": cmd[1:], "Env": stringsOf(c["env"]), "Labels": labels, "Tty": false, "WorkingDir": workdir(c), "Hostname": name, "ExposedPorts": exposed}, "HostConfig": obj{"NetworkMode": inspectNetwork(c), "PortBindings": bindings, "ReadonlyRootfs": c["writable"] != true, "AutoRemove": c["auto_remove"] == true, "RestartPolicy": obj{"Name": "no", "MaximumRetryCount": 0}, "LogConfig": obj{"Type": "json-file", "Config": obj{}}}, "NetworkSettings": obj{"Ports": bindings, "Networks": obj{}}, "Mounts": []any{}, "Driver": "vmfree-private-copy", "Platform": "linux", "RestartCount": 0, "DockivaCompatibility": profileInspection(c)}
+	binds := []string{}
+	if c["binds"] != nil {
+		binds = stringsOf(c["binds"])
+	}
+	return obj{"Id": key(name), "Name": "/" + name, "Created": timestamp(c["created_at"]), "Path": cmd[0], "Args": cmd[1:], "Image": c["image"], "State": obj{"Status": state, "Running": running, "Paused": false, "Restarting": false, "OOMKilled": false, "Dead": state == "dead", "Pid": pid, "ExitCode": code, "Error": text(s["error"]), "StartedAt": timestamp(s["started_at"]), "FinishedAt": timestamp(s["finished_at"])}, "Config": obj{"Image": img, "Entrypoint": cmd[:1], "Cmd": cmd[1:], "Env": stringsOf(c["env"]), "Labels": labels, "Tty": false, "WorkingDir": workdir(c), "Hostname": name, "ExposedPorts": exposed}, "HostConfig": obj{"NetworkMode": inspectNetwork(c), "PortBindings": bindings, "ReadonlyRootfs": c["writable"] != true, "AutoRemove": c["auto_remove"] == true, "Binds": binds, "RestartPolicy": obj{"Name": "no", "MaximumRetryCount": 0}, "LogConfig": obj{"Type": "json-file", "Config": obj{}}}, "NetworkSettings": obj{"Ports": bindings, "Networks": obj{}}, "Mounts": b.inspectMounts(c), "Driver": "vmfree-private-copy", "Platform": "linux", "RestartCount": 0, "DockivaCompatibility": profileInspection(c)}
 }
 func onlyKeys(m obj, allowed ...string) bool {
 	for k := range m {
@@ -164,7 +168,7 @@ func (b *engine) create(name string, body obj) obj {
 		panic(apiError{409, "Container name already exists"})
 	}
 	allowed := map[string]bool{}
-	for _, k := range []string{"Image", "Cmd", "Entrypoint", "Env", "Labels", "HostConfig", "WorkingDir", "AttachStdout", "AttachStderr", "NetworkingConfig", "ExposedPorts"} {
+	for _, k := range []string{"Image", "Cmd", "Entrypoint", "Env", "Labels", "HostConfig", "WorkingDir", "AttachStdout", "AttachStderr", "NetworkingConfig", "ExposedPorts", "Volumes"} {
 		allowed[k] = true
 	}
 	for k, v := range body {
@@ -221,6 +225,8 @@ func (b *engine) create(name string, body obj) obj {
 			ok = v == "host" || v == "default" || v == "bridge" || v == "none"
 		case "ReadonlyRootfs", "AutoRemove":
 			_, ok = v.(bool)
+		case "Binds", "Mounts":
+			ok = true // parseMounts validates them
 		case "PortBindings":
 			ports, ok = portBindings(v), true
 		case "LogConfig":
@@ -279,9 +285,16 @@ func (b *engine) create(name string, body obj) obj {
 	if host["AutoRemove"] == true {
 		config["auto_remove"] = true // docker run --rm: removed once it exits (engine.watch)
 	}
+	if mounts := b.parseMounts(host, body); len(mounts) > 0 {
+		config["mounts"] = mounts
+		if host["Binds"] != nil {
+			config["binds"] = stringsOf(host["Binds"])
+		}
+	}
 	profile := loadProfileCatalog(profileCatalogJSON).selectForHost(im.Digest, b.Native)
 	profile.apply(config)
 	validateLaunchProfile(config, b.Native)
+	reject(config["mounts"] == nil || config["host_sandbox"] != true, "Mounts are not supported for host-sandboxed containers")
 	stage, err := os.MkdirTemp(b.State, ".creating-")
 	check(err)
 	committed := false
@@ -483,7 +496,7 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 					created, e := time.Parse(time.RFC3339Nano, str(item["Created"]))
 					check(e)
 					cmd := append([]string{str(item["Path"])}, item["Args"].([]string)...)
-					rows = append(rows, obj{"Id": item["Id"], "Names": []any{item["Name"]}, "Image": config["Image"], "ImageID": item["Image"], "Command": strings.Join(cmd, " "), "Created": created.Unix(), "State": state["Status"], "Status": state["Status"], "Labels": labels, "Ports": portRows(item), "HostConfig": obj{"NetworkMode": "host"}, "NetworkSettings": obj{"Networks": obj{}}, "Mounts": []any{}})
+					rows = append(rows, obj{"Id": item["Id"], "Names": []any{item["Name"]}, "Image": config["Image"], "ImageID": item["Image"], "Command": strings.Join(cmd, " "), "Created": created.Unix(), "State": state["Status"], "Status": state["Status"], "Labels": labels, "Ports": portRows(item), "HostConfig": obj{"NetworkMode": "host"}, "NetworkSettings": obj{"Networks": obj{}}, "Mounts": item["Mounts"]})
 				}
 			}
 			send(w, 200, rows)
@@ -521,6 +534,8 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 			stream()
 			defer endStream()
 			b.streamEvents(w, r, filters)
+			return
+		case strings.HasPrefix(path, "/volumes") && b.volumesAPI(w, method, path, q, raw):
 			return
 		case path == "/images/create" && method == "POST":
 			defer debug.FreeOSMemory()
@@ -618,7 +633,11 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 				if yes("force") {
 					b.stop(name)
 				}
+				mounts := savedMounts(readObject(filepath.Join(b.container(name), "config.json")))
 				b.remove(name)
+				if yes("v") { // docker rm -v: the container's anonymous volumes go too
+					b.removeAnonymousVolumes(mounts)
+				}
 				send(w, 204, nil)
 				return
 			}

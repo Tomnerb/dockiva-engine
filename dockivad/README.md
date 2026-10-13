@@ -53,12 +53,20 @@ docker run --rm redis:7-alpine sh -c 'echo hello'
 ```
 
 Supported docker commands: `run` (foreground or `-d`, `--rm`, `-p`, `-e`,
-`--entrypoint`, `-w`), `create`, `start`, `stop`, `restart`, `kill` (TERM, INT,
-QUIT, HUP, USR1, USR2 reach the container's first process; KILL ends it),
-`wait`, `rm`, `ps`, `inspect`, `logs` (with `-f` and `--tail`), `attach
---no-stdin`, `events` (create, start, die, destroy), `pull`, `images` and
-`version`/`info`. Not supported: `-i`/`-t` and `exec`, builds, volumes and bind
-mounts, networks, `cp`, `stats`.
+`--entrypoint`, `-w`, `-v`, `--mount`, `--read-only`), `create`, `start`,
+`stop`, `restart`, `kill` (TERM, INT, QUIT, HUP, USR1, USR2 reach the
+container's first process; KILL ends it), `wait`, `rm` (with `-v`), `ps`,
+`inspect`, `logs` (with `-f` and `--tail`), `attach --no-stdin`, `events`
+(create, start, die, destroy), `pull`, `images`, `volume` (`create`, `ls`,
+`inspect`, `rm`, `prune`) and `version`/`info`. Not supported: `-i`/`-t` and
+`exec`, builds, tmpfs mounts, networks, `cp`, `stats`.
+
+Mounts: `-v /host/path:/path[:ro]` binds a host directory or file (a missing
+host directory is created, as Docker does); `-v name:/path` and `-v /path` use
+named and anonymous volumes in `<home>/volumes/<name>/_data`. A new volume first
+receives what the image has at its mount point (unless `nocopy`). Mount points
+are created in the container root, resolving its symlinks; the runtime serves
+them with `--bind`/`--bind-ro`, keeping symlinks and `..` inside the container.
 
 Current resource policy is four live runtimes and 1024 MiB reserved guest memory
 per state store, not a machine-wide or RSS cap. The C guard applies core=0,

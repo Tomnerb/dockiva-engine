@@ -371,6 +371,8 @@ func supervise(p, native, worker, generation string) (result error) {
 	for _, p := range publishedPorts(c) {
 		args = append(args, "--publish", strconv.FormatInt(p[0], 10)+":"+strconv.FormatInt(p[1], 10))
 	}
+	// <home>/containers/<name>: volumes are in <home>/volumes.
+	args = append(args, prepareMounts(filepath.Dir(filepath.Dir(p)), root, c)...)
 	for _, pair := range [][2]string{{"schedule", "--schedule"}, {"process_tree", "--process-tree"}, {"scheduled_network", "--scheduled-network"}, {"dynamic", "--dynamic"}, {"job_control", "--job-control"}, {"writable", "--writable"}} {
 		v := c[pair[0]]
 		reject(v == nil || v == true || v == false, "Invalid runtime flag")
