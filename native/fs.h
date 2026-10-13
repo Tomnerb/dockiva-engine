@@ -37,8 +37,13 @@ typedef struct GuestDirectory { DIR *stream;unsigned refs,count;char path[1025];
 static void fs_directory_release(GuestDirectory *directory) {
     if(directory && !--directory->refs) { if(directory->stream)closedir(directory->stream);free(directory); }
 }
+/* ponytail: the byte counters are updated atomically (file writes run without the
+   runtime lock) but checked without it, so concurrent writers can overshoot a write or
+   storage limit by about one write each; the engine sets neither limit. */
 static uint64_t fs_written;
 static unsigned fs_created,fs_entries;
+/* Atomic: openat (O_CREAT) also runs without the runtime lock. */
+static void fs_count_created(void) { __atomic_fetch_add(&fs_created,1,__ATOMIC_RELAXED);__atomic_fetch_add(&fs_entries,1,__ATOMIC_RELAXED); }
 #define FS_STORAGE_LIMIT (128u*1024u*1024u)
 static uint64_t fs_storage_bytes;
 /* Budgets for direct runtime use; the engine raises them (--file-limit-mib) and
@@ -68,7 +73,7 @@ static int fs_scan_budget(int directory,unsigned depth) {
         struct stat st;if(fstatat(directory,entry->d_name,&st,AT_SYMLINK_NOFOLLOW)<0) { result=-1;break; }
         if(S_ISREG(st.st_mode) && (st.st_nlink<2 || fs_inode_first(&st))) {
             if(st.st_size<0 || (uint64_t)st.st_size>fs_storage_limit-fs_storage_bytes) { errno=ENOSPC;result=-1;break; }
-            fs_storage_bytes+=(uint64_t)st.st_size;
+            __atomic_fetch_add(&fs_storage_bytes,(uint64_t)st.st_size,__ATOMIC_RELAXED);
         } else if(S_ISDIR(st.st_mode)) {
             int fd=openat(directory,entry->d_name,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
             if(fd<0) { result=-1;break; }
@@ -495,7 +500,7 @@ static uint64_t fs_open(void) {
         directory->refs=1;strcpy(directory->path,canon);
         fs_dirs[slot]=directory;
     }
-    if(flags&64) { fs_created++;fs_entries++; }
+    if(flags&64) { fs_count_created(); }
     fs_fd[slot]=fd+1;fs_cloexec[slot]=(flags&524288)!=0;fs_ro[slot]=(unsigned char)read_only;{ int guest=fd_lowest(0);fs_guest[slot]=(unsigned short)guest;fd_bind((uint64_t)guest,FD_FILE,slot);return (uint64_t)guest; }
 }
 static void fs_pack(unsigned char *p,unsigned offset,uint64_t value,unsigned size) {
@@ -536,7 +541,10 @@ static uint64_t fs_transfer_at(int fd,uint64_t call,int64_t offset) {
         ssize_t result=offset>=0?(call==63?pread(fd,buffer,(size_t)count,offset):pwrite(fd,buffer,(size_t)count,offset))
                                 :(call==63?read(fd,buffer,(size_t)count):write(fd,buffer,(size_t)count));
         if(result<0) return fs_error();
-        if(call==64) { fs_written+=(uint64_t)result;uint64_t end=write_position+(uint64_t)result;if(end>previous_size)fs_storage_bytes+=end-previous_size; }
+        if(call==64) { /* atomic: file writes also run without the runtime lock */
+            __atomic_fetch_add(&fs_written,(uint64_t)result,__ATOMIC_RELAXED);uint64_t end=write_position+(uint64_t)result;
+            if(end>previous_size)__atomic_fetch_add(&fs_storage_bytes,end-previous_size,__ATOMIC_RELAXED);
+        }
         return (uint64_t)result;
 }
 static uint64_t fs_transfer(int fd,uint64_t call) { return fs_transfer_at(fd,call,-1); }
@@ -582,7 +590,7 @@ static uint64_t fs_call(uint64_t call) {
         if(!strcmp(leaf,".")) { close(parent);return linux_error(17); }
         int result=symlinkat(target,parent,leaf);int saved=errno;close(parent);errno=saved;
         if(result<0)return fs_error();
-        fs_created++;fs_entries++;return 0;
+        fs_count_created();return 0;
     }
     if(call==37) { /* linkat(olddirfd, old, newdirfd, new, flags): a hard link within one mount */
         uint64_t flags=cpu->gpr[4];if(flags&~UINT64_C(0x400))return linux_error(22);   /* AT_SYMLINK_FOLLOW */
@@ -596,7 +604,7 @@ static uint64_t fs_call(uint64_t call) {
         else if(!strcmp(from,".") || !strcmp(leaf,"."))error=linux_error(!strcmp(leaf,".")?17:1);
         else if(linkat(source,from,parent,leaf,0)<0)error=fs_error();
         close(parent);close(source);
-        if(!error) { fs_created++;fs_entries++; }
+        if(!error) { fs_count_created(); }
         return error;
     }
     if(call==88) { /* utimensat(dirfd, path, times, flags); a NULL path acts on dirfd itself (futimens) */
@@ -635,7 +643,7 @@ static uint64_t fs_call(uint64_t call) {
         if(fs_storage_limit && growth>fs_storage_limit-fs_storage_bytes) { close(fd);return linux_error(28); }
         int result=ftruncate(fd,(off_t)length);saved=errno;close(fd);errno=saved;
         if(result<0)return fs_error();
-        fs_storage_bytes+=growth;return 0;
+        __atomic_fetch_add(&fs_storage_bytes,growth,__ATOMIC_RELAXED);return 0;
     }
     if(call==48 || call==439) { /* faccessat(2); synthetic uid 0; no-link namespace policy still applies. */
         if(cpu->gpr[2]&~UINT64_C(7) || (call==439 && (cpu->gpr[3]&~UINT64_C(0x300))))return linux_error(22); /* AT_EACCESS, AT_SYMLINK_NOFOLLOW */
@@ -690,7 +698,7 @@ static uint64_t fs_call(uint64_t call) {
         if(!fs_path_writable()) { close(parent);return linux_error(30); }
         if(!strcmp(leaf,".")) { close(parent);return linux_error(fs_where>0?16:13); } /* a mount point is busy */
         int result;
-        if(call==34) { result=mkdirat(parent,leaf,(mode_t)(cpu->gpr[2]&0777&~fs_umask));if(!result) { fs_created++;fs_entries++; } }
+        if(call==34) { result=mkdirat(parent,leaf,(mode_t)(cpu->gpr[2]&0777&~fs_umask));if(!result) { fs_count_created(); } }
         else if(call==35) result=unlinkat(parent,leaf,cpu->gpr[2]?AT_REMOVEDIR:0);
         else {
             char target[1025];int other=fs_parent_nofollow(cpu->gpr[2],cpu->gpr[3],target);
@@ -758,7 +766,7 @@ static uint64_t fs_call(uint64_t call) {
         uint64_t growth=cpu->gpr[1]>(uint64_t)st.st_size?cpu->gpr[1]-(uint64_t)st.st_size:0;
         if(fs_storage_limit && growth>fs_storage_limit-fs_storage_bytes)return linux_error(28);
         if(ftruncate(fd,(off_t)cpu->gpr[1])<0) return fs_error();
-        fs_storage_bytes+=growth;fs_written+=cpu->gpr[1];return 0;
+        __atomic_fetch_add(&fs_storage_bytes,growth,__ATOMIC_RELAXED);__atomic_fetch_add(&fs_written,cpu->gpr[1],__ATOMIC_RELAXED);return 0;
     }
     if(call==63 || call==64)return fs_transfer(fd,call);
     if(call==67 || call==68) { /* pread64/pwrite64 */
@@ -802,7 +810,7 @@ static uint64_t fs_call(uint64_t call) {
         uint64_t growth=end-(uint64_t)st.st_size;
         if(fs_storage_limit && growth>fs_storage_limit-fs_storage_bytes)return linux_error(28);
         if(ftruncate(fd,(off_t)end)<0)return fs_error();
-        fs_storage_bytes+=growth;return 0;
+        __atomic_fetch_add(&fs_storage_bytes,growth,__ATOMIC_RELAXED);return 0;
     }
     return linux_error(38);
 }

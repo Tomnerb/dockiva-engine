@@ -99,13 +99,22 @@ static uint64_t hvf_block_ipa_locked(MemoryBacking *backing) {
     hvf_block_last=hvf_nblocks;hvf_blocks[hvf_nblocks++]=(HvfBlock){host,size,ipa};
     return ipa;
 }
+/* Each backing remembers its address, so building tables (every page of a fork)
+   needs no lock: hvf_ipa_epoch moves whenever a block is unmapped, which only happens
+   for a freed backing or with a single thread left. */
+static uint64_t hvf_ipa_epoch=1;
 static uint64_t hvf_block_ipa(MemoryBacking *backing) {
-    pthread_mutex_lock(&hvf_mutex);uint64_t ipa=hvf_block_ipa_locked(backing);pthread_mutex_unlock(&hvf_mutex);
+    uint64_t epoch=__atomic_load_n(&hvf_ipa_epoch,__ATOMIC_ACQUIRE);
+    if(__atomic_load_n(&backing->hvf_epoch,__ATOMIC_ACQUIRE)==epoch)return backing->hvf_ipa;
+    pthread_mutex_lock(&hvf_mutex);uint64_t ipa=hvf_block_ipa_locked(backing);
+    if(ipa) { backing->hvf_ipa=ipa;__atomic_store_n(&backing->hvf_epoch,hvf_ipa_epoch,__ATOMIC_RELEASE); }
+    pthread_mutex_unlock(&hvf_mutex);
     return ipa;
 }
 static void hvf_block_unmap(unsigned i) {
     hvf_check(hv_vm_unmap(hvf_blocks[i].ipa,hvf_blocks[i].size),"hv_vm_unmap");
     hvf_blocks[i]=hvf_blocks[--hvf_nblocks];
+    __atomic_fetch_add(&hvf_ipa_epoch,1,__ATOMIC_RELEASE);
 }
 /* backing_release_hook: no live process maps a freed backing, and the tables of
    a process that used to are rebuilt (its layout changed) before it runs again. */
@@ -722,7 +731,7 @@ static int hvf_unlocked_exit(void) {
     if(ec!=0x15)return 0;                                                     /* SVC from EL0 */
     hvf_check(hv_vcpu_get_reg(hvf_vcpu,HV_REG_X8,&call),"get x8");
     int memory=call==222 || call==215 || call==226 || call==233 || call==214;
-    if(!memory && call!=22 && call!=62 && call!=63 && call!=64 && call!=65 && call!=67 && call!=206 && call!=207)return 0;
+    if(!memory && call!=22 && call!=56 && call!=79 && call!=80 && (call<62 || call>68) && call!=82 && call!=83 && call!=206 && call!=207)return 0;
     hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_ELR_EL1,&elr),"get elr");
     hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_SPSR_EL1,&spsr),"get spsr");
     hvf_get_regs(1,elr,spsr);

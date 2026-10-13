@@ -1,3 +1,8 @@
+/* Pages first.. were freed: the free hint, and map_find's cache, no longer hold below them. */
+static void map_freed(GuestAddressSpace *space,unsigned first) {
+    if(first<space->map_free_hint)space->map_free_hint=first;
+    if(first<space->map_large_from)space->map_large_pages=0;
+}
 static uint64_t linux_error(unsigned error) { return UINT64_C(0)-error; }
 static uint64_t page_up(uint64_t n) { return (n+4095)&~UINT64_C(4095); }
 static void heap_init(void) {
@@ -57,6 +62,6 @@ static uint64_t guest_munmap(uint64_t addr,uint64_t length) {
     uint64_t shared=shared_unmap(addr,bytes);if(shared) return shared;
     if(!address_space_discard_map(address_space,(size_t)first*4096,(size_t)pages*4096)) return linux_error(12); /* release the pages */
     for(unsigned i=first;i<first+pages;i++) address_space->map_flags[i]=0;
-    if(first<address_space->map_free_hint)address_space->map_free_hint=first;
+    map_freed(address_space,first);
     address_space_arena_changed(address_space,first,first+pages);return 0; /* Unmapped holes are permitted. */
 }

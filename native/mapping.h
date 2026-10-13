@@ -15,6 +15,17 @@ static unsigned map_find_free(const unsigned char *flags,unsigned from,unsigned 
     }
     return total;
 }
+/* First fit for pages arena pages, or the arena size if none. A run that long found
+   at start means no such run lies below it, so the next search for as many or more
+   starts there (minus the pages of a run that may straddle it), not at the hint. */
+static unsigned map_find(GuestAddressSpace *space,unsigned pages) {
+    unsigned total=space->map_capacity/4096,from=space->map_free_hint;
+    if(space->map_large_pages && pages>=space->map_large_pages && space->map_large_from>from)
+        from=space->map_large_from-(space->map_large_from-from<space->map_large_pages-1?space->map_large_from-from:space->map_large_pages-1);
+    unsigned start=map_find_free(space->map_flags,from,total,pages);
+    if(start!=total) { space->map_large_from=start;space->map_large_pages=pages; }
+    return start;
+}
 /* Shared memory: a segment over arena pages marked MAP_RESERVED. backing is the
    memory to share (System V shm) or NULL for fresh zeroed memory (MAP_SHARED|
    MAP_ANONYMOUS, charged in full now). fixed is a page address in the arena, or 0. */
@@ -28,7 +39,7 @@ static uint64_t shared_map(uint64_t fixed,uint64_t length,uint64_t prot,MemoryBa
         start=(unsigned)((fixed-MAP_BASE)/4096);
         for(unsigned i=start;i<start+pages;i++)if(address_space->map_flags[i])return linux_error(22);  /* no replacing existing mappings */
     } else {
-        start=map_find_free(address_space->map_flags,address_space->map_free_hint,address_space->map_capacity/4096,pages);
+        start=map_find(address_space,pages);
         if(start==address_space->map_capacity/4096)return linux_error(12);
         if(start==address_space->map_free_hint)address_space->map_free_hint=start+pages;
     }
@@ -47,7 +58,7 @@ static uint64_t shared_unmap(uint64_t address,uint64_t bytes) {
         if(s->base<address || s->base+s->size>address+bytes)return linux_error(22);
         unsigned first=(unsigned)((s->base-MAP_BASE)/4096),pages=(unsigned)(s->size/4096);
         for(unsigned p=first;p<first+pages;p++)address_space->map_flags[p]=0;
-        if(first<address_space->map_free_hint)address_space->map_free_hint=first;
+        map_freed(address_space,first);
         backing_release(s->backing);address_space->seg[i]=address_space->seg[--address_space->nseg];
         address_space_changed(address_space);
     }
@@ -78,7 +89,7 @@ static uint64_t guest_dynamic_mmap(void) {
         if(addr%4096 || addr<MAP_BASE || addr-MAP_BASE>=address_space->map_capacity || page_up(length)>address_space->map_capacity-(addr-MAP_BASE))return linux_error(22);
         start=(unsigned)((addr-MAP_BASE)/4096);
     } else {
-        start=map_find_free(address_space->map_flags,address_space->map_free_hint,address_space->map_capacity/4096,pages);
+        start=map_find(address_space,pages);
         if(start==address_space->map_capacity/4096)return linux_error(12);
         if(start==address_space->map_free_hint)address_space->map_free_hint=start+pages;
     }

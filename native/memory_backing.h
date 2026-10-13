@@ -10,10 +10,13 @@ struct BackingPageGroup { size_t live,count;BackingPage pages[]; };
 /* frozen: the backing was the source of a snapshot. Its memory is never written
    again (each holder writes its own copy instead): with several vCPUs first-touching
    pages at once, a write to a snapshot's source can show through in the snapshot. */
+/* hvf_ipa, hvf_epoch: the hypervisor backend's guest-physical address for it, valid
+   while hvf_epoch matches (see hvf_block_ipa). */
 typedef struct {
     size_t refs,size,mapped_size,page_size;
     unsigned frozen;
     unsigned char *bytes;
+    uint64_t hvf_ipa,hvf_epoch;
     BackingPage *pages[];
 } MemoryBacking;
 #else

@@ -38,6 +38,9 @@ typedef struct {
        16 file-backed. Heap-owned by this process (scheduler images borrow it). */
     unsigned char *map_flags;
     unsigned map_free_hint;           /* every arena page below it is mapped */
+    /* no map_large_pages consecutive free pages lie in [map_free_hint, map_large_from)
+       (0 pages: unknown); first fit for at least that many skips most of it */
+    unsigned map_large_from,map_large_pages;
     unsigned map_top;                 /* no arena page at or above it has ever been mapped */
     uint64_t layout; /* unique revision of the mapping layout (not of page contents) */
     /* mmap-arena changes since revision arena_dirty_since all lie in pages
