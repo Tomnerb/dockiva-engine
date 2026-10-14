@@ -33,7 +33,8 @@ def main():
         if name == 'page-sanitize':
             continue
         result = subprocess.run([str(binary), '--oom-store'], capture_output=True, text=True, timeout=15)
-        passed = result.returncode == 125 and result.stderr == 'vmfree: Guest memory budget exhausted (--memory-limit-mib)\n'
+        # A store past the memory budget is an OOM kill of the process, as Docker's cgroup does.
+        passed = result.returncode == 137 and result.stderr == 'vmfree: out of memory: killed process 1\n'
         rows.append(dict(test=name+'-oom-store', passed=passed, exit=result.returncode,
                          stdout=result.stdout, stderr=result.stderr))
         print(name+'-oom-store', 'PASS' if passed else rows[-1], flush=True)
