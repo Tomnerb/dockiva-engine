@@ -4,6 +4,7 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
+#include <sys/ioctl.h>
 #include <sys/un.h>
 #include <sys/time.h>
 #include <signal.h>
@@ -111,7 +112,8 @@ static int net_outbound; /* --outbound: connect/sendto may reach any IPv4 addres
 #define NET_UDP (1u<<30)  /* net_adopt flag: datagram socket */
 #define NET_UNIX (1u<<29) /* net_adopt flag: AF_UNIX socket */
 static uint64_t net_wait_blocks;
-static int io_input_host(uint64_t guest); /* --stdin's host descriptor, polled like a socket */
+static int io_poll_host(uint64_t guest); /* --stdin's host descriptor or a timerfd's kqueue, polled like a socket */
+static int io_managed(uint64_t fd);static int fs_host(uint64_t n); /* io.h and fs.h, for select */
 /* targeted: only these sockets, the deadline, a signal, a futex wake or a pipe that
    recorded the task in its waiters can end the wait, so the scheduler wakes the task
    for those alone; other blocked calls retry after any I/O event (io_epoch). */
@@ -180,12 +182,16 @@ static struct NetDescription *net_description(unsigned slot) {
     if(!description)fail("Missing socket open description");
     return description;
 }
-static int net_release(unsigned slot) {
-    struct NetDescription *description=net_description(slot);int result=0;
+static int net_description_release(struct NetDescription *description) {
+    int result=0;
     if(!--description->refs) {
         if(description->private_port)net_private_forget(description->private_port);
         epoll_forget_socket(description->host);result=close(description->host);memset(description,0,sizeof(*description));
     }
+    return result;
+}
+static int net_release(unsigned slot) {
+    int result=net_description_release(net_description(slot));
     fd_unbind(net_guest[slot]);net_fd[slot]=0;net_flags[slot]=0;return result;
 }
 static void net_retain_all(void) {
@@ -299,13 +305,37 @@ static uint64_t net_put_address(const struct sockaddr_in *address,uint64_t out,u
 static int io_poll_ready(uint64_t guest,unsigned events);
 /* sendmsg/recvmsg: Linux msghdr {name, namelen, iov, iovlen, control, controllen,
    flags} (56 bytes). Addresses on UDP; no ancillary data. */
+static void fs_pack(unsigned char *p,unsigned offset,uint64_t value,unsigned size); /* fs.h */
+static int fd_carry_send(uint64_t guestfd);                 /* syscall.h: SCM_RIGHTS */
+static int64_t fd_carry_receive(int carrier,int cloexec);
+static void fd_carry_cancel(int carrier);
+#define NET_RIGHTS_MAX 253                                    /* SCM_MAX_FD */
 static uint64_t net_message(int fd,unsigned slot,uint64_t header,uint64_t flag_word,int receiving) {
-    int udp=(int)net_description(slot)->udp;unsigned flags=(unsigned)flag_word;
-    if(flags&~(64u|16384u|(receiving?2u:0u)))return linux_error(95);
+    int udp=(int)net_description(slot)->udp,unix_socket=(int)net_description(slot)->unix_socket;unsigned flags=(unsigned)flag_word;
+    if(flags&~(64u|16384u|(receiving?2u|0x40000000u:0u)))return linux_error(95);
     unsigned char *h=lookup(header,56,receiving?6:4);if(!h)return linux_error(14);
-    uint64_t name=le(h,8),namelen=le(h+8,4),table=le(h+16,8),count=le(h+24,8),controllen=le(h+40,8);
+    uint64_t name=le(h,8),namelen=le(h+8,4),table=le(h+16,8),count=le(h+24,8),control=le(h+32,8),controllen=le(h+40,8);
     if(count>1024)return linux_error(22);
-    if(!receiving && controllen)return linux_error(95);
+    /* SCM_RIGHTS on unix sockets: each descriptor travels as a carrier (fd_carry_send);
+       credentials (SCM_CREDENTIALS) are the container's anyway and are dropped. */
+    static int carriers[NET_RIGHTS_MAX];unsigned carried=0;
+    static unsigned char host_control[CMSG_SPACE(NET_RIGHTS_MAX*sizeof(int))];
+    if(!receiving && controllen) {
+        const unsigned char *c=controllen<=4096?lookup(control,controllen,4):NULL;if(!c)return linux_error(controllen>4096?105:14);
+        for(uint64_t at=0;at+16<=controllen;) {
+            uint64_t length=le(c+at,8);unsigned level=(unsigned)le(c+at+8,4),type=(unsigned)le(c+at+12,4);
+            if(length<16 || length>controllen-at) { for(unsigned i=0;i<carried;i++)fd_carry_cancel(carriers[i]);return linux_error(22); }
+            if(level==1 && type==1) {
+                if(!unix_socket) { for(unsigned i=0;i<carried;i++)fd_carry_cancel(carriers[i]);return linux_error(22); }
+                for(uint64_t k=16;k+4<=length;k+=4) {
+                    int carrier=carried<NET_RIGHTS_MAX?fd_carry_send(le(c+at+k,4)):-22;
+                    if(carrier<0) { for(unsigned i=0;i<carried;i++)fd_carry_cancel(carriers[i]);return linux_error((uint64_t)-carrier); }
+                    carriers[carried++]=carrier;
+                }
+            }
+            at+=(length+7)&~UINT64_C(7);
+        }
+    }
     if(!receiving && name && !udp)return linux_error(106);
     unsigned char *entries=count?lookup(table,count*16,4):NULL;if(count && !entries)return linux_error(14);
     static struct iovec vec[1024];uint64_t total=0;
@@ -320,8 +350,19 @@ static uint64_t net_message(int fd,unsigned slot,uint64_t header,uint64_t flag_w
     m.msg_iov=vec;m.msg_iovlen=(int)count;
     if(name && udp && !receiving) { uint64_t invalid=net_address(name,namelen,&address,0,1);if(invalid)return invalid; }
     if(name && udp) { m.msg_name=&address;m.msg_namelen=sizeof(address); }
+    if(carried) {
+        m.msg_control=host_control;m.msg_controllen=(socklen_t)CMSG_SPACE(carried*sizeof(int));
+        struct cmsghdr *c=CMSG_FIRSTHDR(&m);c->cmsg_level=SOL_SOCKET;c->cmsg_type=SCM_RIGHTS;c->cmsg_len=(socklen_t)CMSG_LEN(carried*sizeof(int));
+        memcpy(CMSG_DATA(c),carriers,carried*sizeof(int));
+    }
+    unsigned room=receiving && unix_socket && !(flags&2) && controllen>=20?(unsigned)((controllen-16)/4):0;  /* never PEEK carriers */
+    if(room) { if(room>NET_RIGHTS_MAX)room=NET_RIGHTS_MAX;m.msg_control=host_control;m.msg_controllen=(socklen_t)CMSG_SPACE(room*sizeof(int)); }
     if(receiving)net_description(slot)->reads++;else net_description(slot)->writes++;
     ssize_t result=receiving?recvmsg(fd,&m,(flags&2)?MSG_PEEK:0):sendmsg(fd,&m,0);
+    if(carried) {                                       /* sent: the message holds its own copies */
+        int sent=result>=0;
+        for(unsigned i=0;i<carried;i++) { if(sent)close(carriers[i]);else fd_carry_cancel(carriers[i]); }
+    }
     if(result<0 && net_scheduled && !(flags&64) && !(net_description(slot)->flags&2048) && (errno==EAGAIN || errno==EWOULDBLOCK))
         return net_suspend_one(fd,receiving?POLLIN:POLLOUT,receiving?net_description(slot)->read_timeout:net_description(slot)->write_timeout);
     net_wait.active=0;if(result<0)return net_error();
@@ -329,8 +370,58 @@ static uint64_t net_message(int fd,unsigned slot,uint64_t header,uint64_t flag_w
         if(name && udp) { uint64_t invalid=net_put_address(&address,name,header+8);if(invalid)return invalid; }
         else memset(h+8,0,4);
         memset(h+40,0,8);memset(h+48,0,4);if(m.msg_flags&MSG_TRUNC)h[48]=0x20;            /* Linux MSG_TRUNC */
+        if(room && m.msg_controllen) {
+            /* Install the descriptors received; those that do not fit are closed (MSG_CTRUNC). */
+            unsigned char *out=lookup(control,controllen,2);unsigned installed=0,truncated=(m.msg_flags&MSG_CTRUNC)!=0;
+            for(struct cmsghdr *c=CMSG_FIRSTHDR(&m);c;c=CMSG_NXTHDR(&m,c)) {
+                if(c->cmsg_level!=SOL_SOCKET || c->cmsg_type!=SCM_RIGHTS)continue;
+                unsigned n=(unsigned)((c->cmsg_len-CMSG_LEN(0))/sizeof(int));int *carrier=(int *)(void *)CMSG_DATA(c);
+                for(unsigned i=0;i<n;i++) {
+                    int64_t guest=out && installed<room?fd_carry_receive(carrier[i],(flags&0x40000000u)!=0):-1;
+                    if(guest<0) { fd_carry_cancel(carrier[i]);truncated=1;continue; }
+                    fs_pack(out,16+installed*4,(uint64_t)guest,4);installed++;
+                }
+            }
+            if(installed) {
+                fs_pack(out,0,16+installed*4,8);fs_pack(out,8,1,4);fs_pack(out,12,1,4);
+                fs_pack(h+40,0,(16+installed*4+7)&~7u,8);
+            }
+            if(truncated)h[48]|=8;                                                           /* Linux MSG_CTRUNC */
+        }
     }
     return (uint64_t)result;
+}
+/* ioctl on a socket: FIONBIO, FIONREAD (TIOCINQ), FIOCLEX and FIONCLEX. */
+static uint64_t net_ioctl(void) {
+    int fd=net_host(cpu->gpr[0]);if(fd<0)return linux_error(9);
+    unsigned slot=(unsigned)net_slot(cpu->gpr[0]);uint64_t request=cpu->gpr[1];
+    if(request==0x5451 || request==0x5450) { net_flags[slot]=(net_flags[slot]&~524288u)|(request==0x5451?524288u:0);return 0; }
+    if(request==0x5452) { const unsigned char *p=lookup(cpu->gpr[2],4,4);return p?0:linux_error(14); } /* FIOASYNC: accepted; no SIGIO is sent (nginx's channels need none) */
+    if(request==0x5421) {
+        const unsigned char *p=lookup(cpu->gpr[2],4,4);if(!p)return linux_error(14);
+        int on=le(p,4)!=0;
+        if(net_scheduled) { struct NetDescription *d=net_description(slot);d->flags=(d->flags&~2048u)|(on?2048u:0);return 0; }
+        int f=fcntl(fd,F_GETFL);if(f<0)return net_error();
+        return fcntl(fd,F_SETFL,on?f|O_NONBLOCK:f&~O_NONBLOCK)<0?net_error():0;
+    }
+    if(request==0x541B) {
+        int n=0;if(ioctl(fd,FIONREAD,&n)<0)return net_error();
+        unsigned char *p=lookup(cpu->gpr[2],4,2);if(!p)return linux_error(14);
+        for(unsigned i=0;i<4;i++)p[i]=(unsigned char)((unsigned)n>>(8*i));
+        return 0;
+    }
+    return linux_error(25);
+}
+/* Common socket options: Linux level and name to the host's; 0 when unknown. */
+static int net_option(uint64_t level,uint64_t name,int *host_level,int *host_name) {
+    if(level==1) { /* SOL_SOCKET */
+        *host_level=SOL_SOCKET;
+        *host_name=name==2?SO_REUSEADDR:name==9?SO_KEEPALIVE:name==7?SO_SNDBUF:name==8?SO_RCVBUF:name==15?SO_REUSEPORT:name==13?SO_LINGER:name==6?SO_BROADCAST:-1;
+    } else if(level==6) { /* IPPROTO_TCP */
+        *host_level=IPPROTO_TCP;
+        *host_name=name==1?TCP_NODELAY:name==3?TCP_NOPUSH:name==4?TCP_KEEPALIVE:name==5?TCP_KEEPINTVL:name==6?TCP_KEEPCNT:-1; /* TCP_CORK: Darwin's TCP_NOPUSH */
+    } else *host_name=-1;
+    return *host_name>=0;
 }
 static uint64_t net_call(uint64_t number) {
     int fd=net_host(cpu->gpr[0]);if(fd<0) return linux_error(9);
@@ -361,8 +452,19 @@ static uint64_t net_call(uint64_t number) {
         for(unsigned i=0;i<4;i++)lenout[i]=(unsigned char)(want>>(8*i));
         return 0;
     }
+    if(number==209 && !(cpu->gpr[1]==1 && cpu->gpr[2]==4)) {
+        /* Options set through setsockopt read back from the host (Java reads its buffer sizes). */
+        int host_level,host_name;if(!net_option(cpu->gpr[1],cpu->gpr[2],&host_level,&host_name))return linux_error(92);
+        unsigned want=host_name==SO_LINGER?8:4;
+        unsigned char *len=lookup(cpu->gpr[4],4,4),*lenout=lookup(cpu->gpr[4],4,2),*out=lookup(cpu->gpr[3],want,2);
+        if(!len || !lenout || !out)return linux_error(14);if(le(len,4)<want)return linux_error(22);
+        if(host_name==SO_LINGER) {
+            struct linger value;socklen_t size=sizeof(value);if(getsockopt(fd,SOL_SOCKET,SO_LINGER,&value,&size))return net_error();
+            fs_pack(out,0,(unsigned)value.l_onoff,4);fs_pack(out,4,(unsigned)value.l_linger,4);
+        } else { int value=0;socklen_t size=sizeof(value);if(getsockopt(fd,host_level,host_name,&value,&size))return net_error();fs_pack(out,0,(unsigned)value,4); }
+        fs_pack(lenout,0,want,4);return 0;
+    }
     if(number==209 && net_scheduled) {
-        if(cpu->gpr[1]!=1 || cpu->gpr[2]!=4)return linux_error(95);
         unsigned char *len=lookup(cpu->gpr[4],4,4),*lenout=lookup(cpu->gpr[4],4,2),*out=lookup(cpu->gpr[3],4,2);
         if(!len || !lenout || !out)return linux_error(14);if(le(len,4)<4)return linux_error(22);
         int error=0;socklen_t size=sizeof(error);
@@ -377,14 +479,7 @@ static uint64_t net_call(uint64_t number) {
         /* IP_MTU_DISCOVER and IP_RECVERR (glibc's resolver requires it): accepted;
            ICMP errors on connected UDP sockets still surface as receive errors. */
         if(level==0 && (name==10 || name==11)) return 0;
-        if(level==1) { /* SOL_SOCKET */
-            host_level=SOL_SOCKET;
-            host_name=name==2?SO_REUSEADDR:name==9?SO_KEEPALIVE:name==7?SO_SNDBUF:name==8?SO_RCVBUF:name==15?SO_REUSEPORT:name==13?SO_LINGER:name==6?SO_BROADCAST:-1;
-        } else if(level==6) { /* IPPROTO_TCP */
-            host_level=IPPROTO_TCP;
-            host_name=name==1?TCP_NODELAY:name==4?TCP_KEEPALIVE:name==5?TCP_KEEPINTVL:name==6?TCP_KEEPCNT:-1;
-        }
-        if(host_name<0)return linux_error(92);
+        if(!net_option(level,name,&host_level,&host_name))return linux_error(92);
         if(host_name==SO_LINGER) {
             if(cpu->gpr[4]!=8)return linux_error(22);
             const unsigned char *p=lookup(cpu->gpr[3],8,4);if(!p)return linux_error(14);
@@ -393,7 +488,7 @@ static uint64_t net_call(uint64_t number) {
         }
         if(cpu->gpr[4]<4) return linux_error(22);
         const unsigned char *p=lookup(cpu->gpr[3],4,4);if(!p) return linux_error(14);
-        int value=(int)le(p,4);if(host_name==SO_REUSEADDR || host_name==SO_KEEPALIVE || host_name==SO_REUSEPORT || host_name==TCP_NODELAY || host_name==SO_BROADCAST)value=value!=0;
+        int value=(int)le(p,4);if(host_name==SO_REUSEADDR || host_name==SO_KEEPALIVE || host_name==SO_REUSEPORT || host_name==TCP_NODELAY || host_name==TCP_NOPUSH || host_name==SO_BROADCAST)value=value!=0;
         return setsockopt(fd,host_level,host_name,&value,sizeof(value))<0?net_error():0;
     }
     if((number==200 || number==203) && net_description(slot)->unix_socket) {
@@ -458,6 +553,7 @@ static uint64_t net_call(uint64_t number) {
             int f=fcntl(fd,F_GETFL);if(f<0)return net_error();
             return fcntl(fd,F_SETFL,(f&~O_NONBLOCK)|((cpu->gpr[2]&2048)?O_NONBLOCK:0))<0?net_error():0;
         }
+        if(cpu->gpr[1]==8 || cpu->gpr[1]==9)return 0; /* F_SETOWN, F_GETOWN: accepted; no SIGIO is sent (see FIOASYNC) */
         return linux_error(95);
     }
     if(number==210) { if(cpu->gpr[1]>2)return linux_error(22);return shutdown(fd,(int)cpu->gpr[1])<0?net_error():0; }
@@ -588,7 +684,7 @@ static uint64_t net_poll(void) {
     for(unsigned i=0;i<count;i++) {
         int32_t guest=(int32_t)le(in+i*8,4);unsigned events=(unsigned)le(in+i*8+4,2);
         fds[i].fd=guest<0?-1:net_host((uint64_t)guest);
-        if(fds[i].fd<0 && guest>=0)fds[i].fd=io_input_host((uint64_t)guest);
+        if(fds[i].fd<0 && guest>=0)fds[i].fd=io_poll_host((uint64_t)guest);
         fds[i].events=(short)(((events&1)?POLLIN:0)|((events&4)?POLLOUT:0));fds[i].revents=0;
         other[i]=0;
         if(guest>=0 && fds[i].fd<0) { other[i]=io_poll_ready((uint64_t)guest,events);if(other[i]<0)other[i]=32;if(other[i])ready_other++; }
@@ -614,4 +710,57 @@ static uint64_t net_poll(void) {
         out[i*8+6]=(unsigned char)value;out[i*8+7]=0;if(value)ready++;
     }
     return ready;
+}
+/* pselect6 as ppoll over the descriptors in its sets (Linux fd_set: 64 per word).
+   The signal mask is ignored, as ppoll's is unsupported; the timeout is not updated. */
+static uint64_t net_select(void) {
+    uint64_t nfds=cpu->gpr[0];if(nfds>NET_FD_LIMIT)return linux_error(22);
+    unsigned bytes=(unsigned)((nfds+63)/64*8);
+    /* The sets are read before they are rewritten (in and out are the same memory). */
+    static unsigned char wanted[3][NET_FD_LIMIT/8];
+    unsigned char *in[3]={0},*out[3]={0};
+    for(unsigned s=0;s<3;s++)if(cpu->gpr[1+s] && bytes) {
+        const unsigned char *p=lookup(cpu->gpr[1+s],bytes,4);out[s]=lookup(cpu->gpr[1+s],bytes,2);if(!p || !out[s])return linux_error(14);
+        memcpy(wanted[s],p,bytes);in[s]=wanted[s];
+    }
+    unsigned timeout=NET_FOREVER;
+    if(cpu->gpr[4]) {
+        unsigned char *ts=lookup(cpu->gpr[4],16,4);if(!ts)return linux_error(14);
+        uint64_t sec=le(ts,8),ns=le(ts+8,8);if(ns>=1000000000 || (int64_t)sec<0)return linux_error(22);
+        uint64_t ms=sec>UINT32_MAX/1000?NET_FOREVER:sec*1000+(ns+999999)/1000000;
+        timeout=ms>=NET_FOREVER?NET_FOREVER:(unsigned)ms;
+    }
+    static struct pollfd fds[NET_FD_LIMIT];static int other[NET_FD_LIMIT];static unsigned guest[NET_FD_LIMIT];
+    unsigned count=0,ready_other=0;
+    for(unsigned fd=0;fd<nfds;fd++) {
+        unsigned bit=fd%8,byte=fd/8,events=0;
+        for(unsigned s=0;s<3;s++)if(in[s] && (in[s][byte]>>bit&1))events|=s==0?1u:s==1?4u:2u;
+        if(!events)continue;
+        int host=net_host(fd);if(host<0)host=io_poll_host(fd);
+        if(host<0 && !io_managed(fd) && fs_host(fd)<0)return linux_error(9);
+        fds[count]=(struct pollfd){host,(short)(((events&1)?POLLIN:0)|((events&4)?POLLOUT:0)|((events&2)?POLLPRI:0)),0};
+        other[count]=0;guest[count]=fd;
+        if(host<0) { int r=io_managed(fd)?io_poll_ready(fd,events&5):(int)(events&5);if(r<0)r=0;other[count]=r;if(r)ready_other++; }
+        count++;
+    }
+    int wait_ms=ready_other || net_scheduled?0:timeout==NET_FOREVER?-1:timeout>INT32_MAX?INT32_MAX:(int)timeout;
+    int result=count?poll(fds,count,wait_ms):0;
+    if(result==0 && !ready_other && timeout && net_scheduled) {
+        uint64_t wait=net_suspend(fds,count,timeout);
+        for(unsigned i=0;i<count;i++)if(fds[i].fd<0)net_wait.targeted=0;
+        if(wait==IO_BLOCK)return wait;
+    }
+    net_wait.active=0;
+    if(result<0)return net_error();
+    for(unsigned s=0;s<3;s++)if(out[s])memset(out[s],0,bytes);
+    uint64_t total=0;
+    for(unsigned i=0;i<count;i++) {
+        unsigned fd=guest[i],bit=fd%8,byte=fd/8;short e=fds[i].revents;
+        unsigned value=fds[i].fd<0?(unsigned)other[i]:(((e&(POLLIN|POLLHUP|POLLERR))?1u:0)|((e&(POLLOUT|POLLERR))?4u:0)|((e&POLLPRI)?2u:0));
+        if(fds[i].fd<0 && (value&(8|16)))value|=(value&8)?5u:1u;   /* a hung-up pipe reads end of file: readable, as on Linux */
+        if((value&1) && out[0] && (in[0][byte]>>bit&1)) { out[0][byte]|=(unsigned char)(1u<<bit);total++; }
+        if((value&4) && out[1] && (in[1][byte]>>bit&1)) { out[1][byte]|=(unsigned char)(1u<<bit);total++; }
+        if((value&2) && out[2] && (in[2][byte]>>bit&1)) { out[2][byte]|=(unsigned char)(1u<<bit);total++; }
+    }
+    return total;
 }

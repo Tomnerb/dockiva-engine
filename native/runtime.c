@@ -11,6 +11,7 @@
 /* Bounded Linux user-mode runtime: interpreter and optional native (Hypervisor.framework) backend. */
 #include <stdint.h>
 #include <stdio.h>
+#include <sys/sysctl.h>
 #include <stdlib.h>
 #include <string.h>
 #include <inttypes.h>
@@ -100,16 +101,16 @@ static void load_stream_inner(FILE *f,int interpreter) {
     struct stat input_stat;
     if(fstat(fileno(f),&input_stat)<0 || !S_ISREG(input_stat.st_mode) || input_stat.st_size<0) { fclose(f);fail("ELF input must be a readable regular file"); }
     if((uint64_t)input_stat.st_size>elf_input_limit) { fclose(f);fail(elf_input_limit==LIMIT?"Input read failed or exceeds 16 MiB":"Input read failed or exceeds configured ELF limit"); }
-    size_t expected=(size_t)input_stat.st_size;
-    /* Allocate actual input bytes, not the configured maximum. The extra byte
-       detects growth during the read; shrinking also fails deterministically. */
-    address_space->file_data=malloc(expected+1);if(!address_space->file_data) { fclose(f);fail("Allocation failed"); }
-    size_t size=fread(address_space->file_data,1,expected+1,f);
-    int error=ferror(f);fclose(f);
-    if(error || size!=expected)fail("ELF input changed or could not be read");
+    size_t size=(size_t)input_stat.st_size;
+    /* Mapped, not read: pages load lazily and are not charged to the guest's memory
+       limit (an executable is page cache on Linux). Segments are copied out below. */
+    void *mapped=size?mmap(NULL,size,PROT_READ,MAP_PRIVATE,fileno(f),0):MAP_FAILED;
+    fclose(f);
+    if(mapped==MAP_FAILED)fail("ELF input could not be read");
+    address_space->file_data=mapped;address_space->file_size=size;
     const unsigned char *d=address_space->file_data;
     if(size<64 || memcmp(d,"\177ELF\002\001\001",7)) fail("Expected little-endian ELF64 version 1");
-    uint64_t elf_type=le(d+16,2),bias=elf_type==3?(interpreter?UINT64_C(0x2000000):UINT64_C(0x400000)):0;
+    uint64_t elf_type=le(d+16,2),bias=elf_type==3?(interpreter?INTERPRETER_BASE:UINT64_C(0x400000)):0;
     if(interpreter && elf_type!=3)fail("Interpreter must be ET_DYN");
     if((elf_type!=2 && elf_type!=3) || le(d+18,2)!=183 || le(d+20,4)!=1) fail("Only ARM64 ET_EXEC/static PIE version 1 supported");
     uint64_t phoff=le(d+32,8), count=le(d+56,2), total=0;
@@ -157,9 +158,17 @@ static void load_stream_inner(FILE *f,int interpreter) {
         uint64_t image_limit=elf_input_limit>LIMIT?(uint64_t)elf_input_limit*4:LIMIT;
         if(mem>image_limit-total) fail(image_limit==LIMIT?"Guest memory exceeds 16 MiB limit":"Guest image exceeds 4x the configured ELF limit");
         total+=mem;
-        for(unsigned j=0;j<address_space->nseg;j++)
-            if(addr<address_space->seg[j].base+address_space->seg[j].size && address_space->seg[j].base<addr+mem) fail("Overlapping segments unsupported");
-        MemoryBacking *buffer=backing_alloc((size_t)mem,1);
+        for(unsigned j=0;j<address_space->nseg;j++) {
+            Segment *s=&address_space->seg[j];
+            if(!(addr<s->base+s->size && s->base<addr+mem))continue;
+            /* Segments that share a page (node, Go binaries): as Linux maps them in
+               order, the later one takes the page, holding the same file bytes. */
+            if(dynamic_enabled && s->base<addr && s->base+s->size<=addr+mem) { s->size=addr-s->base;continue; }
+            fail("Overlapping segments unsupported");
+        }
+        /* Read-only segments (text) are not charged to the memory limit: Linux keeps
+           them in its reclaimable page cache (grafana's binary is 485 MB). */
+        MemoryBacking *buffer=(flags&2)?backing_alloc((size_t)mem,1):backing_alloc_text((size_t)mem);
         if(!buffer) fail("Allocation failed");
         memcpy(backing_data(buffer),d+(size_t)off,(size_t)bytes);
         if(address_space->nseg>=128) { backing_release(buffer);fail("Too many load segments"); }
@@ -172,12 +181,17 @@ static void load_stream_inner(FILE *f,int interpreter) {
         int fd=fs_open_root_file(interpreter_path);if(fd<0)fail("Cannot open guest interpreter");
         FILE *input=fdopen(fd,"rb");if(!input) { close(fd);fail("Cannot read guest interpreter"); }
         uint64_t main_entry=address_space->entry,main_ph=address_space->phaddr,main_count=address_space->phcount;
-        free(address_space->file_data);address_space->file_data=NULL;
+        munmap(address_space->file_data,address_space->file_size);address_space->file_data=NULL;
         load_stream_inner(input,1);
-        address_space->interpreter_base=UINT64_C(0x2000000);address_space->entry=main_entry;address_space->phaddr=main_ph;address_space->phcount=main_count;
+        address_space->interpreter_base=INTERPRETER_BASE;address_space->entry=main_entry;address_space->phaddr=main_ph;address_space->phcount=main_count;
     }
 }
-static void load_stream(FILE *f) { load_stream_inner(f,0); }
+/* The file mapping is loader input only: drop it as soon as the segments are copied,
+   so no image (vfork shares its parent's) ever holds, and later unmaps, it. */
+static void load_stream(FILE *f) {
+    load_stream_inner(f,0);
+    if(address_space->file_data) { munmap(address_space->file_data,address_space->file_size);address_space->file_data=NULL; }
+}
 static void store_le(uint64_t addr, uint64_t value, unsigned bytes) {
     cpu->exclusive_valid=0;
     unsigned char *p=lookup(addr,bytes,2);
@@ -188,6 +202,28 @@ static uint64_t read_mem(uint64_t addr, unsigned bytes) {
     const unsigned char *p=lookup(addr,bytes,4);
     if(!p) { if(trace)fprintf(stderr,"read address=0x%" PRIx64 " bytes=%u\n",addr,bytes);fail("Guest read is unmapped or permission denied"); }
     return le(p,bytes);
+}
+/* AT_HWCAP and AT_HWCAP2: when guest code runs natively, the host CPU's features
+   (macOS hw.optional.arm.FEAT_*) as Linux reports them; the interpreter reports none.
+   Pointer authentication and BTI are left out: they need kernel support. */
+static int native_cpu;
+static uint64_t hwcap_bits(int second) {
+    if(!native_cpu)return 0;
+    static const struct { const char *feature;unsigned bit,second; } features[]={
+        {"FEAT_AES",3,0},{"FEAT_PMULL",4,0},{"FEAT_SHA1",5,0},{"FEAT_SHA256",6,0},{"FEAT_CRC32",7,0},{"FEAT_LSE",8,0},
+        {"FEAT_FP16",9,0},{"FEAT_FP16",10,0},{"FEAT_RDM",12,0},{"FEAT_JSCVT",13,0},{"FEAT_FCMA",14,0},{"FEAT_LRCPC",15,0},
+        {"FEAT_DPB",16,0},{"FEAT_SHA3",17,0},{"FEAT_DotProd",20,0},{"FEAT_SHA512",21,0},{"FEAT_FHM",23,0},{"FEAT_DIT",24,0},
+        {"FEAT_LSE2",25,0},{"FEAT_LRCPC2",26,0},{"FEAT_FlagM",27,0},{"FEAT_SSBS",28,0},{"FEAT_SB",29,0},
+        {"FEAT_DPB2",0,1},{"FEAT_FlagM2",7,1},{"FEAT_FRINTTS",8,1},{"FEAT_I8MM",13,1},{"FEAT_BF16",14,1}};
+    uint64_t bits=second?0:3;                                                          /* FP and ASIMD */
+#ifdef __APPLE__
+    for(unsigned i=0;i<sizeof(features)/sizeof(*features);i++) {
+        if(features[i].second!=(unsigned)second)continue;
+        char name[64];int value=0;size_t size=sizeof(value);snprintf(name,sizeof(name),"hw.optional.arm.%s",features[i].feature);
+        if(!sysctlbyname(name,&value,&size,NULL,0) && value)bits|=UINT64_C(1)<<features[i].bit;
+    }
+#endif
+    return bits;
 }
 static void startup(int argc, const char **argv, unsigned envc, const char **env) {
     const uint64_t base=STACK_TOP-STACK_SIZE, size=STACK_SIZE;
@@ -204,17 +240,24 @@ static void startup(int argc, const char **argv, unsigned envc, const char **env
     }
     address_space_changed(address_space);
     static uint64_t args[EXEC_ENTRIES],envs[EXEC_ENTRIES],vector[2*EXEC_ENTRIES+64];
-    uint64_t cursor=base+size,total=0;
-    for(unsigned group=0;group<2;group++) {
-        unsigned count=group?envc:(unsigned)argc;
-        for(unsigned i=0;i<count;i++) {
-            const char *v=group?env[i]:argv[i]; size_t length=strlen(v)+1;
+    /* As Linux: argument then environment strings in ascending order (libuv measures
+       the process title from argv[0] to the end of the last argument), then an 8-byte
+       zero end marker at the top. */
+    uint64_t total=0;
+    for(unsigned group=0;group<2;group++)
+        for(unsigned i=0;i<(group?envc:(unsigned)argc);i++) {
+            size_t length=strlen(group?env[i]:argv[i])+1;
             if(length>EXEC_STRINGS-total) fail("Arguments and environment exceed 1 MiB");
-            total+=length; cursor-=length;
-            memcpy(backing_data(data)+(size_t)(cursor-base),v,length);
-            if(group) envs[i]=cursor; else args[i]=cursor;
+            total+=length;
         }
-    }
+    uint64_t cursor=base+size-8-total,next=cursor;
+    for(unsigned group=0;group<2;group++)
+        for(unsigned i=0;i<(group?envc:(unsigned)argc);i++) {
+            const char *v=group?env[i]:argv[i];size_t length=strlen(v)+1;
+            memcpy(backing_data(data)+(size_t)(next-base),v,length);
+            if(group) envs[i]=next; else args[i]=next;
+            next+=length;
+        }
     cursor-=16;
     if(getentropy(backing_data(data)+(size_t)(cursor-base),16)<0)fail("Cannot initialize guest startup randomness");
     uint64_t random_address=cursor;
@@ -226,6 +269,7 @@ static void startup(int argc, const char **argv, unsigned envc, const char **env
     vector[n++]=0;
     for(unsigned i=0;i<envc;i++) vector[n++]=envs[i];
     vector[n++]=0;
+    unsigned aux=n;                                                                   /* AT_* pairs from here */
     if(address_space->phaddr) { vector[n++]=3;vector[n++]=address_space->phaddr; }
     vector[n++]=4; vector[n++]=56;
     vector[n++]=5; vector[n++]=address_space->phcount;
@@ -236,14 +280,16 @@ static void startup(int argc, const char **argv, unsigned envc, const char **env
     vector[n++]=12; vector[n++]=guest_uid;
     vector[n++]=13; vector[n++]=guest_gid;
     vector[n++]=14; vector[n++]=guest_gid;
-    vector[n++]=16; vector[n++]=0; /* No optional CPU features advertised. */
+    vector[n++]=16; vector[n++]=hwcap_bits(0);
     vector[n++]=17; vector[n++]=100;
     vector[n++]=23; vector[n++]=0;
     vector[n++]=25; vector[n++]=random_address;
-    vector[n++]=26; vector[n++]=0;
+    vector[n++]=26; vector[n++]=hwcap_bits(1);
     vector[n++]=31; vector[n++]=args[0];
     if(vdso_backing) { vector[n++]=33; vector[n++]=VDSO_BASE; } /* AT_SYSINFO_EHDR */
     vector[n++]=0; vector[n++]=0;
+    /* Kept for /proc/self/auxv. */
+    address_space->auxv_count=n-aux<48?n-aux:48;memcpy(address_space->auxv,vector+aux,address_space->auxv_count*8);
     cpu->sp=(cursor-n*8)&~UINT64_C(15);
     for(unsigned i=0;i<n;i++) store_le(cpu->sp+i*8,vector[i],8);
 }
@@ -954,7 +1000,7 @@ int main(int argc,char **argv) {
             break;
         } else if(!strcmp(argv[i],"--cpu-backend") && i+1<argc) {
             const char *backend=argv[++i];
-            if(!strcmp(backend,"hvf"))use_hvf=1;
+            if(!strcmp(backend,"hvf"))use_hvf=native_cpu=1;
             else if(strcmp(backend,"interpreter"))fail("Unknown CPU backend");
         } else if(!strcmp(argv[i],"--root") && i+1<argc) {
             if(fs_root>=0) fail("Root specified twice");
@@ -1019,8 +1065,8 @@ int main(int argc,char **argv) {
             const char *s=argv[++i];char *end;errno=0;
             if(*s<'0' || *s>'9')fail("Invalid compatibility limit");
             unsigned long value=strtoul(s,&end,10);
-            if(errno || *end || value<16 || value>(mapping?2048u:64u))fail("Compatibility limit outside allowed range");
-            if(mapping)address_space->map_capacity=(unsigned)value*1024*1024;
+            if(errno || *end || value<16 || value>(mapping?MAP_MAX>>20:1024u))fail("Compatibility limit outside allowed range");
+            if(mapping)address_space->map_capacity=(uint64_t)value<<20;
             else elf_input_limit=(unsigned)value*1024*1024;
         }
         else if((!strcmp(argv[i],"--uid") || !strcmp(argv[i],"--gid")) && i+1<argc) {
@@ -1050,6 +1096,7 @@ int main(int argc,char **argv) {
 #else
         if(terminal_enabled || profiling)fail("Hypervisor backend does not yet support terminal or profiling options");
         schedule_enabled=net_scheduled=1; /* each guest thread is a scheduler entity */
+        map_rwx_allowed=1;
 #endif
     }
     if(fs_root>=0 && fs_storage_limit && fs_scan_budget(fs_root,0)<0)fail("Guest root exceeds storage, entry or traversal budget");
@@ -1076,7 +1123,7 @@ int main(int argc,char **argv) {
     if(stdin_host && !terminal_enabled) {
         int flags=fcntl(0,F_GETFL);
         if(flags<0 || fcntl(0,F_SETFL,flags|O_NONBLOCK)<0)fail("--stdin needs an open standard input");
-        io_fds[0]=(GuestIO){IO_INPUT,0,0,NULL,NULL};
+        io_fds[0]=(GuestIO){IO_INPUT,0,0,NULL,NULL,NULL,NULL};
     }
 #ifdef VMFREE_HVF
     if(use_hvf)return hvf_run(steps);

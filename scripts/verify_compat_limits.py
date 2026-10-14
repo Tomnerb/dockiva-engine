@@ -15,8 +15,8 @@ with tempfile.TemporaryDirectory() as temp:
             print('PASS',runtime,options)
         check([],False)
         check(['--elf-limit-mib','64'],True)
-        check(['--elf-limit-mib','64','--memory-limit-mib','16'],False)
-        for option,values in [('--elf-limit-mib',['15','65','-1','x']),('--mmap-limit-mib',['15','2049','-1','x'])]:
+        check(['--elf-limit-mib','64','--memory-limit-mib','16'],True)  # the executable is mapped, not charged to memory
+        for option,values in [('--elf-limit-mib',['15','1025','-1','x']),('--mmap-limit-mib',['15','12289','-1','x'])]:
             for value in values:check([option,value],False)
         with binary.open('r+b') as stream:stream.truncate(64*1024*1024+1)
         check(['--elf-limit-mib','64'],False)

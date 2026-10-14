@@ -55,7 +55,7 @@ int main(void) {
     for(unsigned i=0;i<PIPE_SLOTS;i++)assert(!io_pipes[i].data);
     memset(fd_kind+3,0,sizeof(fd_kind)-3); /* io_cleanup released every slot */
     FILE *file=tmpfile();assert(file);fs_fd[0]=dup(fileno(file))+1;assert(fs_fd[0]>0);
-    IO(1)=(GuestIO){IO_FILE,1,dup(fileno(file)),NULL,NULL};assert(IO(1).host>=0);assert(invoke(25,1,1,0)==1);
+    IO(1)=(GuestIO){IO_FILE,1,dup(fileno(file)),NULL,NULL,NULL,NULL};assert(IO(1).host>=0);assert(invoke(25,1,1,0)==1);
     assert(invoke(25,1,2,0)==0);assert(invoke(25,1,1,0)==0);
     fs_writable=0;assert(invoke(64,1,0x2000,2)==linux_error(30));
     fs_writable=1;fs_written=64u*1024u*1024u-1;assert(invoke(64,1,0x2000,2)==linux_error(27));

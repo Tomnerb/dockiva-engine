@@ -34,13 +34,13 @@ static int address_space_map_flags(GuestAddressSpace *space) {
     return space->map_flags!=NULL;
 }
 static void address_space_reset(GuestAddressSpace *space) {
-    unsigned capacity=space->map_capacity;
+    uint64_t capacity=space->map_capacity;
     memset(space,0,sizeof(*space));space->map_capacity=capacity;
     address_space_changed(space);
 }
 static void address_space_destroy(GuestAddressSpace *space) {
     for(unsigned i=0;i<space->nseg;i++)backing_release(space->seg[i].backing);
-    free(space->file_data);free(space->map_flags);backing_release(space->brk_backing);backing_release(space->map_backing);
+    free(space->map_flags); /* file_data: dropped by load_stream */backing_release(space->brk_backing);backing_release(space->map_backing);
     address_space_reset(space);
 }
 /* Private fork retains backing without copying bytes. Staging permits rollback

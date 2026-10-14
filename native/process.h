@@ -89,9 +89,13 @@ static uint64_t process_exec(void) {
     if(!error)error=process_vector(cpu->gpr[2],env,&envc,buffer,&used);
     if(error || !argc) { close(fd);return linux_error(error?error:22); }
     /* "#!INTERPRETER [ONE-ARGUMENT]" runs INTERPRETER [ARG] SCRIPT ARGV[1..], as execve does.
-       The interpreter must be an ELF program (no nested scripts). */
-    char head[256];ssize_t got=pread(fd,head,sizeof(head)-1,0);
-    if(got>=2 && head[0]=='#' && head[1]=='!') {
+       An interpreter may itself be a script (Oracle Linux's /usr/bin/env is), four
+       levels deep at most, as on Linux. */
+    char script[1025];if(fs_string(cpu->gpr[0],script)<0) { close(fd);return linux_error(14); }
+    for(unsigned depth=0;;depth++) {
+        char head[256];ssize_t got=pread(fd,head,sizeof(head)-1,0);
+        if(got<2 || head[0]!='#' || head[1]!='!')break;
+        if(depth==4) { close(fd);return linux_error(40); }                           /* ELOOP */
         head[got]=0;char *end=strchr(head,'\n');
         if(!end && got==(ssize_t)sizeof(head)-1) { close(fd);return linux_error(8); }
         if(end)*end=0;
@@ -99,8 +103,7 @@ static uint64_t process_exec(void) {
         char *interpreter=p;while(*p && *p!=' ' && *p!='\t' && *p!='\r')p++;
         char *argument=NULL;
         if(*p) { *p++=0;while(*p==' ' || *p=='\t')p++;if(*p) { argument=p;char *t=p+strlen(p);while(t>p && (t[-1]==' ' || t[-1]=='\t' || t[-1]=='\r'))*--t=0; } }
-        char script[1025];
-        if(interpreter[0]!='/' || fs_string(cpu->gpr[0],script)<0 || argc+(argument?2u:1u)>EXEC_ENTRIES) { close(fd);return linux_error(8); }
+        if(interpreter[0]!='/' || strlen(interpreter)>1024 || argc+(argument?2u:1u)>EXEC_ENTRIES) { close(fd);return linux_error(8); }
         char *extra[3]={interpreter,argument,script};unsigned n=0;
         for(unsigned i=0;i<3;i++) {
             if(!extra[i])continue;
@@ -109,11 +112,11 @@ static uint64_t process_exec(void) {
         }
         for(unsigned i=1;i<argc;i++)rebuilt[n++]=args[i];
         memcpy(args,rebuilt,n*sizeof(*args));argc=n;
+        strcpy(script,interpreter);                                                   /* the next level's script */
         close(fd);
-        char leaf2[1025];int dir=fs_walk(fs_root,"/",interpreter,1,leaf2,exe);if(dir<0)return fs_error(); /* /proc/self/exe is the interpreter */
+        char leaf2[1025];int dir=fs_walk(fs_root,"/",script,1,leaf2,exe);if(dir<0)return fs_error(); /* /proc/self/exe is the interpreter */
         fd=openat(dir,leaf2,O_RDONLY|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC);saved=errno;close(dir);errno=saved;if(fd<0)return fs_error();
-        char magic[2]={0};
-        if(fstat(fd,&st)<0 || !S_ISREG(st.st_mode) || !(st.st_mode&0111) || pread(fd,magic,2,0)!=2 || (magic[0]=='#' && magic[1]=='!')) { close(fd);return linux_error(8); }
+        if(fstat(fd,&st)<0 || !S_ISREG(st.st_mode) || !(st.st_mode&0111)) { close(fd);return linux_error(8); }
     }
     FILE *input=fdopen(fd,"rb");if(!input) { close(fd);return linux_error(12); }
     ProcessImage old;image_save(&old);image_clear();
@@ -242,8 +245,10 @@ static uint64_t process_clone(void) {
     return pid;
 }
 static uint64_t process_wait(void) {
-    if(cpu->gpr[2]&~(job_control_enabled?UINT64_C(11):UINT64_C(1)) || cpu->gpr[3])return linux_error(95);
-    int64_t pid=(int64_t)cpu->gpr[0];if(pid!=-1 && pid<=0)return linux_error(95);
+    cpu->gpr[2]&=~UINT64_C(0x60000000);                                   /* __WALL, __WNOTHREAD: no effect here */
+    if(cpu->gpr[2]&~(job_control_enabled?UINT64_C(11):UINT64_C(1)))return linux_error(95);
+    if(cpu->gpr[3]) { unsigned char *usage=lookup(cpu->gpr[3],144,2);if(!usage)return linux_error(14);memset(usage,0,144); } /* rusage: not measured */
+    int64_t pid=(int64_t)cpu->gpr[0];if(pid<=0)pid=-1;                    /* ponytail: a process group waits for any child */
     if(process_depth && !process_tree_enabled)return linux_error(10);
     unsigned live=0;
     if(cpu->gpr[1] && !lookup(cpu->gpr[1],4,2))return linux_error(14);
@@ -263,6 +268,35 @@ static uint64_t process_wait(void) {
         uint64_t result=process_children[i].pid;process_children[i].pid=0;return result;
     }
     return live?((cpu->gpr[2]&1)?0:IO_BLOCK):linux_error(10);
+}
+
+/* waitid(idtype, id, siginfo, options): P_ALL 0 or P_PID 1 (P_PGID 2 as any child);
+   WEXITED 4 (and WSTOPPED 2, WCONTINUED 8 under job control), WNOHANG 1, WNOWAIT
+   0x1000000 (look, do not reap: Go checks waitability so). */
+static uint64_t process_waitid(void) {
+    uint64_t type=cpu->gpr[0],id=cpu->gpr[1],info=cpu->gpr[2],options=cpu->gpr[3]&~UINT64_C(0x60000000);
+    if(type>2 || !(options&(4|2|8)) || options&~UINT64_C(0x100000f))return linux_error(22);
+    if(process_depth && !process_tree_enabled)return linux_error(10);
+    unsigned char *out=info?lookup(info,128,2):NULL;if(info && !out)return linux_error(14);
+    if(cpu->gpr[4]) { unsigned char *usage=lookup(cpu->gpr[4],144,2);if(!usage)return linux_error(14);memset(usage,0,144); }
+    unsigned live=0;
+    for(unsigned i=0;i<process_count;i++) {
+        if(!process_children[i].pid || process_children[i].parent!=process_pid || (type==1 && id!=process_children[i].pid))continue;
+        if(process_children[i].live) { live=1;continue; }
+        if(!(options&4)) { live=1;continue; }
+        unsigned status=process_children[i].status,signal=status&0x7f;
+        if(out) {
+            memset(out,0,128);fs_pack(out,0,17,4);                           /* SIGCHLD */
+            fs_pack(out,8,signal?((status&0x80)?3:2):1,4);                  /* CLD_DUMPED, CLD_KILLED, CLD_EXITED */
+            fs_pack(out,16,process_children[i].pid,4);fs_pack(out,20,guest_uid,4);
+            fs_pack(out,24,signal?signal:(status>>8)&0xff,4);
+        }
+        if(!(options&0x1000000))process_children[i].pid=0;
+        return 0;
+    }
+    if(!live)return linux_error(10);
+    if(options&1) { if(out)memset(out,0,128);return 0; }
+    return IO_BLOCK;
 }
 
 /* capget/capset (versions 2 and 3): root holds every capability (0..40), others

@@ -4,12 +4,12 @@
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
 #include <sys/mman.h>
-static BackingPageGroup *backing_page_group(size_t count,size_t page_size) {
+static BackingPageGroup *backing_page_group(size_t count,size_t page_size,int charge) {
     if(!count || count>(SIZE_MAX-sizeof(BackingPageGroup))/sizeof(BackingPage))return NULL;
     BackingPageGroup *group=malloc(sizeof(*group)+count*sizeof(BackingPage));
     if(!group)return NULL;
-    if(count>UINT64_MAX/page_size || !resource_charge(count*page_size)) { free(group);errno=ENOMEM;return NULL; }
-    group->live=group->count=count;
+    if(count>UINT64_MAX/page_size || (charge && !resource_charge(count*page_size))) { free(group);errno=ENOMEM;return NULL; }
+    group->live=group->count=count;group->uncharged=!charge;
     for(size_t i=0;i<count;i++)group->pages[i]=(BackingPage){1,group};
     return group;
 }
@@ -18,7 +18,7 @@ static void backing_page_release(BackingPage *page,size_t page_size) {
     size_t left=__atomic_sub_fetch(&page->refs,1,__ATOMIC_ACQ_REL);
     if(left==SIZE_MAX)fail("Invalid COW page ownership");
     if(!left) {
-        BackingPageGroup *group=page->group;resource_uncharge(page_size);
+        BackingPageGroup *group=page->group;if(!group->uncharged)resource_uncharge(page_size);
         if(!__atomic_sub_fetch(&group->live,1,__ATOMIC_ACQ_REL))free(group);
     }
 }
@@ -38,11 +38,12 @@ static void backing_vm_release(MemoryBacking *backing) {
         if(backing->pages[i])backing_page_release(backing->pages[i],backing->page_size);
     free(backing);
 }
-static MemoryBacking *backing_alloc(size_t size,int clear) {
-    (void)clear; /* Anonymous Mach pages are initially zero, without eager touch. */
+/* charge 0: memory the budget does not count (read-only program text, which Linux
+   keeps in its reclaimable page cache); a write copies, and charges, a page. */
+static MemoryBacking *backing_alloc_charged(size_t size,int charge) {
     MemoryBacking *backing=backing_descriptor(size);if(!backing)return NULL;
     size_t count=backing->mapped_size/backing->page_size;
-    BackingPageGroup *group=backing_page_group(count,backing->page_size);
+    BackingPageGroup *group=backing_page_group(count,backing->page_size,charge);
     if(!group) { free(backing);return NULL; }
     for(size_t i=0;i<count;i++)backing->pages[i]=&group->pages[i];
     mach_vm_address_t address=0;
@@ -51,6 +52,8 @@ static MemoryBacking *backing_alloc(size_t size,int clear) {
     }
     backing->bytes=(unsigned char *)address;return backing;
 }
+static MemoryBacking *backing_alloc(size_t size,int clear) { (void)clear;return backing_alloc_charged(size,1); } /* Mach pages start zero */
+static MemoryBacking *backing_alloc_text(size_t size) { return backing_alloc_charged(size,0); }
 /* A lazily charged backing: no host page is owned (or charged) until a write
    prepares it. Unowned pages read as zero. */
 static MemoryBacking *backing_reserve(size_t size) {
@@ -92,7 +95,7 @@ static int backing_prepare(MemoryBacking *backing,size_t offset,size_t size,int 
     size_t first=offset/backing->page_size,last=(offset+size-1)/backing->page_size,count=0;
     for(size_t i=first;i<=last;i++)count+=!backing->pages[i] || backing->pages[i]->refs>1; /* unowned or shared */
     if(!count)return 1;
-    BackingPageGroup *group=backing_page_group(count,backing->page_size);if(!group)return 0;
+    BackingPageGroup *group=backing_page_group(count,backing->page_size,1);if(!group)return 0;
     size_t next=0;
     for(size_t i=first;i<=last;i++)if(!backing->pages[i] || backing->pages[i]->refs>1) {
         if(backing->pages[i])backing_page_release(backing->pages[i],backing->page_size);

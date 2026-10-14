@@ -10,6 +10,7 @@ static MemoryBacking *backing_alloc(size_t size,int clear) {
     return backing;
 }
 static MemoryBacking *backing_reserve(size_t size) { return backing_alloc(size,1); }
+static MemoryBacking *backing_alloc_text(size_t size) { return backing_alloc(size,1); }
 #endif
 static int backing_retain(MemoryBacking *backing,size_t count) {
     if(!backing || !backing->refs || count>SIZE_MAX-backing->refs) { errno=ENOMEM;return 0; }

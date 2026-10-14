@@ -26,6 +26,7 @@ static uint64_t signal_call(uint64_t call) {
     uint64_t action[4]={0};
     if(in) {
         for(unsigned i=0;i<4;i++)action[i]=le(in+i*8,8);
+        action[1]&=UINT64_C(0xffffffff); /* musl's int sa_flags arrives sign-extended (SA_RESETHAND); Linux reads 32 bits */
         if(action[0]>1 && !job_control_enabled)return linux_error(95);
         /* Without SA_RESTORER (Go on arm64), handlers return through the vDSO's
            rt_sigreturn trampoline, as on Linux; without a vDSO a restorer is required. */
@@ -49,6 +50,60 @@ static uint64_t signal_call(uint64_t call) {
     return 0;
 }
 
+/* rt_sigsuspend(mask, 8): wait, under mask, for a signal with a handler (or that
+   ends the process). The scheduler delivers it as an interrupted blocking call. */
+static uint64_t signal_suspend(void) {
+    if(!job_control_enabled || !schedule_active)return linux_error(95);
+    if(cpu->gpr[1]!=8)return linux_error(22);
+    ScheduledTask *task=&schedule_tasks[process_pid-1];uint64_t *mask=signal_mask_now();
+    if(!task->suspending) {
+        unsigned char *in=lookup(cpu->gpr[0],8,4);if(!in)return linux_error(14);
+        task->suspend_mask=*mask;task->suspending=1;
+        *mask=le(in,8)&~((UINT64_C(1)<<8)|(UINT64_C(1)<<18));
+        schedule_pending(task);
+    }
+    return IO_BLOCK;
+}
+/* A signal taken by rt_sigtimedwait: its siginfo (number, SI_USER, sender, uid) if
+   asked for; returns the number. */
+static uint64_t signal_waited(ScheduledTask *task,unsigned index) {
+    unsigned char *info=task->sigwait_info?lookup(task->sigwait_info,128,2):NULL;
+    if(info) { memset(info,0,128);fs_pack(info,0,index+1,4);fs_pack(info,16,task->signal_sender[index],4);fs_pack(info,20,guest_uid,4); }
+    return index+1;
+}
+/* rt_sigtimedwait(set, info, timeout, 8): take a pending signal of set, or wait for
+   one up to timeout (none: forever). Meanwhile set is unblocked as in rt_sigsuspend,
+   and signal_deliver completes the call with the first that arrives; a wait that
+   times out returns EAGAIN (re-executed after the sleep, like nanosleep). */
+static uint64_t signal_timedwait(void) {
+    if(!job_control_enabled || !schedule_active)return linux_error(95);
+    if(cpu->gpr[3]!=8)return linux_error(22);
+    ScheduledTask *task=&schedule_tasks[process_pid-1];Thread *th=thread_current();uint64_t *mask=signal_mask_now();
+    if(!task->sigwaiting) {
+        const unsigned char *in=lookup(cpu->gpr[0],8,4);if(!in)return linux_error(14);
+        uint64_t set=le(in,8)&~((UINT64_C(1)<<8)|(UINT64_C(1)<<18)),own=th?th->signal_pending:0;
+        uint64_t ready=(task->signal_pending|own)&set;
+        if(ready) {
+            unsigned index=0;while(!(ready&(UINT64_C(1)<<index)))index++;
+            uint64_t bit=UINT64_C(1)<<index;if(own&bit)th->signal_pending&=~bit;else task->signal_pending&=~bit;
+            task->sigwait_info=cpu->gpr[1];return signal_waited(task,index);
+        }
+        if(cpu->gpr[2]) {
+            const unsigned char *ts=lookup(cpu->gpr[2],16,4);if(!ts)return linux_error(14);
+            if(le(ts+8,8)>=1000000000 || (int64_t)le(ts,8)<0)return linux_error(22);
+            if(!le(ts,8) && !le(ts+8,8))return linux_error(11);                     /* a poll */
+        }
+        task->sigwaiting=1;task->sigwait_set=set;task->sigwait_info=cpu->gpr[1];
+        task->suspend_mask=*mask;*mask&=~set;
+    }
+    uint64_t saved[4]={cpu->gpr[0],cpu->gpr[1],cpu->gpr[2],cpu->gpr[3]};
+    cpu->gpr[0]=0;cpu->gpr[1]=0;cpu->gpr[3]=0;                                       /* ppoll(NULL, 0, timeout, NULL) */
+    uint64_t result=net_poll();
+    cpu->gpr[0]=saved[0];cpu->gpr[1]=saved[1];cpu->gpr[2]=saved[2];cpu->gpr[3]=saved[3];
+    if(result==IO_BLOCK)return result;
+    task->sigwaiting=0;*mask=task->suspend_mask;
+    return linux_error(11);
+}
 /* ARM64 rt_sigframe: 128-byte siginfo, ucontext, and aligned FPSIMD records.
    Offsets follow Linux arch/arm64/include/uapi/asm/{ucontext,sigcontext}.h.
    SA_ONSTACK handlers run on the thread's sigaltstack. No SVE or floating-point
@@ -63,6 +118,11 @@ static void signal_deliver(int blocked) {
     unsigned index=0;while(!(pending&(UINT64_C(1)<<index)))index++;
     uint64_t bit=UINT64_C(1)<<index,handler=task->signal_handler[index],flags=task->signal_flags[index];
     if(own&bit)th->signal_pending&=~bit;else task->signal_pending&=~bit;
+    if(task->sigwaiting && (task->sigwait_set&bit)) {          /* rt_sigtimedwait takes it */
+        task->sigwaiting=0;*mask=task->suspend_mask;
+        if(blocked)cpu->pc+=4;
+        net_wait.active=0;cpu->gpr[0]=signal_waited(task,index);return;
+    }
     if(!handler) { schedule_signal(task,index+1);return; }
     int on_altstack=cpu->altstack_size && cpu->sp>cpu->altstack_sp && cpu->sp-cpu->altstack_sp<=cpu->altstack_size;
     uint64_t base=(flags&UINT64_C(0x08000000)) && cpu->altstack_size && !on_altstack?cpu->altstack_sp+cpu->altstack_size:cpu->sp;
@@ -72,12 +132,20 @@ static void signal_deliver(int blocked) {
     if(!out || (handler&3) || !lookup(handler,4,1) || !lookup(restorer,4,1)) {
         task->terminate_signal=11;return;
     }
-    if(blocked && !(flags&UINT64_C(0x10000000))) { cpu->pc+=4;cpu->gpr[0]=linux_error(4);net_wait.active=0; }
+    /* rt_sigsuspend: the handler's frame restores the mask it replaced, and it returns
+       EINTR (never restarted); other interrupted calls restart under SA_RESTART. */
+    uint64_t frame_mask=*mask;int suspended=(int)(task->suspending || task->sigwaiting);
+    if(suspended) { frame_mask=task->suspend_mask;task->suspending=task->sigwaiting=0; }
+    if(blocked && (suspended || !(flags&UINT64_C(0x10000000)))) { cpu->pc+=4;cpu->gpr[0]=linux_error(4);net_wait.active=0; }
     memset(out,0,SIGNAL_FRAME_SIZE);
     fs_pack(out,0,index+1,4);fs_pack(out,16,task->signal_sender[index],4);
+    if(task->signal_fault_code[index]) { /* a fault: si_code and si_addr */
+        fs_pack(out,8,task->signal_fault_code[index],4);fs_pack(out,16,task->signal_fault_addr[index],8);
+        task->signal_fault_code[index]=0;
+    }
     fs_pack(out,144,cpu->altstack_sp,8);fs_pack(out,160,cpu->altstack_size,8);   /* uc_stack, as interrupted */
     fs_pack(out,152,!cpu->altstack_size?2:on_altstack?1:0,4);                    /* SS_DISABLE / SS_ONSTACK */
-    fs_pack(out,168,*mask,8);
+    fs_pack(out,168,frame_mask,8);
     for(unsigned i=0;i<31;i++)fs_pack(out,312+i*8,cpu->gpr[i],8);
     fs_pack(out,560,cpu->sp,8);fs_pack(out,568,cpu->pc,8);
     fs_pack(out,576,((uint64_t)cpu->flag_n<<31)|((uint64_t)cpu->flag_z<<30)|((uint64_t)cpu->flag_c<<29)|((uint64_t)cpu->flag_v<<28),8);

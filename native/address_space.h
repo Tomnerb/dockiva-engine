@@ -12,8 +12,17 @@
 #define EXEC_STRINGS (1024u*1024u)
 #define EXEC_ENTRIES 16384u
 #define MAP_CAP (16u*1024u*1024u)
-#define MAP_MAX (2048u*1024u*1024u) /* virtual arena; pages are charged on first write */
-#define MAP_BASE UINT64_C(0x1000000000)
+/* Largest mmap arena: virtual, pages are charged on first write. Each process's arena
+   takes guest-physical space under the hypervisor (1 TiB with a 40-bit IPA), so 64
+   processes of 12 GiB still fit. */
+#define MAP_MAX (UINT64_C(12288)*1024*1024)
+/* 12 GiB: where a JVM first asks for its compressed class space (4 GiB-aligned
+   attach points from 12 GiB, MAP_FIXED_NOREPLACE). Programs load at 4 MiB, the
+   dynamic loader at 60 GiB; the largest arena ends at 24 GiB. */
+#define MAP_BASE UINT64_C(0x300000000)
+/* The dynamic loader (ld-musl, ld-linux) loads at 60 GiB, just below the mmap arena,
+   so a position-independent program at 4 MiB may be up to ~60 GiB (node is 107 MiB). */
+#define INTERPRETER_BASE UINT64_C(0xF00000000)
 /* Segment flag: MAP_SHARED memory (shared anonymous mappings, System V shm). Its
    backing is never copied on write, so fork keeps every process on the same bytes. */
 #define SEG_SHARED 8u
@@ -29,8 +38,10 @@ static unsigned char *segment_data(const Segment *segment) {
    General MAP_SHARED is not implemented. */
 typedef struct {
     Segment seg[129];
-    unsigned nseg,map_capacity;
-    unsigned char *file_data; /* Loader input, not a guest mapping. */
+    unsigned nseg;uint64_t map_capacity; /* mmap arena bytes (--mmap-limit-mib) */
+    unsigned char *file_data; /* Loader input (a read-only host mapping of the file), not a guest mapping. */
+    size_t file_size;
+    uint64_t auxv[48];unsigned auxv_count; /* the process's auxiliary vector, for /proc/self/auxv */
     MemoryBacking *brk_backing,*map_backing;
     uint64_t entry,phaddr,phcount,interpreter_base;
     uint64_t brk_base,brk_current,brk_pages;

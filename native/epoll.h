@@ -57,7 +57,7 @@ static uint64_t epoll_suspend(struct GuestEpoll *e,unsigned high,unsigned count,
     if(result==IO_BLOCK && !syscall_unlocked)
         for(unsigned i=0;i<high;i++) {
             EpollWatch *w=&e->watch[i];
-            if(w->active && (w->kind==IO_READ || w->kind==IO_WRITE))w->pipe->waiters|=UINT64_C(1)<<(process_pid-1);
+            if(w->active && (w->kind==IO_READ || w->kind==IO_WRITE || w->kind==IO_EVENT))w->pipe->waiters|=UINT64_C(1)<<(process_pid-1);
         }
     return result==IO_BLOCK?IO_BLOCK:0; /* deadline passed: no events */
 }
@@ -68,7 +68,7 @@ static uint64_t guest_epoll(uint64_t call) {
         if(i==EPOLL_SLOTS)return linux_error(24);
         int fd=io_free_slot(0);if(fd<0)return linux_error(24);
         EpollWatch *watch=calloc(16,sizeof(EpollWatch));if(!watch) { fd_unbind((uint64_t)fd);return linux_error(12); }
-        epolls[i]=(struct GuestEpoll){1,0,0,16,watch};IO(fd)=(GuestIO){IO_EPOLL,!!flags,(int)i,NULL,NULL};return (uint64_t)fd;
+        epolls[i]=(struct GuestEpoll){1,0,0,16,watch};IO(fd)=(GuestIO){IO_EPOLL,!!flags,(int)i,NULL,NULL,NULL,NULL};return (uint64_t)fd;
     }
     uint64_t fd=cpu->gpr[0];
     if(!epoll_fd_valid(fd))return linux_error(9);
@@ -78,11 +78,11 @@ static uint64_t guest_epoll(uint64_t call) {
         unsigned op=(unsigned)cpu->gpr[1];uint64_t target=cpu->gpr[2];
         if(!epoll_fd_valid(target))return linux_error(9);
         if(target==fd || op<1 || op>3)return linux_error(22);
-        EpollWatch key={0};key.fd=target;key.host=net_host(target);
+        EpollWatch key={0};key.fd=target;key.host=net_host(target);if(key.host<0)key.host=io_poll_host(target);
         if(key.host<0) {
             if(!io_managed(target))return linux_error(1);
             GuestIO *f=&IO(target);
-            if(f->kind!=IO_READ && f->kind!=IO_WRITE && f->kind!=IO_SIGNAL)return linux_error(f->kind==IO_EPOLL?95:1);
+            if(f->kind!=IO_READ && f->kind!=IO_WRITE && f->kind!=IO_SIGNAL && f->kind!=IO_EVENT)return linux_error(f->kind==IO_EPOLL?95:1);
             key.kind=f->kind;key.pipe=f->kind==IO_SIGNAL?(struct GuestPipe *)(void *)f->signals:f->pipe;
         }
         int found=-1,free_slot=-1;
@@ -128,6 +128,7 @@ static uint64_t guest_epoll(uint64_t call) {
             EpollWatch *w=&e->watch[i];if(!w->active || !w->kind || w->disabled)continue;
             if(w->kind==IO_SIGNAL)ready|=(io_signals_pending()&((struct GuestSignalfd *)(void *)w->pipe)->mask)!=0;
             else if(w->kind==IO_READ)ready|=w->pipe->used || !w->pipe->writers;
+            else if(w->kind==IO_EVENT)ready|=w->pipe->used || (w->events&4);
             else ready|=PIPE_CAP-w->pipe->used>=4096 || !w->pipe->readers;
         }
         if(!ready)return epoll_suspend(e,high,epoll_prepared.count,epoll_prepared.limit);
@@ -167,6 +168,9 @@ static uint64_t guest_epoll(uint64_t call) {
                 }
             } else if(w->kind==IO_SIGNAL) {
                 if(io_signals_pending()&((struct GuestSignalfd *)(void *)w->pipe)->mask)level[i]|=1;
+            } else if(w->kind==IO_EVENT) {
+                level[i]|=(w->pipe->used?1u:0u)|4u;
+                avail[i]=w->pipe->used;reads[i]=w->pipe->reads;writes[i]=w->pipe->writes;
             } else if(w->kind==IO_READ) {
                 if(w->pipe->used)level[i]|=1;
                 if(!w->pipe->writers)level[i]|=16;

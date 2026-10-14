@@ -1,3 +1,7 @@
+/* Writable and executable pages (JITs: V8, the JVM): the hypervisor backend runs
+   guest code directly, so they work there; the interpreter's decode cache would go
+   stale, so it keeps refusing them. */
+static int map_rwx_allowed;
 /* First fit: the lowest run of pages free arena pages at or above from (the
    address space's map_free_hint), or total if none. Eight page flags are tested at
    once while inside mapped memory or a long free run. */
@@ -18,19 +22,38 @@ static unsigned map_find_free(const unsigned char *flags,unsigned from,unsigned 
 /* First fit for pages arena pages, or the arena size if none. A run that long found
    at start means no such run lies below it, so the next search for as many or more
    starts there (minus the pages of a run that may straddle it), not at the hint. */
+/* An mmap address hint (no MAP_FIXED), as Linux takes it: used when the whole range
+   lies in the arena and is free; else the arena size (search instead). */
+static unsigned map_hint(GuestAddressSpace *space,uint64_t addr,unsigned pages) {
+    unsigned total=(unsigned)(space->map_capacity/4096);
+    if(!addr || addr%4096 || addr<MAP_BASE || addr-MAP_BASE>=space->map_capacity || (uint64_t)pages*4096>space->map_capacity-(addr-MAP_BASE))return total;
+    unsigned start=(unsigned)((addr-MAP_BASE)/4096);
+    for(unsigned i=start;i<start+pages;i++)if(space->map_flags[i])return total;
+    return start;
+}
 static unsigned map_find(GuestAddressSpace *space,unsigned pages) {
     unsigned total=space->map_capacity/4096,from=space->map_free_hint;
+    /* A reservation of 1 GiB or more starts on a 4 GiB boundary when one is free: a
+       JVM that finds none of its preferred class space addresses takes what it gets,
+       and its compressed class base must be 4 GiB aligned on arm64 (JDK 22). */
+    if(pages>=(1u<<18))
+        for(uint64_t at=(MAP_BASE+UINT64_C(0xffffffff))&~UINT64_C(0xffffffff);at-MAP_BASE<space->map_capacity;at+=UINT64_C(1)<<32) {
+            unsigned start=map_hint(space,at,pages);if(start!=total)return start;
+        }
     if(space->map_large_pages && pages>=space->map_large_pages && space->map_large_from>from)
         from=space->map_large_from-(space->map_large_from-from<space->map_large_pages-1?space->map_large_from-from:space->map_large_pages-1);
     unsigned start=map_find_free(space->map_flags,from,total,pages);
     if(start!=total) { space->map_large_from=start;space->map_large_pages=pages; }
     return start;
 }
+static void file_share_unmapped(MemoryBacking *backing); /* below */
 /* Shared memory: a segment over arena pages marked MAP_RESERVED. backing is the
    memory to share (System V shm) or NULL for fresh zeroed memory (MAP_SHARED|
    MAP_ANONYMOUS, charged in full now). fixed is a page address in the arena, or 0. */
-static uint64_t shared_map(uint64_t fixed,uint64_t length,uint64_t prot,MemoryBacking *backing) {
-    if(!length || length>address_space->map_capacity || prot>7 || (prot&6)==6)return linux_error(22);
+static uint64_t shared_map(uint64_t fixed,uint64_t length,uint64_t prot,MemoryBacking *backing,size_t offset) {
+    uint64_t hint=0;
+    if(length>address_space->map_capacity)return linux_error(12); /* more than the arena holds: ENOMEM, as Linux */
+    if(!length || prot>7 || ((prot&6)==6 && !map_rwx_allowed))return linux_error(22);
     if(!address_space_map_flags(address_space))return linux_error(12);
     if(address_space->nseg>=128)return linux_error(12);
     unsigned pages=(unsigned)(page_up(length)/4096),start=0;
@@ -39,14 +62,14 @@ static uint64_t shared_map(uint64_t fixed,uint64_t length,uint64_t prot,MemoryBa
         start=(unsigned)((fixed-MAP_BASE)/4096);
         for(unsigned i=start;i<start+pages;i++)if(address_space->map_flags[i])return linux_error(22);  /* no replacing existing mappings */
     } else {
-        start=map_find(address_space,pages);
+        start=map_hint(address_space,hint,pages);if(start==address_space->map_capacity/4096)start=map_find(address_space,pages);
         if(start==address_space->map_capacity/4096)return linux_error(12);
         if(start==address_space->map_free_hint)address_space->map_free_hint=start+pages;
     }
     if(backing) { if(!backing_retain(backing,1))return linux_error(12); }
     else if(!(backing=backing_alloc((size_t)pages*4096,1)))return linux_error(12);
     unsigned flags=SEG_SHARED|((prot&1)?4:0)|((prot&2)?2:0)|((prot&4)?1:0);
-    address_space->seg[address_space->nseg++]=(Segment){MAP_BASE+(uint64_t)start*4096,(uint64_t)pages*4096,flags,backing,0};
+    address_space->seg[address_space->nseg++]=(Segment){MAP_BASE+(uint64_t)start*4096,(uint64_t)pages*4096,flags,backing,offset};
     for(unsigned i=start;i<start+pages;i++)address_space->map_flags[i]=MAP_RESERVED;
     address_space_changed(address_space);return MAP_BASE+(uint64_t)start*4096;
 }
@@ -59,25 +82,107 @@ static uint64_t shared_unmap(uint64_t address,uint64_t bytes) {
         unsigned first=(unsigned)((s->base-MAP_BASE)/4096),pages=(unsigned)(s->size/4096);
         for(unsigned p=first;p<first+pages;p++)address_space->map_flags[p]=0;
         map_freed(address_space,first);
-        backing_release(s->backing);address_space->seg[i]=address_space->seg[--address_space->nseg];
+        MemoryBacking *backing=s->backing;
+        address_space->seg[i]=address_space->seg[--address_space->nseg];
+        file_share_unmapped(backing);backing_release(backing);
         address_space_changed(address_space);
     }
+    return 0;
+}
+/* Writable MAP_SHARED file mappings (POSIX semaphores in /dev/shm, SQLite's WAL
+   index). Every process of the container lives in this runtime, so all mappings of
+   one file share one backing, filled from the file and written back to it on msync
+   and when the last mapping goes; keyed by the file's device and inode.
+   ponytail: read()/write() of the file do not see unflushed mapped changes (Linux's
+   page cache unifies them); flush on every write if that ever matters. */
+#define FILE_SHARES 64
+static struct FileShare { dev_t dev;ino_t ino;int fd;MemoryBacking *backing;size_t size; } file_shares[FILE_SHARES];
+static void file_share_flush(struct FileShare *f) {
+    struct stat st;if(fstat(f->fd,&st)<0)return;
+    size_t bytes=(size_t)st.st_size<f->size?(size_t)st.st_size:f->size;
+    for(size_t done=0;done<bytes;) {
+        ssize_t n=pwrite(f->fd,backing_data(f->backing)+done,bytes-done,(off_t)done);
+        if(n<=0)break;done+=(size_t)n;
+    }
+}
+/* A shared segment went away: when only the table still holds the backing, flush and forget. */
+static void file_share_unmapped(MemoryBacking *backing) {
+    for(unsigned i=0;i<FILE_SHARES;i++)if(file_shares[i].backing==backing && backing->refs==2) {
+        file_share_flush(&file_shares[i]);close(file_shares[i].fd);
+        backing_release(backing);memset(&file_shares[i],0,sizeof(file_shares[i]));return;
+    }
+}
+static int file_share_find(uint64_t guestfd) {
+    int fd=fs_host(guestfd);struct stat st;if(fd<0 || fstat(fd,&st)<0)return 0;
+    for(unsigned i=0;i<FILE_SHARES;i++)if(file_shares[i].backing && file_shares[i].dev==st.st_dev && file_shares[i].ino==st.st_ino)return 1;
+    return 0;
+}
+static uint64_t file_share_map(uint64_t fixed,uint64_t length,uint64_t prot,uint64_t guestfd,uint64_t offset) {
+    int fd=fs_host(guestfd);if(fd<0)return linux_error(9);
+    if((prot&2) && fs_ro[fs_slot(guestfd)])return linux_error(13);
+    struct stat st;if(fstat(fd,&st)<0)return fs_error();if(!S_ISREG(st.st_mode))return linux_error(19);
+    size_t end=(size_t)page_up(offset+length);
+    struct FileShare *f=NULL,*free_entry=NULL;
+    for(unsigned i=0;i<FILE_SHARES;i++) {
+        if(file_shares[i].backing && file_shares[i].dev==st.st_dev && file_shares[i].ino==st.st_ino)f=&file_shares[i];
+        else if(!file_shares[i].backing && !free_entry)free_entry=&file_shares[i];
+    }
+    if(f && end>f->size) {
+        if(f->backing->refs>1)return linux_error(12); /* mapped beyond what others share */
+        file_share_flush(f);close(f->fd);backing_release(f->backing);memset(f,0,sizeof(*f));free_entry=f;f=NULL;
+    }
+    if(!f) {
+        if(!free_entry)return linux_error(23);
+        size_t size=end>(size_t)page_up((uint64_t)st.st_size)?end:(size_t)page_up((uint64_t)st.st_size);
+        MemoryBacking *backing=backing_alloc(size,1);if(!backing)return linux_error(12);
+        for(size_t done=0;done<(size_t)st.st_size && done<size;) {
+            ssize_t n=pread(fd,backing_data(backing)+done,size-done,(off_t)done);
+            if(n<=0)break;done+=(size_t)n;
+        }
+        int keep=dup(fd);if(keep<0) { backing_release(backing);return fs_error(); }
+        fcntl(keep,F_SETFD,FD_CLOEXEC);
+        f=free_entry;*f=(struct FileShare){st.st_dev,st.st_ino,keep,backing,size};
+    }
+    uint64_t result=shared_map(fixed,length,prot,f->backing,(size_t)offset);
+    if((int64_t)result<0 && f->backing->refs==1) { close(f->fd);backing_release(f->backing);memset(f,0,sizeof(*f)); }
+    return result;
+}
+/* msync: write mapped files back (all of them; cheap at this scale). */
+static uint64_t guest_msync(void) {
+    if(cpu->gpr[0]%4096 || cpu->gpr[2]&~UINT64_C(7))return linux_error(22);
+    for(unsigned i=0;i<FILE_SHARES;i++)if(file_shares[i].backing)file_share_flush(&file_shares[i]);
     return 0;
 }
 /* Private file-backed guest mappings. Bytes remain ordinary non-executable host
    allocations; MAP_FIXED is confined to the bounded guest mmap arena. */
 static int dynamic_enabled;
 static uint64_t guest_dynamic_mmap(void) {
-    uint64_t addr=cpu->gpr[0],length=cpu->gpr[1],prot=cpu->gpr[2],flags=cpu->gpr[3],offset=cpu->gpr[5];
-    if(!length || length>address_space->map_capacity || offset%4096 || offset>INT64_MAX-length || prot>7 || (prot&6)==6)return linux_error(22);
+    uint64_t addr=cpu->gpr[0],length=cpu->gpr[1],prot=cpu->gpr[2],flags=cpu->gpr[3],offset=cpu->gpr[5],hint=(flags&16)?0:addr;
+    if(length>address_space->map_capacity)return linux_error(12); /* more than the arena holds: ENOMEM, as Linux */
+    if(!length || offset%4096 || offset>INT64_MAX-length || prot>7 || ((prot&6)==6 && !map_rwx_allowed))return linux_error(22);
     if(!address_space_map_flags(address_space))return linux_error(12);
     /* Linux ignores MAP_DENYWRITE, MAP_EXECUTABLE and MAP_STACK. Stack guards
        still use ordinary PROT_NONE/mprotect; this does not create a thread. */
     flags&=~UINT64_C(0x2d800);                       /* also MAP_NORESERVE and MAP_POPULATE: hints */
+    int noreplace=(flags&0x100000)!=0;               /* MAP_FIXED_NOREPLACE: fixed, but never over a mapping */
+    if(noreplace) {
+        flags=(flags&~UINT64_C(0x100000))|16;
+        if(addr%4096)return linux_error(22);
+        if(addr<MAP_BASE || addr-MAP_BASE>=address_space->map_capacity || page_up(length)>address_space->map_capacity-(addr-MAP_BASE))
+            return linux_error(12);                  /* outside the arena: this address cannot be had */
+        for(uint64_t p=(addr-MAP_BASE)/4096;p<(addr-MAP_BASE+page_up(length))/4096;p++)if(address_space->map_flags[p])return linux_error(17);
+    }
     if((flags&3) && (flags&3)!=2 && (flags&32) && !(flags&~UINT64_C(0x33)))   /* MAP_SHARED|MAP_ANONYMOUS */
-        return shared_map((flags&16)?addr:0,length,prot,NULL);
+        return shared_map((flags&16)?addr:0,length,prot,NULL,0);
+    if((flags&3) && (flags&3)!=2 && !(flags&32) && (prot&2) && !(flags&~UINT64_C(0x13)))  /* writable MAP_SHARED of a file */
+        return file_share_map((flags&16)?addr:0,length,prot,cpu->gpr[4],offset);
     /* A read-only MAP_SHARED file mapping (ICU data, for instance) can never write
-       through, so a private copy is equivalent. */
+       through, so a private copy is equivalent, unless the file is or can be mapped
+       shared and writable: then it must see those writes. JITs map a memfd twice,
+       asmjit (Erlang's BEAM) the executable view first. */
+    if((flags&3) && (flags&3)!=2 && !(flags&32) && !(prot&2) && !(flags&~UINT64_C(0x13)) &&
+       (file_share_find(cpu->gpr[4]) || (fs_host(cpu->gpr[4])>=0 && !fs_ro[fs_slot(cpu->gpr[4])])))
+        return file_share_map((flags&16)?addr:0,length,prot,cpu->gpr[4],offset);
     if((flags&3) && (flags&3)!=2 && !(flags&32) && !(prot&2))flags=(flags&~UINT64_C(3))|2;
     if((flags&~UINT64_C(0x32)) || (flags&3)!=2)return linux_error(95);
     int fd=-1;
@@ -89,7 +194,7 @@ static uint64_t guest_dynamic_mmap(void) {
         if(addr%4096 || addr<MAP_BASE || addr-MAP_BASE>=address_space->map_capacity || page_up(length)>address_space->map_capacity-(addr-MAP_BASE))return linux_error(22);
         start=(unsigned)((addr-MAP_BASE)/4096);
     } else {
-        start=map_find(address_space,pages);
+        start=map_hint(address_space,hint,pages);if(start==address_space->map_capacity/4096)start=map_find(address_space,pages);
         if(start==address_space->map_capacity/4096)return linux_error(12);
         if(start==address_space->map_free_hint)address_space->map_free_hint=start+pages;
     }
@@ -117,7 +222,7 @@ static uint64_t guest_dynamic_mmap(void) {
 }
 static uint64_t guest_mprotect(void) {
     uint64_t addr=cpu->gpr[0],length=cpu->gpr[1],prot=cpu->gpr[2];
-    if(addr%4096 || length>UINT64_MAX-4095 || prot>7 || (prot&6)==6)return linux_error(22);
+    if(addr%4096 || length>UINT64_MAX-4095 || prot>7 || ((prot&6)==6 && !map_rwx_allowed))return linux_error(22);
     if(!length)return 0;
     uint64_t bytes=page_up(length);
     if(addr<MAP_BASE || addr-MAP_BASE>=address_space->map_capacity || bytes>address_space->map_capacity-(addr-MAP_BASE)) {
@@ -152,9 +257,9 @@ static uint64_t guest_mprotect(void) {
     address_space_arena_changed(address_space,first,first+pages);return 0;
 }
 
-/* Linux madvise advice values are not host ABI values. The three access-pattern
-   hints are accepted on mapped guest ranges; this runtime has no read-ahead
-   policy to change. MADV_DONTNEED releases anonymous mmap-arena pages. Other reclamation/fork advice reports Linux EINVAL, never success. No
+/* Linux madvise advice values are not host ABI values. Pure hints are accepted on
+   mapped guest ranges; this runtime has no read-ahead, merging, huge page or core
+   dump policy to change. MADV_DONTNEED releases anonymous mmap-arena pages. Other reclamation/fork advice reports Linux EINVAL, never success. No
    guest address is passed to host madvise. */
 static uint64_t guest_madvise(void) {
     uint64_t addr=cpu->gpr[0],length=cpu->gpr[1];int32_t advice=(int32_t)cpu->gpr[2];
@@ -175,7 +280,10 @@ static uint64_t guest_madvise(void) {
         if(!address_space_discard_map(address_space,(size_t)first*4096,(size_t)pages*4096))return linux_error(12);
         address_space_arena_changed(address_space,first,first+pages);return 0; /* released pages are write-protected again */
     }
-    if(advice<0 || advice>2 || (addr&4095) || length>UINT64_MAX-4095)return linux_error(22);
+    /* Hints with nothing to change here: NORMAL, RANDOM, SEQUENTIAL, WILLNEED,
+       (UN)MERGEABLE, (NO)HUGEPAGE, DONTDUMP and DODUMP (InnoDB, JVMs, jemalloc). */
+    int hint=(advice>=0 && advice<=3) || (advice>=12 && advice<=17);
+    if(!hint || (addr&4095) || length>UINT64_MAX-4095)return linux_error(22);
     uint64_t bytes=page_up(length);
     if(bytes>UINT64_MAX-addr)return linux_error(22);
     uint64_t end=addr+bytes,cursor=addr;
@@ -231,7 +339,7 @@ static uint64_t shm_attach(void) {
     if(shm_segments[id].removed)return linux_error(43);                         /* EIDRM */
     if(flags&~(UINT64_C(010000)|020000|040000))return linux_error(22);
     if(address && (flags&020000))address&=~UINT64_C(4095);                     /* SHM_RND */
-    uint64_t result=shared_map(address,shm_segments[id].size,(flags&010000)?1:3,shm_segments[id].backing);
+    uint64_t result=shared_map(address,shm_segments[id].size,(flags&010000)?1:3,shm_segments[id].backing,0);
     if((int64_t)result>=0) { shm_segments[id].lpid=process_pid;shm_segments[id].atime=shm_now(); }
     return result;
 }

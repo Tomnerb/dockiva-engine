@@ -214,7 +214,7 @@ static uint64_t net_unix_address(int fd,uint64_t address,uint64_t length,int bin
     char guest[109];size_t n=0;
     while(n<length-2 && p[2+n]) {
         unsigned char c=p[2+n];
-        if(c<32 || c>=127 || c=='\\' || c==':')return linux_error(13);
+        if(c<32 || c==127)return linux_error(13);
         guest[n++]=(char)c;
     }
     guest[n]=0;

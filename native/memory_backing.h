@@ -6,7 +6,7 @@
    and accounting use host pages (16 KiB on Apple Silicon), not guest pages. */
 typedef struct BackingPageGroup BackingPageGroup;
 typedef struct { size_t refs;BackingPageGroup *group; } BackingPage;
-struct BackingPageGroup { size_t live,count;BackingPage pages[]; };
+struct BackingPageGroup { size_t live,count;unsigned uncharged;BackingPage pages[]; }; /* uncharged: read-only program text */
 /* frozen: the backing was the source of a snapshot. Its memory is never written
    again (each holder writes its own copy instead): with several vCPUs first-touching
    pages at once, a write to a snapshot's source can show through in the snapshot. */

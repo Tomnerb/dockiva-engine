@@ -40,7 +40,7 @@ static void terminal_init(void) {
         terminal_install(SIGCONT,terminal_signal);
         if(terminal_forwarded)terminal_install(SIGURG,terminal_signal);
     }
-    atexit(terminal_restore);io_fds[0]=(GuestIO){IO_INPUT,0,0,NULL,NULL};
+    atexit(terminal_restore);io_fds[0]=(GuestIO){IO_INPUT,0,0,NULL,NULL,NULL,NULL};
 }
 static void terminal_pump(int wait) {
     if(!terminal_enabled)return;
@@ -85,7 +85,7 @@ static int terminal_group_exists(uint64_t group) {
     return 0;
 }
 static uint64_t terminal_group(uint64_t call) {
-    if(!(terminal_enabled || stdin_host) || !schedule_active)return linux_error(95);
+    if(!schedule_active)return linux_error(95);                 /* bash and sh ask even without a terminal */
     uint64_t pid=cpu->gpr[0]?cpu->gpr[0]:process_pid;
     if(pid>process_count+1 || !schedule_tasks[pid-1].state)return linux_error(3);
     if(call==155)return schedule_tasks[pid-1].pgid;

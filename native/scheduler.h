@@ -32,6 +32,10 @@ typedef struct {
     uint64_t signal_mask,signal_ignored,signal_pending,timer_deadline,timer_interval;
     uint64_t signal_flags[64],signal_action_mask[64],signal_restorer[64],signal_handler[64];
     unsigned signal_sender[64];
+    /* A fault raised as a signal (SIGSEGV, SIGILL): siginfo's si_code and si_addr. */
+    unsigned signal_fault_code[64];uint64_t signal_fault_addr[64];
+    unsigned suspending;uint64_t suspend_mask; /* rt_sigsuspend: the mask to restore after its handler */
+    unsigned sigwaiting;uint64_t sigwait_set,sigwait_info; /* rt_sigtimedwait: the signals it takes, its siginfo (mask in suspend_mask) */
     ThreadTable *threads;unsigned running,exit_pending,exit_signal;int exit_result;
     pthread_mutex_t mm;
 } ScheduledTask;
@@ -52,6 +56,7 @@ static Worker worker_first={.context=&runtime_context,.task=-1},*workers[WORKER_
 static _Thread_local Worker *worker=&worker_first;
 static unsigned worker_count=1,worker_threads;               /* worker_threads: other workers are live */
 static int workers_supported;                                /* the CPU backend releases the lock around guest code */
+static unsigned guest_cpus(void) { return workers_supported?worker_count:1; } /* one guest CPU per worker */
 static pthread_mutex_t runtime_mutex=PTHREAD_MUTEX_INITIALIZER;
 static void (*worker_interrupt)(Worker *w);                  /* the backend stops w's guest code soon */
 static _Thread_local int thread_now=-1;                      /* the thread this worker runs, or -1 */
@@ -138,7 +143,7 @@ static void schedule_signal_apply(ScheduledTask *task,unsigned signal) {
     if(signal!=9 && (task->signal_ignored&bit))return;
     if(job_control_enabled && task->state==3 && signal!=9 && signal!=18) { task->signal_pending|=bit;return; }
     task->signal_sender[signal-1]=(unsigned)process_pid;
-    if(signal!=9 && ((task_signals_blocked(task)&bit) || task->signal_handler[signal-1])) {
+    if(signal!=9 && ((task_signals_blocked(task)&bit) || task->signal_handler[signal-1] || (task->sigwaiting && (task->sigwait_set&bit)))) {
         task->signal_pending|=bit;io_epoch++;schedule_wake(task);
         if(task->threads)for(unsigned i=0;i<task->threads->top;i++) {    /* a futex wait that can take it ends (EINTR) */
             Thread *th=&task->threads->thread[i];
@@ -221,7 +226,7 @@ static void task_load(ScheduledTask *t) {
     io_table=&t->io;net_table=&t->net;net_wait_now=&t->network_wait;fs_table=&t->fs;fd_table=&t->fds;
 }
 static void task_free(void) {
-    fs_cwd_release();image_free();io_cleanup();net_cleanup();
+    fs_cwd_release();image_free();io_cleanup();net_cleanup();fs_locks_release(0,0,process_pid);
     for(unsigned i=0;i<FS_SLOTS;i++) {
         fs_directory_release(fs_dirs[i]);
         if(fs_fd[i])close(fs_fd[i]-1);
@@ -450,6 +455,12 @@ static void schedule_idle_step(void) {
     for(unsigned i=0;i<=process_count;i++)if(schedule_tasks[i].state==2 && schedule_tasks[i].input_wait)input=1;
     for(unsigned i=0;i<=process_count;i++)if(schedule_tasks[i].state==3)stopped=1;
     if(job_control_enabled && stopped && !input) { terminal_pump(2);return; }
+    /* A process in rt_sigsuspend (nginx's master) or rt_sigtimedwait (tini) waits for a
+       signal from outside: docker stop or kill. That is not a deadlock. */
+    for(unsigned i=0;i<=process_count;i++)if(schedule_tasks[i].state && (schedule_tasks[i].suspending || schedule_tasks[i].sigwaiting)) {
+        if(worker_threads)schedule_wait_idle(10);else (void)poll(NULL,0,10);
+        return;
+    }
     if(terminal_enabled && input) { terminal_pump(1);return; }
     /* Remove the current globals' non-owning alias before fatal cleanup. */
     fs_cwd=NULL;image_clear();memset(net_fd,0,sizeof(net_fd));memset(&net_wait,0,sizeof(net_wait));memset(io_fds,0,sizeof(io_fds));memset(fs_fd,0,sizeof(fs_fd));memset(fs_dirs,0,sizeof(fs_dirs));
