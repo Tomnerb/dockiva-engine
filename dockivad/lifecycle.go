@@ -429,7 +429,7 @@ func runtimeCommand(p, native string, c obj, command []string, argv0 string, env
 	// Every container gets the largest (12 GiB from 12 GiB up): a JVM reserves its heap,
 	// a 1 GiB class space that must start on a 4 GiB boundary and code cache beyond -m,
 	// and needs a third aligned slot free after libraries and the heap take two.
-	args = append(args, "--elf-limit-mib", "512", "--mmap-limit-mib", "12288")
+	args = append(args, "--elf-limit-mib", "1024", "--mmap-limit-mib", "12288")
 	// Like Docker, disk use is left to the host: no storage budget, 4 GiB per file.
 	args = append(args, "--file-limit-mib", "4096", "--storage-limit-mib", "0")
 	reject(c["network"] == nil || c["network"] == "none" || c["network"] == "outbound", "Invalid network mode")

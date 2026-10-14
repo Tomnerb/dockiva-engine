@@ -19,6 +19,8 @@ import (
 	"syscall"
 	"unicode/utf8"
 	"unsafe"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 // OCI and Docker v2 media types (the same structures).
@@ -30,9 +32,9 @@ const dockerManifest = "application/vnd.docker.distribution.manifest.v2+json"
 const dockerList = "application/vnd.docker.distribution.manifest.list.v2+json"
 const dockerConfig = "application/vnd.docker.container.image.v1+json"
 
-// layerTypes: the layer formats an image may use, and whether each is gzipped.
-var layerTypes = map[string]bool{layerMedia: false, layerMedia + "+gzip": true,
-	"application/vnd.docker.image.rootfs.diff.tar": false, "application/vnd.docker.image.rootfs.diff.tar.gzip": true}
+// layerTypes: the layer formats an image may use, and each one's compression.
+var layerTypes = map[string]string{layerMedia: "", layerMedia + "+gzip": "gzip", layerMedia + "+zstd": "zstd",
+	"application/vnd.docker.image.rootfs.diff.tar": "", "application/vnd.docker.image.rootfs.diff.tar.gzip": "gzip"}
 
 // Images stream to disk and are unpacked once, so only sanity bounds remain.
 const maxBlob = int64(64 << 30) // one layer, and a whole pull
@@ -183,7 +185,7 @@ func loadImage(layout string) *image {
 	for i, v := range layers {
 		ld := object(v)
 		_, known := layerTypes[text(ld["mediaType"])]
-		reject(known, "Unsupported layer format (zstd layers are not supported yet): "+text(ld["mediaType"]))
+		reject(known, "Unsupported layer format: "+text(ld["mediaType"]))
 		im.blobs = append(im.blobs, blobDigest(ld, maxBlob, text(ld["mediaType"])))
 		reject(digestPattern.MatchString(text(diffs[i])), "Invalid DiffID")
 		im.layers, im.diffs = append(im.layers, ld), append(im.diffs, str(diffs[i]))
@@ -220,11 +222,16 @@ func (im *image) unpack(root string) int64 {
 		packed, counted := sha256.New(), &counter{}
 		source := io.TeeReader(f, io.MultiWriter(packed, counted))
 		var r io.Reader = source
-		var gz *gzip.Reader
-		if layerTypes[text(ld["mediaType"])] {
-			gz, e = gzip.NewReader(source)
+		switch layerTypes[text(ld["mediaType"])] {
+		case "gzip":
+			gz, e := gzip.NewReader(source)
 			check(errors.Join(e, nil))
 			r = gz
+		case "zstd":
+			zr, e := zstd.NewReader(source, zstd.WithDecoderConcurrency(1))
+			check(e)
+			defer zr.Close()
+			r = zr
 		}
 		diff := sha256.New()
 		r = io.TeeReader(r, diff)

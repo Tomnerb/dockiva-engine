@@ -71,14 +71,15 @@ func pullImage(reference, cache string, insecure bool, bearer string) string {
 		scheme = "http"
 	}
 	origin := scheme + "://" + host
-	transport := &http.Transport{Proxy: nil}
+	transport := &http.Transport{Proxy: nil, ResponseHeaderTimeout: time.Minute}
 	defer transport.CloseIdleConnections()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	// A large image over a slow link may take long; a transfer that stalls fails sooner.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
 	defer cancel()
 	// Registries such as Docker Hub serve blobs through CDN redirects. Follow them, but
 	// never forward the registry token, and never downgrade from HTTPS. Blob content is
 	// still verified against its digest after download.
-	client := &http.Client{Transport: transport, Timeout: 10 * time.Minute, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+	client := &http.Client{Transport: transport, CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 5 {
 			return fmt.Errorf("too many registry redirects")
 		}
@@ -91,7 +92,12 @@ func pullImage(reference, cache string, insecure bool, bearer string) string {
 	used := int64(0)
 	// request GETs address; to, when given, receives the body (streamed, up to limit).
 	request := func(address string, limit int64, auth bool, to io.Writer) ([]byte, http.Header, int) {
-		req, e := http.NewRequestWithContext(ctx, "GET", address, nil)
+		// Each request ends if no bytes arrive for two minutes.
+		reqCtx, stop := context.WithCancel(ctx)
+		defer stop()
+		stall := time.AfterFunc(2*time.Minute, stop)
+		defer stall.Stop()
+		req, e := http.NewRequestWithContext(reqCtx, "GET", address, nil)
 		check(e)
 		req.Header.Set("Accept", strings.Join([]string{manifestMedia, indexMedia, dockerManifest, dockerList}, ", "))
 		req.Header.Set("Accept-Encoding", "identity")
@@ -99,11 +105,15 @@ func pullImage(reference, cache string, insecure bool, bearer string) string {
 			req.Header.Set("Authorization", "Bearer "+bearer)
 		}
 		response, e := client.Do(req)
-		check(e)
+		if e != nil {
+			panic(apiError{502, "Registry request failed: " + e.Error()})
+		}
 		defer response.Body.Close()
 		if to != nil && response.StatusCode == 200 {
-			n, e := io.Copy(to, io.LimitReader(response.Body, limit+1))
-			check(e)
+			n, e := io.Copy(to, io.LimitReader(&progress{response.Body, stall}, limit+1))
+			if e != nil {
+				panic(apiError{502, "Registry download failed: " + e.Error()})
+			}
 			reject(n <= limit, "Registry object exceeds limit")
 			used += n
 			reject(used <= maxBlob, "Pull exceeds 64 GiB")
@@ -211,4 +221,18 @@ func pullImage(reference, cache string, insecure bool, bearer string) string {
 	save(filepath.Join(tmp, "oci-layout"), obj{"imageLayoutVersion": "1.0.0"})
 	save(filepath.Join(tmp, "index.json"), obj{"schemaVersion": 2, "manifests": []any{descriptor}})
 	return commitImage(cache, name, tmp)
+}
+
+// progress pushes back a stall timer on every read that returns data.
+type progress struct {
+	r     io.Reader
+	stall *time.Timer
+}
+
+func (p *progress) Read(b []byte) (int, error) {
+	n, e := p.r.Read(b)
+	if n > 0 {
+		p.stall.Reset(2 * time.Minute)
+	}
+	return n, e
 }
