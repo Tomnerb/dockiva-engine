@@ -1,0 +1,42 @@
+{
+ "run alpine true": {
+  "value": 0.483,
+  "unit": "s"
+ },
+ "dd 1M x 1-byte": {
+  "value": 4.672,
+  "unit": "s"
+ },
+ "pgbench TPC-B tps": {
+  "value": 4263.951,
+  "unit": "tps"
+ },
+ "npm install express+lodash": {
+  "value": 6.426,
+  "unit": "s"
+ },
+ "go build net/http (cold cache)": {
+  "value": 9.257,
+  "unit": "s"
+ },
+ "bind mount 2000 small files": {
+  "value": 0.665,
+  "unit": "s"
+ },
+ "bind mount 256 MiB write": {
+  "value": 0.77,
+  "unit": "s"
+ },
+ "container fs 256 MiB write": {
+  "value": 0.735,
+  "unit": "s"
+ },
+ "sha256 512 MiB (CPU)": {
+  "value": 8.974,
+  "unit": "s"
+ },
+ "awk loop 30M (CPU)": {
+  "value": 9.468,
+  "unit": "s"
+ }
+}

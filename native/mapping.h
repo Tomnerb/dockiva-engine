@@ -75,7 +75,7 @@ static uint64_t shared_map(uint64_t fixed,uint64_t length,uint64_t prot,MemoryBa
     if(length>address_space->map_capacity)return linux_error(12); /* more than the arena holds: ENOMEM, as Linux */
     if(!length || prot>7 || ((prot&6)==6 && !map_rwx_allowed))return linux_error(22);
     if(!address_space_map_flags(address_space))return linux_error(12);
-    if(address_space->nseg>=128)return linux_error(12);
+    if(address_space->nseg>=SEGMENT_LIMIT)return linux_error(12);
     unsigned pages=(unsigned)(page_up(length)/4096),start=0;
     if(fixed) {
         if(fixed%4096 || fixed<MAP_BASE || fixed-MAP_BASE>=address_space->map_capacity || page_up(length)>address_space->map_capacity-(fixed-MAP_BASE))return linux_error(22);
@@ -221,7 +221,7 @@ static uint64_t segments_remove(uint64_t low,uint64_t high) {
         if(end<=low || begin>=high) { i++;continue; }
         if(low<=begin && high>=end) { backing_release(s->backing);address_space->seg[i]=address_space->seg[--address_space->nseg];continue; }
         if(low>begin && high<end) {                                                  /* split around the hole */
-            if(address_space->nseg>=128 || !backing_retain(s->backing,1))return linux_error(12);
+            if(address_space->nseg>=SEGMENT_LIMIT || !backing_retain(s->backing,1))return linux_error(12);
             address_space->seg[address_space->nseg++]=(Segment){high,end-high,s->flags,s->backing,s->offset+(size_t)(high-begin)};
             s->size=low-begin;
         } else if(low<=begin) { s->offset+=(size_t)(high-begin);s->size=end-high;s->base=high; }
@@ -271,7 +271,7 @@ static uint64_t reserve_commit_piece(uint64_t address,uint64_t size,unsigned fla
         if(address+size==s->base && offset+size==s->offset) { s->base=address;s->offset=offset;s->size+=size;backing_release(backing);backing=NULL;break; }
     }
     if(backing) {
-        if(address_space->nseg>=128) { backing_release(backing);return linux_error(12); }
+        if(address_space->nseg>=SEGMENT_LIMIT) { backing_release(backing);return linux_error(12); }
         address_space->seg[address_space->nseg++]=(Segment){address,size,flags,backing,offset};
     }
     segments_merge();
@@ -295,7 +295,7 @@ static uint64_t reserve_protect(uint64_t address,uint64_t bytes,uint64_t prot) {
         Segment *s=&address_space->seg[i];uint64_t begin=s->base,top=s->base+s->size;
         if(top<=address || begin>=end || (s->flags&SEG_SHARED))continue;
         unsigned extra=(begin<address)+(top>end);
-        if(address_space->nseg+extra>128 || !backing_retain(s->backing,extra))return linux_error(12);
+        if(address_space->nseg+extra>SEGMENT_LIMIT || !backing_retain(s->backing,extra))return linux_error(12);
         Segment old=*s;uint64_t low=begin<address?address:begin,high=top>end?end:top;
         *s=(Segment){low,high-low,flags,old.backing,old.offset+(size_t)(low-begin)};
         if(begin<address)address_space->seg[address_space->nseg++]=(Segment){begin,address-begin,old.flags,old.backing,old.offset};
@@ -437,7 +437,7 @@ static uint64_t guest_mprotect(void) {
             Segment old=address_space->seg[i];uint64_t end=addr+bytes,oldend=old.base+old.size;
             if(addr<(old.base&~UINT64_C(4095)) || end>oldend || end<=old.base || addr>=oldend)continue;
             uint64_t begin=addr>old.base?addr:old.base;
-            unsigned extra=(begin>old.base)+(end<oldend);if(address_space->nseg+extra>128)return linux_error(12);
+            unsigned extra=(begin>old.base)+(end<oldend);if(address_space->nseg+extra>SEGMENT_LIMIT)return linux_error(12);
             /* Split mapping views over the same bytes. Acquire every new
                reference before publishing metadata; no segment data is copied. */
             if(!backing_retain(old.backing,extra))return linux_error(12);

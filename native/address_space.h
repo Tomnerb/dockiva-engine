@@ -33,6 +33,9 @@
 #define MAP_RESERVED 0x20u
 
 typedef struct { uint64_t base,size;unsigned flags;MemoryBacking *backing;size_t offset; } Segment;
+/* Mappings outside the arena's page flags: the program, shared memory, mapped files
+   (Go's linker maps every package archive it reads), reservations' commits. */
+#define SEGMENT_LIMIT 1024u
 static unsigned char *segment_data(const Segment *segment) {
     return segment->backing?backing_data(segment->backing)+segment->offset:NULL;
 }
@@ -40,7 +43,7 @@ static unsigned char *segment_data(const Segment *segment) {
    snapshots; private fork retains COW backing, while vfork shares its owning image.
    General MAP_SHARED is not implemented. */
 typedef struct {
-    Segment seg[129];
+    Segment seg[SEGMENT_LIMIT+1];
     unsigned nseg;uint64_t map_capacity; /* mmap arena bytes (--mmap-limit-mib) */
     unsigned char *file_data; /* Loader input (a read-only host mapping of the file), not a guest mapping. */
     size_t file_size;

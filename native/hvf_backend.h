@@ -54,7 +54,7 @@ static _Thread_local int hvf_stale_tlb;
 #define HVF_STALE_NEW 2
 typedef struct {
     uint64_t root;unsigned tables;int stale;  /* root 0: no tables */
-    Segment seg[129];unsigned nseg;uint64_t map_capacity;
+    Segment seg[SEGMENT_LIMIT+1];unsigned nseg;uint64_t map_capacity;
     MemoryBacking *brk_backing,*map_backing;uint64_t brk_base,brk_pages;
     uint64_t layout,arena_rev,generation;
 } HvfView;

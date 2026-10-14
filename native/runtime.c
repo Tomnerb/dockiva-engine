@@ -171,7 +171,7 @@ static void load_stream_inner(FILE *f,int interpreter) {
         MemoryBacking *buffer=(flags&2)?backing_alloc((size_t)mem,1):backing_alloc_text((size_t)mem);
         if(!buffer) fail("Allocation failed");
         memcpy(backing_data(buffer),d+(size_t)off,(size_t)bytes);
-        if(address_space->nseg>=128) { backing_release(buffer);fail("Too many load segments"); }
+        if(address_space->nseg>=SEGMENT_LIMIT) { backing_release(buffer);fail("Too many load segments"); }
         address_space->seg[address_space->nseg++]=(Segment){addr,mem,flags,buffer,0};
         address_space_changed(address_space);
 
@@ -238,7 +238,7 @@ static void startup(int argc, const char **argv, unsigned envc, const char **env
     if(vdso_backing) { /* shared, read-only and executable */
         for(unsigned i=0;i<address_space->nseg;i++)
             if(VDSO_BASE<address_space->seg[i].base+address_space->seg[i].size && address_space->seg[i].base<VDSO_BASE+VDSO_SIZE) fail("ELF overlaps the vDSO");
-        if(address_space->nseg>=128 || !backing_retain(vdso_backing,1)) fail("Cannot map the vDSO");
+        if(address_space->nseg>=SEGMENT_LIMIT || !backing_retain(vdso_backing,1)) fail("Cannot map the vDSO");
         address_space->seg[address_space->nseg++]=(Segment){VDSO_BASE,VDSO_SIZE,5,vdso_backing,0};
     }
     address_space_changed(address_space);
