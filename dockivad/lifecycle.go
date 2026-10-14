@@ -21,7 +21,9 @@ import (
 	"time"
 )
 
-var namePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,39}$`)
+// namePattern: container and network names, as Docker accepts them (act and CI tools
+// generate long ones with dots); never starting with a dot, so state files stay apart.
+var namePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,199}$`)
 
 type engine struct {
 	Home, State, Cache, Native, Worker, Assets, Self string

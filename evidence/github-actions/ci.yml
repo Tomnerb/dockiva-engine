@@ -1,0 +1,32 @@
+name: ci
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "hello from $(uname -m) $(cat /etc/os-release | grep PRETTY)"; cat README.md
+      - id: calc
+        run: echo "answer=42" >> "$GITHUB_OUTPUT"
+      - run: test "${{ steps.calc.outputs.answer }}" = 42 && echo outputs-ok
+      - run: node -e "console.log('node', process.version)"
+      - run: mkdir -p out && date > out/stamp && ls out
+  container-job:
+    runs-on: ubuntu-latest
+    container: python:3.12-alpine
+    services:
+      redis:
+        image: redis:7-alpine
+    steps:
+      - run: python -c "print('python in container ok')"
+      - run: |
+          cat > /tmp/r.py <<'PY'
+          import socket, time
+          for i in range(30):
+              try:
+                  s = socket.create_connection(("redis", 6379)); break
+              except OSError:
+                  time.sleep(1)
+          s.sendall(b"PING\r\n"); print("redis says", s.recv(16))
+          PY
+          python /tmp/r.py

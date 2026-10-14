@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"cmp"
 	"errors"
 	"io"
 	"net"
@@ -51,8 +52,9 @@ func (b *engine) createExec(container string, body obj) obj {
 		mountTarget(j.WorkingDir)
 	}
 	p := b.container(container)
-	env := mergeEnv(stringsOf(readObject(filepath.Join(p, "config.json"))["env"]), j.Env)
-	j.Path = lookPath(noLinks(p, "rootfs"), env, j.Cmd[0])
+	c := readObject(filepath.Join(p, "config.json"))
+	env := mergeEnv(stringsOf(c["env"]), j.Env)
+	j.Path = lookPath(noLinks(p, "rootfs"), env, cmp.Or(j.WorkingDir, workdir(c)), j.Cmd[0])
 	count := 0
 	b.execs.Range(func(any, any) bool { count++; return true })
 	if count >= execLimit {
@@ -86,9 +88,9 @@ func (b *engine) inspectExec(id string) obj {
 // containerCommand resolves argv as docker run does for its entrypoint: the
 // command is found in the container's PATH, and a script runs under its #!
 // interpreter. argv0 is what the program sees as its name.
-func containerCommand(p string, env, argv []string) (command []string, argv0 string) {
+func containerCommand(p, dir string, env, argv []string) (command []string, argv0 string) {
 	root := noLinks(p, "rootfs")
-	command = (&image{Root: root, Env: env}).command(append([]string{lookPath(root, env, argv[0])}, argv[1:]...))
+	command = (&image{Root: root, Env: env}).command(append([]string{lookPath(root, env, dir, argv[0])}, argv[1:]...))
 	if argv0 = argv[0]; len(command) != len(argv) {
 		argv0 = command[0] // a script: its interpreter
 	}
@@ -96,10 +98,10 @@ func containerCommand(p string, env, argv []string) (command []string, argv0 str
 }
 
 // lookPath finds a command in the container's PATH, as docker exec does.
-func lookPath(root string, env []string, name string) string {
+// A path with a slash is used as is, relative to the working directory dir.
+func lookPath(root string, env []string, dir, name string) string {
 	if strings.Contains(name, "/") {
-		reject(strings.HasPrefix(name, "/"), "Exec command must be a name or an absolute path: "+name)
-		return name
+		return path.Join(dir, name)
 	}
 	search := "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 	for _, v := range env {
@@ -248,7 +250,7 @@ func (b *engine) execCommand(j *execJob) (cmd *exec.Cmd, input, output, errput *
 		c["workdir"] = j.WorkingDir
 	}
 	env := mergeEnv(stringsOf(c["env"]), j.Env)
-	command, argv0 := containerCommand(p, env, j.Cmd)
+	command, argv0 := containerCommand(p, workdir(c), env, j.Cmd)
 	extra := []string{}
 	if j.Stdin || j.Tty {
 		extra = append(extra, "--stdin")

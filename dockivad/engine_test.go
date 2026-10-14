@@ -361,6 +361,9 @@ func TestLayerLinks(t *testing.T) {
 		t.Fatalf("image PATH lookup: %v", cmd)
 	}
 	mustReject(t, func() { (&image{Root: root, Entry: []string{"missing"}}).command(nil) })
+	if cmd := (&image{Root: root, WorkingDir: "/usr"}).command([]string{"./bin/env"}); cmd[0] != "/usr/bin/env" {
+		t.Fatalf("relative to WORKDIR: %v", cmd)
+	}
 	link := func(p string) (string, bool) { return readLink(filepath.Join(root, p)) }
 	for in, want := range map[string]string{"bin/sh": "bin/busybox", "usr/bin/env": "bin/busybox", "../../../bin/sh": "bin/busybox", "host": "etc/passwd", "bin/../usr": "usr"} {
 		if got := resolveGuest(in, link); got != want {
@@ -521,11 +524,11 @@ func TestContainerCommandScripts(t *testing.T) {
 	check(os.MkdirAll(filepath.Join(root, "bin"), 0o755))
 	check(os.WriteFile(filepath.Join(root, "bin", "sh"), append([]byte("\x7fELF\x02\x01\x01"), make([]byte, 57)...), 0o755))
 	check(os.WriteFile(filepath.Join(root, "bin", "tool.sh"), []byte("#!/bin/sh\necho hi\n"), 0o755))
-	cmd, argv0 := containerCommand(p, []string{"PATH=/bin"}, []string{"tool.sh", "--list"})
+	cmd, argv0 := containerCommand(p, "/", []string{"PATH=/bin"}, []string{"tool.sh", "--list"})
 	if strings.Join(cmd, " ") != "/bin/sh /bin/tool.sh --list" || argv0 != "/bin/sh" {
 		t.Fatalf("script: %v %q", cmd, argv0)
 	}
-	cmd, argv0 = containerCommand(p, []string{"PATH=/bin"}, []string{"sh", "-c", "true"})
+	cmd, argv0 = containerCommand(p, "/", []string{"PATH=/bin"}, []string{"sh", "-c", "true"})
 	if strings.Join(cmd, " ") != "/bin/sh -c true" || argv0 != "sh" {
 		t.Fatalf("binary: %v %q", cmd, argv0)
 	}

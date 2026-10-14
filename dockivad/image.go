@@ -3,6 +3,7 @@ package main
 import (
 	"archive/tar"
 	"bytes"
+	"cmp"
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
@@ -463,6 +464,9 @@ func (im *image) command(override []string) []string {
 				}
 			}
 		}
+	}
+	if strings.Contains(cmd[0], "/") && !strings.HasPrefix(cmd[0], "/") { // ./run.sh: from WORKDIR
+		cmd[0] = path.Join(cmp.Or(im.WorkingDir, "/"), cmd[0])
 	}
 	reject(strings.HasPrefix(cmd[0], "/"), "Executable not found in PATH: "+cmd[0])
 	v, ok := find(cmd[0][1:])

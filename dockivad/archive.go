@@ -25,7 +25,11 @@ type guestFile struct {
 	readonly    bool
 }
 
-func (b *engine) guestFile(name, guest string) guestFile {
+func (b *engine) guestFile(name, guest string) guestFile { return b.guestFiles(name)(guest, false) }
+
+// guestFiles resolves many paths of one container; create makes missing parent
+// directories (a tar extracted at "/" may reach into several mounts).
+func (b *engine) guestFiles(name string) func(guest string, create bool) guestFile {
 	p := b.container(name)
 	c := readObject(filepath.Join(p, "config.json"))
 	root := noLinks(p, "rootfs")
@@ -59,20 +63,24 @@ func (b *engine) guestFile(name, guest string) guestFile {
 		base, rest, _ := at(g)
 		return readLink(filepath.Join(base, rest))
 	}
-	reject(len(guest) <= 4096 && strings.HasPrefix(guest, "/"), "Path must be absolute: "+guest)
-	clean := strings.TrimPrefix(path.Clean(guest), "/")
-	dir, leaf := path.Split(clean)
-	resolved := path.Join(resolveGuest(pathName(dir), link), leaf)
-	base, rest, readonly := at(resolved)
-	// Every directory above the file is now a real directory; noLinks re-checks that.
-	// ponytail: a process in the container can swap a directory for a symlink between
-	// this check and the copy; open with openat2-style beneath-checks if that matters.
-	if rest == "" {
-		return guestFile{base, "/" + resolved, readonly}
+	return func(guest string, create bool) guestFile {
+		reject(len(guest) <= 4096 && strings.HasPrefix(guest, "/"), "Path must be absolute: "+guest)
+		clean := strings.TrimPrefix(path.Clean(guest), "/")
+		dir, leaf := path.Split(clean)
+		resolved := path.Join(resolveGuest(pathName(dir), link), leaf)
+		base, rest, readonly := at(resolved)
+		// Every directory above the file is now a real directory; noLinks re-checks that.
+		// ponytail: a process in the container can swap a directory for a symlink between
+		// this check and the copy; open with openat2-style beneath-checks if that matters.
+		if rest == "" {
+			return guestFile{base, "/" + resolved, readonly}
+		}
+		parent, last := path.Split(rest)
+		if create && !readonly {
+			return guestFile{filepath.Join(makeParents(base, parent), last), "/" + resolved, readonly}
+		}
+		return guestFile{filepath.Join(noLinksOrMissing(base, parent), last), "/" + resolved, readonly}
 	}
-	parent, last := path.Split(rest)
-	host := filepath.Join(noLinksOrMissing(base, parent), last)
-	return guestFile{host, "/" + resolved, readonly}
 }
 
 func readLink(p string) (string, bool) {
@@ -92,6 +100,22 @@ func noLinksOrMissing(root, relative string) string {
 		panic(apiError{404, "No such file or directory"})
 	}
 	return noLinks(root, relative)
+}
+
+// makeParents is noLinks, creating missing directories as Docker does for a tar that
+// leaves out parent entries (act sends "workflow/event.json" alone).
+func makeParents(root, relative string) string {
+	p := root
+	for _, part := range strings.Split(relative, "/") {
+		if part == "" || part == "." {
+			continue
+		}
+		if e := os.Mkdir(filepath.Join(p, part), 0o755); !errors.Is(e, fs.ErrExist) {
+			check(e)
+		}
+		p = noLinks(p, part)
+	}
+	return p
 }
 
 // pathStat is the X-Docker-Container-Path-Stat header docker cp reads.
@@ -174,16 +198,14 @@ func (b *engine) getArchive(w http.ResponseWriter, name, requested string, head 
 
 // putArchive extracts a tar into a container directory (docker cp - CONTAINER:PATH).
 func (b *engine) putArchive(name, requested string, body io.Reader, noOverwriteDirNonDir bool) {
-	f := b.guestFile(name, requested)
+	resolve := b.guestFiles(name)
+	f := resolve(requested, false)
 	st, e := os.Lstat(f.host)
 	if errors.Is(e, fs.ErrNotExist) {
 		panic(apiError{404, "Could not find the file " + requested + " in container"})
 	}
 	check(e)
 	reject(st.IsDir(), "Extraction point is not a directory: "+requested)
-	if f.readonly {
-		panic(apiError{403, "Container path is read-only: " + requested})
-	}
 	in := tar.NewReader(body)
 	type dated struct {
 		path string
@@ -200,8 +222,12 @@ func (b *engine) putArchive(name, requested string, body io.Reader, noOverwriteD
 		if rel == "" {
 			continue // the directory itself
 		}
-		parent, last := path.Split(rel)
-		dest := filepath.Join(noLinks(f.host, parent), last)
+		// Each entry finds its own mount: act extracts at "/" into a volume.
+		to := resolve(path.Join(f.guest, rel), true)
+		if to.readonly {
+			panic(apiError{403, "Container path is read-only: " + to.guest})
+		}
+		dest := to.host
 		old, e := os.Lstat(dest)
 		exists := e == nil
 		if exists && noOverwriteDirNonDir && old.IsDir() != (h.Typeflag == tar.TypeDir) {
@@ -229,7 +255,7 @@ func (b *engine) putArchive(name, requested string, body io.Reader, noOverwriteD
 			check(os.Symlink(linkTarget(h.Linkname), dest))
 			continue
 		case tar.TypeLink:
-			source := filepath.Join(noLinks(f.host, path.Dir(pathName(h.Linkname))), path.Base(h.Linkname))
+			source := resolve(path.Join(f.guest, pathName(h.Linkname)), false).host
 			check(os.Link(source, dest))
 		default:
 			panic(apiError{400, "Unsupported archive entry type for " + rel})

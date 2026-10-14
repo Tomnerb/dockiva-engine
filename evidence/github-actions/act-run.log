@@ -1,0 +1,85 @@
+time="2026-10-14T23:09:15+07:00" level=info msg="Using docker host 'unix:///Users/macbookpro16m2max/.vmfree-clitest/docker.sock', and daemon socket '-'"
+[ci/build        ] ⭐ Run Set up job
+[ci/container-job] ⭐ Run Set up job
+[ci/build        ] 🚀  Start image=node:22
+[ci/container-job] 🚀  Start image=python:3.12-alpine
+[ci/build        ]   🐳  docker pull image=node:22 platform=linux/arm64 username= forcePull=false
+[ci/container-job]   🐳  docker pull image=redis:7-alpine platform=linux/arm64 username= forcePull=false
+[ci/container-job]   🐳  docker pull image=python:3.12-alpine platform=linux/arm64 username= forcePull=false
+[ci/build        ]   🐳  docker create image=node:22 platform=linux/arm64 entrypoint=["tail" "-f" "/dev/null"] cmd=[] network="host"
+[ci/container-job] Cleaning up services for job container-job
+[ci/container-job] Cleaning up network for job container-job, and network name is: act-ci-container-job-04e27b931fe3d7c56968a6c5300e18ed26117d979deed35ca9a412d534cba99d-container-job-network
+[ci/build        ]   🐳  docker run image=node:22 platform=linux/arm64 entrypoint=["tail" "-f" "/dev/null"] cmd=[] network="host"
+[ci/container-job]   🐳  docker pull image=redis:7-alpine platform=linux/arm64 username= forcePull=false
+[ci/container-job]   🐳  docker create image=redis:7-alpine platform=linux/arm64 entrypoint=[] cmd=[] network="act-ci-container-job-04e27b931fe3d7c56968a6c5300e18ed26117d979deed35ca9a412d534cba99d-container-job-network"
+[ci/build        ]   🐳  docker exec cmd=[node --no-warnings -e console.log(process.execPath)] user= workdir=
+[ci/container-job]   🐳  docker run image=redis:7-alpine platform=linux/arm64 entrypoint=[] cmd=[] network="act-ci-container-job-04e27b931fe3d7c56968a6c5300e18ed26117d979deed35ca9a412d534cba99d-container-job-network"
+[ci/container-job]   🐳  docker create image=python:3.12-alpine platform=linux/arm64 entrypoint=["tail" "-f" "/dev/null"] cmd=[] network="act-ci-container-job-04e27b931fe3d7c56968a6c5300e18ed26117d979deed35ca9a412d534cba99d-container-job-network"
+[ci/build        ]   ✅  Success - Set up job
+[ci/build        ] ⭐ Run Main actions/checkout@v4
+[ci/build        ]   🐳  docker cp src=$SCRATCH/act-repo/. dst=$SCRATCH/act-repo
+[ci/container-job]   🐳  docker run image=python:3.12-alpine platform=linux/arm64 entrypoint=["tail" "-f" "/dev/null"] cmd=[] network="act-ci-container-job-04e27b931fe3d7c56968a6c5300e18ed26117d979deed35ca9a412d534cba99d-container-job-network"
+[ci/build        ]   ✅  Success - Main actions/checkout@v4 [59.575958ms]
+[ci/build        ] ⭐ Run Main echo "hello from $(uname -m) $(cat /etc/os-release | grep PRETTY)"; cat README.md
+[ci/build        ]   🐳  docker exec cmd=[bash -e /var/run/act/workflow/1] user= workdir=
+[ci/build        ]   | hello from aarch64 PRETTY_NAME="Debian GNU/Linux 12 (bookworm)"
+[ci/build        ]   | # act test
+[ci/build        ]   ✅  Success - Main echo "hello from $(uname -m) $(cat /etc/os-release | grep PRETTY)"; cat README.md [64.242542ms]
+[ci/build        ] ⭐ Run Main echo "answer=42" >> "$GITHUB_OUTPUT"
+[ci/build        ]   🐳  docker exec cmd=[bash -e /var/run/act/workflow/calc] user= workdir=
+[ci/container-job]   🐳  docker exec cmd=[node --no-warnings -e console.log(process.execPath)] user= workdir=
+[ci/container-job]   ✅  Success - Set up job
+[ci/container-job] ⭐ Run Main python -c "print('python in container ok')"
+[ci/build        ]   ✅  Success - Main echo "answer=42" >> "$GITHUB_OUTPUT" [49.299084ms]
+[ci/container-job]   🐳  docker exec cmd=[sh -e /var/run/act/workflow/0.sh] user= workdir=
+[ci/build        ]   ⚙  ::set-output:: answer=42
+[ci/build        ] ⭐ Run Main test "42" = 42 && echo outputs-ok
+[ci/build        ]   🐳  docker exec cmd=[bash -e /var/run/act/workflow/3] user= workdir=
+[ci/container-job]   | python in container ok
+[ci/container-job]   ✅  Success - Main python -c "print('python in container ok')" [60.081666ms]
+[ci/build        ]   | outputs-ok
+[ci/build        ]   ✅  Success - Main test "42" = 42 && echo outputs-ok [37.70125ms]
+[ci/container-job] ⭐ Run Main cat > /tmp/r.py <<'PY'
+import socket, time
+for i in range(30):
+    try:
+        s = socket.create_connection(("redis", 6379)); break
+    except OSError:
+        time.sleep(1)
+s.sendall(b"PING\r\n"); print("redis says", s.recv(16))
+PY
+python /tmp/r.py
+[ci/build        ] ⭐ Run Main node -e "console.log('node', process.version)"
+[ci/container-job]   🐳  docker exec cmd=[sh -e /var/run/act/workflow/1.sh] user= workdir=
+[ci/build        ]   🐳  docker exec cmd=[bash -e /var/run/act/workflow/4] user= workdir=
+[ci/build        ]   | node v22.23.3
+[ci/build        ]   ✅  Success - Main node -e "console.log('node', process.version)" [81.998125ms]
+[ci/container-job]   | redis says b'+PONG\r\n'
+[ci/container-job]   ✅  Success - Main cat > /tmp/r.py <<'PY'
+import socket, time
+for i in range(30):
+    try:
+        s = socket.create_connection(("redis", 6379)); break
+    except OSError:
+        time.sleep(1)
+s.sendall(b"PING\r\n"); print("redis says", s.recv(16))
+PY
+python /tmp/r.py
+ [97.22725ms]
+[ci/build        ] ⭐ Run Main mkdir -p out && date > out/stamp && ls out
+[ci/container-job] ⭐ Run Complete job
+[ci/container-job] Cleaning up container for job container-job
+[ci/build        ]   🐳  docker exec cmd=[bash -e /var/run/act/workflow/5] user= workdir=
+[ci/build        ]   | stamp
+[ci/build        ]   ✅  Success - Main mkdir -p out && date > out/stamp && ls out [74.548333ms]
+[ci/container-job] Cleaning up services for job container-job
+[ci/build        ] ⭐ Run Complete job
+[ci/build        ] Cleaning up container for job build
+[ci/container-job] Cleaning up network for job container-job, and network name is: act-ci-container-job-04e27b931fe3d7c56968a6c5300e18ed26117d979deed35ca9a412d534cba99d-container-job-network
+[ci/container-job]   ✅  Success - Complete job
+[ci/container-job] 🏁  Job succeeded
+[ci/build        ]   ✅  Success - Complete job
+[ci/build        ] 🏁  Job succeeded
+real 2.04
+user 0.12
+sys 0.09

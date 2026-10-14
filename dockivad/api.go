@@ -121,8 +121,19 @@ func psStatus(state obj) string {
 	}
 	return str(state["Status"])
 }
-func restartCount(s obj) any             { return cmp.Or(s["restart_count"], any(0)) }
-func hostname(name string, c obj) string { return cmp.Or(text(c["hostname"]), name) }
+func restartCount(s obj) any { return cmp.Or(s["restart_count"], any(0)) }
+
+// hostname is --hostname, else the name when it is a valid host name, else the short
+// container ID, as Docker uses (a name may be too long or hold "_" and dots).
+func hostname(name string, c obj) string {
+	if h := text(c["hostname"]); h != "" {
+		return h
+	}
+	if hostnamePattern.MatchString(name) && !strings.Contains(name, ".") {
+		return name
+	}
+	return key(name)[:12]
+}
 func extraHostList(c obj) []string {
 	out := []string{}
 	if c["extra_hosts"] != nil {

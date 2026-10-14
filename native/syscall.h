@@ -221,6 +221,10 @@ static int guest_syscall_dispatch(void) {
             if(call==133) { uint64_t r=signal_suspend();if(r==IO_BLOCK) { cpu->pc-=4;return -2; }cpu->gpr[0]=r;return -3; }
             if(call==134 || call==135) { cpu->gpr[0]=signal_call(call);if(schedule_active && (schedule_tasks[process_pid-1].terminate_signal || schedule_tasks[process_pid-1].stop_signal))return -1;return -3; }
             if(call==285) { cpu->gpr[0]=cpu->gpr[5]?linux_error(22):fs_copy_between(cpu->gpr[0],cpu->gpr[2],cpu->gpr[1],cpu->gpr[3],cpu->gpr[4]);return -3; } /* copy_file_range */
+            /* splice, tee: EINVAL, as for descriptors that cannot splice; callers fall back to
+               read and write (GNU grep drains a pipe this way). ponytail: add a pipe-to-fd
+               splice if a program needs one without the fallback. */
+            if(call==76 || call==77) { cpu->gpr[0]=linux_error(22);return -3; }
             if(call==71) { uint64_t r=guest_sendfile();if(r==IO_BLOCK) { cpu->pc-=4;return -2; }cpu->gpr[0]=r;return -3; }
             if(call==160) {
                 unsigned char *out=lookup(cpu->gpr[0],390,2);
@@ -511,9 +515,10 @@ static int guest_syscall_dispatch(void) {
             if(call==57 || call==63 || call==25 || call==203 || call==210 || call==242 || call==200 || call==201 || call==202 || call==204 || call==205 || call==206 || call==207 || call==208 || call==209 || call==211 || call==212 || call==269 || (call==64 && net_host(cpu->gpr[0])>=0)) { uint64_t result=net_call(call);if(result==IO_BLOCK) { cpu->pc-=4;return -2; }cpu->gpr[0]=result;return -3; }
             if(call!=64) {
                 /* As on Linux, an unknown system call returns ENOSYS; programs probe and
-                   fall back. Each number is reported once so container logs show gaps. */
+                   fall back. Each number is reported once so container logs show gaps;
+                   clone3 is not, glibc always falls back to clone. */
                 static unsigned char reported[512];
-                if(call>=512 || !reported[call]) { if(call<512)reported[call]=1;fprintf(stderr,"vmfree: Linux syscall %" PRIu64 " is not implemented (ENOSYS)\n",call); }
+                if(call!=435 && (call>=512 || !reported[call])) { if(call<512)reported[call]=1;fprintf(stderr,"vmfree: Linux syscall %" PRIu64 " is not implemented (ENOSYS)\n",call); }
                 cpu->gpr[0]=linux_error(38);return -3;
             }
             if(cpu->gpr[0]!=1 && cpu->gpr[0]!=2) cpu->gpr[0]=UINT64_MAX-8;
