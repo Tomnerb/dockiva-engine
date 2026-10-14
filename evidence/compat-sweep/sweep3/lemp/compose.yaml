@@ -1,0 +1,9 @@
+services:
+  php:
+    image: php:8.3-fpm-alpine
+    volumes: ["./app:/var/www/html"]
+  web:
+    image: nginx:alpine
+    depends_on: [php]
+    ports: ["28121:80"]
+    volumes: ["./app:/var/www/html", "./nginx.conf:/etc/nginx/conf.d/default.conf:ro"]

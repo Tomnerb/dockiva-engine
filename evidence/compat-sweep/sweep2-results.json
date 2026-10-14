@@ -1,0 +1,134 @@
+{
+ "postgres15": {
+  "ok": true,
+  "pull_seconds": 26,
+  "seconds": 5,
+  "detail": "PostgreSQL 15.19 on aarch64-unknown-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit"
+ },
+ "postgres17": {
+  "ok": true,
+  "pull_seconds": 25,
+  "seconds": 2,
+  "detail": "PostgreSQL 17.11 on aarch64-unknown-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit"
+ },
+ "php-fpm": {
+  "ok": true,
+  "pull_seconds": 11,
+  "seconds": 1,
+  "detail": "[\"8.3.35\",true,true]\n[14-Oct-2026 13:52:47] NOTICE: configuration file /usr/local/etc/php-fpm.conf test is successful\nWARNING: VM-free preview: bounded Linux compatibility"
+ },
+ "ruby": {
+  "ok": true,
+  "pull_seconds": 10,
+  "seconds": 1,
+  "detail": "RUBY-OK\nOpenSSL 3.5.8 25 Aug 2026\n[1]\nabbrev (default: 0.1.2)\nbase64 (default: 0.2.0)\nbenchmark (default: 0.3.0)\nWARNING: VM-free preview: bounded Linux compatibility"
+ },
+ "django": {
+  "ok": true,
+  "pull_seconds": 65,
+  "seconds": 9,
+  "detail": "[notice] A new release of pip is available: 25.0.1 -> 26.2.1\n[notice] To update, run: pip install --upgrade pip\nThe install worked successfully\nWARNING: VM-free preview: bounded Linux compatibility\nvmfree: Linux syscall 436 is not implemented (ENOSYS)\nvmfree: Linux syscall 435 is not implemented (ENOSYS)"
+ },
+ "dotnet-sdk": {
+  "ok": true,
+  "pull_seconds": 88,
+  "seconds": 2,
+  "detail": "The template \"Console App\" was created successfully.\n\nProcessing post-creation actions...\nRestoring /tmp/a/a.csproj:\n  Determining projects to restore...\n  Restored /tmp/a/a.csproj (in 35 ms).\nRestore succeeded.\n\n\n8.0.426\nWARNING: VM-free preview: bounded Linux compatibility"
+ },
+ "keycloak": {
+  "ok": true,
+  "pull_seconds": 40,
+  "seconds": 11,
+  "detail": "{\"realm\":\"master\",\"public_key\":\"MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAx94Zqj2wLqWv5vgIm7pMxHKM2kxvDbiz3TRRDSpMyrOd"
+ },
+ "minio": {
+  "ok": false,
+  "pull_seconds": 2,
+  "seconds": 0,
+  "detail": "pull: Error response from daemon: Registry request failed with HTTP 401\n"
+ },
+ "n8n": {
+  "ok": true,
+  "pull_seconds": 78,
+  "seconds": 12,
+  "detail": "{\"status\":\"ok\"}"
+ },
+ "ghost": {
+  "ok": true,
+  "pull_seconds": 55,
+  "seconds": 17,
+  "detail": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n\n    <title>Ghost</title>\n    <meta charset=\"utf-8\">\n    <meta name=\"viewport\" c"
+ },
+ "sonarqube": {
+  "ok": false,
+  "pull_seconds": 176,
+  "seconds": 601,
+  "detail": "<urlopen error [Errno 61] Connection refused> || logs: t/sonarqube/logs/sonarqube.log\nElasticsearch died while starting up, exit code: 1\n2026.10.14 14:08:07 WARN  app[][o.s.a.p.AbstractManagedProcess] Process exited with exit value [ElasticSearch]: 1\n2026.10.14 14:08:07 INFO  app[][o.s.a.SchedulerImpl] Process[ElasticSearch] is stopped\n2026.10.14 14:08:07 INFO  app[][o.s.a.SchedulerImpl] SonarQube is stopped\nvmfree: Linux syscall 435 is not implemented (ENOSYS)\nvmfree: stale page tables at pc=0x3180d1340 address=0x310f55000; rebuilt (please report)\n"
+ },
+ "gitea": {
+  "ok": true,
+  "pull_seconds": 16,
+  "seconds": 1,
+  "detail": "<!DOCTYPE html>\n<html lang=\"en-US\" data-theme=\"gitea-auto\">\n<head>\n\t<meta name=\"viewport\" content=\"width=device-width, i"
+ },
+ "haproxy": {
+  "ok": true,
+  "pull_seconds": 8,
+  "seconds": 1,
+  "detail": "haproxy-ok"
+ },
+ "vault": {
+  "ok": true,
+  "pull_seconds": 29,
+  "seconds": 2,
+  "detail": "{\"initialized\":true,\"sealed\":false,\"standby\":false,\"performance_standby\":false,\"replication_performance_mode\":\"disabled\""
+ },
+ "influxdb": {
+  "ok": true,
+  "pull_seconds": 21,
+  "seconds": 1,
+  "detail": "{\"name\":\"influxdb\", \"message\":\"ready for queries and writes\", \"status\":\"pass\", \"checks\":[], \"version\": \"v2.9.1\", \"commit"
+ },
+ "clickhouse": {
+  "ok": true,
+  "pull_seconds": 53,
+  "seconds": 7,
+  "detail": "ch-499500\n"
+ },
+ "jenkins": {
+  "ok": true,
+  "pull_seconds": 46,
+  "seconds": 9,
+  "detail": "\n      \n      \n    \n    \n    <!DOCTYPE html><html lang=\"en\"><head resURL=\"/static/55953c16\" data-rooturl=\"\" data-resurl="
+ },
+ "mosquitto": {
+  "ok": true,
+  "pull_seconds": 5,
+  "seconds": 1,
+  "detail": "mqtt-ok\n"
+ },
+ "nats": {
+  "ok": true,
+  "pull_seconds": 5,
+  "seconds": 1,
+  "detail": "{\n  \"server_id\": \"NAXIUJRRLQAOTAHX6LH7FK2OTKZH3G6PGJX7HNYJIZRV2HA26ZVVWTGW\",\n  \"server_name\": \"NAXIUJRRLQAOTAHX6LH7FK2OT"
+ },
+ "compose-wordpress": {
+  "ok": true,
+  "pull_seconds": 93,
+  "seconds": 10,
+  "detail": "<!DOCTYPE html>\n<html lang=\"en-US\">\n<head>\n\t<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />\n\t<m"
+ },
+ "compose-lemp": {
+  "ok": true,
+  "pull_seconds": 18,
+  "seconds": 1,
+  "detail": "PHP OK 8.3 fpm-fcgi"
+ },
+ "compose-python-redis": {
+  "ok": true,
+  "pull_seconds": 12,
+  "seconds": 1,
+  "detail": "hits 1"
+ }
+}

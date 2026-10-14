@@ -1,0 +1,107 @@
+{
+ "nginx": {
+  "ok": true,
+  "seconds": 2,
+  "detail": "<!DOCTYPE html>\n<html>\n<head>\n<title>Welcome to nginx!</title>\n<style>\nhtml { color-scheme: light dark; }\nbody { width: "
+ },
+ "httpd": {
+  "ok": true,
+  "seconds": 1,
+  "detail": "<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.01//EN\" \"http://www.w3.org/TR/html4/strict.dtd\">\n<html>\n<head>\n<title>It works"
+ },
+ "caddy": {
+  "ok": true,
+  "seconds": 1,
+  "detail": "<!DOCTYPE html>\n<html>\n<head>\n\t<title>Caddy works!</title>\n\t<meta charset=\"utf-8\">\n\t<meta name=\"viewport\" content=\"width"
+ },
+ "traefik": {
+  "ok": true,
+  "seconds": 1,
+  "detail": "{\"Version\":\"3.2.5\",\"Codename\":\"munster\",\"startDate\":\"2026-10-14T13:48:59.33128125Z\"}"
+ },
+ "memcached": {
+  "ok": true,
+  "seconds": 2,
+  "detail": "STORED\nVALUE k 0 2\nhi\nEND\n"
+ },
+ "node-alpine": {
+  "ok": true,
+  "seconds": 1,
+  "detail": "ok 2d711642 2147483648\nWARNING: VM-free preview: bounded Linux compatibility"
+ },
+ "npm": {
+  "ok": true,
+  "seconds": 2,
+  "detail": "10.9.9\nWARNING: VM-free preview: bounded Linux compatibility"
+ },
+ "python-alpine": {
+  "ok": true,
+  "seconds": 1,
+  "detail": "ok OpenSSL [1, 2]\nWARNING: VM-free preview: bounded Linux compatibility"
+ },
+ "golang": {
+  "ok": true,
+  "seconds": 5,
+  "detail": "go-ok\nWARNING: VM-free preview: bounded Linux compatibility"
+ },
+ "mariadb": {
+  "ok": true,
+  "seconds": 8,
+  "detail": "version()\n11.8.9-MariaDB-ubu2404"
+ },
+ "mysql": {
+  "ok": true,
+  "seconds": 8,
+  "detail": "version()\n8.4.11\nmysql: [Warning] Using a password on the command line interface can be insecure."
+ },
+ "mongo": {
+  "ok": true,
+  "seconds": 3,
+  "detail": "1"
+ },
+ "rabbitmq": {
+  "ok": true,
+  "seconds": 21,
+  "detail": "Ping succeeded"
+ },
+ "kafka": {
+  "ok": true,
+  "seconds": 9,
+  "detail": ""
+ },
+ "java": {
+  "ok": true,
+  "seconds": 1,
+  "detail": "                        = false                                     {product} {default}\nWARNING: VM-free preview: bounded Linux compatibility\nvmfree: Linux syscall 435 is not implemented (ENOSYS)\nopenjdk version \"21.0.12.1\" 2026-08-18 LTS\nOpenJDK Runtime Environment Temurin-21.0.12.1+1 (build 21.0.12.1+1-LTS)\nOpenJDK 64-Bit Server VM Temurin-21.0.12.1+1 (build 21.0.12.1+1-LTS, mixed mode, sharing)"
+ },
+ "java-2g-heap": {
+  "ok": true,
+  "seconds": 1,
+  "detail": "WARNING: VM-free preview: bounded Linux compatibility\nvmfree: Linux syscall 435 is not implemented (ENOSYS)\nopenjdk version \"21.0.12.1\" 2026-08-18 LTS\nOpenJDK Runtime Environment Temurin-21.0.12.1+1 (build 21.0.12.1+1-LTS)\nOpenJDK 64-Bit Server VM Temurin-21.0.12.1+1 (build 21.0.12.1+1-LTS, mixed mode, sharing)"
+ },
+ "prometheus": {
+  "ok": true,
+  "seconds": 1,
+  "detail": "Prometheus Server is Ready.\n"
+ },
+ "grafana": {
+  "ok": true,
+  "seconds": 5,
+  "detail": "{\n  \"database\": \"ok\",\n  \"version\": \"13.2.4\",\n  \"commit\": \"0e79aef9d91abf3bdadae9af15763029072fb45b\"\n}"
+ },
+ "elasticsearch": {
+  "ok": true,
+  "seconds": 11,
+  "detail": "{\n  \"name\" : \"sw-es\",\n  \"cluster_name\" : \"docker-cluster\",\n  \"cluster_uuid\" : \"ZHP2NjASRaWVmlHiagxbDA\",\n  \"version\" : {\n"
+ },
+ "node-full": {
+  "ok": true,
+  "seconds": 3,
+  "detail": "ok\nWARNING: VM-free preview: bounded Linux compatibility"
+ },
+ "python-full": {
+  "ok": true,
+  "seconds": 2,
+  "detail": "ok\nWARNING: VM-free preview: bounded Linux compatibility"
+ }
+}

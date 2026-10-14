@@ -1,0 +1,9 @@
+services:
+  redis:
+    image: redis:7-alpine
+  app:
+    image: python:3.12-alpine
+    depends_on: [redis]
+    ports: ["28122:8000"]
+    volumes: ["./app.py:/app.py:ro"]
+    command: ["python", "/app.py"]
