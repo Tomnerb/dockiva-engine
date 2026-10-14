@@ -1,42 +1,66 @@
 {
  "run alpine true": {
-  "value": 0.483,
+  "value": 0.131,
   "unit": "s"
  },
  "dd 1M x 1-byte": {
-  "value": 4.672,
+  "value": 4.79,
   "unit": "s"
  },
  "pgbench TPC-B tps": {
-  "value": 4263.951,
+  "value": 4309.92,
   "unit": "tps"
  },
  "npm install express+lodash": {
-  "value": 6.426,
+  "value": 5.705,
   "unit": "s"
  },
  "go build net/http (cold cache)": {
-  "value": 9.257,
+  "value": 7.496,
   "unit": "s"
  },
  "bind mount 2000 small files": {
-  "value": 0.665,
+  "value": 0.54,
   "unit": "s"
  },
  "bind mount 256 MiB write": {
-  "value": 0.77,
+  "value": 0.533,
   "unit": "s"
  },
  "container fs 256 MiB write": {
-  "value": 0.735,
+  "value": 0.5,
   "unit": "s"
  },
  "sha256 512 MiB (CPU)": {
-  "value": 8.974,
+  "value": 3.554,
   "unit": "s"
  },
  "awk loop 30M (CPU)": {
-  "value": 9.468,
+  "value": 9.375,
   "unit": "s"
+ },
+ "engine cold start to ready": {
+  "value": 0.308,
+  "unit": "s"
+ },
+ "engine cold start to first container": {
+  "value": 0.536,
+  "unit": "s"
+ },
+ "memory idle engine": {
+  "value": 111.625,
+  "unit": "MiB"
+ },
+ "memory with 5 idle containers": {
+  "value": 189.469,
+  "unit": "MiB"
+ },
+ "host->nginx keep-alive HTTP req/s": {
+  "value": 7081.887,
+  "unit": "req/s"
+ },
+ "host->redis PING round trips/s": {
+  "value": 37551.487,
+  "unit": "ops/s"
  }
 }

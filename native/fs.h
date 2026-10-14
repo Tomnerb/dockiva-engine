@@ -129,7 +129,10 @@ static int fs_is_root(int fd) {
    returns to the guest parent, never the host's. Paths beneath a mount are
    resolved like the rest of the root: symlinks never reach the host kernel. */
 #define FS_MOUNTS 32
-static struct { char path[1025],name[256];int fd,directory,readonly;dev_t dev;ino_t ino; } fs_mounts[FS_MOUNTS];
+/* plain: 0 not yet known, 1 when no directory on the way to the mount (in the root)
+   is a symlink and no other mount lies above it, so a path beneath it resolves from
+   the mount's descriptor in one host call (fs_walk_fast); 2 otherwise. */
+static struct { char path[1025],name[256];int fd,directory,readonly,plain;dev_t dev;ino_t ino; } fs_mounts[FS_MOUNTS];
 static unsigned fs_mount_count;
 /* Where the last fs_walk resolved its leaf: 0 the container root, 1+i mount i,
    -1 unknown (a directory whose guest path is not known). */
@@ -146,6 +149,17 @@ static int fs_mount_of(const char *canon) {
         if(n>longest && !strncmp(canon,fs_mounts[i].path,n) && (canon[n]==0 || canon[n]=='/')) { best=(int)i+1;longest=n; }
     }
     return best;
+}
+static int fs_mount_plain(int i) {
+    if(!fs_mounts[i].plain) {
+        int plain=fs_root>=0;char prefix[1025];strcpy(prefix,fs_mounts[i].path);
+        for(char *s=strrchr(prefix,'/');plain && s && s>prefix;s=strrchr(prefix,'/')) {
+            *s=0;struct stat st;
+            if(fs_mount_index(prefix)>=0 || (!fstatat(fs_root,prefix+1,&st,AT_SYMLINK_NOFOLLOW) && S_ISLNK(st.st_mode)))plain=0;
+        }
+        fs_mounts[i].plain=plain?1:2;
+    }
+    return fs_mounts[i].plain==1;
 }
 /* The mounted directory fd is the top of, or -1. */
 static int fs_mount_root(int fd) {
@@ -234,10 +248,19 @@ static int fs_walk_fast(int base,const char *cur_start,const char *rest,int foll
         if(bad)return -1;
     }
     if(fs_canon_push(canon,name)<0)return -1;
-    /* A path into (or across) a mount needs the component walk, even where the
-       root has nothing at the mount's path. */
-    if(fs_mount_count && fs_mount_of(canon)!=fs_mount_of(cur_start))return -2;
-    const char *relative=dirs;while(*relative=='/')relative++;
+    /* A path into (or across) a mount resolves from the mount's own descriptor when
+       the way to it is plain (bind mounts: an app's files, a database's data); else
+       it needs the component walk, even where the root has nothing at the mount's path. */
+    char inside[1025];const char *relative=dirs;
+    if(fs_mount_count && fs_mount_of(canon)!=fs_mount_of(cur_start)) {
+        int to=fs_mount_of(canon);
+        if(to<=0 || !fs_mounts[to-1].directory || !fs_mount_plain(to-1))return -2;
+        const char *below=canon+strlen(fs_mounts[to-1].path),*end=strrchr(canon,'/');
+        if(!*below || end<below)return -2;                     /* the mount itself */
+        size_t m=(size_t)(end-below);memcpy(inside,below,m);inside[m]=0;
+        base=fs_mounts[to-1].fd;relative=inside;
+    }
+    while(*relative=='/')relative++;
     int fd=*relative?openat(base,relative,O_RDONLY|O_DIRECTORY|O_NOFOLLOW_ANY|O_CLOEXEC):dup(base);
     if(fd<0)return errno==ENOENT || errno==ENOTDIR?-1:-2;
     struct stat st;

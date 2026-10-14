@@ -38,5 +38,29 @@
  "awk loop 30M (CPU)": {
   "value": 9.064,
   "unit": "s"
+ },
+ "engine cold start to ready": {
+  "value": 4.426,
+  "unit": "s"
+ },
+ "engine cold start to first container": {
+  "value": 4.866,
+  "unit": "s"
+ },
+ "memory idle engine": {
+  "value": 2512.797,
+  "unit": "MiB"
+ },
+ "memory with 5 idle containers": {
+  "value": 2102.328,
+  "unit": "MiB"
+ },
+ "host->nginx keep-alive HTTP req/s": {
+  "value": 8708.199,
+  "unit": "req/s"
+ },
+ "host->redis PING round trips/s": {
+  "value": 16309.385,
+  "unit": "ops/s"
  }
 }

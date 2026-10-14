@@ -206,13 +206,25 @@ func save(path string, v any) {
 	defer f.Close()
 	_, e = f.Write(append(b, '\n'))
 	check(e)
-	check(f.Sync())
+	check(barrierSync(f))
 	check(f.Close())
 	check(os.Rename(name, path))
 	dir, e := os.Open(filepath.Dir(path))
 	check(e)
 	defer dir.Close()
-	check(dir.Sync())
+	check(barrierSync(dir))
+}
+
+// barrierSync orders a file's writes before everything written after it
+// (F_BARRIERFSYNC): with the rename above, a crash or power loss leaves the old
+// state or the new one, never a torn file. os.File.Sync is F_FULLFSYNC on macOS,
+// which also empties the drive's cache and took milliseconds per state change.
+func barrierSync(f *os.File) error {
+	const fBarrierFsync = 85
+	if _, _, errno := syscall.Syscall(syscall.SYS_FCNTL, f.Fd(), fBarrierFsync, 0); errno != 0 {
+		return f.Sync() // a file system without barriers: a full sync
+	}
+	return nil
 }
 func lockFile(path string, nonblock bool) (*os.File, error) {
 	fd, e := syscall.Open(path, syscall.O_CREAT|syscall.O_RDWR|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0600)

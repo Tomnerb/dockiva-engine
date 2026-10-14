@@ -197,6 +197,14 @@ func (b *engine) start(name string) {
 		}
 		select {
 		case <-done:
+			// A short run can start, end and take its supervisor with it between two
+			// reads: it started if its status names this generation.
+			if s = readObject(filepath.Join(p, "status.json")); s["generation"] == generation && s["state"] != "failed" {
+				return
+			}
+			if s["generation"] == generation {
+				panic(apiError{409, text(s["error"])})
+			}
 			panic(apiError{409, "Supervisor exited; inspect supervisor.log"})
 		case <-pace.after():
 		}
@@ -341,7 +349,11 @@ func (b *engine) remove(name string) {
 	s := readObject(filepath.Join(p, "status.json"))
 	reject(!workerAlive(s), "Previous worker is still alive")
 	network := text(readObject(filepath.Join(p, "config.json"))["net_name"])
-	check(os.RemoveAll(p))
+	// The name is free at once; the files (a whole root file system) go in the
+	// background. A removal cut short is finished at the next engine start.
+	gone := filepath.Join(b.State, ".removing-"+token()[:16])
+	check(os.Rename(p, gone))
+	go func() { _ = os.RemoveAll(gone) }()
 	b.refreshHosts(network)
 }
 func sandboxArgs(native string, args []string, root string, writable bool) []string {
@@ -485,6 +497,24 @@ func runtimeCommand(p, native string, c obj, command []string, argv0 string, env
 	return append([]string{native}, args...)
 }
 
+// processName runs a container as a macOS process named after it, so Activity
+// Monitor, top and the Energy tab show each container by name, with its own CPU,
+// memory and energy: a hard link to the runtime in the container's directory (the
+// same signed file), or the runtime itself where no link can be made.
+func processName(p, runtime string) string {
+	link := filepath.Join(p, "process", filepath.Base(p))
+	if have, e := os.Stat(link); e == nil {
+		if target, e := os.Stat(runtime); e == nil && os.SameFile(have, target) {
+			return link
+		}
+		_ = os.Remove(link) // an older runtime
+	}
+	if os.MkdirAll(filepath.Dir(link), 0o700) != nil || os.Link(runtime, link) != nil {
+		return runtime
+	}
+	return link
+}
+
 func supervise(p, native, worker, generation string) (result error) {
 	lock := os.NewFile(3, "container-lock")
 	defer lock.Close()
@@ -530,6 +560,7 @@ func supervise(p, native, worker, generation string) (result error) {
 		extra = append(extra, "--stdin")
 	}
 	invocation := runtimeCommand(p, native, c, command, command[0], env, true, extra...)
+	invocation[0] = processName(p, invocation[0])
 	stop := syscall.SIGTERM
 	if name, ok := c["stop_signal"].(string); ok && name != "" {
 		stop = stopSignals[stopSignal(name)]

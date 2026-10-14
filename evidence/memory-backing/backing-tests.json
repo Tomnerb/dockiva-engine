@@ -6,7 +6,7 @@
       "exit": 0,
       "stdout": "PASS: mprotect splits retain offset views without copying or double charging\nPASS: COW fork retains offsets/heap/mmap, copying only page flags; reference overflow rolls back\nPASS: retained view survives original-owner teardown; final release frees backing exactly once\nPASS: startup arguments, environment and random bytes use backing data offsets\n",
       "stderr": "",
-      "binary_sha256": "cf4296c9d718d0b47b26518c6713cf38a845c8a11b93b30d9a9feb9bc9e13500"
+      "binary_sha256": "b4d87288c1d5fb3bd9cf42cbcf0989cb85af4833b66bde67678604f4e25d4c64"
     }
   ],
   "source_hashes": {
@@ -18,7 +18,7 @@
     "native/decode.h": "fdc15750c69a7f12c54e1ef9c27ac93c47fd722093958d1190497964a8ff40bd",
     "native/epoll.h": "546649ee132f1eab1c0758b895078de9e42eb628ca49133a0c609703880c9a94",
     "native/fadvise.h": "08db7b94b12205e6994a6a2de7632addf04d8a2977878fc41b639257965a91bc",
-    "native/fs.h": "e8fe05970173c8b53e2e5a58278421ce67de3c65333f56d2ccddf688d102488a",
+    "native/fs.h": "9c909436d7b67b72ff6d5064f916a90375eadd38f09ef843b81099c26a96e39f",
     "native/heap.h": "6b9270b12ad920567e2a6a20f2c2adf4569dd88b51c48edfe107d31754ec4bd8",
     "native/hvf_backend.h": "020e01d4c0793b74983aa026666ab42819fa85bae90b184b9fbdb5d8c68f9220",
     "native/inotify.h": "97696fc88c592a70851e91e76a97ddb47402b69d06c3a295d45480ee8f99c372",

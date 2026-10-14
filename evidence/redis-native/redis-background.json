@@ -1,14 +1,14 @@
 {
   "scope": "Prepared pinned ARM64 Redis ELF; bounded VM-free backend; not stock-image or PostgreSQL qualification",
   "image_id": "sha256:3b0f54bf27a77c98d319dc3a6706ed500a8985309f0b6c6407599b869f4a2bd9",
-  "runtime_sha256": "69b96d4729aba3e395335176492cb717ffbdaf8ae77e75a0d62f7016c06f47b5",
+  "runtime_sha256": "12706f3107f9c4ed57cd0fce5c29ce5b3f34f260380c91f37a022a2a5aa68071",
   "results": [
     {
       "mode": "rdb",
       "phase": "background",
       "passed": true,
       "reply": "Background saving started",
-      "reply_seconds": 0.0020749580580741167,
+      "reply_seconds": 0.0025249168975278735,
       "before": {
         "loading": "0",
         "async_loading": "0",
@@ -20,7 +20,7 @@
         "current_save_keys_total": "0",
         "rdb_changes_since_last_save": "64",
         "rdb_bgsave_in_progress": "0",
-        "rdb_last_save_time": "1791992125",
+        "rdb_last_save_time": "1791993126",
         "rdb_last_bgsave_status": "ok",
         "rdb_last_bgsave_time_sec": "-1",
         "rdb_current_bgsave_time_sec": "-1",
@@ -53,7 +53,7 @@
         "current_save_keys_total": "0",
         "rdb_changes_since_last_save": "32",
         "rdb_bgsave_in_progress": "0",
-        "rdb_last_save_time": "1791992125",
+        "rdb_last_save_time": "1791993126",
         "rdb_last_bgsave_status": "ok",
         "rdb_last_bgsave_time_sec": "0",
         "rdb_current_bgsave_time_sec": "-1",
@@ -74,11 +74,11 @@
         "module_fork_in_progress": "0",
         "module_fork_last_cow_size": "0"
       },
-      "background_seconds": 0.05584491603076458,
+      "background_seconds": 0.056170166935771704,
       "verified_keys": 80,
-      "seconds": 0.1326517079723999,
+      "seconds": 0.12831779208499938,
       "exit": 0,
-      "stdout": "1:C 14 Oct 2026 15:35:25.213 # WARNING Memory overcommit must be enabled! Without it, a background save or replication may fail under low memory condition. Being disabled, it can also cause failures without low memory condition, see https://github.com/jemalloc/jemalloc/issues/1328. To fix this issue add 'vm.overcommit_memory = 1' to /etc/sysctl.conf and then reboot or run the command 'sysctl vm.overcommit_memory=1' for this to take effect.\n1:C 14 Oct 2026 15:35:25.213 * oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo\n1:C 14 Oct 2026 15:35:25.213 * Redis version=7.4.2, bits=64, commit=00000000, modified=0, pid=1, just started\n1:C 14 Oct 2026 15:35:25.213 * Configuration loaded\n1:M 14 Oct 2026 15:35:25.213 # You requested maxclients of 10000 requiring at least 10032 max file descriptors.\n1:M 14 Oct 2026 15:35:25.213 # Server can't set maximum open files to 10032 because of OS error: Operation not permitted.\n1:M 14 Oct 2026 15:35:25.213 # Current maximum open files is 4096. maxclients has been reduced to 4064 to compensate for low ulimit. If you need higher maxclients increase 'ulimit -n'.\n1:M 14 Oct 2026 15:35:25.213 * monotonic clock: POSIX clock_gettime\n1:M 14 Oct 2026 15:35:25.214 * Running mode=standalone, port=62686.\n1:M 14 Oct 2026 15:35:25.214 # WARNING: The TCP backlog setting of 511 cannot be enforced because /proc/sys/net/core/somaxconn is set to the lower value of 128.\n1:M 14 Oct 2026 15:35:25.214 * Server initialized\n1:M 14 Oct 2026 15:35:25.214 * Ready to accept connections tcp\n1:M 14 Oct 2026 15:35:25.266 * Background saving started by pid 2\n2:C 14 Oct 2026 15:35:25.268 * DB saved on disk\n2:C 14 Oct 2026 15:35:25.268 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB\n1:M 14 Oct 2026 15:35:25.320 * Background saving terminated with success\n1:M 14 Oct 2026 15:35:25.329 * User requested shutdown...\n1:M 14 Oct 2026 15:35:25.329 # Redis is now ready to exit, bye bye...\n",
+      "stdout": "1:C 14 Oct 2026 15:52:06.325 # WARNING Memory overcommit must be enabled! Without it, a background save or replication may fail under low memory condition. Being disabled, it can also cause failures without low memory condition, see https://github.com/jemalloc/jemalloc/issues/1328. To fix this issue add 'vm.overcommit_memory = 1' to /etc/sysctl.conf and then reboot or run the command 'sysctl vm.overcommit_memory=1' for this to take effect.\n1:C 14 Oct 2026 15:52:06.325 * oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo\n1:C 14 Oct 2026 15:52:06.325 * Redis version=7.4.2, bits=64, commit=00000000, modified=0, pid=1, just started\n1:C 14 Oct 2026 15:52:06.325 * Configuration loaded\n1:M 14 Oct 2026 15:52:06.326 # You requested maxclients of 10000 requiring at least 10032 max file descriptors.\n1:M 14 Oct 2026 15:52:06.326 # Server can't set maximum open files to 10032 because of OS error: Operation not permitted.\n1:M 14 Oct 2026 15:52:06.326 # Current maximum open files is 4096. maxclients has been reduced to 4064 to compensate for low ulimit. If you need higher maxclients increase 'ulimit -n'.\n1:M 14 Oct 2026 15:52:06.326 * monotonic clock: POSIX clock_gettime\n1:M 14 Oct 2026 15:52:06.327 * Running mode=standalone, port=64219.\n1:M 14 Oct 2026 15:52:06.327 # WARNING: The TCP backlog setting of 511 cannot be enforced because /proc/sys/net/core/somaxconn is set to the lower value of 128.\n1:M 14 Oct 2026 15:52:06.327 * Server initialized\n1:M 14 Oct 2026 15:52:06.327 * Ready to accept connections tcp\n1:M 14 Oct 2026 15:52:06.379 * Background saving started by pid 2\n2:C 14 Oct 2026 15:52:06.381 * DB saved on disk\n2:C 14 Oct 2026 15:52:06.381 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB\n1:M 14 Oct 2026 15:52:06.433 * Background saving terminated with success\n1:M 14 Oct 2026 15:52:06.439 * User requested shutdown...\n1:M 14 Oct 2026 15:52:06.439 # Redis is now ready to exit, bye bye...\n",
       "stderr": ""
     },
     {
@@ -86,9 +86,9 @@
       "phase": "restart",
       "passed": true,
       "verified_keys": 64,
-      "seconds": 0.0663769580423832,
+      "seconds": 0.06482800003141165,
       "exit": 0,
-      "stdout": "1:C 14 Oct 2026 15:35:25.344 # WARNING Memory overcommit must be enabled! Without it, a background save or replication may fail under low memory condition. Being disabled, it can also cause failures without low memory condition, see https://github.com/jemalloc/jemalloc/issues/1328. To fix this issue add 'vm.overcommit_memory = 1' to /etc/sysctl.conf and then reboot or run the command 'sysctl vm.overcommit_memory=1' for this to take effect.\n1:C 14 Oct 2026 15:35:25.344 * oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo\n1:C 14 Oct 2026 15:35:25.344 * Redis version=7.4.2, bits=64, commit=00000000, modified=0, pid=1, just started\n1:C 14 Oct 2026 15:35:25.344 * Configuration loaded\n1:M 14 Oct 2026 15:35:25.345 # You requested maxclients of 10000 requiring at least 10032 max file descriptors.\n1:M 14 Oct 2026 15:35:25.345 # Server can't set maximum open files to 10032 because of OS error: Operation not permitted.\n1:M 14 Oct 2026 15:35:25.345 # Current maximum open files is 4096. maxclients has been reduced to 4064 to compensate for low ulimit. If you need higher maxclients increase 'ulimit -n'.\n1:M 14 Oct 2026 15:35:25.345 * monotonic clock: POSIX clock_gettime\n1:M 14 Oct 2026 15:35:25.346 * Running mode=standalone, port=62686.\n1:M 14 Oct 2026 15:35:25.346 # WARNING: The TCP backlog setting of 511 cannot be enforced because /proc/sys/net/core/somaxconn is set to the lower value of 128.\n1:M 14 Oct 2026 15:35:25.346 * Server initialized\n1:M 14 Oct 2026 15:35:25.346 * Loading RDB produced by version 7.4.2\n1:M 14 Oct 2026 15:35:25.346 * RDB age 0 seconds\n1:M 14 Oct 2026 15:35:25.346 * RDB memory usage when created 1.06 Mb\n1:M 14 Oct 2026 15:35:25.347 * Done loading RDB, keys loaded: 64, keys expired: 0.\n1:M 14 Oct 2026 15:35:25.347 * DB loaded from disk: 0.001 seconds\n1:M 14 Oct 2026 15:35:25.347 * Ready to accept connections tcp\n1:M 14 Oct 2026 15:35:25.396 * User requested shutdown...\n1:M 14 Oct 2026 15:35:25.396 # Redis is now ready to exit, bye bye...\n",
+      "stdout": "1:C 14 Oct 2026 15:52:06.454 # WARNING Memory overcommit must be enabled! Without it, a background save or replication may fail under low memory condition. Being disabled, it can also cause failures without low memory condition, see https://github.com/jemalloc/jemalloc/issues/1328. To fix this issue add 'vm.overcommit_memory = 1' to /etc/sysctl.conf and then reboot or run the command 'sysctl vm.overcommit_memory=1' for this to take effect.\n1:C 14 Oct 2026 15:52:06.454 * oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo\n1:C 14 Oct 2026 15:52:06.454 * Redis version=7.4.2, bits=64, commit=00000000, modified=0, pid=1, just started\n1:C 14 Oct 2026 15:52:06.454 * Configuration loaded\n1:M 14 Oct 2026 15:52:06.455 # You requested maxclients of 10000 requiring at least 10032 max file descriptors.\n1:M 14 Oct 2026 15:52:06.455 # Server can't set maximum open files to 10032 because of OS error: Operation not permitted.\n1:M 14 Oct 2026 15:52:06.455 # Current maximum open files is 4096. maxclients has been reduced to 4064 to compensate for low ulimit. If you need higher maxclients increase 'ulimit -n'.\n1:M 14 Oct 2026 15:52:06.455 * monotonic clock: POSIX clock_gettime\n1:M 14 Oct 2026 15:52:06.456 * Running mode=standalone, port=64219.\n1:M 14 Oct 2026 15:52:06.456 # WARNING: The TCP backlog setting of 511 cannot be enforced because /proc/sys/net/core/somaxconn is set to the lower value of 128.\n1:M 14 Oct 2026 15:52:06.456 * Server initialized\n1:M 14 Oct 2026 15:52:06.456 * Loading RDB produced by version 7.4.2\n1:M 14 Oct 2026 15:52:06.456 * RDB age 0 seconds\n1:M 14 Oct 2026 15:52:06.456 * RDB memory usage when created 1.06 Mb\n1:M 14 Oct 2026 15:52:06.457 * Done loading RDB, keys loaded: 64, keys expired: 0.\n1:M 14 Oct 2026 15:52:06.457 * DB loaded from disk: 0.001 seconds\n1:M 14 Oct 2026 15:52:06.457 * Ready to accept connections tcp\n1:M 14 Oct 2026 15:52:06.504 * User requested shutdown...\n1:M 14 Oct 2026 15:52:06.504 # Redis is now ready to exit, bye bye...\n",
       "stderr": ""
     },
     {
@@ -96,7 +96,7 @@
       "phase": "background",
       "passed": true,
       "reply": "Background append only file rewriting started",
-      "reply_seconds": 0.00267633399926126,
+      "reply_seconds": 0.004055666038766503,
       "before": {
         "loading": "0",
         "async_loading": "0",
@@ -108,7 +108,7 @@
         "current_save_keys_total": "0",
         "rdb_changes_since_last_save": "64",
         "rdb_bgsave_in_progress": "0",
-        "rdb_last_save_time": "1791992125",
+        "rdb_last_save_time": "1791993126",
         "rdb_last_bgsave_status": "ok",
         "rdb_last_bgsave_time_sec": "-1",
         "rdb_current_bgsave_time_sec": "-1",
@@ -147,7 +147,7 @@
         "current_save_keys_total": "0",
         "rdb_changes_since_last_save": "96",
         "rdb_bgsave_in_progress": "0",
-        "rdb_last_save_time": "1791992125",
+        "rdb_last_save_time": "1791993126",
         "rdb_last_bgsave_status": "ok",
         "rdb_last_bgsave_time_sec": "-1",
         "rdb_current_bgsave_time_sec": "-1",
@@ -174,11 +174,11 @@
         "aof_pending_bio_fsync": "0",
         "aof_delayed_fsync": "0"
       },
-      "background_seconds": 0.057976917014457285,
+      "background_seconds": 0.05833841604180634,
       "verified_keys": 80,
-      "seconds": 0.13814012508373708,
+      "seconds": 0.13376645802054554,
       "exit": 0,
-      "stdout": "1:C 14 Oct 2026 15:35:25.441 # WARNING Memory overcommit must be enabled! Without it, a background save or replication may fail under low memory condition. Being disabled, it can also cause failures without low memory condition, see https://github.com/jemalloc/jemalloc/issues/1328. To fix this issue add 'vm.overcommit_memory = 1' to /etc/sysctl.conf and then reboot or run the command 'sysctl vm.overcommit_memory=1' for this to take effect.\n1:C 14 Oct 2026 15:35:25.441 * oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo\n1:C 14 Oct 2026 15:35:25.441 * Redis version=7.4.2, bits=64, commit=00000000, modified=0, pid=1, just started\n1:C 14 Oct 2026 15:35:25.441 * Configuration loaded\n1:M 14 Oct 2026 15:35:25.442 # You requested maxclients of 10000 requiring at least 10032 max file descriptors.\n1:M 14 Oct 2026 15:35:25.442 # Server can't set maximum open files to 10032 because of OS error: Operation not permitted.\n1:M 14 Oct 2026 15:35:25.442 # Current maximum open files is 4096. maxclients has been reduced to 4064 to compensate for low ulimit. If you need higher maxclients increase 'ulimit -n'.\n1:M 14 Oct 2026 15:35:25.442 * monotonic clock: POSIX clock_gettime\n1:M 14 Oct 2026 15:35:25.442 * Running mode=standalone, port=62689.\n1:M 14 Oct 2026 15:35:25.442 # WARNING: The TCP backlog setting of 511 cannot be enforced because /proc/sys/net/core/somaxconn is set to the lower value of 128.\n1:M 14 Oct 2026 15:35:25.443 * Server initialized\n1:M 14 Oct 2026 15:35:25.443 * Creating AOF base file appendonly.aof.1.base.rdb on server start\n1:M 14 Oct 2026 15:35:25.443 * Creating AOF incr file appendonly.aof.1.incr.aof on server start\n1:M 14 Oct 2026 15:35:25.443 * Ready to accept connections tcp\n1:M 14 Oct 2026 15:35:25.496 * Creating AOF incr file appendonly.aof.2.incr.aof on background rewrite\n1:M 14 Oct 2026 15:35:25.498 * Background append only file rewriting started by pid 2\n2:C 14 Oct 2026 15:35:25.500 * Successfully created the temporary AOF base file temp-rewriteaof-bg-2.aof\n2:C 14 Oct 2026 15:35:25.500 * Fork CoW for AOF rewrite: current 0 MB, peak 0 MB, average 0 MB\n1:M 14 Oct 2026 15:35:25.547 * Background AOF rewrite terminated with success\n1:M 14 Oct 2026 15:35:25.547 * Successfully renamed the temporary AOF base file temp-rewriteaof-bg-2.aof into appendonly.aof.2.base.rdb\n1:M 14 Oct 2026 15:35:25.548 * Removing the history file appendonly.aof.1.incr.aof in the background\n1:M 14 Oct 2026 15:35:25.548 * Removing the history file appendonly.aof.1.base.rdb in the background\n1:M 14 Oct 2026 15:35:25.548 * Background AOF rewrite finished successfully\n1:M 14 Oct 2026 15:35:25.561 * User requested shutdown...\n1:M 14 Oct 2026 15:35:25.561 * Calling fsync() on the AOF file.\n1:M 14 Oct 2026 15:35:25.561 # Redis is now ready to exit, bye bye...\n",
+      "stdout": "1:C 14 Oct 2026 15:52:06.586 # WARNING Memory overcommit must be enabled! Without it, a background save or replication may fail under low memory condition. Being disabled, it can also cause failures without low memory condition, see https://github.com/jemalloc/jemalloc/issues/1328. To fix this issue add 'vm.overcommit_memory = 1' to /etc/sysctl.conf and then reboot or run the command 'sysctl vm.overcommit_memory=1' for this to take effect.\n1:C 14 Oct 2026 15:52:06.586 * oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo\n1:C 14 Oct 2026 15:52:06.586 * Redis version=7.4.2, bits=64, commit=00000000, modified=0, pid=1, just started\n1:C 14 Oct 2026 15:52:06.586 * Configuration loaded\n1:M 14 Oct 2026 15:52:06.586 # You requested maxclients of 10000 requiring at least 10032 max file descriptors.\n1:M 14 Oct 2026 15:52:06.586 # Server can't set maximum open files to 10032 because of OS error: Operation not permitted.\n1:M 14 Oct 2026 15:52:06.586 # Current maximum open files is 4096. maxclients has been reduced to 4064 to compensate for low ulimit. If you need higher maxclients increase 'ulimit -n'.\n1:M 14 Oct 2026 15:52:06.586 * monotonic clock: POSIX clock_gettime\n1:M 14 Oct 2026 15:52:06.587 * Running mode=standalone, port=64222.\n1:M 14 Oct 2026 15:52:06.587 # WARNING: The TCP backlog setting of 511 cannot be enforced because /proc/sys/net/core/somaxconn is set to the lower value of 128.\n1:M 14 Oct 2026 15:52:06.587 * Server initialized\n1:M 14 Oct 2026 15:52:06.588 * Creating AOF base file appendonly.aof.1.base.rdb on server start\n1:M 14 Oct 2026 15:52:06.588 * Creating AOF incr file appendonly.aof.1.incr.aof on server start\n1:M 14 Oct 2026 15:52:06.588 * Ready to accept connections tcp\n1:M 14 Oct 2026 15:52:06.641 * Creating AOF incr file appendonly.aof.2.incr.aof on background rewrite\n1:M 14 Oct 2026 15:52:06.644 * Background append only file rewriting started by pid 2\n2:C 14 Oct 2026 15:52:06.647 * Successfully created the temporary AOF base file temp-rewriteaof-bg-2.aof\n2:C 14 Oct 2026 15:52:06.647 * Fork CoW for AOF rewrite: current 0 MB, peak 0 MB, average 0 MB\n1:M 14 Oct 2026 15:52:06.692 * Background AOF rewrite terminated with success\n1:M 14 Oct 2026 15:52:06.692 * Successfully renamed the temporary AOF base file temp-rewriteaof-bg-2.aof into appendonly.aof.2.base.rdb\n1:M 14 Oct 2026 15:52:06.693 * Removing the history file appendonly.aof.1.incr.aof in the background\n1:M 14 Oct 2026 15:52:06.693 * Removing the history file appendonly.aof.1.base.rdb in the background\n1:M 14 Oct 2026 15:52:06.693 * Background AOF rewrite finished successfully\n1:M 14 Oct 2026 15:52:06.705 * User requested shutdown...\n1:M 14 Oct 2026 15:52:06.705 * Calling fsync() on the AOF file.\n1:M 14 Oct 2026 15:52:06.705 # Redis is now ready to exit, bye bye...\n",
       "stderr": ""
     },
     {
@@ -186,9 +186,9 @@
       "phase": "restart",
       "passed": true,
       "verified_keys": 80,
-      "seconds": 0.06430854101199657,
+      "seconds": 0.06451654201373458,
       "exit": 0,
-      "stdout": "1:C 14 Oct 2026 15:35:25.576 # WARNING Memory overcommit must be enabled! Without it, a background save or replication may fail under low memory condition. Being disabled, it can also cause failures without low memory condition, see https://github.com/jemalloc/jemalloc/issues/1328. To fix this issue add 'vm.overcommit_memory = 1' to /etc/sysctl.conf and then reboot or run the command 'sysctl vm.overcommit_memory=1' for this to take effect.\n1:C 14 Oct 2026 15:35:25.576 * oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo\n1:C 14 Oct 2026 15:35:25.576 * Redis version=7.4.2, bits=64, commit=00000000, modified=0, pid=1, just started\n1:C 14 Oct 2026 15:35:25.576 * Configuration loaded\n1:M 14 Oct 2026 15:35:25.577 # You requested maxclients of 10000 requiring at least 10032 max file descriptors.\n1:M 14 Oct 2026 15:35:25.577 # Server can't set maximum open files to 10032 because of OS error: Operation not permitted.\n1:M 14 Oct 2026 15:35:25.577 # Current maximum open files is 4096. maxclients has been reduced to 4064 to compensate for low ulimit. If you need higher maxclients increase 'ulimit -n'.\n1:M 14 Oct 2026 15:35:25.577 * monotonic clock: POSIX clock_gettime\n1:M 14 Oct 2026 15:35:25.578 * Running mode=standalone, port=62689.\n1:M 14 Oct 2026 15:35:25.578 # WARNING: The TCP backlog setting of 511 cannot be enforced because /proc/sys/net/core/somaxconn is set to the lower value of 128.\n1:M 14 Oct 2026 15:35:25.578 * Server initialized\n1:M 14 Oct 2026 15:35:25.578 * Reading RDB base file on AOF loading...\n1:M 14 Oct 2026 15:35:25.578 * Loading RDB produced by version 7.4.2\n1:M 14 Oct 2026 15:35:25.578 * RDB age 0 seconds\n1:M 14 Oct 2026 15:35:25.578 * RDB memory usage when created 1.06 Mb\n1:M 14 Oct 2026 15:35:25.578 * RDB is base AOF\n1:M 14 Oct 2026 15:35:25.579 * Done loading RDB, keys loaded: 64, keys expired: 0.\n1:M 14 Oct 2026 15:35:25.579 * DB loaded from base file appendonly.aof.2.base.rdb: 0.001 seconds\n1:M 14 Oct 2026 15:35:25.579 * DB loaded from incr file appendonly.aof.2.incr.aof: 0.000 seconds\n1:M 14 Oct 2026 15:35:25.579 * DB loaded from append only file: 0.001 seconds\n1:M 14 Oct 2026 15:35:25.579 * Opening AOF incr file appendonly.aof.2.incr.aof on server start\n1:M 14 Oct 2026 15:35:25.579 * Ready to accept connections tcp\n1:M 14 Oct 2026 15:35:25.626 * User requested shutdown...\n1:M 14 Oct 2026 15:35:25.626 * Calling fsync() on the AOF file.\n1:M 14 Oct 2026 15:35:25.626 # Redis is now ready to exit, bye bye...\n",
+      "stdout": "1:C 14 Oct 2026 15:52:06.721 # WARNING Memory overcommit must be enabled! Without it, a background save or replication may fail under low memory condition. Being disabled, it can also cause failures without low memory condition, see https://github.com/jemalloc/jemalloc/issues/1328. To fix this issue add 'vm.overcommit_memory = 1' to /etc/sysctl.conf and then reboot or run the command 'sysctl vm.overcommit_memory=1' for this to take effect.\n1:C 14 Oct 2026 15:52:06.721 * oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo\n1:C 14 Oct 2026 15:52:06.721 * Redis version=7.4.2, bits=64, commit=00000000, modified=0, pid=1, just started\n1:C 14 Oct 2026 15:52:06.721 * Configuration loaded\n1:M 14 Oct 2026 15:52:06.722 # You requested maxclients of 10000 requiring at least 10032 max file descriptors.\n1:M 14 Oct 2026 15:52:06.722 # Server can't set maximum open files to 10032 because of OS error: Operation not permitted.\n1:M 14 Oct 2026 15:52:06.722 # Current maximum open files is 4096. maxclients has been reduced to 4064 to compensate for low ulimit. If you need higher maxclients increase 'ulimit -n'.\n1:M 14 Oct 2026 15:52:06.722 * monotonic clock: POSIX clock_gettime\n1:M 14 Oct 2026 15:52:06.722 * Running mode=standalone, port=64222.\n1:M 14 Oct 2026 15:52:06.722 # WARNING: The TCP backlog setting of 511 cannot be enforced because /proc/sys/net/core/somaxconn is set to the lower value of 128.\n1:M 14 Oct 2026 15:52:06.723 * Server initialized\n1:M 14 Oct 2026 15:52:06.723 * Reading RDB base file on AOF loading...\n1:M 14 Oct 2026 15:52:06.723 * Loading RDB produced by version 7.4.2\n1:M 14 Oct 2026 15:52:06.723 * RDB age 0 seconds\n1:M 14 Oct 2026 15:52:06.723 * RDB memory usage when created 1.06 Mb\n1:M 14 Oct 2026 15:52:06.723 * RDB is base AOF\n1:M 14 Oct 2026 15:52:06.724 * Done loading RDB, keys loaded: 64, keys expired: 0.\n1:M 14 Oct 2026 15:52:06.724 * DB loaded from base file appendonly.aof.2.base.rdb: 0.001 seconds\n1:M 14 Oct 2026 15:52:06.724 * DB loaded from incr file appendonly.aof.2.incr.aof: 0.000 seconds\n1:M 14 Oct 2026 15:52:06.724 * DB loaded from append only file: 0.001 seconds\n1:M 14 Oct 2026 15:52:06.724 * Opening AOF incr file appendonly.aof.2.incr.aof on server start\n1:M 14 Oct 2026 15:52:06.724 * Ready to accept connections tcp\n1:M 14 Oct 2026 15:52:06.770 * User requested shutdown...\n1:M 14 Oct 2026 15:52:06.770 * Calling fsync() on the AOF file.\n1:M 14 Oct 2026 15:52:06.770 # Redis is now ready to exit, bye bye...\n",
       "stderr": ""
     }
   ],
