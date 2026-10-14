@@ -54,7 +54,7 @@ static _Thread_local int hvf_stale_tlb;
 #define HVF_STALE_NEW 2
 typedef struct {
     uint64_t root;unsigned tables;int stale;  /* root 0: no tables */
-    Segment seg[129];unsigned nseg,map_capacity;
+    Segment seg[129];unsigned nseg;uint64_t map_capacity;
     MemoryBacking *brk_backing,*map_backing;uint64_t brk_base,brk_pages;
     uint64_t layout,arena_rev,generation;
 } HvfView;
@@ -503,8 +503,15 @@ static void hvf_init(void) {
     hvf_tables=hvf_host_pages(HVF_TABLE_BYTES);hvf_system=hvf_host_pages(HVF_SYSTEM_BYTES);
     hvf_check(hv_vm_map(hvf_tables,HVF_IPA_BASE,HVF_TABLE_BYTES,HV_MEMORY_READ|HV_MEMORY_WRITE),"hv_vm_map tables");
     hvf_check(hv_vm_map(hvf_system,HVF_IPA_BASE+HVF_TABLE_BYTES,HVF_SYSTEM_BYTES,HV_MEMORY_READ|HV_MEMORY_EXEC),"hv_vm_map system");
-    for(unsigned i=0;i<16;i++)((uint32_t *)hvf_system)[i*0x80/4]=UINT32_C(0xd4000002);     /* hvc #0 */
-    const uint32_t flush[]={UINT32_C(0xd508711f),UINT32_C(0xd508831f),UINT32_C(0xd5033b9f),UINT32_C(0xd5033fdf),UINT32_C(0xd4000022)};
+    /* Each HVC is followed by "b .-4": under load Hypervisor.framework can resume a
+       vCPU past an HVC without reporting its exit (the next instruction, zeros, then
+       faulted at EL1 and the guest saw SIGILL at the vector). Looping back takes the
+       exit on the retry; ESR/ELR_EL1 are unchanged, and the exit PC is HVC+4 either way. */
+    for(unsigned i=0;i<16;i++) {
+        ((uint32_t *)hvf_system)[i*0x80/4]=UINT32_C(0xd4000002);                       /* hvc #0 */
+        ((uint32_t *)hvf_system)[i*0x80/4+1]=UINT32_C(0x17ffffff);                     /* b .-4 */
+    }
+    const uint32_t flush[]={UINT32_C(0xd508711f),UINT32_C(0xd508831f),UINT32_C(0xd5033b9f),UINT32_C(0xd5033fdf),UINT32_C(0xd4000022),UINT32_C(0x17ffffff)};
     memcpy(hvf_system+HVF_FLUSH_OFFSET,flush,sizeof(flush));
     worker->backend=hvf_cpu_new(1);
     if(vdso_backing)vdso_start(hvf_vtimer_offset);
@@ -592,6 +599,26 @@ static unsigned hvf_futex_wake(uint64_t address,unsigned count,uint32_t bits) {
     if(woken)schedule_events++;                        /* idle workers pick the woken threads */
     return woken;
 }
+/* FUTEX_REQUEUE / FUTEX_CMP_REQUEUE: wake up to wake waiters on address and move up
+   to move others to wait on target (musl's condition variables move their waiters
+   to the mutex this way). Returns the number woken plus moved, as Linux does. */
+static unsigned hvf_futex_requeue(uint64_t address,unsigned wake,unsigned move,uint64_t target) {
+    unsigned woken=hvf_futex_wake(address,wake,UINT32_MAX),moved=0;
+    size_t offset=0,target_offset=0;
+    MemoryBacking *shared=hvf_futex_shared(address,&offset),*target_shared=hvf_futex_shared(target,&target_offset);
+    for(unsigned i=0;i<=PROCESS_LIMIT && moved<move;i++) {
+        ScheduledTask *t=&schedule_tasks[i];
+        if(!t->threads || (!shared && t!=hvf_task()))continue;
+        for(unsigned j=0;j<t->threads->top && moved<move;j++) {
+            Thread *th=&t->threads->thread[j];
+            if(th->state!=2)continue;
+            if(shared?th->futex_backing==shared && th->futex_offset==offset:!th->futex_backing && th->futex_address==address) {
+                th->futex_address=target;th->futex_backing=target_shared;th->futex_offset=target_offset;moved++;
+            }
+        }
+    }
+    return woken+moved;
+}
 static uint64_t hvf_thread_clone(void) {
     uint64_t flags=cpu->gpr[0];
     /* VM, FS, FILES, SIGHAND, THREAD required; SYSVSEM, SETTLS, PARENT_SETTID,
@@ -620,10 +647,16 @@ static uint64_t hvf_thread_clone(void) {
 static uint64_t hvf_futex(int *waiting) {
     unsigned op=(unsigned)cpu->gpr[1],command=op&127;*waiting=0;
     if(op&~511u)return linux_error(38);
-    if(command!=0 && command!=1 && command!=9 && command!=10)return linux_error(38);
+    if(command!=0 && command!=1 && command!=3 && command!=4 && command!=9 && command!=10)return linux_error(38);
     if((op&256) && command!=9)return linux_error(38);
     if(cpu->gpr[0]&3)return linux_error(22);
     unsigned char *word=lookup(cpu->gpr[0],4,4);if(!word)return linux_error(14);
+    if(command==3 || command==4) { /* x2: to wake, x3: to move, x4: the target futex, x5: the expected value */
+        if((int32_t)cpu->gpr[2]<0 || (int32_t)cpu->gpr[3]<0 || (cpu->gpr[4]&3))return linux_error(22);
+        if(!lookup(cpu->gpr[4],4,4))return linux_error(14);
+        if(command==4 && le(word,4)!=(uint32_t)cpu->gpr[5])return linux_error(11);
+        return hvf_futex_requeue(cpu->gpr[0],(unsigned)cpu->gpr[2],(unsigned)cpu->gpr[3],cpu->gpr[4]);
+    }
     uint32_t bits=(command==9 || command==10)?(uint32_t)cpu->gpr[5]:UINT32_MAX;
     if(!bits)return linux_error(22);
     if(command==1 || command==10) {
@@ -696,9 +729,20 @@ static int hvf_thread_call(uint64_t call) {
     if(call==283 && th && cpu->gpr[0])hvf_siblings_out();
     return HVF_UNHANDLED;
 }
-/* Under the scheduler a guest fault ends only that process (as SIGSEGV/SIGILL). */
+/* Under the scheduler a guest fault is a SIGSEGV or SIGILL for that process: its
+   handler runs if it has one and has not blocked the signal (OpenSSL probes CPU
+   features this way, JVMs and V8 catch faults on purpose); else the process ends. */
 static int hvf_fault(unsigned signal,uint64_t pc,uint64_t address,unsigned ec) {
     if(schedule_active) {
+        ScheduledTask *task=&schedule_tasks[process_pid-1];unsigned index=signal-1;uint64_t bit=UINT64_C(1)<<index;
+        if(job_control_enabled && task->signal_handler[index] && !(*signal_mask_now()&bit) && !(task->signal_ignored&bit)) {
+            /* ILL_ILLOPC at the instruction; SEGV_ACCERR on a mapped page, else SEGV_MAPERR. */
+            task->signal_fault_code[index]=signal==4?1u:(lookup(address,1,4) || lookup(address,1,1))?2u:1u;
+            task->signal_fault_addr[index]=signal==4?pc:address;
+            Thread *th=thread_current();
+            if(th)th->signal_pending|=bit;else task->signal_pending|=bit;
+            return -1; /* delivered before the instruction runs again (signal_deliver) */
+        }
         /* Like a kernel's segfault line: always reported, so container logs explain a 139. */
         fprintf(stderr,"vmfree: process %" PRIu64 " killed by signal %u: fault at pc=0x%" PRIx64 " address=0x%" PRIx64 " (exception class 0x%x)\n",process_pid,signal,pc,address,ec);
         schedule_tasks[process_pid-1].terminate_signal=signal;return -1;
@@ -819,8 +863,26 @@ static int hvf_slice_run(void) {
             if(!schedule_active || (mode&0xf)) { fast=in_vector=1;continue; }
             hvf_get_regs(0,0,0);return -1;
         }
-        if(hvf_exit->reason!=HV_EXIT_REASON_EXCEPTION || (hvf_exit->exception.syndrome>>26)!=0x16)
+        uint64_t syndrome=hvf_exit->exception.syndrome;
+        if(hvf_exit->reason==HV_EXIT_REASON_EXCEPTION && ((syndrome>>26)==0x20 || (syndrome>>26)==0x24) && (syndrome&0x3c)==0x4) {
+            /* A stage-2 translation fault: the tables still name a backing that was
+               just freed (a sibling thread's copy-on-write replaced it, and this vCPU
+               ran before the rebuild reached it). Rebuild this process's tables and
+               retry the instruction; the same fault again on unchanged memory is a bug. */
+            static _Thread_local uint64_t retry_pc,retry_va,retry_generation;
+            uint64_t pc=0;hvf_check(hv_vcpu_get_reg(hvf_vcpu,HV_REG_PC,&pc),"get pc");
+            if(pc!=retry_pc || hvf_exit->exception.virtual_address!=retry_va || address_space->generation!=retry_generation) {
+                retry_pc=pc;retry_va=hvf_exit->exception.virtual_address;retry_generation=address_space->generation;
+                hvf_views[process_pid].stale=HVF_STALE_NEW;hvf_views[process_pid].generation=UINT64_MAX;
+                fast=1;continue;
+            }
+        }
+        if(hvf_exit->reason!=HV_EXIT_REASON_EXCEPTION || (syndrome>>26)!=0x16) {
+            uint64_t pc=0;hv_vcpu_get_reg(hvf_vcpu,HV_REG_PC,&pc);
+            fprintf(stderr,"vmfree: unexpected hypervisor exit: reason %u syndrome 0x%llx address 0x%llx pc 0x%llx\n",(unsigned)hvf_exit->reason,
+                    (unsigned long long)hvf_exit->exception.syndrome,(unsigned long long)hvf_exit->exception.virtual_address,(unsigned long long)pc);
             fail("Unexpected hypervisor exit");
+        }
         uint64_t esr=0,elr=0,spsr=0,far=0;
         hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_ESR_EL1,&esr),"get esr");
         hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_ELR_EL1,&elr),"get elr");
