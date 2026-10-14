@@ -33,6 +33,10 @@ static int io_slot(uint64_t fd) { return fd_slot(fd,FD_IO); }
 #define IO_TIMER 10 /* timerfd: host is the description's kqueue */
 #define IO_TIMERS 128
 #define IO_TEXT 11  /* procfs-like text (/proc/mounts...): read-only, seekable */
+#define IO_INOTIFY 12 /* inotify.h: host is the instance's notification pipe */
+struct GuestInotify;
+static void inotify_release(struct GuestInotify *in);
+static void inotify_retain(struct GuestInotify *in);
 static void epoll_ref(int slot,int change);
 static void epoll_forget_socket(int host);
 static void epoll_forget_pipe(void *pipe,unsigned kind);
@@ -56,13 +60,13 @@ static struct GuestSignalfd { unsigned refs,nonblock;uint64_t mask; } io_signalf
 static struct GuestTimer { unsigned refs,nonblock;clockid_t clock;int kq;uint64_t deadline,interval; } io_timers[IO_TIMERS];
 /* A synthetic file's contents, shared by dup and fork, and the shared position. */
 struct GuestText { unsigned refs;size_t size,position;unsigned char *data; };
-typedef struct { unsigned kind,cloexec;int host;struct GuestPipe *pipe;struct GuestSignalfd *signals;struct GuestTimer *timer;struct GuestText *text; } GuestIO;
+typedef struct { unsigned kind,cloexec;int host;struct GuestPipe *pipe;struct GuestSignalfd *signals;struct GuestTimer *timer;struct GuestText *text;struct GuestInotify *inotify; } GuestIO;
 static uint64_t io_signals_pending(void);            /* the calling process's pending signals */
 static unsigned io_signal_take(unsigned signal);     /* consume one; returns its sender's pid */
 static uint64_t terminal_ioctl(GuestIO *fd);
 /* The current process's I/O slots; guest: slot -> guest descriptor. */
 typedef struct { GuestIO fds[IO_END];unsigned short guest[IO_END]; } IoTable;
-static IoTable io_table_first={{[0]={IO_EOF,0,0,NULL,NULL,NULL,NULL},[1]={IO_OUTPUT,0,1,NULL,NULL,NULL,NULL},[2]={IO_OUTPUT,0,2,NULL,NULL,NULL,NULL}},{0,1,2}};
+static IoTable io_table_first={{[0]={IO_EOF,0,0,NULL,NULL,NULL,NULL,NULL},[1]={IO_OUTPUT,0,1,NULL,NULL,NULL,NULL,NULL},[2]={IO_OUTPUT,0,2,NULL,NULL,NULL,NULL,NULL}},{0,1,2}};
 static _Thread_local IoTable *io_table=&io_table_first;
 #define io_fds (io_table->fds)
 #define io_guest (io_table->guest)
@@ -70,7 +74,7 @@ static int io_managed(uint64_t fd) { return io_slot(fd)>=0; }
 /* A host descriptor to poll like a socket for this guest one: --stdin's, or a timerfd's kqueue. */
 static int io_poll_host(uint64_t guest) {
     if(!io_managed(guest))return -1;
-    if(IO(guest).kind==IO_TIMER)return IO(guest).host;
+    if(IO(guest).kind==IO_TIMER || IO(guest).kind==IO_INOTIFY)return IO(guest).host;
     return stdin_host && !terminal_enabled && IO(guest).kind==IO_INPUT?IO(guest).host:-1;
 }
 static void io_release(GuestIO *f) {
@@ -79,6 +83,7 @@ static void io_release(GuestIO *f) {
     if(f->kind==IO_SIGNAL && !--f->signals->refs) { epoll_forget_pipe(f->signals,IO_SIGNAL);memset(f->signals,0,sizeof(*f->signals)); }
     if(f->kind==IO_TIMER && !--f->timer->refs) { epoll_forget_socket(f->timer->kq);close(f->timer->kq);memset(f->timer,0,sizeof(*f->timer)); }
     if(f->kind==IO_TEXT && !--f->text->refs) { free(f->text->data);free(f->text); }
+    if(f->kind==IO_INOTIFY)inotify_release(f->inotify);
     if(f->kind==IO_READ || f->kind==IO_WRITE || f->kind==IO_EVENT) {
         struct GuestPipe *p=f->pipe;io_pipe_changed(p);
         if(f->kind!=IO_WRITE)p->readers--;else p->writers--;
@@ -97,6 +102,7 @@ static int io_copy(GuestIO *out,const GuestIO *source) {
     if(source->kind==IO_SIGNAL)source->signals->refs++;
     if(source->kind==IO_TIMER)source->timer->refs++;
     if(source->kind==IO_TEXT)source->text->refs++;
+    if(source->kind==IO_INOTIFY)inotify_retain(source->inotify);
     if(source->kind==IO_FILE) { out->host=dup(source->host);if(out->host<0) { memset(out,0,sizeof(*out));return -1; } }
     if(source->kind==IO_READ || source->kind==IO_EVENT)source->pipe->readers++;
     if(source->kind==IO_WRITE)source->pipe->writers++;
@@ -143,7 +149,7 @@ static uint64_t io_pipe(void) {
     struct GuestPipe *p=&io_pipes[i];p->data=malloc(PIPE_CAP);if(!p->data) { fd_unbind((uint64_t)r);fd_unbind((uint64_t)w);return linux_error(12); }
     p->used=0;p->readers=p->writers=1;p->read_nonblock=p->write_nonblock=(cpu->gpr[1]&2048)!=0;
     unsigned cloexec=(cpu->gpr[1]&524288)!=0;
-    IO(r)=(GuestIO){IO_READ,cloexec,-1,p,NULL,NULL,NULL};IO(w)=(GuestIO){IO_WRITE,cloexec,-1,p,NULL,NULL,NULL};
+    IO(r)=(GuestIO){IO_READ,cloexec,-1,p,NULL,NULL,NULL,NULL};IO(w)=(GuestIO){IO_WRITE,cloexec,-1,p,NULL,NULL,NULL,NULL};
     fs_pack(out,0,(unsigned)r,4);fs_pack(out,4,(unsigned)w,4);return 0;
 }
 /* eventfd2(initval, flags): EFD_SEMAPHORE 1, EFD_NONBLOCK, EFD_CLOEXEC. */
@@ -157,7 +163,7 @@ static uint64_t io_eventfd(void) {
     struct GuestPipe *p=&io_pipes[i];if(!(p->data=malloc(1))) { fd_unbind((uint64_t)fd);return linux_error(12); }
     p->used=(size_t)cpu->gpr[0];p->readers=1;p->writers=0;p->semaphore=(flags&1)!=0;
     p->read_nonblock=p->write_nonblock=(flags&2048)!=0;
-    IO(fd)=(GuestIO){IO_EVENT,(flags&524288)!=0,-1,p,NULL,NULL,NULL};
+    IO(fd)=(GuestIO){IO_EVENT,(flags&524288)!=0,-1,p,NULL,NULL,NULL,NULL};
     return (uint64_t)fd;
 }
 /* read/write of an eventfd: 8-byte counter values. */
@@ -213,7 +219,7 @@ static uint64_t io_fifo_open(dev_t dev,ino_t ino,uint64_t flags) {
     unsigned cloexec=(flags&524288)!=0,nonblock=(flags&2048)!=0;
     if(reading) { p->readers++;p->read_nonblock=nonblock; } else { p->writers++;p->write_nonblock=nonblock; }
     if(writing) { p->had_writer=1;if(reading)p->writers++; }
-    IO(fd)=(GuestIO){reading?IO_READ:IO_WRITE,cloexec,-1,p,NULL,NULL,NULL};
+    IO(fd)=(GuestIO){reading?IO_READ:IO_WRITE,cloexec,-1,p,NULL,NULL,NULL,NULL};
     io_pipe_changed(p);
     return (uint64_t)fd;
 }
@@ -226,7 +232,7 @@ static uint64_t io_text_open(const void *data,size_t size,int cloexec) {
     struct GuestText *t=calloc(1,sizeof(*t));if(!t || !(t->data=malloc(size?size:1))) { free(t);return linux_error(12); }
     memcpy(t->data,data,size);t->size=size;t->refs=1;
     int fd=io_free_slot(0);if(fd<0) { free(t->data);free(t);return linux_error(24); }
-    IO(fd)=(GuestIO){IO_TEXT,cloexec!=0,-1,NULL,NULL,NULL,t};
+    IO(fd)=(GuestIO){IO_TEXT,cloexec!=0,-1,NULL,NULL,NULL,t,NULL};
     return (uint64_t)fd;
 }
 /* timerfd: expirations are counted from the guest's clock; the kqueue only wakes
@@ -287,7 +293,7 @@ static uint64_t io_timerfd(uint64_t call) {
         fcntl(kq,F_SETFD,FD_CLOEXEC);
         int slot=io_free_slot(0);if(slot<0) { close(kq);return linux_error(24); }
         io_timers[i]=(struct GuestTimer){1,(flags&2048)!=0,clock==0?CLOCK_REALTIME:clock==1?CLOCK_UPTIME_RAW:CLOCK_MONOTONIC,kq,0,0};
-        IO(slot)=(GuestIO){IO_TIMER,(flags&524288)!=0,kq,NULL,NULL,&io_timers[i],NULL};
+        IO(slot)=(GuestIO){IO_TIMER,(flags&524288)!=0,kq,NULL,NULL,&io_timers[i],NULL,NULL};
         return (uint64_t)slot;
     }
     if(io_slot(cpu->gpr[0])<0 || !IO(cpu->gpr[0]).kind)return linux_error(9);
@@ -314,10 +320,16 @@ static uint64_t io_timerfd(uint64_t call) {
     (void)io_timer_due(t,0,&remaining);io_timer_pack(out,t->interval,remaining);return 0;
 #endif
 }
+#include "inotify.h"
 static uint64_t io_call(uint64_t call) {
     if(io_slot(cpu->gpr[0])<0)return linux_error(9);
     GuestIO *f=&IO(cpu->gpr[0]);if(!f->kind)return linux_error(9);
     if(call==57) { io_release(f);fd_unbind(cpu->gpr[0]);return 0; }
+    if(call==29 && cpu->gpr[1]==0x541b && f->kind==IO_INOTIFY) {                      /* FIONREAD: queued event bytes */
+        unsigned char *out=lookup(cpu->gpr[2],4,2);if(!out)return linux_error(14);
+        pthread_mutex_lock(&f->inotify->lock);uint64_t used=f->inotify->used;pthread_mutex_unlock(&f->inotify->lock);
+        fs_pack(out,0,used,4);return 0;
+    }
     if(call==29 && cpu->gpr[1]==0x541b && (f->kind==IO_EOF || f->kind==IO_READ)) {   /* FIONREAD (Java's available()) */
         unsigned char *out=lookup(cpu->gpr[2],4,2);if(!out)return linux_error(14);
         fs_pack(out,0,f->kind==IO_READ?(uint64_t)f->pipe->used:0,4);return 0;
@@ -350,6 +362,10 @@ static uint64_t io_call(uint64_t call) {
         if(f->kind==IO_TIMER && (cpu->gpr[1]==3 || cpu->gpr[1]==4)) {
             if(cpu->gpr[1]==3)return 2|(f->timer->nonblock?2048:0);
             f->timer->nonblock=(cpu->gpr[2]&2048)!=0;return 0;
+        }
+        if(f->kind==IO_INOTIFY && (cpu->gpr[1]==3 || cpu->gpr[1]==4)) {
+            if(cpu->gpr[1]==3)return f->inotify->nonblock?2048:0;
+            f->inotify->nonblock=(cpu->gpr[2]&2048)!=0;return 0;
         }
         if(cpu->gpr[1]==3) {
             if(f->kind==IO_EPOLL)return 2;
@@ -400,6 +416,7 @@ static uint64_t io_call(uint64_t call) {
     int writing=call==64;
     if(f->kind==IO_EVENT)return io_event_transfer(f,writing);
     if(f->kind==IO_TIMER)return writing?linux_error(22):io_timer_read(f->timer);
+    if(f->kind==IO_INOTIFY)return writing?linux_error(9):inotify_read(f->inotify);
     if(f->kind==IO_TEXT) {
         if(writing)return linux_error(9);
         struct GuestText *t=f->text;
@@ -462,6 +479,6 @@ static uint64_t io_signalfd(void) {
     if(i==IO_SIGNALFDS)return linux_error(24);
     int slot=io_free_slot(0);if(slot<0)return linux_error(24);
     io_signalfds[i]=(struct GuestSignalfd){1,(flags&2048)!=0,mask};
-    IO(slot)=(GuestIO){IO_SIGNAL,(flags&524288)!=0,-1,NULL,&io_signalfds[i],NULL,NULL};
+    IO(slot)=(GuestIO){IO_SIGNAL,(flags&524288)!=0,-1,NULL,&io_signalfds[i],NULL,NULL,NULL};
     return (uint64_t)slot;
 }

@@ -1125,7 +1125,7 @@ int main(int argc,char **argv) {
     if(stdin_host && !terminal_enabled) {
         int flags=fcntl(0,F_GETFL);
         if(flags<0 || fcntl(0,F_SETFL,flags|O_NONBLOCK)<0)fail("--stdin needs an open standard input");
-        io_fds[0]=(GuestIO){IO_INPUT,0,0,NULL,NULL,NULL,NULL};
+        io_fds[0]=(GuestIO){IO_INPUT,0,0,NULL,NULL,NULL,NULL,NULL};
     }
 #ifdef VMFREE_HVF
     if(use_hvf)return hvf_run(steps);

@@ -280,6 +280,7 @@ static int guest_syscall_dispatch(void) {
             if(call==59) { cpu->gpr[0]=io_pipe();return -3; }
             if(call==19) { cpu->gpr[0]=io_eventfd();return -3; }
             if(call>=85 && call<=87) { cpu->gpr[0]=io_timerfd(call);return -3; }
+            if(call>=26 && call<=28) { cpu->gpr[0]=io_inotify(call);return -3; }
             if(call==79 || call==48 || call==439) {   /* /dev/fd/N (bash's process substitution): the descriptor itself */
                 char path[1025];int64_t n=fs_string(cpu->gpr[1],path)==0?guest_fd_path(path):-1;
                 if(n>=0) {

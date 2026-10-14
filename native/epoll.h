@@ -68,7 +68,7 @@ static uint64_t guest_epoll(uint64_t call) {
         if(i==EPOLL_SLOTS)return linux_error(24);
         int fd=io_free_slot(0);if(fd<0)return linux_error(24);
         EpollWatch *watch=calloc(16,sizeof(EpollWatch));if(!watch) { fd_unbind((uint64_t)fd);return linux_error(12); }
-        epolls[i]=(struct GuestEpoll){1,0,0,16,watch};IO(fd)=(GuestIO){IO_EPOLL,!!flags,(int)i,NULL,NULL,NULL,NULL};return (uint64_t)fd;
+        epolls[i]=(struct GuestEpoll){1,0,0,16,watch};IO(fd)=(GuestIO){IO_EPOLL,!!flags,(int)i,NULL,NULL,NULL,NULL,NULL};return (uint64_t)fd;
     }
     uint64_t fd=cpu->gpr[0];
     if(!epoll_fd_valid(fd))return linux_error(9);
