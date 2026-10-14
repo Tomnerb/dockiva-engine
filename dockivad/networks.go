@@ -170,10 +170,10 @@ func hostsFile(home, name string, c obj, members []obj) string {
 		self = h + " " + name
 	}
 	mac := "127.0.0.1"
-	out := "127.0.0.1\tlocalhost\n127.0.0.1\t" + self + "\n127.0.0.1\thost.docker.internal\n"
+	out := "127.0.0.1\tlocalhost\n::1\tlocalhost ip6-localhost ip6-loopback\n127.0.0.1\t" + self + "\n127.0.0.1\thost.docker.internal\n"
 	if ip != "" {
 		mac = gateway(ip)
-		out = "127.0.0.1\tlocalhost\n" + ip + "\t" + self + "\n" + mac + "\thost.docker.internal gateway.docker.internal\n"
+		out = "127.0.0.1\tlocalhost\n::1\tlocalhost ip6-localhost ip6-loopback\n" + ip + "\t" + self + "\n" + mac + "\thost.docker.internal gateway.docker.internal\n"
 	}
 	if c["extra_hosts"] != nil { // --add-host
 		for _, v := range array(c["extra_hosts"]) {

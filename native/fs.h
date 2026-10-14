@@ -560,7 +560,7 @@ static int fs_proc_kind(const char *path) {
     for(unsigned i=0;i<sizeof(fs_proc_root_files)/sizeof(*fs_proc_root_files);i++)
         if(!strncmp(path,"/proc/",6) && !strcmp(path+6,fs_proc_root_files[i]))return 2;
     for(unsigned i=0;i<sizeof(fs_proc_pid_files)/sizeof(*fs_proc_pid_files);i++)if(fs_proc_file(path,fs_proc_pid_files[i]))return 2;
-    return 0;
+    return !strcmp(path,"/proc/net/if_inet6")?2:0;
 }
 /* A linux_dirent64 record. */
 static size_t fs_dirent(char *out,size_t used,size_t capacity,uint64_t inode,const char *name,unsigned type) {
@@ -701,6 +701,9 @@ static uint64_t fs_open(void) {
                 length+=(size_t)snprintf(text+length,sizeof(text)-length,"intr 0\nctxt 0\nbtime %llu\nprocesses %u\nprocs_running %u\nprocs_blocked 0\n",
                     (unsigned long long)(runtime_started_ns/1000000000u),processes,running?running:1);
             }
+        } else if(!strcmp(path,"/proc/net/if_inet6")) {
+            /* IPv6 is up on lo (nginx's entrypoint then also listens on [::]). */
+            length=(size_t)snprintf(text,sizeof text,"00000000000000000000000000000001 01 80 10 80       lo\n");
         } else if(fs_proc_file(path,"cgroup")) {
             length=(size_t)snprintf(text,sizeof text,"0::/\n");                       /* cgroup v2, the container's root */
         } else if(!strcmp(path,"/sys/devices/system/cpu/online") || !strcmp(path,"/sys/devices/system/cpu/possible")) {
