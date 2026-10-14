@@ -126,10 +126,12 @@ static int address_space_make_private(GuestAddressSpace *space,MemoryBacking *ba
     backing_drop(backing,local);   /* the other holders may have let go meanwhile */
     address_space_changed(space);return 1;
 }
+static int memory_exhausted(void); /* scheduler.h: the OOM kill */
+static int memory_oom;             /* set by memory_exhausted */
 static int address_space_write(GuestAddressSpace *space,MemoryBacking *backing,size_t offset,size_t size) {
     if(address_space_make_private(space,backing,offset,size))return 1;
     if(syscall_abort)return 0;
-    fail("Guest memory budget exhausted (--memory-limit-mib)");return 0;
+    return memory_exhausted();
 }
 /* This address space's own MemoryBacking for the bytes it shares with another
    address space after fork (a VM snapshot; nothing is charged or copied yet). */

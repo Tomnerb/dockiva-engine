@@ -92,22 +92,23 @@ static void schedule_interrupt(ScheduledTask *t) {
 static void mm_lock(ScheduledTask *t) { if(schedule_active)pthread_mutex_lock(&t->mm); }
 static void mm_unlock(ScheduledTask *t) { if(schedule_active)pthread_mutex_unlock(&t->mm); }
 static void schedule_notify(void);
+static _Thread_local int runtime_held; /* this worker holds runtime_mutex */
 /* Around guest execution and host waits; no-ops with a single worker. */
 static void runtime_unlock(void) {
     if(!worker_threads)return;
-    schedule_notify();pthread_mutex_unlock(&runtime_mutex);
+    runtime_held=0;schedule_notify();pthread_mutex_unlock(&runtime_mutex);
 }
 /* The lock is held for microseconds at a time: spin briefly before sleeping in the kernel. */
 static void runtime_lock(Worker *w) {
     (void)w;
     if(!worker_threads)return;
     for(unsigned spin=0;spin<2000;spin++) {
-        if(!pthread_mutex_trylock(&runtime_mutex))return;
+        if(!pthread_mutex_trylock(&runtime_mutex)) { runtime_held=1;return; }
 #if defined(__aarch64__)
         __asm__ volatile("yield");
 #endif
     }
-    pthread_mutex_lock(&runtime_mutex);
+    pthread_mutex_lock(&runtime_mutex);runtime_held=1;
 }
 static int process_slot_free(unsigned slot) {
     if(process_children[slot].pid || process_children[slot].live)return 0;
@@ -162,6 +163,24 @@ static void schedule_signal_apply(ScheduledTask *task,unsigned signal) {
 /* A target running on another worker leaves its guest code to take the signal. */
 static void schedule_signal(ScheduledTask *task,unsigned signal) {
     schedule_signal_apply(task,signal);schedule_interrupt(task);
+}
+/* The memory budget (--memory-limit-mib) cannot cover a page this process needs:
+   like Linux's OOM killer in a container's cgroup, kill the process (SIGKILL; the
+   container exits 137 when it is PID 1) and leave --oom-file for the engine
+   (docker inspect's OOMKilled). Decided under the runtime lock: a worker without it
+   returns, and the access is retried with the lock. Always returns 0. */
+static const char *oom_file;
+static int memory_exhausted(void) {
+    memory_oom=1;
+    if(oom_file) { int fd=open(oom_file,O_WRONLY|O_CREAT|O_CLOEXEC,0600);if(fd>=0)close(fd); }
+    if(!schedule_active) { fprintf(stderr,"vmfree: out of memory: killed process 1\n");exit(137); }
+    if(worker_threads && !runtime_held)return 0;
+    ScheduledTask *t=&schedule_tasks[process_pid-1];
+    if(t->terminate_signal!=9) {
+        fprintf(stderr,"vmfree: out of memory: killed process %" PRIu64 "\n",process_pid);
+        schedule_signal(t,9);
+    }
+    return 0;
 }
 static void schedule_pending(ScheduledTask *task) {
     uint64_t blocked=task==&schedule_tasks[process_pid-1]?*signal_mask_now():task_signals_blocked(task);
@@ -586,12 +605,12 @@ static int schedule_loop(int current) {
 }
 static void *schedule_worker(void *argument) {
     Worker *self=argument;
-    pthread_mutex_lock(&runtime_mutex);
+    pthread_mutex_lock(&runtime_mutex);runtime_held=1;
     worker=self;cpu=&self->context->cpu;address_space=image_home_scheduled=&self->context->memory;
     task_load(&schedule_spare);                              /* this thread's globals start empty */
     (void)schedule_loop(-1);
     schedule_parked++;pthread_cond_broadcast(&schedule_idle_cond);
-    pthread_mutex_unlock(&runtime_mutex);
+    runtime_held=0;pthread_mutex_unlock(&runtime_mutex);
     return NULL;
 }
 static int schedule_run(uint64_t steps) {
@@ -607,7 +626,7 @@ static int schedule_run(uint64_t steps) {
     }
     if(worker_count>1) {
         if(pipe(schedule_poke) || fcntl(schedule_poke[0],F_SETFL,O_NONBLOCK) || fcntl(schedule_poke[1],F_SETFL,O_NONBLOCK))fail("Cannot create the scheduler wake pipe");
-        worker_threads=1;pthread_mutex_lock(&runtime_mutex);worker_first.task=0;
+        worker_threads=1;pthread_mutex_lock(&runtime_mutex);runtime_held=1;worker_first.task=0;
         for(unsigned i=1;i<worker_count;i++) {
             Worker *w=workers[i];w->task=-1;
             pthread_t thread;

@@ -402,7 +402,9 @@ func runtimeCommand(p, native string, c obj, command []string, argv0 string, env
 	}
 	memory := memoryMiB(c)
 	reject(memory >= 1 && memory <= 65536, "Invalid memory limit")
-	args := []string{"run", guest, "--root", root, "--argv0", argv0, "--max-steps", steps, "--memory-limit-mib", strconv.FormatInt(memory, 10)}
+	// The run creates the oom file when it kills a process over the memory limit
+	// (exec and healthchecks share the container's budget, as in a cgroup).
+	args := []string{"run", guest, "--root", root, "--argv0", argv0, "--max-steps", steps, "--memory-limit-mib", strconv.FormatInt(memory, 10), "--oom-file", filepath.Join(p, "oom")}
 	if c["cpu_backend"] == "hvf" {
 		native = regularExecutable(filepath.Join(filepath.Dir(native), "vmfree-c-hvf"))
 		// Like Docker, a container may use every core: one vCPU per host CPU.
@@ -576,6 +578,7 @@ func supervise(p, native, worker, generation string) (result error) {
 			input, child = os.NewFile(uintptr(pair[0]), "stdin"), os.NewFile(uintptr(pair[1]), "container-stdin")
 			cmd.Stdin = child
 		}
+		_ = os.Remove(filepath.Join(p, "oom")) // OOMKilled describes the latest run
 		check(cmd.Start())
 		if child != nil {
 			child.Close()

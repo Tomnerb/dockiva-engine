@@ -733,6 +733,7 @@ static int hvf_thread_call(uint64_t call) {
    handler runs if it has one and has not blocked the signal (OpenSSL probes CPU
    features this way, JVMs and V8 catch faults on purpose); else the process ends. */
 static int hvf_fault(unsigned signal,uint64_t pc,uint64_t address,unsigned ec) {
+    if(schedule_active && schedule_tasks[process_pid-1].terminate_signal==9)return -1; /* OOM-killed: the fault was the page it could not get */
     if(schedule_active) {
         ScheduledTask *task=&schedule_tasks[process_pid-1];unsigned index=signal-1;uint64_t bit=UINT64_C(1)<<index;
         if(job_control_enabled && task->signal_handler[index] && !(*signal_mask_now()&bit) && !(task->signal_ignored&bit)) {

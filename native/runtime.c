@@ -195,6 +195,7 @@ static void load_stream(FILE *f) {
 static void store_le(uint64_t addr, uint64_t value, unsigned bytes) {
     cpu->exclusive_valid=0;
     unsigned char *p=lookup(addr,bytes,2);
+    if(!p && memory_oom) exit(137); /* the interpreter cannot end only this process: the run ends, as an OOM kill */
     if(!p) fail("Guest write is unmapped or permission denied");
     for(unsigned i=0;i<bytes;i++) p[i]=(unsigned char)(value>>(8*i));
 }
@@ -1031,6 +1032,7 @@ int main(int argc,char **argv) {
         else if(!strcmp(argv[i],"--stdin")) stdin_host=1;
         else if(!strcmp(argv[i],"--trace")) trace=1;
         else if(!strcmp(argv[i],"--outbound")) net_outbound=1;
+        else if(!strcmp(argv[i],"--oom-file") && i+1<argc) oom_file=argv[++i]; /* created on an OOM kill (docker inspect's OOMKilled) */
         else if(!strcmp(argv[i],"--hostname") && i+1<argc) {
             const char *name=argv[++i];size_t n=strlen(name);
             if(!n || n>64 || strspn(name,"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_")!=n)fail("Invalid --hostname");
