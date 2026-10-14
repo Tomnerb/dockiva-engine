@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -45,7 +48,18 @@ func parseReference(reference string) (host, repo, ref, name string) {
 			repo = "library/" + repo
 		}
 	}
-	return host, repo, ref, name
+	return host, repo, ref, shortName(name)
+}
+
+// shortName is Docker's familiar form of a Docker Hub name (nginx:alpine for
+// docker.io/library/nginx:alpine), so a name finds its image however it was pulled.
+func shortName(name string) string {
+	for _, prefix := range []string{"docker.io/library/", "index.docker.io/library/", "docker.io/", "index.docker.io/"} {
+		if rest, ok := strings.CutPrefix(name, prefix); ok {
+			return rest
+		}
+	}
+	return name
 }
 
 func pullImage(reference, cache string, insecure bool, bearer string) string {
@@ -75,10 +89,11 @@ func pullImage(reference, cache string, insecure bool, bearer string) string {
 		return nil
 	}}
 	used := int64(0)
-	request := func(address string, limit int64, auth bool) ([]byte, http.Header, int) {
+	// request GETs address; to, when given, receives the body (streamed, up to limit).
+	request := func(address string, limit int64, auth bool, to io.Writer) ([]byte, http.Header, int) {
 		req, e := http.NewRequestWithContext(ctx, "GET", address, nil)
 		check(e)
-		req.Header.Set("Accept", manifestMedia+", "+indexMedia)
+		req.Header.Set("Accept", strings.Join([]string{manifestMedia, indexMedia, dockerManifest, dockerList}, ", "))
 		req.Header.Set("Accept-Encoding", "identity")
 		if bearer != "" && auth {
 			req.Header.Set("Authorization", "Bearer "+bearer)
@@ -86,15 +101,22 @@ func pullImage(reference, cache string, insecure bool, bearer string) string {
 		response, e := client.Do(req)
 		check(e)
 		defer response.Body.Close()
-		data, e := io.ReadAll(io.LimitReader(response.Body, limit+1))
+		if to != nil && response.StatusCode == 200 {
+			n, e := io.Copy(to, io.LimitReader(response.Body, limit+1))
+			check(e)
+			reject(n <= limit, "Registry object exceeds limit")
+			used += n
+			reject(used <= maxBlob, "Pull exceeds 64 GiB")
+			return nil, response.Header, response.StatusCode
+		}
+		data, e := io.ReadAll(io.LimitReader(response.Body, min(limit, maxJSON)+1))
 		check(e)
-		reject(int64(len(data)) <= limit, "Registry object exceeds limit")
+		reject(int64(len(data)) <= min(limit, maxJSON), "Registry object exceeds limit")
 		used += int64(len(data))
-		reject(used <= maxPacked, "Pull exceeds 512 MiB budget")
 		return data, response.Header, response.StatusCode
 	}
-	fetch := func(path string, limit int64) []byte {
-		data, headers, status := request(origin+path, limit, true)
+	fetch := func(path string, limit int64, to io.Writer) []byte {
+		data, headers, status := request(origin+path, limit, true, to)
 		if status == 401 && bearer == "" {
 			challenge := headers.Get("WWW-Authenticate")
 			reject(strings.HasPrefix(strings.ToLower(challenge), "bearer "), "Unsupported registry authentication")
@@ -109,7 +131,7 @@ func pullImage(reference, cache string, insecure bool, bearer string) string {
 			query.Set("service", fields["service"])
 			query.Set("scope", "repository:"+repo+":pull")
 			realm.RawQuery = query.Encode()
-			raw, _, code := request(realm.String(), maxJSON, false)
+			raw, _, code := request(realm.String(), maxJSON, false, nil)
 			reject(code == 200, "Token service request failed")
 			auth := decode(raw, maxJSON)
 			bearer = text(auth["token"])
@@ -117,15 +139,16 @@ func pullImage(reference, cache string, insecure bool, bearer string) string {
 				bearer = text(auth["access_token"])
 			}
 			reject(validToken(bearer), "Invalid registry token")
-			data, headers, status = request(origin+path, limit, true)
+			data, headers, status = request(origin+path, limit, true, to)
 		}
 		reject(status == 200, fmt.Sprintf("Registry request failed with HTTP %d", status))
-		if d := headers.Get("Docker-Content-Digest"); d != "" {
+		if d := headers.Get("Docker-Content-Digest"); d != "" && to == nil {
 			reject(d == digest(data), "Registry digest header mismatch")
 		}
 		return data
 	}
-	tmp, e := os.MkdirTemp("", "dockivad-pull-")
+	// In the cache, so committing links the blobs instead of copying them.
+	tmp, e := os.MkdirTemp(private(cache), ".pull-")
 	check(e)
 	defer os.RemoveAll(tmp)
 	check(os.MkdirAll(filepath.Join(tmp, "blobs/sha256"), 0700))
@@ -134,12 +157,12 @@ func pullImage(reference, cache string, insecure bool, bearer string) string {
 		check(os.WriteFile(filepath.Join(tmp, "blobs/sha256", d[7:]), data, 0600))
 		return obj{"digest": d, "size": len(data), "mediaType": media}
 	}
-	data := fetch("/v2/"+repo+"/manifests/"+ref, maxJSON)
+	data := fetch("/v2/"+repo+"/manifests/"+ref, maxJSON, nil)
 	if digestPattern.MatchString(ref) {
 		reject(digest(data) == ref, "Requested manifest digest mismatch")
 	}
 	manifest := decode(data, maxJSON)
-	if manifest["mediaType"] == indexMedia {
+	if manifest["mediaType"] == indexMedia || manifest["mediaType"] == dockerList {
 		items := array(manifest["manifests"])
 		reject(len(items) <= 32, "Too many index entries")
 		selected := []obj{}
@@ -154,23 +177,36 @@ func pullImage(reference, cache string, insecure bool, bearer string) string {
 		d := selected[0]
 		dg := str(d["digest"])
 		reject(digestPattern.MatchString(dg), "Invalid selected digest")
-		data = fetch("/v2/"+repo+"/manifests/"+dg, maxJSON)
+		data = fetch("/v2/"+repo+"/manifests/"+dg, maxJSON, nil)
 		reject(digest(data) == dg && int64(len(data)) == integer(d["size"]), "Selected descriptor mismatch")
 		manifest = decode(data, maxJSON)
 	}
-	reject(manifest["mediaType"] == manifestMedia, "Only OCI manifests supported")
-	descriptor := store(data, manifestMedia)
+	media := text(manifest["mediaType"])
+	if media == "" {
+		media = manifestMedia // an OCI manifest may omit its type
+	}
+	reject(media == manifestMedia || media == dockerManifest, "Unsupported manifest type: "+media)
+	descriptor := store(data, media)
 	layers := array(manifest["layers"])
-	reject(len(layers) <= 32, "Too many layers")
+	reject(len(layers) <= 128, "Too many layers")
 	for _, v := range append([]any{manifest["config"]}, layers...) {
 		d := object(v)
 		dg := str(d["digest"])
 		reject(digestPattern.MatchString(dg), "Invalid blob digest")
 		size := integer(d["size"])
 		reject(size >= 0 && size <= maxBlob, "Invalid blob size")
-		raw := fetch("/v2/"+repo+"/blobs/"+dg, size)
-		reject(int64(len(raw)) == size && digest(raw) == dg, "Downloaded blob digest mismatch")
-		store(raw, text(d["mediaType"]))
+		// Stream to disk, hashing on the way (a blob listed twice, such as the empty layer, once).
+		p := filepath.Join(tmp, "blobs/sha256", dg[7:])
+		if exists(p) {
+			continue
+		}
+		f, e := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		check(e)
+		hash := sha256.New()
+		fetch("/v2/"+repo+"/blobs/"+dg, size, io.MultiWriter(f, hash))
+		st, e := f.Stat()
+		check(errors.Join(e, f.Close()))
+		reject(st.Size() == size && "sha256:"+hex.EncodeToString(hash.Sum(nil)) == dg, "Downloaded blob digest mismatch")
 	}
 	save(filepath.Join(tmp, "oci-layout"), obj{"imageLayoutVersion": "1.0.0"})
 	save(filepath.Join(tmp, "index.json"), obj{"schemaVersion": 2, "manifests": []any{descriptor}})

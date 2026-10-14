@@ -83,6 +83,18 @@ func (b *engine) inspectExec(id string) obj {
 		"ProcessConfig": obj{"tty": j.Tty, "entrypoint": j.Cmd[0], "arguments": j.Cmd[1:], "privileged": false, "user": j.User}}
 }
 
+// containerCommand resolves argv as docker run does for its entrypoint: the
+// command is found in the container's PATH, and a script runs under its #!
+// interpreter. argv0 is what the program sees as its name.
+func containerCommand(p string, env, argv []string) (command []string, argv0 string) {
+	root := noLinks(p, "rootfs")
+	command = (&image{Root: root, Env: env}).command(append([]string{lookPath(root, env, argv[0])}, argv[1:]...))
+	if argv0 = argv[0]; len(command) != len(argv) {
+		argv0 = command[0] // a script: its interpreter
+	}
+	return command, argv0
+}
+
 // lookPath finds a command in the container's PATH, as docker exec does.
 func lookPath(root string, env []string, name string) string {
 	if strings.Contains(name, "/") {
@@ -236,12 +248,12 @@ func (b *engine) execCommand(j *execJob) (cmd *exec.Cmd, input, output, errput *
 		c["workdir"] = j.WorkingDir
 	}
 	env := mergeEnv(stringsOf(c["env"]), j.Env)
-	command := append([]string{j.Path}, j.Cmd[1:]...)
+	command, argv0 := containerCommand(p, env, j.Cmd)
 	extra := []string{}
 	if j.Stdin || j.Tty {
 		extra = append(extra, "--stdin")
 	}
-	invocation := runtimeCommand(p, b.Native, c, command, j.Cmd[0], env, false, extra...)
+	invocation := runtimeCommand(p, b.Native, c, command, argv0, env, false, extra...)
 	cmd = exec.Command(b.Worker, invocation...)
 	cmd.Env = []string{"PATH=/usr/bin:/bin", "LANG=C"}
 	// The worker ends the exec if the engine goes away (its end of this pipe closes).

@@ -112,7 +112,7 @@ func savedMounts(config obj) []obj {
 	return out
 }
 
-// mountTarget validates a guest mount path: absolute, clean, printable ASCII
+// mountTarget validates a guest mount path: absolute, clean, printable UTF-8
 // without ':' or '\', and not the root itself.
 func mountTarget(t string) string {
 	reject(strings.HasPrefix(t, "/") && t != "/" && filepath.Clean(t) == t && len(t) <= 1024, "Invalid mount target: "+t)

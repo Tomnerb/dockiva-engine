@@ -34,37 +34,45 @@ func layer(t *testing.T, headers []tar.Header, contents []string) []byte {
 	return out.Bytes()
 }
 func TestLayerRules(t *testing.T) {
-	for _, name := range []string{"../escape", "/escape", "a/../../escape", "a\\b", "a:b", "a/\x01b"} {
+	for _, name := range []string{"../escape", "/escape", "a/../../escape", "a/\x01b", "a/\xffb"} {
 		t.Run(name, func(t *testing.T) { mustReject(t, func() { pathName(name) }) })
 	}
-	// Hardlinks name archive paths, so an absolute host path is rejected; an
-	// absolute symlink target is a guest path (see TestLayerLinks).
-	for _, kind := range []byte{tar.TypeLink, tar.TypeChar, tar.TypeFifo, tar.TypeGNUSparse} {
-		t.Run(string(kind), func(t *testing.T) {
-			mustReject(t, func() {
-				count := 0
-				applyLayer(map[string]entry{}, layer(t, []tar.Header{{Name: "bad", Typeflag: kind, Linkname: "/tmp/outside"}}, nil), &count)
-			})
-		})
+	pathName("units/system-systemd\\x2dcryptsetup.slice") // Linux names may hold \ and :
+	pathName("ca/Főtanúsítvány.pem")
+	apply := func(root string, headers []tar.Header, contents []string) {
+		n := 0
+		applyLayer(root, bytes.NewReader(layer(t, headers, contents)), &n)
 	}
-	tree := map[string]entry{"a": {Data: []byte("old")}, "b": {}, "dir": {Dir: true}, "dir/old": {}}
-	count := 0
-	applyLayer(tree, layer(t, []tar.Header{{Name: "a", Size: 3, Mode: 0700}, {Name: ".wh.a"}, {Name: ".wh.b"}, {Name: "dir/new", Size: 1}, {Name: "dir/.wh..wh..opq"}}, []string{"new", "", "", "x", ""}), &count)
-	if string(tree["a"].Data) != "new" {
+	// Hardlinks name archive paths (an absolute host path is rejected); sparse files are refused.
+	for _, kind := range []byte{tar.TypeLink, tar.TypeGNUSparse} {
+		mustReject(t, func() { apply(t.TempDir(), []tar.Header{{Name: "bad", Typeflag: kind, Linkname: "/tmp/outside"}}, nil) })
+	}
+	root := t.TempDir()
+	apply(root, []tar.Header{{Name: "dev/null", Typeflag: tar.TypeChar}, {Name: "fifo", Typeflag: tar.TypeFifo}}, nil) // skipped
+	if _, e := os.Lstat(filepath.Join(root, "fifo")); e == nil {
+		t.Fatal("FIFO extracted")
+	}
+	apply(root, []tar.Header{{Name: "a", Size: 3, Mode: 0644}, {Name: "b", Size: 1, Mode: 0644}, {Name: "dir/old", Size: 1, Mode: 0644}}, []string{"old", "b", "o"})
+	// Same-layer whiteouts hide lower layers only; an opaque directory drops its lower files.
+	apply(root, []tar.Header{{Name: "a", Size: 3, Mode: 0700}, {Name: ".wh.a"}, {Name: ".wh.b"}, {Name: "dir/new", Size: 1}, {Name: "dir/.wh..wh..opq"}}, []string{"new", "", "", "x", ""})
+	if data, _ := os.ReadFile(filepath.Join(root, "a")); string(data) != "new" {
 		t.Fatal("whiteout removed upper layer")
 	}
-	if _, ok := tree["b"]; ok {
-		t.Fatal("whiteout missed")
+	if st, _ := os.Stat(filepath.Join(root, "a")); st.Mode().Perm() != 0700 {
+		t.Fatalf("mode not kept: %v", st.Mode())
 	}
-	if _, ok := tree["dir/old"]; ok {
-		t.Fatal("opaque whiteout missed")
+	for _, gone := range []string{"b", "dir/old"} {
+		if _, e := os.Lstat(filepath.Join(root, gone)); e == nil {
+			t.Fatal("whiteout missed " + gone)
+		}
 	}
-	for _, names := range [][]string{{"a", "a"}, {"a", "A"}, {"a", "a/b"}} {
-		mustReject(t, func() {
-			n := 0
-			applyLayer(map[string]entry{}, layer(t, []tar.Header{{Name: names[0]}, {Name: names[1]}}, nil), &n)
-		})
+	if _, e := os.Lstat(filepath.Join(root, "dir/new")); e != nil {
+		t.Fatal("opaque whiteout removed this layer's file")
 	}
+	// Nothing is written through a symlink.
+	mustReject(t, func() {
+		apply(t.TempDir(), []tar.Header{{Name: "lib", Typeflag: tar.TypeSymlink, Linkname: "/tmp"}, {Name: "lib/x", Size: 1}}, []string{"", "x"})
+	})
 }
 func TestJSONAndProcessLimits(t *testing.T) {
 	for _, raw := range []string{`{"a":1,"a":2}`, `[]`, `null`, `{"a":NaN}`, `{"a":true} trailing`, string([]byte{'{', '"', 'a', '"', ':', '"', 255, '"', '}'})} {
@@ -81,33 +89,34 @@ func TestPinnedImagesAndImport(t *testing.T) {
 			im := loadImage(root)
 			cache := filepath.Join(t.TempDir(), "cache")
 			target := commitImage(cache, "fixture", root)
-			again := loadImage(target)
-			if im.Digest != again.Digest {
+			if again := loadImage(target); im.Digest != again.Digest {
 				t.Fatal("import changed digest")
 			}
-			out := t.TempDir()
-			im.extract(out)
-			for name, v := range im.Tree {
-				st, e := os.Stat(filepath.Join(out, name))
-				if e != nil {
-					t.Fatal(e)
-				}
-				if !v.Dir && st.Size() != int64(len(v.Data)) {
-					t.Fatal("extraction size mismatch")
-				}
+			unpacked := filepath.Join(filepath.Dir(target), "rootfs")
+			if size := readObject(filepath.Join(filepath.Dir(target), "image.json"))["size"]; integer(size) <= 0 {
+				t.Fatalf("unpacked size: %v", size)
+			}
+			if _, e := os.Stat(filepath.Join(unpacked, "dev")); e != nil {
+				t.Fatal("no /dev")
 			}
 			if commitImage(cache, "fixture", root) != target {
 				t.Fatal("idempotent import")
 			}
-			for d, raw := range im.Blobs {
-				if len(raw) > 0 {
-					bad := append([]byte{}, raw...)
-					bad[0] ^= 1
-					check(os.WriteFile(filepath.Join(target, "blobs/sha256", d[7:]), bad, 0600))
-					break
-				}
+			// A tag clones the unpacked root.
+			tagged := commitImage(cache, "fixture:tag", target)
+			if _, e := os.Stat(filepath.Join(filepath.Dir(tagged), "rootfs", "dev")); e != nil {
+				t.Fatal("tag has no unpacked root")
 			}
-			mustReject(t, func() { loadImage(target) })
+			// A corrupted layer fails unpacking.
+			layerDigest := str(im.layers[len(im.layers)-1]["digest"])
+			p := filepath.Join(target, "blobs/sha256", layerDigest[7:])
+			data, e := os.ReadFile(p)
+			check(e)
+			check(os.Remove(p))
+			data[len(data)/2] ^= 1
+			check(os.WriteFile(p, data, 0600))
+			check(os.RemoveAll(unpacked))
+			mustReject(t, func() { ensureUnpacked(filepath.Dir(target)) })
 		})
 	}
 }
@@ -281,8 +290,8 @@ func TestParseReference(t *testing.T) {
 		"alpine":                         {"registry-1.docker.io", "library/alpine", "latest", "alpine:latest"},
 		"alpine:3.20":                    {"registry-1.docker.io", "library/alpine", "3.20", "alpine:3.20"},
 		"bitnami/redis:7.4":              {"registry-1.docker.io", "bitnami/redis", "7.4", "bitnami/redis:7.4"},
-		"docker.io/library/nginx:alpine": {"registry-1.docker.io", "library/nginx", "alpine", "docker.io/library/nginx:alpine"},
-		"docker.io/nginx":                {"registry-1.docker.io", "library/nginx", "latest", "docker.io/nginx:latest"},
+		"docker.io/library/nginx:alpine": {"registry-1.docker.io", "library/nginx", "alpine", "nginx:alpine"},
+		"docker.io/nginx":                {"registry-1.docker.io", "library/nginx", "latest", "nginx:latest"},
 		"ghcr.io/owner/app:v1":           {"ghcr.io", "owner/app", "v1", "ghcr.io/owner/app:v1"},
 		"localhost/app":                  {"localhost", "app", "latest", "localhost/app:latest"},
 		"127.0.0.1:5000/app:dev":         {"127.0.0.1:5000", "app", "dev", "127.0.0.1:5000/app:dev"},
@@ -323,63 +332,15 @@ func TestUnpublishedCreationRecovery(t *testing.T) {
 
 func TestLayerLinks(t *testing.T) {
 	elf := "\x7fELF\x02\x01\x01busybox"
-	tree, count := map[string]entry{}, 0
-	applyLayer(tree, layer(t, []tar.Header{
-		{Name: "bin/", Typeflag: tar.TypeDir},
+	root, count := t.TempDir(), 0
+	applyLayer(root, bytes.NewReader(layer(t, []tar.Header{
+		{Name: "bin/", Typeflag: tar.TypeDir, Mode: 0755},
 		{Name: "bin/busybox", Size: int64(len(elf)), Mode: 0755},
 		{Name: "bin/sh", Typeflag: tar.TypeSymlink, Linkname: "busybox"},
 		{Name: "bin/ls", Typeflag: tar.TypeLink, Linkname: "bin/busybox"},
 		{Name: "usr/bin/env", Typeflag: tar.TypeSymlink, Linkname: "../../bin/busybox"},
 		{Name: "host", Typeflag: tar.TypeSymlink, Linkname: "/etc/passwd"},
-	}, []string{"", elf}), &count)
-	if tree["bin/sh"].Link != "busybox" || tree["host"].Link != "/etc/passwd" {
-		t.Fatal("symlink not retained")
-	}
-	if tree["bin/ls"].Hardlink != "bin/busybox" || string(tree["bin/ls"].Data) != elf || !tree["bin/ls"].Executable {
-		t.Fatal("hardlink not retained")
-	}
-	// A later layer whiteouts the shell link.
-	applyLayer(tree, layer(t, []tar.Header{{Name: "bin/.wh.sh"}}, nil), &count)
-	if _, ok := tree["bin/sh"]; ok {
-		t.Fatal("whiteout missed symlink")
-	}
-	tree["bin/sh"] = entry{Link: "/usr/bin/env"}
-
-	// Executables resolve through chained, relative and absolute links.
-	im := &image{Tree: tree, Entry: []string{"/bin/sh"}}
-	if cmd := im.command(nil); cmd[0] != "/bin/sh" {
-		t.Fatalf("command rewritten: %v", cmd)
-	}
-	if cmd := (&image{Tree: tree}).command([]string{"sh", "-c", "true"}); cmd[0] != "/bin/sh" || cmd[1] != "-c" {
-		t.Fatalf("PATH lookup: %v", cmd)
-	}
-	if cmd := (&image{Tree: tree, Env: []string{"PATH=/usr/bin"}, Entry: []string{"env"}}).command(nil); cmd[0] != "/usr/bin/env" {
-		t.Fatalf("image PATH lookup: %v", cmd)
-	}
-	mustReject(t, func() { (&image{Tree: tree, Entry: []string{"missing"}}).command(nil) })
-	link := func(p string) (string, bool) { e := tree[p]; return e.Link, e.Link != "" }
-	for in, want := range map[string]string{"bin/sh": "bin/busybox", "usr/bin/env": "bin/busybox", "../../../bin/sh": "bin/busybox", "host": "etc/passwd", "bin/../usr": "usr"} {
-		if got := resolveGuest(in, link); got != want {
-			t.Errorf("resolveGuest(%q) = %q, want %q", in, got, want)
-		}
-	}
-	mustReject(t, func() { resolveGuest("loop", func(string) (string, bool) { return "loop", true }) })
-
-	// Paths beneath a symlink and devices stay rejected.
-	mustReject(t, func() {
-		applyLayer(map[string]entry{}, layer(t, []tar.Header{{Name: "lib", Typeflag: tar.TypeSymlink, Linkname: "/tmp"}, {Name: "lib/x", Size: 1}}, []string{"", "x"}), &count)
-	})
-	mustReject(t, func() {
-		applyLayer(map[string]entry{}, layer(t, []tar.Header{{Name: "ls", Typeflag: tar.TypeLink, Linkname: "missing"}}, nil), &count)
-	})
-	mustReject(t, func() { linkTarget("a:b") })
-
-	// Extraction creates real symlinks and shares hardlinked inodes.
-	root := t.TempDir()
-	im.extract(root)
-	if st, e := os.Lstat(filepath.Join(root, "dev")); e != nil || !st.IsDir() {
-		t.Fatal("extraction did not provide /dev")
-	}
+	}, []string{"", elf})), &count)
 	if target, e := os.Readlink(filepath.Join(root, "host")); e != nil || target != "/etc/passwd" {
 		t.Fatalf("symlink extraction: %q %v", target, e)
 	}
@@ -388,14 +349,34 @@ func TestLayerLinks(t *testing.T) {
 	if e1 != nil || e2 != nil || !os.SameFile(a, b) {
 		t.Fatal("hardlink extraction did not share the inode")
 	}
-	if got := filepath.Join(root, resolveGuest("bin/sh", func(p string) (string, bool) {
-		target, e := os.Readlink(filepath.Join(root, p))
-		return target, e == nil
-	})); got != filepath.Join(root, "bin/busybox") {
-		t.Fatalf("on-disk resolution: %s", got)
+	// Executables resolve through chained, relative and absolute links.
+	im := &image{Root: root, Entry: []string{"/bin/sh"}}
+	if cmd := im.command(nil); cmd[0] != "/bin/sh" {
+		t.Fatalf("command rewritten: %v", cmd)
 	}
+	if cmd := (&image{Root: root}).command([]string{"sh", "-c", "true"}); cmd[0] != "/bin/sh" || cmd[1] != "-c" {
+		t.Fatalf("PATH lookup: %v", cmd)
+	}
+	if cmd := (&image{Root: root, Env: []string{"PATH=/usr/bin"}, Entry: []string{"env"}}).command(nil); cmd[0] != "/usr/bin/env" {
+		t.Fatalf("image PATH lookup: %v", cmd)
+	}
+	mustReject(t, func() { (&image{Root: root, Entry: []string{"missing"}}).command(nil) })
+	link := func(p string) (string, bool) { return readLink(filepath.Join(root, p)) }
+	for in, want := range map[string]string{"bin/sh": "bin/busybox", "usr/bin/env": "bin/busybox", "../../../bin/sh": "bin/busybox", "host": "etc/passwd", "bin/../usr": "usr"} {
+		if got := resolveGuest(in, link); got != want {
+			t.Errorf("resolveGuest(%q) = %q, want %q", in, got, want)
+		}
+	}
+	mustReject(t, func() { resolveGuest("loop", func(string) (string, bool) { return "loop", true }) })
+	// A later layer whiteouts the shell link.
+	applyLayer(root, bytes.NewReader(layer(t, []tar.Header{{Name: "bin/.wh.sh"}}, nil)), &count)
+	if _, e := os.Lstat(filepath.Join(root, "bin/sh")); e == nil {
+		t.Fatal("whiteout missed symlink")
+	}
+	mustReject(t, func() {
+		applyLayer(t.TempDir(), bytes.NewReader(layer(t, []tar.Header{{Name: "ls", Typeflag: tar.TypeLink, Linkname: "missing"}}, nil)), &count)
+	})
 }
-
 func TestPublishedPorts(t *testing.T) {
 	b := testEngine(t)
 	b.create("web", decode([]byte(`{"Image":"vmfree/shell:demo","ExposedPorts":{"80/tcp":{}},"HostConfig":{"NetworkMode":"host","PortBindings":{"80/tcp":[{"HostIp":"","HostPort":"8080"}],"443/tcp":[{"HostIp":"127.0.0.1","HostPort":"8443"}]}}}`), maxJSON))
@@ -430,18 +411,20 @@ func TestPublishedPorts(t *testing.T) {
 }
 
 func TestScriptEntrypointAndDirectories(t *testing.T) {
-	elf := []byte("\x7fELF\x02\x01\x01sh")
-	tree := map[string]entry{
-		"bin": {Dir: true}, "bin/sh": {Executable: true, Data: elf},
-		"usr": {Dir: true}, "usr/bin": {Dir: true}, "usr/bin/env": {Link: "/bin/sh"},
-		"entry.sh": {Executable: true, Data: []byte("#!/bin/sh\nexec \"$@\"\n")},
-		"with-arg": {Executable: true, Data: []byte("#! /usr/bin/env  sh -x \r\n")},
-		"nested":   {Executable: true, Data: []byte("#!/entry.sh\n")},
-		"plain":    {Executable: true, Data: []byte("echo no interpreter\n")},
-		"var":      {Dir: true}, "var/lib": {Link: "/srv"}, "srv": {Dir: true},
-		"file": {Data: []byte("x")},
+	root := t.TempDir()
+	files := map[string]string{"bin/sh": "\x7fELF\x02\x01\x01sh", "entry.sh": "#!/bin/sh\nexec \"$@\"\n", "with-arg": "#! /usr/bin/env  sh -x \r\n",
+		"nested": "#!/entry.sh\n", "plain": "echo no interpreter\n"}
+	for name, data := range files {
+		check(os.MkdirAll(filepath.Dir(filepath.Join(root, name)), 0755))
+		check(os.WriteFile(filepath.Join(root, name), []byte(data), 0755))
 	}
-	im := &image{Tree: tree}
+	check(os.MkdirAll(filepath.Join(root, "usr/bin"), 0755))
+	check(os.Symlink("/bin/sh", filepath.Join(root, "usr/bin/env")))
+	check(os.MkdirAll(filepath.Join(root, "var"), 0755))
+	check(os.MkdirAll(filepath.Join(root, "srv"), 0755))
+	check(os.Symlink("/srv", filepath.Join(root, "var/lib")))
+	check(os.WriteFile(filepath.Join(root, "file"), []byte("x"), 0644))
+	im := &image{Root: root}
 	got := im.command([]string{"/entry.sh", "redis-server"})
 	if strings.Join(got, " ") != "/bin/sh /entry.sh redis-server" {
 		t.Fatalf("script: %v", got)
@@ -449,19 +432,24 @@ func TestScriptEntrypointAndDirectories(t *testing.T) {
 	if got = im.command([]string{"/with-arg", "a"}); strings.Join(got, "|") != "/usr/bin/env|sh -x|/with-arg|a" {
 		t.Fatalf("interpreter argument: %q", got)
 	}
-	mustReject(t, func() { im.command([]string{"/nested"}) }) // interpreter is itself a script
-	mustReject(t, func() { im.command([]string{"/plain"}) })  // not ELF, no #!
-	if im.ensureDir("/data") != "/data" || !tree["data"].Dir {
+	if got = im.command([]string{"/nested", "x"}); strings.Join(got, " ") != "/bin/sh /entry.sh /nested x" { // a script interpreter
+		t.Fatalf("nested interpreter: %q", got)
+	}
+	mustReject(t, func() { im.command([]string{"/plain"}) }) // not ELF, no #!
+	mustReject(t, func() { im.command([]string{"/file"}) })  // not executable
+	if im.ensureDir("/data") != "/data" {
+		t.Fatal("ensureDir result")
+	}
+	if st, e := os.Stat(filepath.Join(root, "data")); e != nil || !st.IsDir() {
 		t.Fatal("WorkingDir/volume not created")
 	}
 	im.ensureDir("/var/lib/redis") // through a symlink: lands in /srv
-	if !tree["srv/redis"].Dir {
-		t.Fatalf("symlinked parent not followed: %v", tree["srv/redis"])
+	if st, e := os.Stat(filepath.Join(root, "srv/redis")); e != nil || !st.IsDir() {
+		t.Fatal("symlinked parent not followed")
 	}
 	mustReject(t, func() { im.ensureDir("/file/sub") })
 	mustReject(t, func() { im.ensureDir("relative") })
 }
-
 func TestNetworkModeAndDNSFiles(t *testing.T) {
 	b := testEngine(t)
 	for name, mode := range map[string]string{"plain": "", "bridge": `"bridge"`, "host": `"host"`, "none": `"none"`} {
@@ -502,6 +490,14 @@ func TestNetworkModeAndDNSFiles(t *testing.T) {
 	mustReject(t, func() { networkFiles(link, "") }) // a symlinked /etc is refused
 }
 
+func TestShortName(t *testing.T) {
+	for in, want := range map[string]string{"docker.io/library/nginx:alpine": "nginx:alpine", "docker.io/grafana/grafana:latest": "grafana/grafana:latest", "nginx": "nginx", "ghcr.io/a/b:1": "ghcr.io/a/b:1"} {
+		if got := shortName(in); got != want {
+			t.Fatalf("%s: %s", in, got)
+		}
+	}
+}
+
 func TestResourceLimits(t *testing.T) {
 	b := testEngine(t)
 	b.create("small", decode([]byte(`{"Image":"vmfree/shell:demo","HostConfig":{"Memory":104857601,"MemorySwap":-1,"NanoCpus":1500000000}}`), maxJSON))
@@ -516,5 +512,21 @@ func TestResourceLimits(t *testing.T) {
 	}
 	for _, bad := range []string{`{"Memory":1024}`, `{"Memory":70000000000000}`, `{"NanoCpus":65000000000}`, `{"MemorySwap":-2}`} {
 		mustReject(t, func() { b.create("bad", decode([]byte(`{"Image":"vmfree/shell:demo","HostConfig":`+bad+`}`), maxJSON)) })
+	}
+}
+
+func TestContainerCommandScripts(t *testing.T) {
+	p := t.TempDir()
+	root := filepath.Join(p, "rootfs")
+	check(os.MkdirAll(filepath.Join(root, "bin"), 0o755))
+	check(os.WriteFile(filepath.Join(root, "bin", "sh"), append([]byte("\x7fELF\x02\x01\x01"), make([]byte, 57)...), 0o755))
+	check(os.WriteFile(filepath.Join(root, "bin", "tool.sh"), []byte("#!/bin/sh\necho hi\n"), 0o755))
+	cmd, argv0 := containerCommand(p, []string{"PATH=/bin"}, []string{"tool.sh", "--list"})
+	if strings.Join(cmd, " ") != "/bin/sh /bin/tool.sh --list" || argv0 != "/bin/sh" {
+		t.Fatalf("script: %v %q", cmd, argv0)
+	}
+	cmd, argv0 = containerCommand(p, []string{"PATH=/bin"}, []string{"sh", "-c", "true"})
+	if strings.Join(cmd, " ") != "/bin/sh -c true" || argv0 != "sh" {
+		t.Fatalf("binary: %v %q", cmd, argv0)
 	}
 }

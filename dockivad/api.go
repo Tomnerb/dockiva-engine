@@ -21,6 +21,7 @@ import (
 )
 
 func (b *engine) imagePath(name string) string {
+	name = shortName(name)
 	p := filepath.Join(b.Cache, key(name))
 	if !exists(p) && !strings.Contains(name, "@") && !strings.Contains(name[strings.LastIndex(name, "/")+1:], ":") {
 		p = filepath.Join(b.Cache, key(name+":latest")) // Docker treats an untagged name as :latest.
@@ -30,14 +31,20 @@ func (b *engine) imagePath(name string) string {
 	}
 	return p
 }
+
+// image is a cached image with its unpacked filesystem (read only: containers clone it).
 func (b *engine) image(name string) *image {
-	return loadImage(noLinks(b.imagePath(name), "layout"))
+	p := b.imagePath(name)
+	ensureUnpacked(p)
+	im := loadImage(noLinks(p, "layout"))
+	im.Root = noLinks(p, "rootfs")
+	return im
 }
 func (b *engine) imageInfo(name string) obj {
-	im := b.image(name)
-	var size int
-	for _, v := range im.Tree {
-		size += len(v.Data)
+	im := loadImage(noLinks(b.imagePath(name), "layout"))
+	size := readObject(filepath.Join(b.imagePath(name), "image.json"))["size"]
+	if size == nil {
+		size = 0
 	}
 	st, e := os.Stat(filepath.Join(b.imagePath(name), "image.json"))
 	check(e)
@@ -371,7 +378,9 @@ func (b *engine) create(name string, body obj) obj {
 	reject(len(imageName) > 0 && len(imageName) <= 512, "Invalid image name")
 	im := b.image(imageName)
 	if wd := text(body["WorkingDir"]); wd != "" {
-		im.WorkingDir = im.ensureDir(wd)
+		reject(strings.HasPrefix(wd, "/"), "WorkingDir must be absolute")
+		pathName(wd[1:])
+		im.WorkingDir = wd
 	}
 	if body["Entrypoint"] != nil {
 		im.Entry = stringsOf(body["Entrypoint"])
@@ -503,8 +512,11 @@ func (b *engine) create(name string, body obj) obj {
 			_ = os.RemoveAll(stage)
 		}
 	}()
-	check(os.Mkdir(filepath.Join(stage, "rootfs"), 0700))
-	im.extract(filepath.Join(stage, "rootfs"))
+	cloneTree(im.Root, filepath.Join(stage, "rootfs"))
+	im.Root = filepath.Join(stage, "rootfs")
+	for _, d := range append([]string{im.WorkingDir}, im.Volumes...) { // Docker creates them
+		im.ensureDir(d)
+	}
 	save(filepath.Join(stage, "config.json"), config)
 	save(filepath.Join(stage, "status.json"), obj{"state": "created"})
 	check(os.Rename(stage, p))
@@ -769,8 +781,9 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 			if tag := q.Get("tag"); tag != "" && !strings.Contains(reference, "@") {
 				reference += ":" + tag
 			}
-			b.Mu.Lock()
-			defer b.Mu.Unlock()
+			// No engine lock (a pull is staged, then renamed in) and no write deadline:
+			// a large image takes minutes, and other requests go on meanwhile.
+			unbounded(w)
 			pullImage(reference, b.Cache, false, "")
 			send(w, 200, obj{"status": "Downloaded verified image " + reference})
 			return

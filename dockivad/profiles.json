@@ -16,7 +16,7 @@
   },
   "native": {
     "id": "native-arm64-hvf",
-    "revision": 2,
+    "revision": 3,
     "image_digests": [],
     "backend": "hvf",
     "required_capabilities": ["elf64-arm64", "private-rootfs", "loopback-tcp", "bounded-dynamic-elf", "native-threads"],
@@ -24,7 +24,7 @@
     "process_tree": true,
     "scheduled_network": true,
     "writable_root": "optional",
-    "memory_limit_mib": 512,
+    "memory_limit_mib": 2048,
     "max_steps": 18446744073709551615,
     "scope": "Unqualified image; native ARM64 execution under Hypervisor.framework (no guest kernel), Linux syscalls served by the runtime, threads on parallel vCPUs. Loading does not establish application compatibility."
   },

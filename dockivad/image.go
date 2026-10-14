@@ -4,36 +4,45 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"io"
 	"os"
+	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
+	"unicode/utf8"
+	"unsafe"
 )
 
+// OCI and Docker v2 media types (the same structures).
 const manifestMedia = "application/vnd.oci.image.manifest.v1+json"
 const configMedia = "application/vnd.oci.image.config.v1+json"
 const layerMedia = "application/vnd.oci.image.layer.v1.tar"
 const indexMedia = "application/vnd.oci.image.index.v1+json"
+const dockerManifest = "application/vnd.docker.distribution.manifest.v2+json"
+const dockerList = "application/vnd.docker.distribution.manifest.list.v2+json"
+const dockerConfig = "application/vnd.docker.container.image.v1+json"
 
-// ponytail: images are pulled, unpacked and copied in memory, so these caps bound
-// the engine's memory; stream layers to disk to lift them further.
-const maxBlob = int64(256 << 20)
-const maxPacked = int64(512 << 20)
-const maxMembers = 65536
+// layerTypes: the layer formats an image may use, and whether each is gzipped.
+var layerTypes = map[string]bool{layerMedia: false, layerMedia + "+gzip": true,
+	"application/vnd.docker.image.rootfs.diff.tar": false, "application/vnd.docker.image.rootfs.diff.tar.gzip": true}
+
+// Images stream to disk and are unpacked once, so only sanity bounds remain.
+const maxBlob = int64(64 << 30) // one layer, and a whole pull
+const maxMembers = 4 << 20      // files in an image
 const maxJSON = int64(1 << 20)
-const maxExpanded = int64(1 << 30)
 
 var digestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
-type entry struct {
-	Dir, Executable bool
-	Data            []byte
-	Link            string // symlink target, resolved inside the guest root
-	Hardlink        string // tree path of the file this one shares data with
-}
+// image is an image's configuration and, in Root, its unpacked filesystem: the
+// cache's (read only) or a container's own clone of it.
 type image struct {
 	Digest           string
 	Entry, Args, Env []string
@@ -42,41 +51,49 @@ type image struct {
 	User             string   // USER: name or uid, with an optional :group or :gid; "" for root
 	Volumes          []string // declared VOLUME paths, sorted
 	Healthcheck      obj      // HEALTHCHECK, as Config.Healthcheck (Test, Interval, ...)
-	Tree             map[string]entry
-	Blobs            map[string][]byte
-	Descriptor       obj
+	Root             string
+	layout           string
+	descriptor       obj
+	blobs            []string // manifest, config and layer digests
+	layers           []obj
+	diffs            []string
 }
 
 func pathName(name string) string {
-	reject(len(name) <= 1024 && !strings.HasPrefix(name, "/") && !strings.ContainsAny(name, "\\:"), "Invalid image path")
-	for _, c := range name {
-		reject(c >= 32 && c < 127, "Only printable ASCII paths supported")
-	}
+	reject(len(name) <= 4096 && !strings.HasPrefix(name, "/"), "Invalid image path")
+	reject(printableUTF8(name), "Paths must be UTF-8 without control characters: "+strconv.Quote(name))
 	out := []string{}
 	for _, s := range strings.Split(name, "/") {
 		reject(s != "..", "Path traversal rejected")
+		reject(len(s) <= 255, "Path component too long")
 		if s != "" && s != "." {
 			out = append(out, s)
 		}
 	}
-	reject(len(out) <= 32, "Path too deep")
+	reject(len(out) <= 256, "Path too deep")
 	return strings.Join(out, "/")
 }
 func blob(root string, desc obj, limit int64, media ...string) []byte {
+	d := blobDigest(desc, limit, media...)
+	b := readBounded(root, "blobs/sha256/"+d[7:], limit)
+	reject(int64(len(b)) == integer(desc["size"]) && digest(b) == d, "Blob size/digest mismatch")
+	return b
+}
+
+// blobDigest validates a descriptor (local, of an allowed type, size within limit).
+func blobDigest(desc obj, limit int64, media ...string) string {
 	d := text(desc["digest"])
 	reject(digestPattern.MatchString(d), "Invalid sha256 descriptor")
 	ok := false
 	for _, m := range media {
 		ok = ok || desc["mediaType"] == m
 	}
-	reject(ok, "Unsupported descriptor media type")
+	reject(ok, "Unsupported descriptor media type: "+text(desc["mediaType"]))
 	_, embedded := desc["data"]
 	reject(idle(desc["urls"]) && !embedded, "External/embedded blobs unsupported")
 	size := integer(desc["size"])
 	reject(size >= 0 && size <= limit, "Invalid descriptor size")
-	b := readBounded(root, "blobs/sha256/"+d[7:], limit)
-	reject(int64(len(b)) == size && digest(b) == d, "Blob size/digest mismatch")
-	return b
+	return d
 }
 
 // resolveGuest follows guest symlinks the way native/fs.h does: absolute targets
@@ -110,163 +127,43 @@ func resolveGuest(guest string, link func(string) (string, bool)) string {
 	}
 	return strings.Join(cur, "/")
 }
-func linkTarget(name string) string {
-	reject(name != "" && len(name) <= 1024 && !strings.ContainsAny(name, "\\:"), "Invalid symlink target")
-	for _, c := range name {
-		reject(c >= 32 && c < 127, "Only printable ASCII symlink targets supported")
+
+// printableUTF8: valid UTF-8 (what APFS stores) without control characters.
+func printableUTF8(s string) bool {
+	for _, c := range s {
+		if c < 32 || c == 127 || c == utf8.RuneError {
+			return false
+		}
 	}
+	return true
+}
+func linkTarget(name string) string {
+	reject(name != "" && len(name) <= 4096, "Invalid symlink target")
+	reject(printableUTF8(name), "Symlink targets must be UTF-8 without control characters: "+strconv.Quote(name))
 	return name
 }
-func removeTree(tree map[string]entry, name string) {
-	for k := range tree {
-		if name == "" || k == name || strings.HasPrefix(k, name+"/") {
-			delete(tree, k)
-		}
-	}
-}
-func applyLayer(tree map[string]entry, raw []byte, members *int) {
-	type named struct {
-		Name string
-		E    entry
-	}
-	entries := []named{}
-	names := map[string]bool{}
-	r := tar.NewReader(bytes.NewReader(raw))
-	for {
-		h, e := r.Next()
-		if e == io.EOF {
-			break
-		}
-		check(e)
-		*members++
-		reject(*members <= maxMembers, "Too many tar members")
-		name := pathName(h.Name)
-		dir := h.Typeflag == tar.TypeDir
-		symlink, hardlink := h.Typeflag == tar.TypeSymlink, h.Typeflag == tar.TypeLink
-		reject(dir || symlink || hardlink || h.Typeflag == tar.TypeReg || h.Typeflag == tar.TypeRegA, "Devices/FIFOs unsupported")
-		for k := range h.PAXRecords {
-			reject(!strings.HasPrefix(k, "GNU.sparse"), "Sparse files unsupported")
-		}
-		reject(h.Size >= 0 && h.Size <= maxBlob, "Layer file exceeds limit")
-		if name == "" {
-			reject(dir, "Empty file path")
-			continue
-		}
-		reject(!names[name], "Duplicate path within layer")
-		names[name] = true
-		reject(!dir || h.Size == 0, "Directory content unsupported")
-		if symlink || hardlink {
-			reject(h.Size == 0, "Link content unsupported")
-			if symlink {
-				entries = append(entries, named{name, entry{Link: linkTarget(h.Linkname)}})
-			} else {
-				target := pathName(h.Linkname)
-				reject(target != "" && target != name, "Invalid hardlink target")
-				entries = append(entries, named{name, entry{Hardlink: target}})
-			}
-			continue
-		}
-		b, e := io.ReadAll(io.LimitReader(r, maxBlob+1))
-		check(e)
-		reject(int64(len(b)) == h.Size, "Truncated tar content")
-		entries = append(entries, named{name, entry{Dir: dir, Executable: h.Mode&0111 != 0, Data: b}})
-	}
-	for _, v := range entries {
-		base := filepath.Base(v.Name)
-		if !strings.HasPrefix(base, ".wh.") {
-			continue
-		}
-		reject(!v.E.Dir && len(v.E.Data) == 0 && v.E.Link == "" && v.E.Hardlink == "", "Invalid whiteout")
-		parent := filepath.ToSlash(filepath.Dir(v.Name))
-		if parent == "." {
-			parent = ""
-		}
-		if base == ".wh..wh..opq" {
-			p, ok := tree[parent]
-			reject(!ok || p.Dir, "Invalid opaque parent")
-			for k := range tree {
-				if parent == "" || strings.HasPrefix(k, parent+"/") {
-					delete(tree, k)
-				}
-			}
-		} else {
-			target := strings.TrimPrefix(base, ".wh.")
-			reject(target != "" && target != "." && target != ".." && !strings.HasPrefix(target, ".wh."), "Invalid whiteout target")
-			if parent != "" {
-				target = parent + "/" + target
-			}
-			removeTree(tree, target)
-		}
-	}
-	sort.SliceStable(entries, func(i, j int) bool {
-		if entries[i].E.Dir != entries[j].E.Dir {
-			return entries[i].E.Dir
-		}
-		return strings.Count(entries[i].Name, "/") < strings.Count(entries[j].Name, "/")
-	})
-	place := func(name string, e entry) {
-		parts := strings.Split(name, "/")
-		for n := 1; n < len(parts); n++ {
-			p := strings.Join(parts[:n], "/")
-			old, ok := tree[p]
-			// Also keeps extraction from writing through a symlinked directory.
-			reject(!ok || old.Dir, "File or symlink used as directory")
-			if !ok {
-				tree[p] = entry{Dir: true}
-			}
-		}
-		old, ok := tree[name]
-		if !e.Dir || (ok && old.Dir != e.Dir) {
-			removeTree(tree, name)
-		}
-		tree[name] = e
-	}
-	for _, v := range entries {
-		if !strings.HasPrefix(filepath.Base(v.Name), ".wh.") && v.E.Hardlink == "" {
-			place(v.Name, v.E)
-		}
-	}
-	// Hardlinks refer to files from this or earlier layers; they share data in
-	// memory and become host hardlinks on extraction.
-	for _, v := range entries {
-		if v.E.Hardlink == "" {
-			continue
-		}
-		src, ok := tree[v.E.Hardlink]
-		reject(ok && !src.Dir && src.Link == "", "Hardlink target missing or not a regular file")
-		origin := v.E.Hardlink
-		if src.Hardlink != "" {
-			origin = src.Hardlink
-		}
-		place(v.Name, entry{Executable: src.Executable, Data: src.Data, Hardlink: origin})
-	}
-	reject(len(tree) <= 4096, "Too many extracted paths")
-	fold := map[string]bool{}
-	for k := range tree {
-		low := strings.ToLower(k)
-		reject(!fold[low], "Case-colliding paths unsupported")
-		fold[low] = true
-	}
-}
-func loadImage(root string) *image {
-	header := readObject(filepath.Join(root, "oci-layout"))
+
+// loadImage reads an OCI layout's manifest and configuration; layers are read
+// only when unpacking.
+func loadImage(layout string) *image {
+	header := readObject(filepath.Join(layout, "oci-layout"))
 	reject(header["imageLayoutVersion"] == "1.0.0", "Unsupported OCI version")
-	index := readObject(filepath.Join(root, "index.json"))
+	index := readObject(filepath.Join(layout, "index.json"))
 	reject(integer(index["schemaVersion"]) == 2, "Invalid index version")
 	items := array(index["manifests"])
 	reject(len(items) == 1, "Expected exactly one image")
 	desc := object(items[0])
-	raw := blob(root, desc, maxJSON, manifestMedia)
+	raw := blob(layout, desc, maxJSON, manifestMedia, dockerManifest)
 	manifest := decode(raw, maxJSON)
-	reject(integer(manifest["schemaVersion"]) == 2 && manifest["mediaType"] == manifestMedia, "Invalid image manifest")
+	reject(integer(manifest["schemaVersion"]) == 2 && (manifest["mediaType"] == nil || manifest["mediaType"] == desc["mediaType"]), "Invalid image manifest")
 	if p := desc["platform"]; p != nil {
 		m := object(p)
 		reject(m["os"] == "linux" && m["architecture"] == "arm64", "Only linux/arm64 supported")
 	}
-	im := &image{Digest: str(desc["digest"]), Descriptor: desc, Tree: map[string]entry{}, Blobs: map[string][]byte{str(desc["digest"]): raw}}
+	im := &image{Digest: str(desc["digest"]), descriptor: desc, layout: layout, blobs: []string{str(desc["digest"])}}
 	cd := object(manifest["config"])
-	cr := blob(root, cd, maxJSON, configMedia)
-	im.Blobs[str(cd["digest"])] = cr
+	cr := blob(layout, cd, maxJSON, configMedia, dockerConfig)
+	im.blobs = append(im.blobs, str(cd["digest"]))
 	c := decode(cr, maxJSON)
 	reject(c["os"] == "linux" && c["architecture"] == "arm64", "Only linux/arm64 supported")
 	settings := object(c["config"])
@@ -278,67 +175,248 @@ func loadImage(root string) *image {
 	im.Env = stringsOf(settings["Env"])
 	validateEnv(im.Env)
 	layers := array(manifest["layers"])
-	reject(len(layers) > 0 && len(layers) <= 32, "Expected 1..32 layers")
+	reject(len(layers) > 0 && len(layers) <= 128, "Expected 1..128 layers")
 	rf := object(c["rootfs"])
 	reject(rf["type"] == "layers", "Invalid rootfs")
 	diffs := array(rf["diff_ids"])
 	reject(len(layers) == len(diffs), "Layer/DiffID count mismatch")
-	var total int64
-	packedTotal := int64(len(raw) + len(cr))
-	members := 0
-	for i, d := range layers {
-		ld := object(d)
-		packedTotal += integer(ld["size"])
-		reject(packedTotal <= maxPacked, "Packed image exceeds 512 MiB")
-		packed := blob(root, ld, maxBlob, layerMedia, layerMedia+"+gzip")
-		im.Blobs[str(ld["digest"])] = packed
-		raw := packed
-		if ld["mediaType"] == layerMedia+"+gzip" {
-			r, e := gzip.NewReader(bytes.NewReader(packed))
-			check(e)
-			raw, e = io.ReadAll(io.LimitReader(r, maxExpanded-total+1))
-			check(e)
-			check(r.Close())
-		}
-		total += int64(len(raw))
-		reject(total <= maxExpanded, "Expanded layers exceed 1 GiB")
-		reject(digest(raw) == str(diffs[i]), "Layer DiffID mismatch")
-		applyLayer(im.Tree, raw, &members)
+	for i, v := range layers {
+		ld := object(v)
+		_, known := layerTypes[text(ld["mediaType"])]
+		reject(known, "Unsupported layer format (zstd layers are not supported yet): "+text(ld["mediaType"]))
+		im.blobs = append(im.blobs, blobDigest(ld, maxBlob, text(ld["mediaType"])))
+		reject(digestPattern.MatchString(text(diffs[i])), "Invalid DiffID")
+		im.layers, im.diffs = append(im.layers, ld), append(im.diffs, str(diffs[i]))
 	}
-	// Docker creates WorkingDir if missing. Declared volumes become anonymous
-	// volumes of each container (parseMounts); their directories exist in the root.
+	// Docker creates WorkingDir and declared volumes in each container (ensureDir).
 	im.WorkingDir = "/"
 	if wd := text(settings["WorkingDir"]); wd != "" {
-		im.WorkingDir = im.ensureDir(wd)
+		reject(strings.HasPrefix(wd, "/"), "WorkingDir must be absolute")
+		pathName(wd[1:])
+		im.WorkingDir = wd
 	}
 	for v := range object(settings["Volumes"]) {
-		im.ensureDir(v)
+		reject(strings.HasPrefix(v, "/"), "Volume must be absolute")
+		pathName(v[1:])
 		im.Volumes = append(im.Volumes, v)
 	}
 	sort.Strings(im.Volumes)
-	im.command(nil)
 	return im
 }
 
-// ensureDir makes an absolute guest directory exist in the tree, following
-// guest symlinks like the runtime does, and returns the path as given.
+// unpack writes the image's layers, in order, into an empty directory, checking
+// each layer's digest and DiffID as it streams. It returns the file bytes written.
+func (im *image) unpack(root string) int64 {
+	entries, e := os.ReadDir(root)
+	check(e)
+	reject(len(entries) == 0, "Unpacking requires an empty directory")
+	var size int64
+	members := 0
+	for i, ld := range im.layers {
+		d := str(ld["digest"])
+		fd, e := syscall.Open(noLinks(im.layout, "blobs/sha256/"+d[7:]), syscall.O_RDONLY|syscall.O_NOFOLLOW, 0)
+		check(e)
+		f := os.NewFile(uintptr(fd), d)
+		packed, counted := sha256.New(), &counter{}
+		source := io.TeeReader(f, io.MultiWriter(packed, counted))
+		var r io.Reader = source
+		var gz *gzip.Reader
+		if layerTypes[text(ld["mediaType"])] {
+			gz, e = gzip.NewReader(source)
+			check(errors.Join(e, nil))
+			r = gz
+		}
+		diff := sha256.New()
+		r = io.TeeReader(r, diff)
+		size += applyLayer(root, r, &members)
+		_, e = io.Copy(io.Discard, r) // tar padding and the end of the stream
+		check(e)
+		_, e = io.Copy(io.Discard, source)
+		check(e)
+		f.Close()
+		reject(counted.n == integer(ld["size"]) && "sha256:"+hex.EncodeToString(packed.Sum(nil)) == d, "Layer digest mismatch")
+		reject("sha256:"+hex.EncodeToString(diff.Sum(nil)) == im.diffs[i], "Layer DiffID mismatch")
+	}
+	// The runtime serves /dev/null, /dev/zero and /dev/urandom beneath /dev.
+	if _, e := os.Lstat(filepath.Join(root, "dev")); os.IsNotExist(e) {
+		check(os.Mkdir(filepath.Join(root, "dev"), 0o755))
+	}
+	return size
+}
+
+type counter struct{ n int64 }
+
+func (c *counter) Write(b []byte) (int, error) { c.n += int64(len(b)); return len(b), nil }
+
+// applyLayer extracts one layer onto the unpacked root as Docker's overlay layers
+// combine: ".wh.NAME" removes NAME from lower layers, ".wh..wh..opq" empties its
+// directory of lower files, and no path goes through a symlink (layerDir). Devices
+// and FIFOs are skipped: a container's /dev comes from the runtime.
+//
+// ponytail: APFS is case-insensitive by default, so of two names that differ only
+// in case (terminfo has a few) the later one wins; a case-sensitive volume avoids it.
+func applyLayer(root string, r io.Reader, members *int) int64 {
+	t := tar.NewReader(r)
+	created := map[string]bool{}
+	var size int64
+	for {
+		h, e := t.Next()
+		if e == io.EOF {
+			break
+		}
+		check(e)
+		*members++
+		reject(*members <= maxMembers, "Too many files in the image")
+		for k := range h.PAXRecords {
+			reject(!strings.HasPrefix(k, "GNU.sparse"), "Sparse files unsupported")
+		}
+		name := pathName(h.Name)
+		if name == "" {
+			continue
+		}
+		parent, base := path.Split(name)
+		parent = strings.TrimSuffix(parent, "/")
+		if strings.HasPrefix(base, ".wh.") {
+			dir, ok := layerDir(root, parent, false)
+			if !ok {
+				continue
+			}
+			if base == ".wh..wh..opq" {
+				children, e := os.ReadDir(dir)
+				check(e)
+				for _, c := range children {
+					if !created[path.Join(parent, c.Name())] {
+						check(os.RemoveAll(filepath.Join(dir, c.Name())))
+					}
+				}
+				continue
+			}
+			target := strings.TrimPrefix(base, ".wh.")
+			reject(target != "" && target != "." && target != ".." && !strings.HasPrefix(target, ".wh."), "Invalid whiteout")
+			if !created[path.Join(parent, target)] { // a whiteout hides lower layers only
+				check(os.RemoveAll(filepath.Join(dir, target)))
+			}
+			continue
+		}
+		dir, _ := layerDir(root, parent, true)
+		p := filepath.Join(dir, base)
+		created[name] = true
+		old, e := os.Lstat(p)
+		if e == nil && !(old.IsDir() && h.Typeflag == tar.TypeDir) {
+			check(os.RemoveAll(p))
+		}
+		mode := os.FileMode(h.Mode) & os.ModePerm
+		switch h.Typeflag {
+		case tar.TypeDir:
+			if e != nil || !old.IsDir() {
+				check(os.Mkdir(p, mode|0o700))
+			} else {
+				check(os.Chmod(p, mode|0o700))
+			}
+		case tar.TypeReg, tar.TypeRegA:
+			f, e := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, mode|0o600)
+			check(e)
+			n, e := io.Copy(f, t)
+			check(errors.Join(e, f.Close()))
+			reject(n == h.Size, "Truncated layer file")
+			size += n
+			_ = os.Chtimes(p, h.ModTime, h.ModTime)
+		case tar.TypeSymlink:
+			check(os.Symlink(linkTarget(h.Linkname), p))
+		case tar.TypeLink:
+			target := pathName(h.Linkname)
+			reject(target != "" && target != name, "Invalid hardlink target")
+			tparent, tbase := path.Split(target)
+			tdir, ok := layerDir(root, strings.TrimSuffix(tparent, "/"), false)
+			reject(ok, "Hardlink target missing: "+target)
+			src := filepath.Join(tdir, tbase)
+			st, e := os.Lstat(src)
+			reject(e == nil && st.Mode().IsRegular(), "Hardlink target missing or not a regular file: "+target)
+			check(os.Link(src, p))
+		}
+	}
+	return size
+}
+
+// layerDir is a directory of an unpacked root, made when missing (create). A file
+// or symlink on the way is refused (or, without create, reported absent), so
+// extraction never writes through a guest link.
+func layerDir(root, dir string, create bool) (string, bool) {
+	p := root
+	if dir == "" {
+		return p, true
+	}
+	for _, part := range strings.Split(dir, "/") {
+		p = filepath.Join(p, part)
+		st, e := os.Lstat(p)
+		if os.IsNotExist(e) {
+			if !create {
+				return "", false
+			}
+			check(os.Mkdir(p, 0o755))
+			continue
+		}
+		check(e)
+		if !st.IsDir() {
+			reject(!create, "Not a directory (a file or symlink is in the way): /"+dir)
+			return "", false
+		}
+	}
+	return p, true
+}
+
+// cloneTree copies an unpacked root for a container: one APFS clone of the whole
+// tree (clonefileat), sharing blocks until written; a plain copy elsewhere.
+func cloneTree(src, dst string) {
+	s, e := syscall.BytePtrFromString(src)
+	check(e)
+	d, e := syscall.BytePtrFromString(dst)
+	check(e)
+	cwd := -2 // AT_FDCWD
+	const sysClonefileat, cloneNofollow = 462, 1
+	if _, _, errno := syscall.Syscall6(sysClonefileat, uintptr(cwd), uintptr(unsafe.Pointer(s)), uintptr(cwd), uintptr(unsafe.Pointer(d)), cloneNofollow, 0); errno == 0 {
+		return
+	}
+	out, e := exec.Command("/bin/cp", "-R", "-p", src, dst).CombinedOutput()
+	reject(e == nil, "Copying the image failed: "+strings.TrimSpace(string(out)))
+}
+
+// guestFile is an executable file at an absolute guest path of the unpacked root,
+// following guest symlinks inside it, with its first bytes (for #! and ELF checks).
+func (im *image) guestFile(guest string) ([]byte, bool) {
+	rel := ""
+	if safeRun(func() {
+		rel = resolveGuest(pathName(strings.TrimPrefix(guest, "/")), func(p string) (string, bool) { return readLink(filepath.Join(im.Root, p)) })
+	}) != nil || rel == "" {
+		return nil, false
+	}
+	parent, base := path.Split(rel)
+	dir, ok := "", false
+	if safeRun(func() { dir, ok = layerDir(im.Root, strings.TrimSuffix(parent, "/"), false) }) != nil || !ok {
+		return nil, false
+	}
+	fd, e := syscall.Open(filepath.Join(dir, base), syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if e != nil {
+		return nil, false
+	}
+	f := os.NewFile(uintptr(fd), base)
+	defer f.Close()
+	st, e := f.Stat()
+	if e != nil || !st.Mode().IsRegular() || st.Mode()&0o111 == 0 {
+		return nil, false
+	}
+	head := make([]byte, 256)
+	n, _ := io.ReadFull(f, head)
+	return head[:n], true
+}
+
+// ensureDir makes an absolute guest directory exist in the unpacked root,
+// following guest symlinks like the runtime does, and returns the path as given.
 func (im *image) ensureDir(guest string) string {
 	reject(strings.HasPrefix(guest, "/"), "Directory must be an absolute guest path: "+guest)
-	p := resolveGuest(pathName(guest[1:]), func(p string) (string, bool) {
-		e := im.Tree[p]
-		return e.Link, e.Link != ""
-	})
-	if p == "" {
-		return guest
-	}
-	parts := strings.Split(p, "/")
-	for n := 1; n <= len(parts); n++ {
-		q := strings.Join(parts[:n], "/")
-		e, ok := im.Tree[q]
-		reject(!ok || e.Dir, "Not a directory in the image: "+guest)
-		if !ok {
-			im.Tree[q] = entry{Dir: true}
-		}
+	p := resolveGuest(pathName(guest[1:]), func(p string) (string, bool) { return readLink(filepath.Join(im.Root, p)) })
+	if p != "" {
+		layerDir(im.Root, p, true)
 	}
 	return guest
 }
@@ -358,12 +436,9 @@ func (im *image) command(override []string) []string {
 	}
 	cmd := append(append([]string{}, im.Entry...), args...)
 	reject(len(cmd) > 0 && len(cmd) <= 64, "Expected executable and at most 63 arguments")
-	find := func(guest string) (entry, bool) {
-		v, ok := im.Tree[resolveGuest(pathName(guest), func(p string) (string, bool) {
-			e := im.Tree[p]
-			return e.Link, e.Link != ""
-		})]
-		return v, ok && !v.Dir && v.Executable
+	find := func(guest string) (struct{ Data []byte }, bool) {
+		head, ok := im.guestFile(guest)
+		return struct{ Data []byte }{head}, ok
 	}
 	if !strings.Contains(cmd[0], "/") {
 		// Like runc, look a bare command up in the image PATH (Docker's default when unset).
@@ -385,8 +460,10 @@ func (im *image) command(override []string) []string {
 	reject(strings.HasPrefix(cmd[0], "/"), "Executable not found in PATH: "+cmd[0])
 	v, ok := find(cmd[0][1:])
 	reject(ok, "Executable missing or not executable")
-	if bytes.HasPrefix(v.Data, []byte("#!")) {
-		// Like Linux execve: "#!INTERPRETER [ONE-ARGUMENT]" runs INTERPRETER [ARG] SCRIPT ARGS...
+	// Like Linux execve: "#!INTERPRETER [ONE-ARGUMENT]" runs INTERPRETER [ARG] SCRIPT ARGS...;
+	// an interpreter may itself be a script, four levels deep at most.
+	for depth := 0; bytes.HasPrefix(v.Data, []byte("#!")); depth++ {
+		reject(depth < 4, "Script interpreters nest too deeply: "+cmd[0])
 		line := v.Data[2:]
 		if i := bytes.IndexByte(line, '\n'); i >= 0 {
 			line = line[:i]
@@ -396,7 +473,7 @@ func (im *image) command(override []string) []string {
 		interpreter, argument, _ := strings.Cut(fields, " ")
 		interpreter, argument = strings.TrimSpace(interpreter), strings.TrimSpace(argument)
 		reject(strings.HasPrefix(interpreter, "/"), "Script interpreter must be an absolute path")
-		script := append([]string{interpreter}, cmd[0])
+		script := []string{interpreter, cmd[0]}
 		if argument != "" {
 			script = []string{interpreter, argument, cmd[0]}
 		}
@@ -414,55 +491,9 @@ func (im *image) command(override []string) []string {
 	reject(total <= 1<<20, "Process strings exceed 1 MiB") // the runtime's exec limit
 	return cmd
 }
-func (im *image) extract(root string) {
-	s, e := os.Lstat(root)
-	check(e)
-	reject(s.IsDir() && s.Mode()&os.ModeSymlink == 0, "Invalid extraction root")
-	entries, e := os.ReadDir(root)
-	check(e)
-	reject(len(entries) == 0, "Extraction requires empty directory")
-	names := []string{}
-	for k := range im.Tree {
-		names = append(names, k)
-	}
-	sort.Slice(names, func(i, j int) bool { return strings.Count(names[i], "/") < strings.Count(names[j], "/") })
-	// The tree never places a path under a symlink (see place in applyLayer), so
-	// these host operations cannot traverse a guest link.
-	hardlinks := []string{}
-	for _, name := range names {
-		v := im.Tree[name]
-		p := filepath.Join(root, name)
-		if v.Dir {
-			check(os.MkdirAll(p, 0700))
-			continue
-		}
-		check(os.MkdirAll(filepath.Dir(p), 0700))
-		if v.Link != "" {
-			check(os.Symlink(v.Link, p))
-			continue
-		}
-		if origin, ok := im.Tree[v.Hardlink]; ok && v.Hardlink != "" && origin.Hardlink == "" && len(v.Data) > 0 && len(origin.Data) == len(v.Data) && &origin.Data[0] == &v.Data[0] {
-			hardlinks = append(hardlinks, name)
-			continue
-		}
-		mode := os.FileMode(0600)
-		if v.Executable {
-			mode = 0700
-		}
-		f, e := os.OpenFile(p, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
-		check(e)
-		_, e = f.Write(v.Data)
-		f.Close()
-		check(e)
-	}
-	for _, name := range hardlinks {
-		check(os.Link(filepath.Join(root, im.Tree[name].Hardlink), filepath.Join(root, name)))
-	}
-	// The runtime serves /dev/null, /dev/zero and /dev/urandom beneath /dev.
-	if _, ok := im.Tree["dev"]; !ok {
-		check(os.Mkdir(filepath.Join(root, "dev"), 0700))
-	}
-}
+
+// commitImage caches an OCI layout under name: its blobs (hard links where
+// possible) and its unpacked filesystem, which containers clone.
 func commitImage(cache, name, layout string) string {
 	cache = private(cache)
 	im := loadImage(layout)
@@ -470,6 +501,7 @@ func commitImage(cache, name, layout string) string {
 	if exists(target) {
 		old := loadImage(noLinks(target, "layout"))
 		reject(old.Digest == im.Digest, "Cached name already has another digest")
+		ensureUnpacked(target)
 		return filepath.Join(target, "layout")
 	}
 	stage, e := os.MkdirTemp(cache, ".incoming-")
@@ -477,14 +509,59 @@ func commitImage(cache, name, layout string) string {
 	defer os.RemoveAll(stage)
 	dest := filepath.Join(stage, "layout")
 	check(os.MkdirAll(filepath.Join(dest, "blobs/sha256"), 0700))
-	for d, b := range im.Blobs {
-		check(os.WriteFile(filepath.Join(dest, "blobs/sha256", d[7:]), b, 0600))
+	for _, d := range im.blobs {
+		if exists(filepath.Join(dest, "blobs/sha256", d[7:])) { // listed twice (the empty layer)
+			continue
+		}
+		linkOrCopy(noLinks(layout, "blobs/sha256/"+d[7:]), filepath.Join(dest, "blobs/sha256", d[7:]))
 	}
 	save(filepath.Join(dest, "oci-layout"), obj{"imageLayoutVersion": "1.0.0"})
-	save(filepath.Join(dest, "index.json"), obj{"schemaVersion": 2, "manifests": []any{im.Descriptor}})
-	save(filepath.Join(stage, "image.json"), obj{"name": name, "digest": im.Digest})
-	check(os.Rename(stage, target))
+	save(filepath.Join(dest, "index.json"), obj{"schemaVersion": 2, "manifests": []any{im.descriptor}})
+	im.layout = dest
+	var size any
+	if source := filepath.Dir(layout); filepath.Base(layout) == "layout" && exists(filepath.Join(source, "rootfs")) && exists(filepath.Join(source, "image.json")) {
+		cloneTree(noLinks(source, "rootfs"), filepath.Join(stage, "rootfs")) // docker tag: the same files
+		size = readObject(filepath.Join(source, "image.json"))["size"]
+	} else {
+		check(os.Mkdir(filepath.Join(stage, "rootfs"), 0o755))
+		size = im.unpack(filepath.Join(stage, "rootfs"))
+	}
+	save(filepath.Join(stage, "image.json"), obj{"name": name, "digest": im.Digest, "size": size})
+	if e := os.Rename(stage, target); e != nil && !exists(target) { // a concurrent pull of the same name may win
+		check(e)
+	}
 	return filepath.Join(target, "layout")
+}
+
+// ensureUnpacked unpacks a cached image that predates unpacked images.
+func ensureUnpacked(target string) {
+	if exists(filepath.Join(target, "rootfs")) {
+		return
+	}
+	im := loadImage(noLinks(target, "layout"))
+	stage, e := os.MkdirTemp(target, ".rootfs-")
+	check(e)
+	defer os.RemoveAll(stage)
+	size := im.unpack(stage)
+	if e := os.Rename(stage, filepath.Join(target, "rootfs")); e != nil && !exists(filepath.Join(target, "rootfs")) {
+		check(e)
+	}
+	meta := readObject(filepath.Join(target, "image.json"))
+	meta["size"] = size
+	save(filepath.Join(target, "image.json"), meta)
+}
+
+func linkOrCopy(src, dst string) {
+	if os.Link(src, dst) == nil {
+		return
+	}
+	in, e := os.Open(src)
+	check(e)
+	defer in.Close()
+	out, e := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	check(e)
+	_, e = io.Copy(out, in)
+	check(errors.Join(e, out.Close()))
 }
 
 // stopSignal accepts the signals a container may ask to be stopped with.

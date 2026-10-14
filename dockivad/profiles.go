@@ -74,7 +74,7 @@ func validateProfile(p executionProfile) {
 	reject(profileID.MatchString(p.ID) && p.Revision > 0, "Invalid profile ID/revision")
 	reject(p.Backend == "interpreter" || p.Backend == "hvf", "Unknown profile backend")
 	reject(p.WritableRoot == "optional" || p.WritableRoot == "required", "Invalid profile writable-root policy")
-	reject(p.MemoryLimitMiB >= 1 && p.MemoryLimitMiB <= 1024, "Invalid profile memory limit")
+	reject(p.MemoryLimitMiB >= 1 && p.MemoryLimitMiB <= 65536, "Invalid profile memory limit")
 	reject(p.MaxSteps > 0, "Profile must bound guest instruction execution")
 	reject(len(p.Scope) > 0 && len(p.Scope) <= 1024, "Profile requires bounded evidence scope")
 	reject(len(p.ImageDigests) <= 32, "Too many profile image digests")

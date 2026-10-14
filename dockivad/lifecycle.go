@@ -415,12 +415,21 @@ func runtimeCommand(p, native string, c obj, command []string, argv0 string, env
 	if wd := workdir(c); wd != "/" {
 		args = append(args, "--cwd", wd)
 	}
-	// Stock server binaries (redis-server is 17 MiB) exceed the 16 MiB ELF default.
-	// The mmap arena is virtual: pages count against --memory-limit-mib on first write.
-	args = append(args, "--elf-limit-mib", "64", "--mmap-limit-mib", "2048")
+	// Stock binaries exceed the 16 MiB ELF default (node is 110 MiB, traefik 150 MiB).
+	// The mmap arena is virtual: pages count against the memory limit on first write.
+	// Every container gets the largest (12 GiB from 12 GiB up): a JVM reserves its heap,
+	// a 1 GiB class space that must start on a 4 GiB boundary and code cache beyond -m,
+	// and needs a third aligned slot free after libraries and the heap take two.
+	args = append(args, "--elf-limit-mib", "512", "--mmap-limit-mib", "12288")
 	// Like Docker, disk use is left to the host: no storage budget, 4 GiB per file.
 	args = append(args, "--file-limit-mib", "4096", "--storage-limit-mib", "0")
 	reject(c["network"] == nil || c["network"] == "none" || c["network"] == "outbound", "Invalid network mode")
+	// Docker gives every container /dev/shm (POSIX shared memory and semaphores) and
+	// /proc; these directories stand in (the runtime serves /proc/self/fd/N itself).
+	for _, d := range []string{"dev/shm", "proc/self/fd"} {
+		_ = safeRun(func() { mountPoint(root, d, true) })
+	}
+	_ = os.Chmod(filepath.Join(root, "dev/shm"), os.ModeSticky|0o777)
 	home := filepath.Dir(filepath.Dir(p)) // <home>/containers/<name>
 	if c["network"] != "none" {
 		name := filepath.Base(p)

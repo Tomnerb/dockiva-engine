@@ -63,8 +63,8 @@ func probe(p, native, worker string, c obj, argv []string, timeout time.Duration
 		}
 	}()
 	env := stringsOf(c["env"])
-	command := append([]string{lookPath(noLinks(p, "rootfs"), env, argv[0])}, argv[1:]...)
-	cmd := exec.Command(worker, runtimeCommand(p, native, c, command, argv[0], env, false)...)
+	command, argv0 := containerCommand(p, env, argv)
+	cmd := exec.Command(worker, runtimeCommand(p, native, c, command, argv0, env, false)...)
 	alive, keep, e := os.Pipe()
 	check(e)
 	defer keep.Close()

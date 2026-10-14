@@ -29,7 +29,7 @@ func TestProfileSchemaAndSelection(t *testing.T) {
 		func(c *profileCatalog) { c.Images = append(c.Images, c.Images[0]) },
 		func(c *profileCatalog) { other := c.Images[0]; other.ID = "other"; c.Images = append(c.Images, other) },
 		func(c *profileCatalog) { c.Images[0].ImageDigests = []string{"not-a-digest"} },
-		func(c *profileCatalog) { c.Images[0].MemoryLimitMiB = 1025 },
+		func(c *profileCatalog) { c.Images[0].MemoryLimitMiB = 65537 },
 		func(c *profileCatalog) { c.Images[0].MaxSteps = 0 },
 		func(c *profileCatalog) { c.Images[0].RequiredCapabilities = []string{"unknown-only"} },
 		func(c *profileCatalog) { c.Images[0].Backend = "native-magic" },
