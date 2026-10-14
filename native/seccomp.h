@@ -128,6 +128,6 @@ static int seccomp_check(void) {
     if(action==0x7ff00000u || action==0x7fc00000u) { cpu->gpr[0]=linux_error(38);return -3; }
     /* KILL_PROCESS, KILL_THREAD, TRAP: SIGSYS. ponytail: the whole process ends, even
        for KILL_THREAD, and a TRAP handler is not run. */
-    if(!schedule_active) { fprintf(stderr,"vmfree: seccomp: system call %u denied\n",data[0]);exit(128+31); }
+    if(!schedule_active) { fprintf(stderr,"dockiva: seccomp: system call %u denied\n",data[0]);exit(128+31); }
     schedule_tasks[process_pid-1].terminate_signal=31;return -1;
 }

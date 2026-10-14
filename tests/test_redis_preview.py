@@ -30,18 +30,18 @@ class RedisPreviewTests(unittest.TestCase):
             return cli.call_args.args
 
     def test_pinned_redis_uses_native_backend(self):
-        args = self.create('vmfree/redis:preview')
+        args = self.create('dockiva/redis:preview')
         self.assertEqual(args[args.index('--cpu-backend') + 1], 'hvf')
         for flag in ('--dynamic', '--process-tree', '--scheduled-network'):
             self.assertIn(flag, args)
 
     def test_other_images_keep_default_backend(self):
-        self.assertNotIn('--cpu-backend', self.create('vmfree/shell:demo', readonly=True))
+        self.assertNotIn('--cpu-backend', self.create('dockiva/shell:demo', readonly=True))
 
     def test_changed_redis_tag_rejected(self):
         with self.assertRaisesRegex(daemon.APIError, 'does not match'):
-            self.create('vmfree/redis:preview', digest='sha256:other')
+            self.create('dockiva/redis:preview', digest='sha256:other')
 
     def test_readonly_redis_rejected(self):
         with self.assertRaisesRegex(daemon.APIError, 'private writable'):
-            self.create('vmfree/redis:preview', readonly=True)
+            self.create('dockiva/redis:preview', readonly=True)

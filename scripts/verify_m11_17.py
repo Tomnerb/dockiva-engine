@@ -108,7 +108,7 @@ def main():
             local=registry.commit(cache,'test:import',imported);check('import_ignores_unreferenced_links',not (local/'extra').exists())
             limits=run([sys.executable,str(ROOT/'confined_exec.py'),sys.executable,'-c','import resource,json;print(json.dumps([resource.getrlimit(x) for x in (resource.RLIMIT_CORE,resource.RLIMIT_FSIZE,resource.RLIMIT_NOFILE,resource.RLIMIT_CPU)]))'])
             check('host_resource_limits',limits.returncode==0 and json.loads(limits.stdout)==[[0,0],[16777216,16777216],[128,128],[60,60]])
-            home=base/'engine';home.mkdir(mode=0o700);registry.commit(home/'images','vmfree/server:demo',layout)
+            home=base/'engine';home.mkdir(mode=0o700);registry.commit(home/'images','dockiva/server:demo',layout)
             api=subprocess.Popen([sys.executable,str(ROOT/'daemon.py'),'--home',str(home),'--native',native,'--tcp','0'],stdout=subprocess.PIPE,stderr=subprocess.PIPE);processes.append(api)
             ready(api,b'API ');client=compose.Client(home)
             info=json.loads((home/'connection.json').read_text());url=urllib.parse.urlsplit(info['host'])
@@ -118,9 +118,9 @@ def main():
             def rejects(path,body):
                 try:client.request('POST',path,body);return False
                 except ValueError as e:return '501' in str(e)
-            check('api_privileged_rejected',rejects('/containers/create?name=bad',dict(Image='vmfree/server:demo',HostConfig={'Privileged':True})))
-            check('api_port_remapping_rejected',rejects('/containers/create?name=bad',dict(Image='vmfree/server:demo',HostConfig={'PortBindings':{'80/tcp':[{'HostPort':'8080'}]}})))
-            check('api_wrong_platform_rejected',rejects('/containers/create?name=bad&platform=linux/amd64',dict(Image='vmfree/server:demo')))
+            check('api_privileged_rejected',rejects('/containers/create?name=bad',dict(Image='dockiva/server:demo',HostConfig={'Privileged':True})))
+            check('api_port_remapping_rejected',rejects('/containers/create?name=bad',dict(Image='dockiva/server:demo',HostConfig={'PortBindings':{'80/tcp':[{'HostPort':'8080'}]}})))
+            check('api_wrong_platform_rejected',rejects('/containers/create?name=bad&platform=linux/amd64',dict(Image='dockiva/server:demo')))
             model=json.loads((d/'compose.json').read_text());back,front=freeport(),freeport()
             while front==back:front=freeport()
             model['services']['backend']['command']=[str(back)];model['services']['frontend']['command']=[str(front),str(back)]
@@ -144,7 +144,7 @@ def main():
                 check('compose_unsupported_volume_rejected',rejected)
                 if a.docker:
                     env={**os.environ,'DOCKER_API_VERSION':'1.45'};env.pop('DOCKER_CONTEXT',None)
-                    for name,args in [('version',['version']),('images',['images']),('create',['create','--network','host','--name','cli','vmfree/server:demo','0']),('start',['start','cli']),('ps',['ps','-a']),('inspect',['inspect','cli']),('logs',['logs','cli']),('stop',['stop','cli']),('rm',['rm','cli'])]:
+                    for name,args in [('version',['version']),('images',['images']),('create',['create','--network','host','--name','cli','dockiva/server:demo','0']),('start',['start','cli']),('ps',['ps','-a']),('inspect',['inspect','cli']),('logs',['logs','cli']),('stop',['stop','cli']),('rm',['rm','cli'])]:
                         r=run([a.docker,'--config',info['config'],'--host',info['host'],*args],env=env);check('docker_'+name,r.returncode==0,stderr=r.stderr.decode(errors='replace'))
                 if a.compose:
                     env={**os.environ,'DOCKER_API_VERSION':'1.45','DOCKER_HOST':info['host'],'DOCKER_CONFIG':info['config']};env.pop('DOCKER_CONTEXT',None)

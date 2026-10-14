@@ -138,7 +138,7 @@ func testEngine(t *testing.T) *engine {
 	home := t.TempDir()
 	check(os.Chmod(home, 0700))
 	b := &engine{Home: home, State: private(filepath.Join(home, "containers")), Cache: private(filepath.Join(home, "images")), Assets: "..", Native: "../build/vmfree-c", MaxContainers: 64}
-	commitImage(b.Cache, "vmfree/shell:demo", "../examples/m19/shell-image")
+	commitImage(b.Cache, "dockiva/shell:demo", "../examples/m19/shell-image")
 	// Hermetic default: the host's hypervisor availability must not change test results.
 	nativeProbe.Lock()
 	nativeProbe.known[b.Native] = false
@@ -167,20 +167,20 @@ func TestAPIContractAndRejectedOptions(t *testing.T) {
 	if request(t, h, "GET", "/v1.99/info", "", "secret").Code != 400 {
 		t.Fatal("version range")
 	}
-	for _, body := range []string{`{"Image":"vmfree/shell:demo","HostConfig":{"Privileged":true}}`, `{"Image":"vmfree/shell:demo","HostConfig":{"Binds":["/tmp:/tmp:shared"]}}`, `{"Image":"vmfree/shell:demo","NetworkingConfig":{"EndpointsConfig":{"overlay":{}}}}`, `{"Image":"vmfree/shell:demo","Cmd":[]}`, `{"Image":"vmfree/shell:demo","Env":["bad"]}`, `{"Image":"vmfree/shell:demo","Image":"duplicate"}`} {
+	for _, body := range []string{`{"Image":"dockiva/shell:demo","HostConfig":{"Privileged":true}}`, `{"Image":"dockiva/shell:demo","HostConfig":{"Binds":["/tmp:/tmp:shared"]}}`, `{"Image":"dockiva/shell:demo","NetworkingConfig":{"EndpointsConfig":{"overlay":{}}}}`, `{"Image":"dockiva/shell:demo","Cmd":[]}`, `{"Image":"dockiva/shell:demo","Env":["bad"]}`, `{"Image":"dockiva/shell:demo","Image":"duplicate"}`} {
 		r := request(t, h, "POST", "/containers/create?name=bad", body, "secret")
 		if r.Code < 400 || (r.Code >= 500 && r.Code != 501) {
 			t.Fatalf("bad option: %d %s", r.Code, r.Body.String())
 		}
 	}
-	r := request(t, h, "POST", "/containers/create?name=valid", `{"Image":"vmfree/shell:demo","Cmd":["-c","busybox echo go"],"Labels":{"test":"go"},"HostConfig":{"ReadonlyRootfs":true}}`, "secret")
+	r := request(t, h, "POST", "/containers/create?name=valid", `{"Image":"dockiva/shell:demo","Cmd":["-c","busybox echo go"],"Labels":{"test":"go"},"HostConfig":{"ReadonlyRootfs":true}}`, "secret")
 	if r.Code != 201 {
 		t.Fatalf("create: %d %s", r.Code, r.Body.String())
 	}
-	if request(t, h, "POST", "/containers/create?name=valid", `{"Image":"vmfree/shell:demo"}`, "secret").Code != 409 {
+	if request(t, h, "POST", "/containers/create?name=valid", `{"Image":"dockiva/shell:demo"}`, "secret").Code != 409 {
 		t.Fatal("duplicate name")
 	}
-	for _, path := range []string{"/containers/valid/json", "/containers/json?all=1&filters=%7B%22label%22:%5B%22test=go%22%5D%7D", "/images/json", "/images/vmfree/shell:demo/json"} {
+	for _, path := range []string{"/containers/valid/json", "/containers/json?all=1&filters=%7B%22label%22:%5B%22test=go%22%5D%7D", "/images/json", "/images/dockiva/shell:demo/json"} {
 		r := request(t, h, "GET", path, "", "secret")
 		if r.Code != 200 {
 			t.Fatalf("%s: %d %s", path, r.Code, r.Body.String())
@@ -203,13 +203,13 @@ func TestAPIContractAndRejectedOptions(t *testing.T) {
 		t.Fatal("remove")
 	}
 	// docker run -it: a terminal and standard input, shown by inspect.
-	if r := request(t, h, "POST", "/containers/create?name=interactive", `{"Image":"vmfree/shell:demo","Tty":true,"OpenStdin":true,"StdinOnce":true,"AttachStdin":true,"HostConfig":{"ConsoleSize":[24,80]}}`, "secret"); r.Code != 201 {
+	if r := request(t, h, "POST", "/containers/create?name=interactive", `{"Image":"dockiva/shell:demo","Tty":true,"OpenStdin":true,"StdinOnce":true,"AttachStdin":true,"HostConfig":{"ConsoleSize":[24,80]}}`, "secret"); r.Code != 201 {
 		t.Fatalf("-it: %d %s", r.Code, r.Body.String())
 	}
 	if config := b.inspect("interactive")["Config"].(obj); config["Tty"] != true || config["OpenStdin"] != true || config["StdinOnce"] != true {
 		t.Fatalf("-it inspect: %v", config)
 	}
-	if r := request(t, h, "POST", "/containers/create?name=once", `{"Image":"vmfree/shell:demo","HostConfig":{"AutoRemove":true}}`, "secret"); r.Code != 201 {
+	if r := request(t, h, "POST", "/containers/create?name=once", `{"Image":"dockiva/shell:demo","HostConfig":{"AutoRemove":true}}`, "secret"); r.Code != 201 {
 		t.Fatalf("--rm: %d %s", r.Code, r.Body.String())
 	}
 	if !strings.Contains(request(t, h, "GET", "/containers/once/json", "", "secret").Body.String(), `"AutoRemove":true`) {
@@ -305,7 +305,7 @@ func TestParseReference(t *testing.T) {
 }
 func TestLegacyStateAndStaleOwnership(t *testing.T) {
 	b := testEngine(t)
-	b.create("legacy", decode([]byte(`{"Image":"vmfree/shell:demo","HostConfig":{"ReadonlyRootfs":true}}`), maxJSON))
+	b.create("legacy", decode([]byte(`{"Image":"dockiva/shell:demo","HostConfig":{"ReadonlyRootfs":true}}`), maxJSON))
 	p := b.container("legacy")
 	save(filepath.Join(p, "status.json"), obj{"state": "running", "generation": "old-python-generation", "pid": 99999999, "started_at": now()})
 	state := object(b.inspect("legacy")["State"])
@@ -320,7 +320,7 @@ func TestLegacyStateAndStaleOwnership(t *testing.T) {
 
 func TestUnpublishedCreationRecovery(t *testing.T) {
 	b := testEngine(t)
-	b.create("retained", decode([]byte(`{"Image":"vmfree/shell:demo"}`), maxJSON))
+	b.create("retained", decode([]byte(`{"Image":"dockiva/shell:demo"}`), maxJSON))
 	stage := filepath.Join(b.State, ".creating-interrupted")
 	check(os.MkdirAll(filepath.Join(stage, "rootfs"), 0700))
 	check(os.WriteFile(filepath.Join(stage, "rootfs", "partial"), []byte("partial"), 0600))
@@ -382,7 +382,7 @@ func TestLayerLinks(t *testing.T) {
 }
 func TestPublishedPorts(t *testing.T) {
 	b := testEngine(t)
-	b.create("web", decode([]byte(`{"Image":"vmfree/shell:demo","ExposedPorts":{"80/tcp":{}},"HostConfig":{"NetworkMode":"host","PortBindings":{"80/tcp":[{"HostIp":"","HostPort":"8080"}],"443/tcp":[{"HostIp":"127.0.0.1","HostPort":"8443"}]}}}`), maxJSON))
+	b.create("web", decode([]byte(`{"Image":"dockiva/shell:demo","ExposedPorts":{"80/tcp":{}},"HostConfig":{"NetworkMode":"host","PortBindings":{"80/tcp":[{"HostIp":"","HostPort":"8080"}],"443/tcp":[{"HostIp":"127.0.0.1","HostPort":"8443"}]}}}`), maxJSON))
 	c := readObject(filepath.Join(b.container("web"), "config.json"))
 	if got := publishedPorts(c); len(got) != 2 || got[0] != [2]int64{80, 8080} || got[1] != [2]int64{443, 8443} {
 		t.Fatalf("saved ports: %v", got)
@@ -404,7 +404,7 @@ func TestPublishedPorts(t *testing.T) {
 		`{"80/tcp":[{"HostPort":"8080"},{"HostPort":"8081"}]}`,
 	} {
 		mustReject(t, func() {
-			b.create("bad"+strconv.Itoa(i), decode([]byte(`{"Image":"vmfree/shell:demo","HostConfig":{"PortBindings":`+bad+`}}`), maxJSON))
+			b.create("bad"+strconv.Itoa(i), decode([]byte(`{"Image":"dockiva/shell:demo","HostConfig":{"PortBindings":`+bad+`}}`), maxJSON))
 		})
 	}
 	// Containers created before port publishing have no saved ports.
@@ -456,9 +456,9 @@ func TestScriptEntrypointAndDirectories(t *testing.T) {
 func TestNetworkModeAndDNSFiles(t *testing.T) {
 	b := testEngine(t)
 	for name, mode := range map[string]string{"plain": "", "bridge": `"bridge"`, "host": `"host"`, "none": `"none"`} {
-		body := `{"Image":"vmfree/shell:demo"}`
+		body := `{"Image":"dockiva/shell:demo"}`
 		if mode != "" {
-			body = `{"Image":"vmfree/shell:demo","HostConfig":{"NetworkMode":` + mode + `}}`
+			body = `{"Image":"dockiva/shell:demo","HostConfig":{"NetworkMode":` + mode + `}}`
 		}
 		b.create(name, decode([]byte(body), maxJSON))
 		want := map[bool]string{true: "none", false: "outbound"}[name == "none"]
@@ -467,7 +467,7 @@ func TestNetworkModeAndDNSFiles(t *testing.T) {
 		}
 	}
 	mustReject(t, func() {
-		b.create("overlay", decode([]byte(`{"Image":"vmfree/shell:demo","HostConfig":{"NetworkMode":"overlay"}}`), maxJSON))
+		b.create("overlay", decode([]byte(`{"Image":"dockiva/shell:demo","HostConfig":{"NetworkMode":"overlay"}}`), maxJSON))
 	})
 	host := "# macOS\nnameserver 192.168.1.1\nnameserver fe80::1%en0\nnameserver 127.0.0.1\nsearch lan example.com\n"
 	if got := resolvConf([]byte(host)); got != "nameserver 192.168.1.1\nnameserver 127.0.0.1\nsearch lan example.com\n" {
@@ -503,18 +503,20 @@ func TestShortName(t *testing.T) {
 
 func TestResourceLimits(t *testing.T) {
 	b := testEngine(t)
-	b.create("small", decode([]byte(`{"Image":"vmfree/shell:demo","HostConfig":{"Memory":104857601,"MemorySwap":-1,"NanoCpus":1500000000}}`), maxJSON))
+	b.create("small", decode([]byte(`{"Image":"dockiva/shell:demo","HostConfig":{"Memory":104857601,"MemorySwap":-1,"NanoCpus":1500000000}}`), maxJSON))
 	host := b.inspect("small")["HostConfig"].(obj)
 	if host["Memory"] != int64(101<<20) || host["NanoCpus"] != int64(2e9) {
 		t.Fatalf("limits: %v %v", host["Memory"], host["NanoCpus"])
 	}
 	// The docker CLI sends zeros when -m and --cpus are absent: the profile's limits apply.
-	b.create("plain", decode([]byte(`{"Image":"vmfree/shell:demo","HostConfig":{"Memory":0,"NanoCpus":0,"MemorySwap":0}}`), maxJSON))
+	b.create("plain", decode([]byte(`{"Image":"dockiva/shell:demo","HostConfig":{"Memory":0,"NanoCpus":0,"MemorySwap":0}}`), maxJSON))
 	if host := b.inspect("plain")["HostConfig"].(obj); host["Memory"] == int64(0) || host["NanoCpus"] != int64(0) {
 		t.Fatalf("defaults: %v %v", host["Memory"], host["NanoCpus"])
 	}
 	for _, bad := range []string{`{"Memory":1024}`, `{"Memory":70000000000000}`, `{"NanoCpus":65000000000}`, `{"MemorySwap":-2}`} {
-		mustReject(t, func() { b.create("bad", decode([]byte(`{"Image":"vmfree/shell:demo","HostConfig":`+bad+`}`), maxJSON)) })
+		mustReject(t, func() {
+			b.create("bad", decode([]byte(`{"Image":"dockiva/shell:demo","HostConfig":`+bad+`}`), maxJSON))
+		})
 	}
 }
 

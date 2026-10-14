@@ -173,7 +173,7 @@ func (b *engine) start(name string) {
 	}
 	// Like Docker, memory limits are caps, not reservations: guest memory is committed as it is touched.
 	if count > b.MaxContainers {
-		panic(apiError{409, "At most " + strconv.Itoa(b.MaxContainers) + " running containers (vmfree-engine --max-containers)"})
+		panic(apiError{409, "At most " + strconv.Itoa(b.MaxContainers) + " running containers (dockiva-engine --max-containers)"})
 	}
 	generation := token()
 	log, e := os.OpenFile(filepath.Join(p, "supervisor.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
@@ -427,7 +427,7 @@ func runtimeCommand(p, native string, c obj, command []string, argv0 string, env
 		args = append(args, "--proc-peer", filepath.Join(p, "procs"))
 	}
 	if c["cpu_backend"] == "hvf" {
-		native = regularExecutable(filepath.Join(filepath.Dir(native), "vmfree-c-hvf"))
+		native = regularExecutable(engineBinary(filepath.Dir(native), "dockiva-hvf", "vmfree-c-hvf"))
 		// Like Docker, a container may use every core: one vCPU per host CPU.
 		cpus := min(runtime.NumCPU(), 64)
 		if c["cpus"] != nil {

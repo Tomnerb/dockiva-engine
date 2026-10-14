@@ -390,7 +390,7 @@ func (b *engine) moveNetwork(name, network string, connect bool, endpoint obj) {
 	}
 	reject(network != "host" && network != "none", "Connecting to "+network+" is not supported")
 	if live(b.status(p)) {
-		panic(apiError{409, "Container " + name + " is running; the VM-free engine changes networks of stopped containers only"})
+		panic(apiError{409, "Container " + name + " is running; Dockiva Engine changes networks of stopped containers only"})
 	}
 	if connect && current != "" && current != "bridge" {
 		panic(apiError{501, "Container " + name + " is already on network " + current + "; one network per container is supported"})

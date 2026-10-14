@@ -48,7 +48,7 @@ static void fail(const char *message) { if(exec_loading) longjmp(exec_recovery,1
         fprintf(stderr,"guest pc=0x%" PRIx64 "\n",cpu->pc);
         for(unsigned i=0;i<16;i++) { unsigned at=(trace_cursor+i)%16;if(trace_tail[at].word)fprintf(stderr,"tail pc=0x%" PRIx64 " instruction=0x%08" PRIx32 "\n",trace_tail[at].address,trace_tail[at].word); }
         for(unsigned i=0;i<31;i++)fprintf(stderr,"x%u=0x%" PRIx64 "%s",i,cpu->gpr[i],i%4==3?"\n":" ");fprintf(stderr,"\n");
-    } fprintf(stderr,"vmfree: %s\n",message); exit(125); }
+    } fprintf(stderr,"dockiva: %s\n",message); exit(125); }
 static uint64_t le(const unsigned char *p, unsigned n) {
     uint64_t value=0; for (unsigned i=0;i<n;i++) value |= (uint64_t)p[i] << (8*i); return value;
 }
@@ -1038,7 +1038,7 @@ int main(int argc,char **argv) {
     sysinfo_started_ms=net_now();
     (void)umask(0); /* Creation modes are filtered by each guest task's umask. */
     if(signal(SIGPIPE,SIG_IGN)==SIG_ERR) fail("Cannot configure SIGPIPE");
-    if(argc<3 || (strcmp(argv[1],"run") && strcmp(argv[1],"inspect"))) fail("Usage: vmfree-c run|inspect ELF [--trace] [--max-steps N] [--env KEY=VALUE] [--argv0 NAME] [-- ARGS...]");
+    if(argc<3 || (strcmp(argv[1],"run") && strcmp(argv[1],"inspect"))) fail("Usage: dockiva-runtime run|inspect ELF [--trace] [--max-steps N] [--env KEY=VALUE] [--argv0 NAME] [-- ARGS...]");
     uint64_t steps=100000;
     int use_hvf=0,signals_forwarded=0;const char *root_path=NULL;
     static const char *guestargv[EXEC_ENTRIES], *guestenv[EXEC_ENTRIES]; guestargv[0]=argv[2]; int guestargc=1; unsigned envc=0;
@@ -1059,7 +1059,7 @@ int main(int argc,char **argv) {
         } else if((!strcmp(argv[i],"--bind") || !strcmp(argv[i],"--bind-ro")) && i+2<argc) {
             /* --bind HOST GUEST: the host directory or file appears at GUEST (absolute). */
             int readonly=!strcmp(argv[i],"--bind-ro");
-            if(fs_add_mount(argv[i+1],argv[i+2],readonly)<0) { fprintf(stderr,"vmfree: --bind %s %s: %s\n",argv[i+1],argv[i+2],strerror(errno));fail("Invalid bind mount"); }
+            if(fs_add_mount(argv[i+1],argv[i+2],readonly)<0) { fprintf(stderr,"dockiva: --bind %s %s: %s\n",argv[i+1],argv[i+2],strerror(errno));fail("Invalid bind mount"); }
             i+=2;
         } else if(!strcmp(argv[i],"--argv0") && i+1<argc) {
             guestargv[0]=argv[++i];

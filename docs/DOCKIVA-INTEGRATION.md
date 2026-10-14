@@ -59,7 +59,7 @@ Reproduce with the bundled helper:
 
 ```sh
 python3 scripts/verify_dockiva_capacity.py \
-  --helper /path/to/Dockiva.app/Contents/Resources/vmfree-engine/vmfree-engine \
+  --helper /path/to/Dockiva.app/Contents/Resources/dockiva-engine/dockiva-engine \
   --report evidence/dockiva-capacity.json
 ```
 
@@ -164,18 +164,20 @@ may require manual recovery before a new worker can start.
 python3 scripts/bundle_dockiva_engine.py --output build/dockiva-go
 go -C dockivad test -race -ldflags=-linkmode=external ./...
 python3 scripts/verify_dockivad.py \
-  --helper build/dockiva-go/vmfree-engine/vmfree-engine \
+  --helper build/dockiva-go/dockiva-engine/dockiva-engine \
   --report build/dockivad-recovery.json
 python3 scripts/verify_dockiva_capacity.py \
-  --helper build/dockiva-go/vmfree-engine/vmfree-engine \
+  --helper build/dockiva-go/dockiva-engine/dockiva-engine \
   --report build/dockivad-capacity.json --sample-seconds 10
 ```
 
 Python is development tooling only. Go uses the standard library with no external
 modules. The local Go 1.22/macOS toolchain needs external linking and explicit
 ad-hoc signing. Each executable is verified before bundle publication. `dockivad`
-and the legacy helper filename `vmfree-engine` contain the same Go program and
-are separately signed copies.
+and `dockiva-engine` (the name Dockiva starts) contain the same Go program and
+are separately signed copies. The bundle ships the C runtime as
+`_internal/build/dockiva-runtime`, `dockiva-hvf` and `dockiva-worker`; dockivad
+also finds the source build's names (`vmfree-c`, `vmfree-c-hvf`, `vmfree-worker`).
 
 Dockiva packaging validates the five Go/C executable entries, rejects Python
 files, and replaces its generated helper directory so obsolete CPython files
@@ -322,7 +324,7 @@ Evidence: [Go tests](../evidence/dockivad-profiles/go-tests.txt),
 python3 scripts/bundle_dockiva_engine.py --output build/dockiva-profiles
 go -C dockivad test -race -ldflags=-linkmode=external ./...
 python3 scripts/verify_dockivad_profiles.py \
-  --helper build/dockiva-profiles/vmfree-engine/vmfree-engine \
+  --helper build/dockiva-profiles/dockiva-engine/dockiva-engine \
   --report build/dockivad-profiles.json
 ```
 

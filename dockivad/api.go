@@ -199,7 +199,7 @@ func (b *engine) inspect(name string) obj {
 	if c["binds"] != nil {
 		binds = stringsOf(c["binds"])
 	}
-	return obj{"Id": key(name), "Name": "/" + name, "Created": timestamp(c["created_at"]), "Path": cmd[0], "Args": cmd[1:], "Image": c["image"], "State": obj{"Status": state, "Running": running, "Paused": false, "Restarting": s["state"] == "restarting", "Health": health(p, c), "OOMKilled": exists(filepath.Join(p, "oom")), "Dead": state == "dead", "Pid": pid, "ExitCode": code, "Error": text(s["error"]), "StartedAt": timestamp(s["started_at"]), "FinishedAt": timestamp(s["finished_at"])}, "Config": obj{"Image": img, "Entrypoint": cmd[:1], "Cmd": cmd[1:], "Env": stringsOf(c["env"]), "Labels": labels, "User": text(c["user"]), "Tty": c["tty"] == true, "OpenStdin": c["open_stdin"] == true, "StdinOnce": c["stdin_once"] == true, "WorkingDir": workdir(c), "Hostname": hostname(name, c), "Healthcheck": healthConfig(c), "ExposedPorts": exposed}, "HostConfig": obj{"NetworkMode": inspectNetwork(c), "PortBindings": bindings, "ReadonlyRootfs": c["writable"] != true, "AutoRemove": c["auto_remove"] == true, "Binds": binds, "Memory": memoryMiB(c) << 20, "NanoCpus": nanoCpus(c), "RestartPolicy": restartPolicy(c), "ExtraHosts": extraHostList(c), "LogConfig": obj{"Type": "json-file", "Config": obj{}}}, "NetworkSettings": obj{"Ports": bindings, "Networks": b.containerNetworks(name, c), "IPAddress": text(c["ip"]), "Gateway": gatewayOf(c)}, "Mounts": b.inspectMounts(c), "Driver": "vmfree-private-copy", "Platform": "linux", "RestartCount": restartCount(s), "DockivaCompatibility": profileInspection(c)}
+	return obj{"Id": key(name), "Name": "/" + name, "Created": timestamp(c["created_at"]), "Path": cmd[0], "Args": cmd[1:], "Image": c["image"], "State": obj{"Status": state, "Running": running, "Paused": false, "Restarting": s["state"] == "restarting", "Health": health(p, c), "OOMKilled": exists(filepath.Join(p, "oom")), "Dead": state == "dead", "Pid": pid, "ExitCode": code, "Error": text(s["error"]), "StartedAt": timestamp(s["started_at"]), "FinishedAt": timestamp(s["finished_at"])}, "Config": obj{"Image": img, "Entrypoint": cmd[:1], "Cmd": cmd[1:], "Env": stringsOf(c["env"]), "Labels": labels, "User": text(c["user"]), "Tty": c["tty"] == true, "OpenStdin": c["open_stdin"] == true, "StdinOnce": c["stdin_once"] == true, "WorkingDir": workdir(c), "Hostname": hostname(name, c), "Healthcheck": healthConfig(c), "ExposedPorts": exposed}, "HostConfig": obj{"NetworkMode": inspectNetwork(c), "PortBindings": bindings, "ReadonlyRootfs": c["writable"] != true, "AutoRemove": c["auto_remove"] == true, "Binds": binds, "Memory": memoryMiB(c) << 20, "NanoCpus": nanoCpus(c), "RestartPolicy": restartPolicy(c), "ExtraHosts": extraHostList(c), "LogConfig": obj{"Type": "json-file", "Config": obj{}}}, "NetworkSettings": obj{"Ports": bindings, "Networks": b.containerNetworks(name, c), "IPAddress": text(c["ip"]), "Gateway": gatewayOf(c)}, "Mounts": b.inspectMounts(c), "Driver": "dockiva-private-copy", "Platform": "linux", "RestartCount": restartCount(s), "DockivaCompatibility": profileInspection(c)}
 }
 func onlyKeys(m obj, allowed ...string) bool {
 	for k := range m {
@@ -241,7 +241,7 @@ func portBindings(v any) []any {
 		b := object(bindings[0])
 		reject(onlyKeys(b, "HostIp", "HostPort"), "Unsupported port binding option")
 		if ip := text(b["HostIp"]); ip != "" && ip != "127.0.0.1" {
-			panic(apiError{501, "VM-free publishes ports on 127.0.0.1 only"})
+			panic(apiError{501, "Dockiva Engine publishes ports on 127.0.0.1 only"})
 		}
 		host, e := strconv.ParseInt(text(b["HostPort"]), 10, 32)
 		reject(e == nil && host >= 1 && host <= 65535, "Explicit host port 1..65535 required for "+k)
@@ -533,7 +533,7 @@ func (b *engine) create(name string, body obj) obj {
 	check(os.Rename(stage, p))
 	committed = true
 	b.refreshHosts(text(config["net_name"]))
-	return obj{"Id": key(name), "Warnings": []string{"VM-free preview: bounded Linux compatibility"}}
+	return obj{"Id": key(name), "Warnings": []string{}}
 }
 
 var versionPath = regexp.MustCompile(`^/v([0-9]+)\.([0-9]+)(/.*)$`)
@@ -653,10 +653,10 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 			_, _ = w.Write([]byte("OK"))
 			return
 		case path == "/version" && method == "GET":
-			send(w, 200, obj{"Version": "0.18.0", "ApiVersion": "1.45", "MinAPIVersion": "1.24", "Os": "linux", "Arch": "arm64", "GitCommit": "preview", "GoVersion": runtime.Version(), "KernelVersion": "vmfree-user-mode", "Experimental": true, "Components": []any{obj{"Name": "dockivad", "Version": "0.18.0", "Details": obj{"ControlPlane": "Go", "PythonRuntime": "false"}}}})
+			send(w, 200, obj{"Version": "0.18.0", "ApiVersion": "1.45", "MinAPIVersion": "1.24", "Os": "linux", "Arch": "arm64", "GitCommit": "preview", "GoVersion": runtime.Version(), "KernelVersion": "dockiva-engine", "Experimental": true, "Components": []any{obj{"Name": "dockivad", "Version": "0.18.0", "Details": obj{"ControlPlane": "Go", "PythonRuntime": "false"}}}})
 			return
 		case path == "/info" && method == "GET":
-			send(w, 200, obj{"ID": "vmfree", "Name": "vmfree", "ServerVersion": "0.18.0", "OSType": "linux", "Architecture": "aarch64", "OperatingSystem": "VM-free preview on " + runtime.GOOS, "Driver": "private-copy", "Containers": len(b.names()), "NCPU": min(runtime.NumCPU(), 64), "MemTotal": 0, "SecurityOptions": []any{}, "Warnings": []string{"Not a production isolation boundary"}})
+			send(w, 200, obj{"ID": "dockiva-engine", "Name": "dockiva-engine", "ServerVersion": "0.18.0", "OSType": "linux", "Architecture": "aarch64", "OperatingSystem": "Dockiva Engine on " + runtime.GOOS, "Driver": "private-copy", "Containers": len(b.names()), "NCPU": min(runtime.NumCPU(), 64), "MemTotal": 0, "SecurityOptions": []any{}, "Warnings": []string{"Not a production isolation boundary"}})
 			return
 		case path == "/containers/create" && method == "POST":
 			defer debug.FreeOSMemory()

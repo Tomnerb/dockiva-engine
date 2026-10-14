@@ -7,7 +7,7 @@ import (
 )
 
 const dockerContextName = "dockiva"
-const dockerContextDescription = "Dockiva VM-free engine"
+const dockerContextDescription = "Dockiva Engine"
 
 // registerDockerContext adds (or refreshes) the "dockiva" Docker context for the
 // user-only engine socket, so `docker context use dockiva` points the docker CLI at

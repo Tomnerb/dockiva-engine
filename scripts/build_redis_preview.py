@@ -24,6 +24,6 @@ def main():
         if len(manifest['layers'])==1 and gzip.decompress((destination/'blobs/sha256'/manifest['layers'][0]['digest'][7:]).read_bytes())==layer:
             print((destination.parent/'profile.json').read_text().strip());return
     write_layout(destination,[layer],dict(Entrypoint=[pin['binary']],Cmd=['--bind','127.0.0.1','--port','16379','--dir','/data','--save','','--appendonly','yes','--appendfsync','always','--daemonize','no'],Env=[],WorkingDir='/'),compressed=True)
-    profile=dict(name='vmfree/redis:preview',digest=oci.Image(destination).digest,source_image=pin['image_id'],scope='Prepared Redis 7.4.2, native execution, private container data, loopback TCP')
+    profile=dict(name='dockiva/redis:preview',digest=oci.Image(destination).digest,source_image=pin['image_id'],scope='Prepared Redis 7.4.2, native execution, private container data, loopback TCP')
     (destination.parent/'profile.json').write_text(json.dumps(profile,indent=2)+'\n');print(json.dumps(profile))
 if __name__=='__main__':main()

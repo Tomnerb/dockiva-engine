@@ -243,6 +243,15 @@ func lockFile(path string, nonblock bool) (*os.File, error) {
 	return f, nil
 }
 func exists(path string) bool { _, e := os.Lstat(path); return e == nil }
+
+// engineBinary is dir/name as the app bundle ships it, or dir/old where only the
+// source build's name exists.
+func engineBinary(dir, name, old string) string {
+	if p := filepath.Join(dir, name); exists(p) {
+		return p
+	}
+	return filepath.Join(dir, old)
+}
 func idle(v any) bool {
 	if v == nil {
 		return true

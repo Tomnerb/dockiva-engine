@@ -67,9 +67,9 @@ def main():
                 expect('pipeline'+flag,'busybox echo cache | busybox cat > /cached; busybox cat </cached',out=b'cache\n',flags=[flag])
             expect('exec_recovery_in_pipeline','probe exec-error /bad 8 | busybox cat',out=b'exec preserved caller\n')
             expect('child_lifetime_bound',';'.join(['probe exit 0']*17),125,err=b'sh: child limit or unsupported process state\n')
-            expect('cpu_spinner_bounded','probe spin | busybox cat',125,err=b'vmfree: Instruction budget exhausted\n',steps=200000)
-            expect('shared_budget','probe emit | busybox cat',125,err=b'vmfree: Instruction budget exhausted\n',steps=1000)
-            for mode,code,err in [('wait',0,b''),('live-limit',0,b''),('orphan',0,b''),('deadlock',125,b'vmfree: Guest process deadlock: no runnable task\n')]:
+            expect('cpu_spinner_bounded','probe spin | busybox cat',125,err=b'dockiva: Instruction budget exhausted\n',steps=200000)
+            expect('shared_budget','probe emit | busybox cat',125,err=b'dockiva: Instruction budget exhausted\n',steps=1000)
+            for mode,code,err in [('wait',0,b''),('live-limit',0,b''),('orphan',0,b''),('deadlock',125,b'dockiva: Guest process deadlock: no runnable task\n')]:
                 r=subprocess.run([native,'run',root/'bin/probe','--root',root,'--schedule','--max-steps','10000000','--',mode],capture_output=True,timeout=20)
                 check('process_'+mode,r.returncode==code and not r.stdout and r.stderr==err,code=r.returncode,stderr=r.stderr.decode(errors='replace'))
             def oci(command,writable=False):

@@ -1,4 +1,13 @@
-# VM-free runtime — bounded musl application candidate
+# Dockiva Engine
+
+Dockiva Engine (formerly the VM-free runtime) runs Linux ARM64 containers on Apple
+Silicon macOS with no Linux VM: guest code runs on the host CPU under
+Hypervisor.framework and this runtime implements the Linux system calls. The app
+bundle ships it as `Dockiva.app/Contents/Resources/dockiva-engine/`; its state lives
+in `~/.dockiva-engine`. The notes below keep the project's history and its original
+development names (`vmfree.py`, `build/vmfree-c*`).
+
+## History
 
 Run supported Linux ARM64 guests on Apple Silicon macOS without a Linux kernel VM.
 The prototype supports bounded guest processes, noninteractive commands, buffered
@@ -169,7 +178,7 @@ support is still outside this milestone. Mac M18 validation remains pending.
 Extract the full package into a fresh directory. Requires Python 3.10+ and `cc`.
 
 ```sh
-cd vmfree-runtime
+cd dockiva-engine
 python3 scripts/build_native.py
 python3 scripts/verify_m11_17.py --report mac-m11-17-validation.json
 python3 scripts/verify_m7_10.py
@@ -209,7 +218,7 @@ python3 vmfree.py docker ps -a
 python3 vmfree.py docker images
 ```
 
-This targets the VM-free engine without changing your default Docker context.
+This targets Dockiva Engine without changing your default Docker context.
 No Docker Desktop is required. Only the documented API/Compose subset is supported.
 
 ## Results and next gates
@@ -233,4 +242,4 @@ remains build and verification tooling.
 
 ## Dockiva integration for internal testing
 
-Dockiva defaults to the bundled experimental VM-free engine on new Apple Silicon installations and starts it automatically, with no terminal setup. Existing engine choices are preserved. Supported images and basic lifecycle workflows remain the scope. See [project definition and setup](docs/PROJECT-DEFINITION.md). This integration does not close M33 preview or M80 production acceptance gates.
+Dockiva defaults to the bundled Dockiva Engine on new Apple Silicon installations and starts it automatically, with no terminal setup. Existing engine choices are preserved. Supported images and basic lifecycle workflows remain the scope. See [project definition and setup](docs/PROJECT-DEFINITION.md). This integration does not close M33 preview or M80 production acceptance gates.

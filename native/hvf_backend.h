@@ -78,7 +78,7 @@ typedef struct {
 #define hvf_fp_in_cpu (hvf_cpu->fp_in_cpu)
 #define hvf_fp_dirty (hvf_cpu->fp_dirty)
 static void hvf_check(hv_return_t result,const char *what) {
-    if(result!=HV_SUCCESS) { fprintf(stderr,"vmfree: %s failed (0x%x)\n",what,(unsigned)result);fail("Hypervisor.framework call failed"); }
+    if(result!=HV_SUCCESS) { fprintf(stderr,"dockiva: %s failed (0x%x)\n",what,(unsigned)result);fail("Hypervisor.framework call failed"); }
 }
 static void *hvf_host_pages(size_t size) {
     void *p=mmap(NULL,size,PROT_READ|PROT_WRITE,MAP_ANON|MAP_PRIVATE,-1,0);
@@ -748,10 +748,10 @@ static int hvf_fault(unsigned signal,uint64_t pc,uint64_t address,unsigned ec) {
             return -1; /* delivered before the instruction runs again (signal_deliver) */
         }
         /* Like a kernel's segfault line: always reported, so container logs explain a 139. */
-        fprintf(stderr,"vmfree: process %" PRIu64 " killed by signal %u: fault at pc=0x%" PRIx64 " address=0x%" PRIx64 " (exception class 0x%x)\n",process_pid,signal,pc,address,ec);
+        fprintf(stderr,"dockiva: process %" PRIu64 " killed by signal %u: fault at pc=0x%" PRIx64 " address=0x%" PRIx64 " (exception class 0x%x)\n",process_pid,signal,pc,address,ec);
         schedule_tasks[process_pid-1].terminate_signal=signal;return -1;
     }
-    fprintf(stderr,"vmfree: guest fault at pc=0x%" PRIx64 " address=0x%" PRIx64 " (exception class 0x%x)\n",pc,address,ec);
+    fprintf(stderr,"dockiva: guest fault at pc=0x%" PRIx64 " address=0x%" PRIx64 " (exception class 0x%x)\n",pc,address,ec);
     fail("Guest memory or instruction fault");return 125;
 }
 /* Right after a guest exit, without the runtime lock (the process's mm lock is
@@ -890,7 +890,7 @@ static int hvf_slice_run(void) {
         }
         if(hvf_exit->reason!=HV_EXIT_REASON_EXCEPTION || (syndrome>>26)!=0x16) {
             uint64_t pc=0;hv_vcpu_get_reg(hvf_vcpu,HV_REG_PC,&pc);
-            fprintf(stderr,"vmfree: unexpected hypervisor exit: reason %u syndrome 0x%llx address 0x%llx pc 0x%llx\n",(unsigned)hvf_exit->reason,
+            fprintf(stderr,"dockiva: unexpected hypervisor exit: reason %u syndrome 0x%llx address 0x%llx pc 0x%llx\n",(unsigned)hvf_exit->reason,
                     (unsigned long long)hvf_exit->exception.syndrome,(unsigned long long)hvf_exit->exception.virtual_address,(unsigned long long)pc);
             fail("Unexpected hypervisor exit");
         }
@@ -951,7 +951,7 @@ static int hvf_slice_run(void) {
             static _Thread_local uint64_t stale_pc,stale_far,stale_generation;static int reported;
             if(elr!=stale_pc || far!=stale_far || address_space->generation!=stale_generation) {
                 stale_pc=elr;stale_far=far;stale_generation=address_space->generation;
-                if(!reported) { reported=1;fprintf(stderr,"vmfree: stale page tables at pc=0x%" PRIx64 " address=0x%" PRIx64 "; rebuilt (please report)\n",elr,far); }
+                if(!reported) { reported=1;fprintf(stderr,"dockiva: stale page tables at pc=0x%" PRIx64 " address=0x%" PRIx64 "; rebuilt (please report)\n",elr,far); }
                 hvf_views[process_pid].stale=HVF_STALE_NEW;hvf_views[process_pid].generation=UINT64_MAX;
                 hvf_resume_el0(elr,spsr);fast=1;continue;
             }

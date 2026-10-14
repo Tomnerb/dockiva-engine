@@ -64,7 +64,7 @@ static int inotify_load(void) {
     *(void **)&fse.cf_release=dlsym(cf,"CFRelease");fse.array_callbacks=dlsym(cf,"kCFTypeArrayCallBacks");
     *(void **)&fse.queue_create=dlsym(RTLD_DEFAULT,"dispatch_queue_create");*(void **)&fse.sync=dlsym(RTLD_DEFAULT,"dispatch_sync_f");
     if(!fse.create || !fse.set_queue || !fse.start || !fse.stop || !fse.invalidate || !fse.release || !fse.array || !fse.string ||
-       !fse.cf_release || !fse.array_callbacks || !fse.queue_create || !fse.sync || !(fse.queue=fse.queue_create("vmfree.inotify",NULL)))return 0;
+       !fse.cf_release || !fse.array_callbacks || !fse.queue_create || !fse.sync || !(fse.queue=fse.queue_create("dockiva.inotify",NULL)))return 0;
     fse.loaded=1;return 1;
 }
 /* Called with in->lock held. */

@@ -24,8 +24,9 @@ def main():
         report['checks'].append(name);print('PASS',name,flush=True)
     with tempfile.TemporaryDirectory(prefix='dv-prof-',dir='/tmp') as tmp:
         home=Path(tmp);native=home/'native';native.mkdir()
-        for name in ('vmfree-c','vmfree-c-hvf'):
-            shutil.copy2(helper.parent/'_internal/build'/name,native/name)
+        # The bundle's names, copied under the source build's (dockivad finds either).
+        for name,shipped in (('vmfree-c','dockiva-runtime'),('vmfree-c-hvf','dockiva-hvf')):
+            shutil.copy2(helper.parent/'_internal/build'/shipped,native/name)
         subprocess.run([str(helper),'--home',str(home),'--import-name','alias/prepared:renamed',
                         '--import-layout',str(helper.parent/'_internal/examples/redis-preview/image')],check=True,capture_output=True)
         def api(method,path,body=None):
@@ -69,7 +70,7 @@ def main():
             check('missing required backend fails without interpreter fallback',b'required backend: hvf' in failure)
             state=json.loads((home/'containers/alias/status.json').read_text())
             check('failed negotiation launches no guest worker',state['state']=='created' and not (home/'containers/alias/control.json').exists())
-            shutil.copy2(helper.parent/'_internal/build/vmfree-c-hvf',replacement)
+            shutil.copy2(helper.parent/'_internal/build/dockiva-hvf',replacement)
             replacement.replace(native/'vmfree-c-hvf')
             expect('POST','/containers/alias/start',204)
             result=json.loads(expect('POST','/containers/alias/wait',200))

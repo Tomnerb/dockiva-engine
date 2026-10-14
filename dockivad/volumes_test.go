@@ -13,7 +13,7 @@ func TestBindsMountsAndVolumes(t *testing.T) {
 	h := b.handler("secret")
 	src := t.TempDir()
 	missing := filepath.Join(t.TempDir(), "created-by-v")
-	body := `{"Image":"vmfree/shell:demo","Volumes":{"/anon":{}},"HostConfig":{"Binds":["` + src + `:/app:ro","` + missing + `:/new","data:/var/data"],` +
+	body := `{"Image":"dockiva/shell:demo","Volumes":{"/anon":{}},"HostConfig":{"Binds":["` + src + `:/app:ro","` + missing + `:/new","data:/var/data"],` +
 		`"Mounts":[{"Type":"volume","Target":"/cache"},{"Type":"bind","Source":"` + src + `","Target":"/again"}]}}`
 	if r := request(t, h, "POST", "/containers/create?name=mounts", body, "secret"); r.Code != 201 {
 		t.Fatalf("create: %d %s", r.Code, r.Body.String())
@@ -56,10 +56,10 @@ func TestBindsMountsAndVolumes(t *testing.T) {
 	if len(list.Volumes) != 1 || request(t, h, "DELETE", "/volumes/data", "", "secret").Code != 204 {
 		t.Fatalf("after rm -v: %d volumes", len(list.Volumes))
 	}
-	for _, bad := range []string{`{"Image":"vmfree/shell:demo","HostConfig":{"Binds":["relative:/x:bad"]}}`, `{"Image":"vmfree/shell:demo","HostConfig":{"Binds":["` + src + `:relative"]}}`,
-		`{"Image":"vmfree/shell:demo","HostConfig":{"Binds":["` + src + `:/"]}}`, `{"Image":"vmfree/shell:demo","HostConfig":{"Binds":["` + src + `:/x","` + src + `:/x"]}}`,
-		`{"Image":"vmfree/shell:demo","HostConfig":{"Mounts":[{"Type":"bind","Source":"/no/such/dir","Target":"/x"}]}}`,
-		`{"Image":"vmfree/shell:demo","HostConfig":{"Mounts":[{"Type":"tmpfs","Target":"/x"}]}}`} {
+	for _, bad := range []string{`{"Image":"dockiva/shell:demo","HostConfig":{"Binds":["relative:/x:bad"]}}`, `{"Image":"dockiva/shell:demo","HostConfig":{"Binds":["` + src + `:relative"]}}`,
+		`{"Image":"dockiva/shell:demo","HostConfig":{"Binds":["` + src + `:/"]}}`, `{"Image":"dockiva/shell:demo","HostConfig":{"Binds":["` + src + `:/x","` + src + `:/x"]}}`,
+		`{"Image":"dockiva/shell:demo","HostConfig":{"Mounts":[{"Type":"bind","Source":"/no/such/dir","Target":"/x"}]}}`,
+		`{"Image":"dockiva/shell:demo","HostConfig":{"Mounts":[{"Type":"tmpfs","Target":"/x"}]}}`} {
 		if r := request(t, h, "POST", "/containers/create?name=bad", bad, "secret"); r.Code < 400 || (r.Code >= 500 && r.Code != 501) {
 			t.Fatalf("%s: %d %s", bad, r.Code, r.Body.String())
 		}

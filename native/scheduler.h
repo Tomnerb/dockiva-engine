@@ -175,11 +175,11 @@ static const char *oom_file;
 static int memory_exhausted(void) {
     memory_oom=1;
     if(oom_file) { int fd=open(oom_file,O_WRONLY|O_CREAT|O_CLOEXEC,0600);if(fd>=0)close(fd); }
-    if(!schedule_active) { fprintf(stderr,"vmfree: out of memory: killed process 1\n");exit(137); }
+    if(!schedule_active) { fprintf(stderr,"dockiva: out of memory: killed process 1\n");exit(137); }
     if(worker_threads && !runtime_held)return 0;
     ScheduledTask *t=&schedule_tasks[process_pid-1];
     if(t->terminate_signal!=9) {
-        fprintf(stderr,"vmfree: out of memory: killed process %" PRIu64 "\n",process_pid);
+        fprintf(stderr,"dockiva: out of memory: killed process %" PRIu64 "\n",process_pid);
         schedule_signal(t,9);
     }
     return 0;

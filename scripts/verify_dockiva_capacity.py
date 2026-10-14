@@ -145,7 +145,7 @@ def main():
             report['measurements']['engine_idle']=measure(home,args.sample_seconds)
             for i in range(5):
                 name=f'server-{i}'
-                status,_=api('POST',f'/containers/create?name={name}',{'Image':'vmfree/server:demo','Cmd':['0'],'HostConfig':{'NetworkMode':'host','ReadonlyRootfs':True}})
+                status,_=api('POST',f'/containers/create?name={name}',{'Image':'dockiva/server:demo','Cmd':['0'],'HostConfig':{'NetworkMode':'host','ReadonlyRootfs':True}})
                 check(f'create {name}',status==201)
                 if i<4:
                     check(f'start {name}',api('POST',f'/containers/{name}/start')[0]==204)

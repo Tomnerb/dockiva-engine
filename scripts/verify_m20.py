@@ -60,7 +60,7 @@ def main():
             check('syntax_has_no_side_effects',not (root/'bad').exists())
             for flag in ['--no-decode-cache','--no-lookup-cache']:
                 expect('pipeline'+flag,'busybox echo cache | busybox cat > /cached; busybox cat </cached',out=b'cache\n',flags=[flag])
-            expect('shared_budget','probe emit | busybox cat',125,err=b'vmfree: Instruction budget exhausted\n',steps=1000)
+            expect('shared_budget','probe emit | busybox cat',125,err=b'dockiva: Instruction budget exhausted\n',steps=1000)
             def oci(command,writable=False):
                 return subprocess.run([sys.executable,ROOT/'oci.py','run',d/'shell-image','--native',native,*(['--writable'] if writable else []),'--','-c',command],capture_output=True,timeout=20)
             r=oci('busybox echo OCI | busybox cat');check('oci_pipe',r.returncode==0 and r.stdout==b'OCI\n' and not r.stderr)

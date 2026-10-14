@@ -12,7 +12,7 @@ import (
 
 func TestArchiveRoundTripAndImageRemoval(t *testing.T) {
 	b := testEngine(t)
-	b.create("box", decode([]byte(`{"Image":"vmfree/shell:demo"}`), maxJSON))
+	b.create("box", decode([]byte(`{"Image":"dockiva/shell:demo"}`), maxJSON))
 	var in bytes.Buffer
 	w := tar.NewWriter(&in)
 	for _, h := range []*tar.Header{{Name: "d/", Typeflag: tar.TypeDir, Mode: 0o755}, {Name: "d/f", Typeflag: tar.TypeReg, Mode: 0o644, Size: 2}, {Name: "d/l", Typeflag: tar.TypeSymlink, Linkname: "f"}} {
@@ -49,8 +49,8 @@ func TestArchiveRoundTripAndImageRemoval(t *testing.T) {
 	if len(names) != 3 || names[0] != "./" || names[1] != "./f" || names[2] != "./l" {
 		t.Fatalf("archive: %v", names)
 	}
-	mustReject(t, func() { b.removeImage("vmfree/shell:demo", false) }) // box uses it
-	if out := b.removeImage("vmfree/shell:demo", true); len(out) != 2 {
+	mustReject(t, func() { b.removeImage("dockiva/shell:demo", false) }) // box uses it
+	if out := b.removeImage("dockiva/shell:demo", true); len(out) != 2 {
 		t.Fatalf("rmi: %v", out)
 	}
 }

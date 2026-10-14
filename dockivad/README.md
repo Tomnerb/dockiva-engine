@@ -1,17 +1,17 @@
 # dockivad
 
-Go control plane for the supported VM-free preview engine. No external Go modules
+Go control plane for Dockiva Engine. No external Go modules
 and no Python execution. Guest Linux semantics stay in the C runtime.
 
 Build the complete signed helper on Apple Silicon from the repository root:
 
 ```sh
 python3 scripts/bundle_dockiva_engine.py --output build/dockiva-go
-build/dockiva-go/vmfree-engine/dockivad --home /tmp/dockivad-local
+build/dockiva-go/dockiva-engine/dockivad --home /tmp/dockivad-local
 ```
 
 The Python command is build tooling. The resulting helper contains only Go/C
-executables and prepared OCI fixture data. `vmfree-engine` is a separately signed
+executables and prepared OCI fixture data. `dockiva-engine` is a separately signed
 copy of `dockivad` for existing Dockiva helper discovery. Both run the same code.
 Stop the API with SIGTERM; active container supervisors continue independently.
 Use the authenticated Docker API subset or Dockiva for container lifecycle.
@@ -19,7 +19,7 @@ Use the authenticated Docker API subset or Dockiva for container lifecycle.
 Import a bounded OCI layout while the daemon is stopped:
 
 ```sh
-build/dockiva-go/vmfree-engine/dockivad --home /tmp/dockivad-local \
+build/dockiva-go/dockiva-engine/dockivad --home /tmp/dockivad-local \
   --import-name local/demo:test --import-layout examples/m19/shell-image
 ```
 
@@ -33,7 +33,7 @@ Tests (macOS needs external linking with the local Go 1.22 toolchain):
 ```sh
 go -C dockivad test -race -ldflags=-linkmode=external ./...
 python3 scripts/verify_dockivad.py \
-  --helper build/dockiva-go/vmfree-engine/vmfree-engine \
+  --helper build/dockiva-go/dockiva-engine/dockiva-engine \
   --report build/dockivad-recovery.json
 ```
 
@@ -44,11 +44,11 @@ token; `--tcp 0` explicitly selects a loopback test endpoint instead.
 
 `docker.sock` serves the same API without the token, for the docker CLI and
 Docker tools: like Docker's own socket, the private (0700) engine home and the
-0600 socket are the access control. For the default home (`~/.vmfree`) the engine
+0600 socket are the access control. For the default home (`~/.dockiva-engine`, or `~/.vmfree` from before the rename) the engine
 registers a `dockiva` Docker context, never switching the current one:
 
 ```sh
-docker context use dockiva     # or: DOCKER_HOST=unix://$HOME/.vmfree/docker.sock
+docker context use dockiva     # or: DOCKER_HOST=unix://$HOME/.dockiva-engine/docker.sock
 docker run --rm redis:7-alpine sh -c 'echo hello'
 ```
 
@@ -94,7 +94,7 @@ Resources: `-m` caps a container's guest memory (6 MiB to 64 GiB; otherwise
 its profile's limit, 512 MiB) and is what `free`, `/proc/meminfo` and sysinfo
 report; a process that exceeds it is killed. `--cpus N` sets the vCPU count,
 rounded up (default: one per host CPU), not a CFS quota. At most 64 containers
-run at once (`vmfree-engine --max-containers`). Limits are caps, not reservations. The C guard applies core=0,
+run at once (`dockiva-engine --max-containers`). Limits are caps, not reservations. The C guard applies core=0,
 file size=16 MiB, descriptors=128 and CPU=60 seconds to workers. Cross-store/JIT
 accounting, pressure feedback, production confinement and broader workload
 compatibility remain separate architecture gates.

@@ -106,7 +106,7 @@ def main():
                 return True
         def legacy(*arguments):
             return subprocess.run([sys.executable, str(ROOT/'containers.py'), '--state-dir', str(home/'containers'),
-                                   '--native', str(helper.parent/'_internal/build/vmfree-c'), *arguments],
+                                   '--native', str(helper.parent/'_internal/build/dockiva-runtime'), *arguments],
                                   capture_output=True, text=True, check=True, timeout=20)
         def processes():
             rows = []
@@ -136,7 +136,7 @@ def main():
             check('duplicate daemon refused', duplicate.returncode == 125)
             check('three prepared images discovered', len(json.loads(expect('GET', '/images/json', 200))) == 3)
             expect('POST', '/containers/create?name=shell', 201,
-                   {'Image':'vmfree/shell:demo', 'Cmd':['-c', 'busybox echo go-control; probe exit 7']})
+                   {'Image':'dockiva/shell:demo', 'Cmd':['-c', 'busybox echo go-control; probe exit 7']})
             expect('POST', '/containers/shell/start', 204)
             result = json.loads(expect('POST', '/containers/shell/wait', 200))
             check('exit status and framed logs preserved', result['StatusCode'] == 7 and b'go-control' in expect('GET', '/containers/shell/logs?stdout=1', 200))
@@ -147,7 +147,7 @@ def main():
             check('20 immediate restarts and removal tolerate natural exit and supervisor cleanup')
             for i in range(9):
                 expect('POST', f'/containers/create?name=server-{i}', 201,
-                       {'Image':'vmfree/server:demo', 'Cmd':['0'], 'HostConfig':{'ReadonlyRootfs':True}})
+                       {'Image':'dockiva/server:demo', 'Cmd':['0'], 'HostConfig':{'ReadonlyRootfs':True}})
             with ThreadPoolExecutor(max_workers=9) as pool:
                 results = list(pool.map(lambda i: api('POST', f'/containers/server-{i}/start')[0], range(9)))
             check('concurrent admission: --max-containers 8 admits eight runs, ninth rejected', sorted(results) == [204]*8+[409])

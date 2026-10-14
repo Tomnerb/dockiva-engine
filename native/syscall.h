@@ -231,7 +231,7 @@ static int guest_syscall_dispatch(void) {
                 if(!out)cpu->gpr[0]=linux_error(14);
                 else {
                     /* A current kernel version: glibc, MongoDB and the JVM refuse "too old" ones. */
-                    const char *fields[]={"Linux",guest_hostname,"6.6.0-vmfree","#1 SMP PREEMPT_DYNAMIC VM-free","aarch64","(none)"};
+                    const char *fields[]={"Linux",guest_hostname,"6.6.0-dockiva","#1 SMP PREEMPT_DYNAMIC Dockiva Engine","aarch64","(none)"};
                     memset(out,0,390);for(unsigned i=0;i<6;i++)memcpy(out+i*65,fields[i],strlen(fields[i]));cpu->gpr[0]=0;
                 }
                 return -3;
@@ -518,7 +518,7 @@ static int guest_syscall_dispatch(void) {
                    fall back. Each number is reported once so container logs show gaps;
                    clone3 is not, glibc always falls back to clone. */
                 static unsigned char reported[512];
-                if(call!=435 && (call>=512 || !reported[call])) { if(call<512)reported[call]=1;fprintf(stderr,"vmfree: Linux syscall %" PRIu64 " is not implemented (ENOSYS)\n",call); }
+                if(call!=435 && (call>=512 || !reported[call])) { if(call<512)reported[call]=1;fprintf(stderr,"dockiva: Linux syscall %" PRIu64 " is not implemented (ENOSYS)\n",call); }
                 cpu->gpr[0]=linux_error(38);return -3;
             }
             if(cpu->gpr[0]!=1 && cpu->gpr[0]!=2) cpu->gpr[0]=UINT64_MAX-8;

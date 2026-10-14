@@ -39,26 +39,27 @@ def main():
                     str(ROOT/'native/worker_launcher.c'), '-o', str(ROOT/'build/vmfree-worker')], check=True)
     output = args.output.absolute()
     output.mkdir(parents=True, exist_ok=True)
-    target = output/'vmfree-engine'
+    target = output/'dockiva-engine'
     if target.is_symlink():
         parser.error('Bundle target must not be a symlink')
     with tempfile.TemporaryDirectory(prefix='.dockivad-build-', dir=output) as temporary:
-        stage = Path(temporary)/'vmfree-engine'
+        stage = Path(temporary)/'dockiva-engine'
         (stage/'_internal/build').mkdir(parents=True)
         shutil.copy2(ROOT/'build/dockivad', stage/'dockivad')
-        # Keep the existing Dockiva helper lookup compatible without a shell wrapper.
-        shutil.copy2(stage/'dockivad', stage/'vmfree-engine')
-        for name in ('vmfree-c', 'vmfree-c-hvf', 'vmfree-worker'):
-            shutil.copy2(ROOT/'build'/name, stage/'_internal/build'/name)
+        # Dockiva starts the engine by this name, and it shows in Activity Monitor.
+        shutil.copy2(stage/'dockivad', stage/'dockiva-engine')
+        # The build's names, as shipped (dockivad finds either).
+        for name, shipped in (('vmfree-c', 'dockiva-runtime'), ('vmfree-c-hvf', 'dockiva-hvf'), ('vmfree-worker', 'dockiva-worker')):
+            shutil.copy2(ROOT/'build'/name, stage/'_internal/build'/shipped)
         for relative in ('examples/m19/shell-image', 'examples/m11_17/http-image', 'examples/redis-preview'):
             shutil.copytree(ROOT/relative, stage/'_internal'/relative)
-        for executable in (stage/'dockivad', stage/'vmfree-engine', stage/'_internal/build/vmfree-c', stage/'_internal/build/vmfree-worker'):
+        for executable in (stage/'dockivad', stage/'dockiva-engine', stage/'_internal/build/dockiva-runtime', stage/'_internal/build/dockiva-worker'):
             subprocess.run(['codesign', '--force', '--sign', '-', str(executable)], check=True)
         # Native execution: Hypervisor.framework requires this entitlement.
         subprocess.run(['codesign', '--force', '--sign', '-', '--options', 'runtime',
                         '--entitlements', str(ROOT/'native/hvf.entitlements.plist'),
-                        str(stage/'_internal/build/vmfree-c-hvf')], check=True)
-        for executable in (stage/'dockivad', stage/'vmfree-engine', *list((stage/'_internal/build').iterdir())):
+                        str(stage/'_internal/build/dockiva-hvf')], check=True)
+        for executable in (stage/'dockivad', stage/'dockiva-engine', *list((stage/'_internal/build').iterdir())):
             subprocess.run(['codesign', '--verify', '--strict', str(executable)], check=True)
         forbidden = [p for p in stage.rglob('*') if p.suffix in ('.py', '.pyc') or 'python' in p.name.lower()]
         if forbidden:
@@ -72,7 +73,7 @@ def main():
             if backup.exists():
                 backup.rename(target)
             raise
-    print(target/'vmfree-engine')
+    print(target/'dockiva-engine')
 
 
 if __name__ == '__main__':

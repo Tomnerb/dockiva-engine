@@ -90,8 +90,8 @@ func TestProfileAliasAndSavedPolicy(t *testing.T) {
 		t.Fatal("rejected profile published a container")
 	}
 	// The old reserved tag is not authority: content determines execution policy.
-	commitImage(b.Cache, "vmfree/redis:preview", "../examples/m19/shell-image")
-	b.create("renamed-shell", decode([]byte(`{"Image":"vmfree/redis:preview"}`), maxJSON))
+	commitImage(b.Cache, "dockiva/redis:preview", "../examples/m19/shell-image")
+	b.create("renamed-shell", decode([]byte(`{"Image":"dockiva/redis:preview"}`), maxJSON))
 	if object(b.inspect("renamed-shell")["DockivaCompatibility"])["ProfileID"] == "prepared-redis-7.4.2-native" {
 		t.Fatal("tag name still selects the pinned profile")
 	}
@@ -140,7 +140,7 @@ func TestProfilePreflightRejectsBeforePublicationOrStart(t *testing.T) {
 	c := cloneCatalog()
 	c.Default.RequiredCapabilities = append(c.Default.RequiredCapabilities, "unimplemented-feature")
 	profileCatalogJSON = profileBytes(c)
-	response := request(t, b.handler("secret"), "POST", "/containers/create?name=rejected", `{"Image":"vmfree/shell:demo"}`, "secret")
+	response := request(t, b.handler("secret"), "POST", "/containers/create?name=rejected", `{"Image":"dockiva/shell:demo"}`, "secret")
 	if response.Code != 409 || !strings.Contains(response.Body.String(), "unimplemented-feature") {
 		t.Fatalf("%d %s", response.Code, response.Body.String())
 	}
@@ -148,7 +148,7 @@ func TestProfilePreflightRejectsBeforePublicationOrStart(t *testing.T) {
 		t.Fatal("unsupported requirements created state")
 	}
 	profileCatalogJSON = original
-	b.create("valid", decode([]byte(`{"Image":"vmfree/shell:demo"}`), maxJSON))
+	b.create("valid", decode([]byte(`{"Image":"dockiva/shell:demo"}`), maxJSON))
 	p := filepath.Join(b.State, "valid")
 	config := readObject(filepath.Join(p, "config.json"))
 	config["max_steps"] = json.Number("42")
@@ -193,7 +193,7 @@ func TestNativeProfileSelection(t *testing.T) {
 	for _, hvf := range []bool{true, false} {
 		b := testEngine(t)
 		b.Native = fakeRuntime(t, hvf)
-		b.create("c", decode([]byte(`{"Image":"vmfree/shell:demo"}`), maxJSON))
+		b.create("c", decode([]byte(`{"Image":"dockiva/shell:demo"}`), maxJSON))
 		config := readObject(filepath.Join(b.State, "c", "config.json"))
 		want := map[bool]string{true: "hvf", false: "interpreter"}[hvf]
 		if config["cpu_backend"] != want || savedProfile(config).Definition.Backend != want {

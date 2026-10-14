@@ -25,9 +25,9 @@ def main():
             home = Path(sys.argv[sys.argv.index('--home')+1])
         root = Path(daemon.__file__).parent
         for name, relative in (
-            ('vmfree/shell:demo', 'examples/m19/shell-image'),
-            ('vmfree/server:demo', 'examples/m11_17/http-image'),
-            ('vmfree/redis:preview', 'examples/redis-preview/image'),
+            ('dockiva/shell:demo', 'examples/m19/shell-image'),
+            ('dockiva/server:demo', 'examples/m11_17/http-image'),
+            ('dockiva/redis:preview', 'examples/redis-preview/image'),
         ):
             fixture = root/relative
             if fixture.is_dir():

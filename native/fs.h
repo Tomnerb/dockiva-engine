@@ -498,7 +498,7 @@ static uint64_t fs_memfd(void) {
     char name[1025];if(fs_string(cpu->gpr[0],name)<0)return fs_error();
     unsigned slot=0;while(slot<FS_SLOTS && fs_fd[slot])slot++;
     if(slot==FS_SLOTS || fd_lowest(0)<0)return linux_error(24);
-    char path[]="/tmp/vmfree-memfd-XXXXXX";int fd=mkstemp(path);if(fd<0)return fs_error();
+    char path[]="/tmp/dockiva-memfd-XXXXXX";int fd=mkstemp(path);if(fd<0)return fs_error();
     unlink(path);(void)fcntl(fd,F_SETFD,FD_CLOEXEC);
     fs_fd[slot]=fd+1;fs_cloexec[slot]=(flags&1)!=0;fs_ro[slot]=0;
     int guest=fd_lowest(0);fs_guest[slot]=(unsigned short)guest;fd_bind((uint64_t)guest,FD_FILE,slot);return (uint64_t)guest;

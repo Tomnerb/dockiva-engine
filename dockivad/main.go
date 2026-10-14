@@ -45,9 +45,9 @@ func run() {
 	homeDefault, e := os.UserHomeDir()
 	check(e)
 	flags := flag.NewFlagSet("dockivad", flag.ContinueOnError)
-	home := flags.String("home", filepath.Join(homeDefault, ".vmfree"), "private state")
-	native := flags.String("native", filepath.Join(assets, "build/vmfree-c"), "C interpreter")
-	worker := flags.String("worker", filepath.Join(assets, "build/vmfree-worker"), "C worker guard")
+	home := flags.String("home", filepath.Join(homeDefault, ".dockiva-engine"), "private state")
+	native := flags.String("native", engineBinary(filepath.Join(assets, "build"), "dockiva-runtime", "vmfree-c"), "C interpreter")
+	worker := flags.String("worker", engineBinary(filepath.Join(assets, "build"), "dockiva-worker", "vmfree-worker"), "C worker guard")
 	assetRoot := flags.String("assets", assets, "OCI fixtures")
 	tcp := flags.Int("tcp", -1, "loopback API port (0 selects a free port)")
 	importName := flags.String("import-name", "", "import name then exit")
@@ -78,7 +78,7 @@ func run() {
 	b.Native = regularExecutable(*native)
 	b.Worker = regularExecutable(*worker)
 	loadProfileCatalog(profileCatalogJSON)
-	for _, seed := range [][2]string{{"vmfree/shell:demo", "examples/m19/shell-image"}, {"vmfree/server:demo", "examples/m11_17/http-image"}, {"vmfree/redis:preview", "examples/redis-preview/image"}} {
+	for _, seed := range [][2]string{{"dockiva/shell:demo", "examples/m19/shell-image"}, {"dockiva/server:demo", "examples/m11_17/http-image"}, {"dockiva/redis:preview", "examples/redis-preview/image"}} {
 		source := filepath.Join(b.Assets, seed[1])
 		if exists(source) && !exists(filepath.Join(b.Cache, key(seed[0]))) {
 			commitImage(b.Cache, seed[0], source)
@@ -114,7 +114,7 @@ func run() {
 		userListener = unixListener(userSocket)
 		defer os.Remove(userSocket)
 		defer userListener.Close()
-		if *home == filepath.Join(homeDefault, ".vmfree") { // not for test or secondary engine homes
+		if *home == filepath.Join(homeDefault, ".dockiva-engine") || *home == filepath.Join(homeDefault, ".vmfree") { // not for test or secondary engine homes
 			if e := safeRun(func() { registerDockerContext(userSocket) }); e != nil {
 				fmt.Fprintln(os.Stderr, "dockivad: docker context:", e)
 			}

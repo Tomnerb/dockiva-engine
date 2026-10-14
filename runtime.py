@@ -140,7 +140,7 @@ def main():
             return 0
         return Machine(elf, trace=args.trace).run(args.max_steps)
     except (Unsupported, OSError, struct.error) as exc:
-        print(f'vmfree: {exc}', file=sys.stderr)
+        print(f'dockiva: {exc}', file=sys.stderr)
         return 125
 
 
