@@ -340,6 +340,25 @@ static int fs_walk(int base,const char *base_path,const char *input,int follow,c
    (canonical guest paths, indexed by pid; PROCESS_LIMIT+1 processes). Path lookups
    resolve them to that file; readlink returns the path. */
 static char proc_exe[PROCESS_LIMIT+2][256];
+/* Each process's argv, NUL-separated, for /proc/<pid>/cmdline, comm and stat (ps, pgrep). */
+static char proc_cmdline[PROCESS_LIMIT+2][1024];static unsigned proc_cmdline_size[PROCESS_LIMIT+2];
+static void proc_set_cmdline(uint64_t pid,int argc,const char **argv) {
+    if(!pid || pid>PROCESS_LIMIT+1)return;
+    unsigned size=0;
+    for(int i=0;i<argc;i++) {
+        size_t length=strlen(argv[i])+1;
+        if(size+length>sizeof(proc_cmdline[0]))break;
+        memcpy(proc_cmdline[pid]+size,argv[i],length);size+=(unsigned)length;
+    }
+    proc_cmdline_size[pid]=size;
+}
+/* The process name ps shows: argv[0]'s last component, at most 15 bytes, as Linux's comm. */
+static const char *proc_comm(uint64_t pid) {
+    static _Thread_local char name[16];
+    const char *argv0=pid && pid<=PROCESS_LIMIT+1 && proc_cmdline_size[pid]?proc_cmdline[pid]:"guest";
+    const char *slash=strrchr(argv0,'/');snprintf(name,sizeof(name),"%s",slash && slash[1]?slash+1:argv0);
+    return name;
+}
 static _Thread_local uint64_t process_pid; /* defined with the process layer */
 static uint64_t process_pid_now(void) { return process_pid; }
 static int fs_proc_exe(const char *path,char out[1025]) {
@@ -349,7 +368,7 @@ static int fs_proc_exe(const char *path,char out[1025]) {
         const char *p=path+6;while(*p>='0' && *p<='9' && pid<100)pid=pid*10+(uint64_t)(*p++-'0');
         if(p==path+6 || strcmp(p,"/exe"))pid=0;
     }
-    if(!pid || pid>=18 || !proc_exe[pid][0])return 0;
+    if(!pid || pid>PROCESS_LIMIT+1 || !proc_exe[pid][0])return 0;
     strcpy(out,proc_exe[pid]);return 1;
 }
 static int fs_lookup(uint64_t dir,uint64_t ptr,char leaf[1025],int follow,char canon[1025]) {
@@ -459,18 +478,105 @@ static uint64_t fs_memfd(void) {
     int guest=fd_lowest(0);fs_guest[slot]=(unsigned short)guest;fd_bind((uint64_t)guest,FD_FILE,slot);return (uint64_t)guest;
 }
 static unsigned guest_cpus(void); /* scheduler.h */
-static uint64_t io_text_open(const void *data,size_t size,int cloexec); /* io.h */
+static uint64_t io_text_open(const void *data,size_t size,int cloexec,int directory); /* io.h */
 static uint64_t io_fifo_open(dev_t dev,ino_t ino,uint64_t flags);          /* io.h */
 static char prctl_name[16];       /* compat.h: PR_SET_NAME */
 static uint64_t guest_ppid_of(uint64_t pid);static unsigned guest_threads_of(uint64_t pid); /* syscall.h */
 static int guest_process_exists(uint64_t pid);
-/* /proc/self/NAME or /proc/PID/NAME of a process of the container: its pid, or 0. */
+static char guest_state_of(uint64_t pid);       /* syscall.h: R, S or T */
+static uint64_t fs_proc_file(const char *path,const char *name);
+static uint64_t runtime_started_ns;             /* the container's boot time, for /proc/stat and uptime */
+/* The container's processes as /proc shows them. An exec or healthcheck is a run of
+   its own, so the main run publishes its process table (--proc-publish) and other runs
+   read it (--proc-peer): their /proc lists the main run's processes under their own
+   pids and theirs as PROC_PEER_OFFSET+pid, so the two never collide. Read-only: a
+   peer's processes cannot be signalled from another run. */
+static const char *proc_publish_path,*proc_peer_path;
+#define PROC_PEER_OFFSET 1000u
+struct ProcPeer { uint64_t pid,ppid;unsigned uid,size;char cmdline[1024]; };
+static struct ProcPeer proc_peers[PROCESS_LIMIT+2];static unsigned proc_npeers;
+static void proc_peer_load(void) {
+    proc_npeers=0;if(!proc_peer_path)return;
+    FILE *f=fopen(proc_peer_path,"rb");if(!f)return;
+    struct ProcPeer *p;unsigned long long pid,ppid;unsigned uid,size;
+    while(proc_npeers<PROCESS_LIMIT+2 && fscanf(f,"%llu %llu %u %u",&pid,&ppid,&uid,&size)==4 && fgetc(f)==' ') {
+        p=&proc_peers[proc_npeers];if(size>sizeof(p->cmdline))break;
+        if(fread(p->cmdline,1,size,f)!=size)break;
+        p->pid=pid;p->ppid=ppid;p->uid=uid;p->size=size;proc_npeers++;
+        if(fgetc(f)!='\n')break;
+    }
+    fclose(f);
+}
+/* The main run's table, rewritten (atomically) when its processes start, exec or end
+   (ended: a pid whose task is gone but may still be the current one). */
+static void proc_publish(uint64_t ended) {
+    if(!proc_publish_path)return;
+    char temporary[1100];snprintf(temporary,sizeof(temporary),"%s.%d",proc_publish_path,(int)getpid());
+    FILE *f=fopen(temporary,"wb");if(!f)return;
+    for(uint64_t pid=1;pid<=PROCESS_LIMIT+1;pid++)if(pid!=ended && guest_process_exists(pid)) {
+        fprintf(f,"%llu %llu %u %u ",(unsigned long long)pid,(unsigned long long)guest_ppid_of(pid),guest_uid,proc_cmdline_size[pid]);
+        fwrite(proc_cmdline[pid],1,proc_cmdline_size[pid],f);fputc('\n',f);
+    }
+    if(fclose(f)==0)rename(temporary,proc_publish_path);else unlink(temporary);
+}
+static uint64_t proc_display(uint64_t own) { return proc_peer_path?own+PROC_PEER_OFFSET:own; }
+/* A /proc pid: one of this run's (>0, its pid), a published one (<0, -(index+1)), or none (0). */
+static int64_t proc_resolve(uint64_t display) {
+    if(!proc_peer_path)return guest_process_exists(display)?(int64_t)display:0;
+    if(display>PROC_PEER_OFFSET)return guest_process_exists(display-PROC_PEER_OFFSET)?(int64_t)(display-PROC_PEER_OFFSET):0;
+    proc_peer_load();
+    for(unsigned i=0;i<proc_npeers;i++)if(proc_peers[i].pid==display)return -(int64_t)i-1;
+    return 0;
+}
+typedef struct { uint64_t pid,ppid;unsigned threads,uid,size;char state;char comm[16];const char *cmdline; } ProcInfo;
+static int proc_info(uint64_t display,ProcInfo *info) {
+    int64_t r=proc_resolve(display);if(!r)return 0;
+    memset(info,0,sizeof(*info));info->pid=display;
+    if(r>0) {
+        uint64_t own=(uint64_t)r,ppid=guest_ppid_of(own);
+        info->ppid=ppid?proc_display(ppid):0;info->threads=guest_threads_of(own);info->uid=guest_uid;info->state=guest_state_of(own);
+        snprintf(info->comm,sizeof(info->comm),"%s",own==process_pid && *prctl_name?prctl_name:proc_comm(own));
+        info->cmdline=proc_cmdline[own];info->size=proc_cmdline_size[own];
+    } else {
+        struct ProcPeer *p=&proc_peers[-r-1];
+        info->ppid=p->ppid;info->threads=1;info->uid=p->uid;info->state='S';info->cmdline=p->cmdline;info->size=p->size;
+        const char *argv0=p->size?p->cmdline:"guest",*slash=strrchr(argv0,'/');
+        snprintf(info->comm,sizeof(info->comm),"%s",slash && slash[1]?slash+1:argv0);
+    }
+    return 1;
+}
+/* /proc/self or /proc/PID (with or without a final slash) of a process of the container: its pid, or 0. */
+static uint64_t fs_proc_dir(const char *path) {
+    if(!strcmp(path,"/proc/self") || !strcmp(path,"/proc/self/"))return proc_display(process_pid);
+    if(strncmp(path,"/proc/",6))return 0;
+    uint64_t pid=0;const char *p=path+6;while(*p>='0' && *p<='9' && pid<100000)pid=pid*10+(uint64_t)(*p++-'0');
+    return p>path+6 && (!*p || !strcmp(p,"/")) && proc_resolve(pid)?pid:0;
+}
+static const char *const fs_proc_root_files[]={"cpuinfo","loadavg","meminfo","mounts","stat","uptime"};
+static const char *const fs_proc_pid_files[]={"auxv","cgroup","cmdline","comm","mountinfo","mounts","stat","statm","status"};
+/* What a /proc path is: 1 a directory, 2 a file, 0 not one of ours. */
+static int fs_proc_kind(const char *path) {
+    if(!strcmp(path,"/proc") || !strcmp(path,"/proc/") || fs_proc_dir(path))return 1;
+    for(unsigned i=0;i<sizeof(fs_proc_root_files)/sizeof(*fs_proc_root_files);i++)
+        if(!strncmp(path,"/proc/",6) && !strcmp(path+6,fs_proc_root_files[i]))return 2;
+    for(unsigned i=0;i<sizeof(fs_proc_pid_files)/sizeof(*fs_proc_pid_files);i++)if(fs_proc_file(path,fs_proc_pid_files[i]))return 2;
+    return 0;
+}
+/* A linux_dirent64 record. */
+static size_t fs_dirent(char *out,size_t used,size_t capacity,uint64_t inode,const char *name,unsigned type) {
+    size_t length=strlen(name),size=(19+length+1+7)&~(size_t)7;
+    if(used+size>capacity)return used;
+    unsigned char *r=(unsigned char *)out+used;memset(r,0,size);
+    fs_pack(r,0,inode,8);fs_pack(r,8,used+size,8);fs_pack(r,16,size,2);r[18]=(unsigned char)type;memcpy(r+19,name,length);
+    return used+size;
+}
+/* /proc/self/NAME or /proc/PID/NAME of a process of the container: its /proc pid, or 0. */
 static uint64_t fs_proc_file(const char *path,const char *name) {
-    const char *rest=NULL;uint64_t pid=process_pid;
+    const char *rest=NULL;uint64_t pid=proc_display(process_pid);
     if(!strncmp(path,"/proc/self/",11))rest=path+11;
     else if(!strncmp(path,"/proc/",6)) {
         pid=0;const char *p=path+6;while(*p>='0' && *p<='9' && pid<100000)pid=pid*10+(uint64_t)(*p++-'0');
-        if(p>path+6 && *p=='/' && guest_process_exists(pid))rest=p+1;
+        if(p>path+6 && *p=='/' && proc_resolve(pid))rest=p+1;
     }
     return rest && !strcmp(rest,name)?pid:0;
 }
@@ -492,6 +598,23 @@ static uint64_t fs_open(void) {
     unsigned slot=0;while(slot<FS_SLOTS && fs_fd[slot]) slot++;
     if(slot==FS_SLOTS || fd_lowest(0)<0) return linux_error(24);
     char path[1025];
+    if(fs_string(cpu->gpr[1],path)==0 && (!strcmp(path,"/proc") || !strcmp(path,"/proc/") || fs_proc_dir(path))) {
+        /* /proc and /proc/PID: the container's processes and our files (ps, pgrep, top). */
+        if(flags&(3|64|512|1024))return linux_error(flags&64?17:21);
+        static _Thread_local char list[16384];size_t used=0;uint64_t pid=fs_proc_dir(path);
+        used=fs_dirent(list,used,sizeof(list),1,".",4);used=fs_dirent(list,used,sizeof(list),1,"..",4);
+        if(!pid) {
+            for(unsigned i=0;i<sizeof(fs_proc_root_files)/sizeof(*fs_proc_root_files);i++)used=fs_dirent(list,used,sizeof(list),2+i,fs_proc_root_files[i],8);
+            used=fs_dirent(list,used,sizeof(list),20,"self",10);
+            char name[24];proc_peer_load();
+            for(unsigned i=0;i<proc_npeers;i++) { snprintf(name,sizeof(name),"%llu",(unsigned long long)proc_peers[i].pid);used=fs_dirent(list,used,sizeof(list),100+proc_peers[i].pid,name,4); }
+            for(uint64_t p=1;p<=PROCESS_LIMIT+1;p++)if(guest_process_exists(p)) { snprintf(name,sizeof(name),"%llu",(unsigned long long)proc_display(p));used=fs_dirent(list,used,sizeof(list),100+proc_display(p),name,4); }
+        } else {
+            for(unsigned i=0;i<sizeof(fs_proc_pid_files)/sizeof(*fs_proc_pid_files);i++)used=fs_dirent(list,used,sizeof(list),1000*pid+i,fs_proc_pid_files[i],8);
+            used=fs_dirent(list,used,sizeof(list),1000*pid+99,"exe",10);
+        }
+        return io_text_open(list,used,(flags&524288)!=0,1);
+    }
     if(fs_string(cpu->gpr[1],path)==0) {
         char text[16384];size_t length=0;int known=1;uint64_t proc=0;
         if(!strcmp(path,"/proc/self/auxv") || !strcmp(path,"/proc/1/auxv")) {
@@ -522,12 +645,12 @@ static uint64_t fs_open(void) {
                 memcpy(text+length,entry,(size_t)n);length+=(size_t)n;
             }
         } else if((proc=fs_proc_file(path,"stat"))) {
-            /* This process's status line (MongoDB's diagnostics read it); CPU times are the runtime's. */
-            struct rusage use;getrusage(RUSAGE_SELF,&use);
-            unsigned threads=guest_threads_of(proc);uint64_t ppid=guest_ppid_of(proc);
-            length=(size_t)snprintf(text,sizeof text,"%llu (%s) R %llu %llu %llu 0 -1 0 %ld 0 %ld 0 %ld %ld 0 0 20 0 %u 0 0 %llu %llu"
+            /* A process's status line (MongoDB's diagnostics, ps); CPU times are the runtime's. */
+            struct rusage use;getrusage(RUSAGE_SELF,&use);ProcInfo info;proc_info(proc,&info);
+            unsigned threads=info.threads;uint64_t ppid=info.ppid;
+            length=(size_t)snprintf(text,sizeof text,"%llu (%s) %c %llu %llu %llu 0 -1 0 %ld 0 %ld 0 %ld %ld 0 0 20 0 %u 0 0 %llu %llu"
                 " 18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n",
-                (unsigned long long)proc,*prctl_name?prctl_name:"guest",(unsigned long long)ppid,(unsigned long long)proc,(unsigned long long)proc,
+                (unsigned long long)proc,info.comm,info.state,(unsigned long long)ppid,(unsigned long long)proc,(unsigned long long)proc,
                 (long)use.ru_minflt,(long)use.ru_majflt,(long)use.ru_utime.tv_sec*100+use.ru_utime.tv_usec/10000,(long)use.ru_stime.tv_sec*100+use.ru_stime.tv_usec/10000,
                 threads,(unsigned long long)resource_used,(unsigned long long)(resource_used/4096));
         } else if(fs_proc_file(path,"statm")) {
@@ -535,12 +658,13 @@ static uint64_t fs_open(void) {
             unsigned long long pages=resource_used/4096;
             length=(size_t)snprintf(text,sizeof text,"%llu %llu 0 0 0 %llu 0\n",pages,pages,pages);
         } else if((proc=fs_proc_file(path,"status"))) {
-            unsigned long long kib=resource_used>>10;
-            length=(size_t)snprintf(text,sizeof text,"Name:\t%s\nState:\tR (running)\nTgid:\t%llu\nPid:\t%llu\nPPid:\t%llu\nUid:\t%u\t%u\t%u\t%u\n"
-                "Gid:\t%u\t%u\t%u\t%u\nVmSize:\t%llu kB\nVmRSS:\t%llu kB\nThreads:\t%u\n",*prctl_name?prctl_name:"guest",
-                (unsigned long long)proc,(unsigned long long)proc,(unsigned long long)guest_ppid_of(proc),guest_uid,guest_uid,guest_uid,guest_uid,
-                guest_gid,guest_gid,guest_gid,guest_gid,kib,kib,guest_threads_of(proc));
-        } else if(!strcmp(path,"/proc/mounts") || !strcmp(path,"/proc/self/mounts") || !strcmp(path,"/proc/self/mountinfo") || !strcmp(path,"/proc/1/mountinfo")) {
+            unsigned long long kib=resource_used>>10;ProcInfo info;proc_info(proc,&info);
+            char state=info.state;
+            length=(size_t)snprintf(text,sizeof text,"Name:\t%s\nState:\t%c (%s)\nTgid:\t%llu\nPid:\t%llu\nPPid:\t%llu\nUid:\t%u\t%u\t%u\t%u\n"
+                "Gid:\t%u\t%u\t%u\t%u\nVmSize:\t%llu kB\nVmRSS:\t%llu kB\nThreads:\t%u\n",info.comm,state,state=='S'?"sleeping":state=='T'?"stopped":"running",
+                (unsigned long long)proc,(unsigned long long)proc,(unsigned long long)info.ppid,info.uid,info.uid,info.uid,info.uid,
+                guest_gid,guest_gid,guest_gid,guest_gid,kib,kib,info.threads);
+        } else if(!strcmp(path,"/proc/mounts") || fs_proc_file(path,"mounts") || fs_proc_file(path,"mountinfo")) {
             /* The container's mounts (Java's FileStore looks a path's mount point up here). */
             int info=strstr(path,"mountinfo")!=NULL;
             static const char *const base[][4]={{"overlay","/","overlay","rw,relatime"},{"proc","/proc","proc","rw,nosuid,nodev,noexec,relatime"},
@@ -554,7 +678,30 @@ static uint64_t fs_open(void) {
                           :snprintf(text+length,sizeof text-length,"%s %s %s %s 0 0\n",device,point,type,options);
                 if(n>0)length+=(size_t)n;
             }
-        } else if(!strcmp(path,"/proc/self/cgroup") || !strcmp(path,"/proc/1/cgroup")) {
+        } else if((proc=fs_proc_file(path,"cmdline"))) {
+            ProcInfo info;proc_info(proc,&info);memcpy(text,info.cmdline,info.size);length=info.size;
+        } else if((proc=fs_proc_file(path,"comm"))) {
+            ProcInfo info;proc_info(proc,&info);length=(size_t)snprintf(text,sizeof text,"%s\n",info.comm);
+        } else if(!strcmp(path,"/proc/stat") || !strcmp(path,"/proc/uptime") || !strcmp(path,"/proc/loadavg")) {
+            /* Boot is the container's start; CPU time is the runtime's (procps needs btime). */
+            struct timespec now;clock_gettime(CLOCK_REALTIME,&now);
+            uint64_t now_ns=(uint64_t)now.tv_sec*1000000000u+(uint64_t)now.tv_nsec,up=now_ns>runtime_started_ns?now_ns-runtime_started_ns:0;
+            unsigned processes=0,running=0;
+            for(uint64_t p=1;p<=PROCESS_LIMIT+1;p++)if(guest_process_exists(p)) { processes++;running+=guest_state_of(p)=='R'; }
+            proc_peer_load();processes+=proc_npeers;
+            if(path[6]=='u')length=(size_t)snprintf(text,sizeof text,"%llu.%02llu 0.00\n",(unsigned long long)(up/1000000000u),(unsigned long long)(up%1000000000u/10000000u));
+            else if(path[6]=='l')length=(size_t)snprintf(text,sizeof text,"0.00 0.00 0.00 %u/%u %llu\n",running?running:1,processes,(unsigned long long)proc_display(process_pid));
+            else {
+                struct rusage use;getrusage(RUSAGE_SELF,&use);
+                unsigned long long user=(unsigned long long)use.ru_utime.tv_sec*100+(unsigned long long)use.ru_utime.tv_usec/10000,
+                    system=(unsigned long long)use.ru_stime.tv_sec*100+(unsigned long long)use.ru_stime.tv_usec/10000,idle=up/10000000u;
+                length=(size_t)snprintf(text,sizeof text,"cpu  %llu 0 %llu %llu 0 0 0 0 0 0\n",user,system,idle);
+                for(unsigned c=0;c<guest_cpus() && length<sizeof(text)-200;c++)
+                    length+=(size_t)snprintf(text+length,sizeof(text)-length,"cpu%u %llu 0 %llu %llu 0 0 0 0 0 0\n",c,user/guest_cpus(),system/guest_cpus(),idle);
+                length+=(size_t)snprintf(text+length,sizeof(text)-length,"intr 0\nctxt 0\nbtime %llu\nprocesses %u\nprocs_running %u\nprocs_blocked 0\n",
+                    (unsigned long long)(runtime_started_ns/1000000000u),processes,running?running:1);
+            }
+        } else if(fs_proc_file(path,"cgroup")) {
             length=(size_t)snprintf(text,sizeof text,"0::/\n");                       /* cgroup v2, the container's root */
         } else if(!strcmp(path,"/sys/devices/system/cpu/online") || !strcmp(path,"/sys/devices/system/cpu/possible")) {
             unsigned cpus=guest_cpus();
@@ -563,7 +710,7 @@ static uint64_t fs_open(void) {
         if(known) {
             /* Synthetic read-only text, seekable like procfs (Java's mount table reader seeks). */
             if(flags&(3|64|512|1024|16384))return linux_error(13);
-            return io_text_open(text,length,(flags&524288)!=0);
+            return io_text_open(text,length,(flags&524288)!=0,0);
         }
     }
     /* Linux follows a final symlink unless O_NOFOLLOW (32768) or O_CREAT|O_EXCL. */
@@ -840,6 +987,7 @@ static uint64_t fs_call(uint64_t call) {
         __atomic_fetch_add(&fs_storage_bytes,growth,__ATOMIC_RELAXED);return 0;
     }
     if(call==48 || call==439) { /* faccessat(2); synthetic uid 0; no-link namespace policy still applies. */
+        { char proc_path[1025];if(fs_string(cpu->gpr[1],proc_path)==0 && fs_proc_kind(proc_path))return (cpu->gpr[2]&2)?linux_error(13):0; }
         if(cpu->gpr[2]&~UINT64_C(7) || (call==439 && (cpu->gpr[3]&~UINT64_C(0x300))))return linux_error(22); /* AT_EACCESS, AT_SYMLINK_NOFOLLOW */
         char leaf[1025];int parent=fs_parent(cpu->gpr[0],cpu->gpr[1],leaf);if(parent<0)return fs_error();
         int writable=fs_path_writable();
@@ -868,6 +1016,13 @@ static uint64_t fs_call(uint64_t call) {
             if(fd<0)return linux_error(9);
             struct stat st;if(fstat(fd,&st)<0)return fs_error();
             fs_stat_pack(out,&st);return 0;
+        }
+        {   /* /proc paths of ours: directories and empty read-only files, as procfs shows them */
+            char proc_path[1025];int kind=fs_string(cpu->gpr[1],proc_path)==0?fs_proc_kind(proc_path):0;
+            if(kind) {
+                struct stat st;memset(&st,0,sizeof(st));st.st_mode=kind==1?S_IFDIR|0555:S_IFREG|0444;st.st_nlink=kind==1?2:1;st.st_blksize=4096;
+                fs_stat_pack(out,&st);return 0;
+            }
         }
         /* AT_SYMLINK_NOFOLLOW (256) reports a final symlink itself. */
         char leaf[1025],canon[1025];int parent=fs_lookup(cpu->gpr[0],cpu->gpr[1],leaf,!(cpu->gpr[3]&256),canon);if(parent<0)return fs_error();

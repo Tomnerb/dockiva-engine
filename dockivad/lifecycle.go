@@ -405,6 +405,13 @@ func runtimeCommand(p, native string, c obj, command []string, argv0 string, env
 	// The run creates the oom file when it kills a process over the memory limit
 	// (exec and healthchecks share the container's budget, as in a cgroup).
 	args := []string{"run", guest, "--root", root, "--argv0", argv0, "--max-steps", steps, "--memory-limit-mib", strconv.FormatInt(memory, 10), "--oom-file", filepath.Join(p, "oom")}
+	// The container's own run publishes its process table; exec and healthcheck runs
+	// show it in their /proc (ps, top), and docker top reads it.
+	if publish {
+		args = append(args, "--proc-publish", filepath.Join(p, "procs"))
+	} else {
+		args = append(args, "--proc-peer", filepath.Join(p, "procs"))
+	}
 	if c["cpu_backend"] == "hvf" {
 		native = regularExecutable(filepath.Join(filepath.Dir(native), "vmfree-c-hvf"))
 		// Like Docker, a container may use every core: one vCPU per host CPU.

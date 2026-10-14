@@ -127,7 +127,7 @@ static uint64_t process_exec(void) {
     }
     load_stream(input);heap_init();startup((int)argc,(const char **)args,envc,(const char **)env);
     exec_loading=0;process_exec_count++;
-    if(process_pid<18)snprintf(proc_exe[process_pid],sizeof(proc_exe[0]),"%s",strlen(exe)<sizeof(proc_exe[0])?exe:"");
+    if(process_pid<=PROCESS_LIMIT+1)snprintf(proc_exe[process_pid],sizeof(proc_exe[0]),"%s",strlen(exe)<sizeof(proc_exe[0])?exe:"");
     ProcessImage next;image_save(&next);image_restore(&old);image_free();image_restore(&next);
     /* M19 preserves regular guest descriptors. CLOEXEC is tracked by the FS adapter. */
     for(unsigned i=0;i<FS_SLOTS;i++)if(fs_fd[i] && fs_cloexec[i]) {
@@ -209,12 +209,13 @@ static uint64_t process_clone(void) {
     if(vfork && child_stack)cpu->sp=child_stack;
     memset(address_space->lookup_cache,0,sizeof(address_space->lookup_cache));memcpy(fs_fd,child_fds,sizeof(fs_fd));
     uint64_t pid=2+slot;cpu->gpr[0]=0;
-    memcpy(proc_exe[pid],proc_exe[process_pid],sizeof(proc_exe[0])); /* /proc/<pid>/exe is inherited */
+    memcpy(proc_exe[pid],proc_exe[process_pid],sizeof(proc_exe[0])); /* /proc/<pid>/exe and cmdline are inherited */
+    memcpy(proc_cmdline[pid],proc_cmdline[process_pid],sizeof(proc_cmdline[0]));proc_cmdline_size[pid]=proc_cmdline_size[process_pid];
     if(!vfork && (flags&0x1000000))fs_pack(lookup(child_tid,4,2),0,(unsigned)pid,4); /* child's private memory */
     if(slot==process_count)process_count++;
     memset(&process_children[slot],0,sizeof(process_children[slot]));
     if(schedule_active) {
-        schedule_child(pid);if(share)schedule_vfork(pid);fs_cwd=parent_cwd;image_restore(&parent);
+        schedule_child(pid);proc_publish(0);if(share)schedule_vfork(pid);fs_cwd=parent_cwd;image_restore(&parent);
         memcpy(io_fds,parent_io,sizeof(io_fds));memcpy(fs_fd,parent_fds,sizeof(fs_fd));
         memcpy(fs_cloexec,parent_cloexec,sizeof(fs_cloexec));
         process_children[slot].pid=pid;process_children[slot].parent=process_pid;process_children[slot].live=1;

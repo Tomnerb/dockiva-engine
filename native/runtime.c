@@ -227,6 +227,8 @@ static uint64_t hwcap_bits(int second) {
     return bits;
 }
 static void startup(int argc, const char **argv, unsigned envc, const char **env) {
+    proc_set_cmdline(process_pid?process_pid:1,argc,argv);proc_publish(0);
+    if(!runtime_started_ns) { struct timespec now;clock_gettime(CLOCK_REALTIME,&now);runtime_started_ns=(uint64_t)now.tv_sec*1000000000u+(uint64_t)now.tv_nsec; }
     const uint64_t base=STACK_TOP-STACK_SIZE, size=STACK_SIZE;
     if((unsigned)argc>EXEC_ENTRIES || envc>EXEC_ENTRIES) fail("Too many arguments or environment entries");
     for(unsigned i=0;i<address_space->nseg;i++)
@@ -1032,6 +1034,8 @@ int main(int argc,char **argv) {
         else if(!strcmp(argv[i],"--stdin")) stdin_host=1;
         else if(!strcmp(argv[i],"--trace")) trace=1;
         else if(!strcmp(argv[i],"--outbound")) net_outbound=1;
+        else if(!strcmp(argv[i],"--proc-publish") && i+1<argc) proc_publish_path=argv[++i]; /* this run's process table, for exec runs and docker top */
+        else if(!strcmp(argv[i],"--proc-peer") && i+1<argc) proc_peer_path=argv[++i];       /* the main run's, shown in this run's /proc */
         else if(!strcmp(argv[i],"--oom-file") && i+1<argc) oom_file=argv[++i]; /* created on an OOM kill (docker inspect's OOMKilled) */
         else if(!strcmp(argv[i],"--hostname") && i+1<argc) {
             const char *name=argv[++i];size_t n=strlen(name);

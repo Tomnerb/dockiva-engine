@@ -25,6 +25,10 @@ static int64_t guest_fd_path(const char *path) {
 static uint64_t guest_ppid_of(uint64_t pid) { return pid>1?process_children[pid-2].parent:0; }
 static uint64_t guest_ppid(void) { return guest_ppid_of(process_pid); }
 static unsigned guest_threads_of(uint64_t pid) { return schedule_active && schedule_tasks[pid-1].threads?schedule_tasks[pid-1].threads->top:1; }
+static char guest_state_of(uint64_t pid) {
+    if(!schedule_active || pid==process_pid)return 'R';
+    unsigned state=schedule_tasks[pid-1].state;return state==2?'S':state==3?'T':'R';
+}
 static int guest_process_exists(uint64_t pid) { return pid==process_pid || (schedule_active && pid && pid<=PROCESS_LIMIT+1 && schedule_tasks[pid-1].state); }
 static uint64_t io_signals_pending(void) { return schedule_active?schedule_tasks[process_pid-1].signal_pending:0; }
 static unsigned io_signal_take(unsigned signal) {
@@ -308,7 +312,7 @@ static int guest_syscall_dispatch(void) {
             if(call==25 && (cpu->gpr[1]==0 || cpu->gpr[1]==1030)) {                                  /* F_DUPFD(_CLOEXEC) */
                 cpu->gpr[0]=cpu->gpr[2]>=GUEST_FD_LIMIT?linux_error(22):guest_dup(cpu->gpr[0],-1,cpu->gpr[2],cpu->gpr[1]==1030);return -3;
             }
-            if(io_managed(cpu->gpr[0]) && (call==57 || call==63 || call==64 || call==25 || call==29 || call==80 || call==62 || call==67)) { uint64_t result=io_call(call);if(result==IO_BLOCK) { cpu->pc-=4;return -2; }cpu->gpr[0]=result;return -3; }
+            if(io_managed(cpu->gpr[0]) && (call==57 || call==63 || call==64 || call==25 || call==29 || call==80 || call==62 || call==67 || call==61)) { uint64_t result=io_call(call);if(result==IO_BLOCK) { cpu->pc-=4;return -2; }cpu->gpr[0]=result;return -3; }
             if(call==220) { cpu->gpr[0]=process_clone();return -3; }
             if(call==221) { uint64_t result=process_exec();if(result)cpu->gpr[0]=result;return -3; }
             if(call==260 || call==95) { uint64_t result=call==95?process_waitid():process_wait();if(result==IO_BLOCK) { cpu->pc-=4;return -2; }cpu->gpr[0]=result;return -3; }

@@ -59,7 +59,7 @@ static struct GuestSignalfd { unsigned refs,nonblock;uint64_t mask; } io_signalf
    in nanoseconds, and a host kqueue holding a one-shot timer for that expiration. */
 static struct GuestTimer { unsigned refs,nonblock;clockid_t clock;int kq;uint64_t deadline,interval; } io_timers[IO_TIMERS];
 /* A synthetic file's contents, shared by dup and fork, and the shared position. */
-struct GuestText { unsigned refs;size_t size,position;unsigned char *data; };
+struct GuestText { unsigned refs,directory;size_t size,position;unsigned char *data; }; /* directory: data is linux_dirent64 records */
 typedef struct { unsigned kind,cloexec;int host;struct GuestPipe *pipe;struct GuestSignalfd *signals;struct GuestTimer *timer;struct GuestText *text;struct GuestInotify *inotify; } GuestIO;
 static uint64_t io_signals_pending(void);            /* the calling process's pending signals */
 static unsigned io_signal_take(unsigned signal);     /* consume one; returns its sender's pid */
@@ -228,9 +228,9 @@ static void io_fifo_forget(uint64_t pid) {
     for(unsigned i=0;i<IO_FIFOS;i++)if(io_fifos[i].pipe) { io_fifos[i].pipe->want_read&=~bit;io_fifos[i].pipe->want_write&=~bit; }
 }
 /* A synthetic read-only file (fs_open): its own copy of the text, a new descriptor. */
-static uint64_t io_text_open(const void *data,size_t size,int cloexec) {
+static uint64_t io_text_open(const void *data,size_t size,int cloexec,int directory) {
     struct GuestText *t=calloc(1,sizeof(*t));if(!t || !(t->data=malloc(size?size:1))) { free(t);return linux_error(12); }
-    memcpy(t->data,data,size);t->size=size;t->refs=1;
+    memcpy(t->data,data,size);t->size=size;t->refs=1;t->directory=(unsigned)directory;
     int fd=io_free_slot(0);if(fd<0) { free(t->data);free(t);return linux_error(24); }
     IO(fd)=(GuestIO){IO_TEXT,cloexec!=0,-1,NULL,NULL,NULL,t,NULL};
     return (uint64_t)fd;
@@ -378,7 +378,7 @@ static uint64_t io_call(uint64_t call) {
     if(call==80) {
         unsigned char *p=lookup(cpu->gpr[1],128,2);if(!p)return linux_error(14);
         if(f->kind==IO_FILE) { struct stat st;if(fstat(f->host,&st)<0)return fs_error();fs_stat_pack(p,&st); }
-        else if(f->kind==IO_TEXT) { memset(p,0,128);fs_pack(p,16,0100444,4);fs_pack(p,20,1,4);fs_pack(p,56,4096,4); } /* size 0, as procfs */
+        else if(f->kind==IO_TEXT) { memset(p,0,128);fs_pack(p,16,f->text->directory?040555:0100444,4);fs_pack(p,20,1,4);fs_pack(p,56,4096,4); } /* size 0, as procfs */
         else { memset(p,0,128);fs_pack(p,16,(f->kind==IO_READ || f->kind==IO_WRITE)?0010600:0020600,4);fs_pack(p,56,4096,4); }
         return 0;
     }
@@ -394,6 +394,20 @@ static uint64_t io_call(uint64_t call) {
         if(cpu->gpr[2]>2)return linux_error(22);
         off_t n=lseek(f->host,(off_t)(int64_t)cpu->gpr[1],(int)cpu->gpr[2]);return n<0?fs_error():(uint64_t)n;
     }
+    if(call==61) {                                                                   /* getdents64 of a /proc directory */
+        if(f->kind!=IO_TEXT || !f->text->directory)return linux_error(20);
+        struct GuestText *t=f->text;uint64_t count=cpu->gpr[2];size_t take=0;
+        while(t->position+take<t->size) {
+            size_t size=(size_t)le(t->data+t->position+take+16,2);
+            if(take+size>count)break;
+            take+=size;
+        }
+        if(!take && t->position<t->size)return linux_error(22);
+        unsigned char *out=take?lookup(cpu->gpr[1],take,2):NULL;if(take && !out)return linux_error(14);
+        if(take)memcpy(out,t->data+t->position,take);
+        t->position+=take;return take;
+    }
+    if(f->kind==IO_TEXT && f->text->directory && (call==63 || call==67))return linux_error(21); /* EISDIR */
     if(call==67 && f->kind!=IO_TEXT)return linux_error(29);
     if(call!=63 && call!=64 && call!=67)return linux_error(95);
     if(f->kind==IO_FILE)return fs_transfer(f->host,call);

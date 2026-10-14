@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -116,4 +117,40 @@ func (b *engine) stats(w http.ResponseWriter, r *http.Request, name string, stre
 		case <-tick.C:
 		}
 	}
+}
+
+// top lists a running container's processes (docker top) from the table its run
+// publishes: one "pid ppid uid size cmdline" record per process, cmdline being
+// size bytes of NUL-separated arguments.
+func (b *engine) top(name string) obj {
+	item := b.inspect(name)
+	state := object(item["State"])
+	if state["Running"] != true {
+		panic(apiError{409, "Container " + name + " is not running"})
+	}
+	stime := "?"
+	if started, e := time.Parse(time.RFC3339Nano, str(state["StartedAt"])); e == nil {
+		stime = started.Local().Format("15:04")
+	}
+	data, _ := os.ReadFile(filepath.Join(b.container(name), "procs"))
+	rows := [][]string{}
+	for len(data) > 0 {
+		fields := strings.SplitN(string(data[:min(len(data), 96)]), " ", 5)
+		if len(fields) < 5 {
+			break
+		}
+		size, e := strconv.Atoi(fields[3])
+		header := len(fields[0]) + len(fields[1]) + len(fields[2]) + len(fields[3]) + 4
+		if e != nil || size < 0 || header+size >= len(data) {
+			break
+		}
+		cmdline := strings.TrimRight(string(data[header:header+size]), "\x00")
+		user := fields[2]
+		if user == "0" {
+			user = "root"
+		}
+		rows = append(rows, []string{user, fields[0], fields[1], "0", stime, "?", "00:00:00", strings.ReplaceAll(cmdline, "\x00", " ")})
+		data = data[header+size+1:]
+	}
+	return obj{"Titles": []string{"UID", "PID", "PPID", "C", "STIME", "TTY", "TIME", "CMD"}, "Processes": rows}
 }

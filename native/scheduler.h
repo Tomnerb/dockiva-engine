@@ -506,6 +506,7 @@ static int schedule_finish(int current,int result,unsigned terminating) {
     }
     for(unsigned i=0;i<process_count;i++)if(process_children[i].parent==(uint64_t)current+1)process_children[i].parent=1;
     process_children[current-1].live=0;process_children[current-1].status=terminating?terminating:(unsigned)result<<8;schedule_live--;
+    proc_publish((uint64_t)current+1);
     ScheduledTask *parent=&schedule_tasks[process_children[current-1].parent-1];
     if(job_control_enabled)schedule_signal(parent,17);
     if((parent->signal_ignored&(UINT64_C(1)<<16)) || (parent->signal_flags[16]&2))process_children[current-1].pid=0;

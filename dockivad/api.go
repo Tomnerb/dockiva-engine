@@ -526,7 +526,7 @@ func (b *engine) create(name string, body obj) obj {
 }
 
 var versionPath = regexp.MustCompile(`^/v([0-9]+)\.([0-9]+)(/.*)$`)
-var containerPath = regexp.MustCompile(`^/containers/([^/]+)(?:/(json|start|stop|restart|logs|wait|attach|kill|archive|stats|exec|resize))?$`)
+var containerPath = regexp.MustCompile(`^/containers/([^/]+)(?:/(json|start|stop|restart|logs|wait|attach|kill|archive|stats|exec|resize|top))?$`)
 var execPath = regexp.MustCompile(`^/exec/([0-9a-f]+)/(start|json|resize)$`)
 
 func send(w http.ResponseWriter, status int, v any) {
@@ -926,6 +926,9 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 					defer endStream()
 				}
 				b.stats(w, r, name, streaming, yes("one-shot"))
+				return
+			case action == "top" && method == "GET":
+				send(w, 200, b.top(name))
 				return
 			case action == "kill" && method == "POST":
 				b.kill(name, signalNumber(q.Get("signal")))
