@@ -54,13 +54,23 @@ static uint64_t guest_mmap(uint64_t length,uint64_t prot,uint64_t flags,uint64_t
 }
 static uint64_t shared_unmap(uint64_t address,uint64_t bytes); /* mapping.h */
 static int reserve_unmap(uint64_t address,uint64_t bytes);      /* mapping.h */
+static int file_copy_demote(uint64_t address,uint64_t bytes,int partial); /* mapping.h */
 static uint64_t guest_munmap(uint64_t addr,uint64_t length) {
     if(addr%4096 || !length || length>UINT64_MAX-4095) return linux_error(22);
     uint64_t bytes=page_up(length);
     if(addr<MAP_BASE || addr-MAP_BASE>=address_space->map_capacity || bytes>address_space->map_capacity-(addr-MAP_BASE))
-        return reserve_unmap(addr,bytes)?0:linux_error(95);
+    {
+        /* Outside the arena: reservations and their commits go; anything else is left
+           and the call succeeds, as Linux's munmap of an unmapped range does
+           (ClickHouse calls munmap(NULL, n) after a failed mmap). The loader's own
+           segments stay: a position-independent program sits at 4 MiB here, where on
+           Linux it would be far from such a range. */
+        if(bytes>UINT64_C(0x1000000000000)-addr)return linux_error(22);           /* beyond the user address space */
+        (void)reserve_unmap(addr,bytes);return 0;
+    }
     unsigned first=(unsigned)((addr-MAP_BASE)/4096), pages=(unsigned)(bytes/4096);
     if(!address_space->map_flags) return 0;
+    if(!file_copy_demote(addr,bytes,1)) return linux_error(12);          /* part of a file copy */
     uint64_t shared=shared_unmap(addr,bytes);if(shared) return shared;
     if(!address_space_discard_map(address_space,(size_t)first*4096,(size_t)pages*4096)) return linux_error(12); /* release the pages */
     for(unsigned i=first;i<first+pages;i++) address_space->map_flags[i]=0;

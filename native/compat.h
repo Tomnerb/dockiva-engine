@@ -180,6 +180,8 @@ static void cap_after_setuid(uint32_t old_uid,uint32_t new_uid) {
     if(!old_uid && new_uid && !prctl_keepcaps)cap_held[0]=cap_held[1]=0;
 }
 static char prctl_name[16];
+static uint64_t seccomp_install(uint64_t flags,uint64_t address); /* seccomp.h */
+static int seccomp_active(void);
 static uint64_t guest_prctl(void) {
     uint64_t option=cpu->gpr[0],arg=cpu->gpr[1];
     switch(option) {
@@ -197,6 +199,8 @@ static uint64_t guest_prctl(void) {
         case 23:return arg<=40?1:linux_error(22);                                                  /* PR_CAPBSET_READ: full bounding set */
         case 38:if(arg!=1 || cpu->gpr[2] || cpu->gpr[3] || cpu->gpr[4])return linux_error(22);prctl_no_new_privs=1;return 0;
         case 39:return prctl_no_new_privs;
+        case 21:return seccomp_active()?2:0;                                                       /* PR_GET_SECCOMP */
+        case 22:return arg==2?seccomp_install(0,cpu->gpr[2]):linux_error(22);                     /* PR_SET_SECCOMP: filters only */
     }
     return linux_error(22);
 }

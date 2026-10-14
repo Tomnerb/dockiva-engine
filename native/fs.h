@@ -51,6 +51,9 @@ static uint64_t fs_storage_bytes;
    removes the storage and cumulative-write budgets (--storage-limit-mib 0), as
    Docker leaves disk use to the host. */
 static uint64_t fs_file_limit=FS_FILE_LIMIT,fs_storage_limit=FS_STORAGE_LIMIT,fs_write_limit=64u*1024u*1024u; /* 0: unlimited */
+/* With --storage-limit-mib, a run may also create at most 4096 files (8192 entries in all);
+   without one (Docker's behaviour), only the host's disk bounds them. */
+static int fs_count_full(void) { return fs_storage_limit && (fs_created>=4096 || fs_entries>=8192); }
 /* Hardlinked files (BusyBox applets) share one inode; count their bytes once.
    Open addressing; capacity exceeds the 8192-entry scan budget. */
 #define FS_INODE_SLOTS 16384u
@@ -484,6 +487,7 @@ static char prctl_name[16];       /* compat.h: PR_SET_NAME */
 static uint64_t guest_ppid_of(uint64_t pid);static unsigned guest_threads_of(uint64_t pid); /* syscall.h */
 static int guest_process_exists(uint64_t pid);
 static char guest_state_of(uint64_t pid);       /* syscall.h: R, S or T */
+static void guest_signal_sets(uint64_t pid,uint64_t sets[4]);  /* syscall.h: pending, blocked, ignored, caught */
 static uint64_t fs_proc_file(const char *path,const char *name);
 static uint64_t runtime_started_ns;             /* the container's boot time, for /proc/stat and uptime */
 /* The container's processes as /proc shows them. An exec or healthcheck is a run of
@@ -553,14 +557,23 @@ static uint64_t fs_proc_dir(const char *path) {
     return p>path+6 && (!*p || !strcmp(p,"/")) && proc_resolve(pid)?pid:0;
 }
 static const char *const fs_proc_root_files[]={"cpuinfo","loadavg","meminfo","mounts","stat","uptime"};
-static const char *const fs_proc_pid_files[]={"auxv","cgroup","cmdline","comm","mountinfo","mounts","stat","statm","status"};
+static const char *const fs_proc_pid_files[]={"auxv","cgroup","cmdline","comm","maps","mountinfo","mounts","stat","statm","status"};
+static size_t proc_maps(char *out,size_t capacity); /* mapping.h */
+/* Kernel settings programs read (Elasticsearch's bootstrap checks, ClickHouse, Redis):
+   Linux defaults, and somaxconn as the backlog this runtime grants (NET_BACKLOG_LIMIT). */
+static const char *const fs_proc_sys[][2]={{"/proc/sys/vm/max_map_count","262144\n"},{"/proc/sys/vm/overcommit_memory","0\n"},
+    {"/proc/sys/net/core/somaxconn","128\n"},{"/proc/sys/kernel/pid_max","4194304\n"},{"/proc/sys/kernel/ngroups_max","65536\n"}};
+static const char *fs_proc_sys_value(const char *path) {
+    for(unsigned i=0;i<sizeof(fs_proc_sys)/sizeof(*fs_proc_sys);i++)if(!strcmp(path,fs_proc_sys[i][0]))return fs_proc_sys[i][1];
+    return NULL;
+}
 /* What a /proc path is: 1 a directory, 2 a file, 0 not one of ours. */
 static int fs_proc_kind(const char *path) {
     if(!strcmp(path,"/proc") || !strcmp(path,"/proc/") || fs_proc_dir(path))return 1;
     for(unsigned i=0;i<sizeof(fs_proc_root_files)/sizeof(*fs_proc_root_files);i++)
         if(!strncmp(path,"/proc/",6) && !strcmp(path+6,fs_proc_root_files[i]))return 2;
     for(unsigned i=0;i<sizeof(fs_proc_pid_files)/sizeof(*fs_proc_pid_files);i++)if(fs_proc_file(path,fs_proc_pid_files[i]))return 2;
-    return !strcmp(path,"/proc/net/if_inet6")?2:0;
+    return !strcmp(path,"/proc/net/if_inet6") || fs_proc_sys_value(path)?2:0;
 }
 /* A linux_dirent64 record. */
 static size_t fs_dirent(char *out,size_t used,size_t capacity,uint64_t inode,const char *name,unsigned type) {
@@ -615,6 +628,13 @@ static uint64_t fs_open(void) {
         }
         return io_text_open(list,used,(flags&524288)!=0,1);
     }
+    if(fs_string(cpu->gpr[1],path)==0 && fs_proc_file(path,"maps")) {
+        /* This process's mappings (another process's address space is not at hand: empty). */
+        if(flags&(3|64|512|1024|16384))return linux_error(13);
+        size_t capacity=1<<20;char *text=malloc(capacity);if(!text)return linux_error(12);
+        size_t length=fs_proc_file(path,"maps")==proc_display(process_pid)?proc_maps(text,capacity):0;
+        uint64_t result=io_text_open(text,length,(flags&524288)!=0,0);free(text);return result;
+    }
     if(fs_string(cpu->gpr[1],path)==0) {
         char text[16384];size_t length=0;int known=1;uint64_t proc=0;
         if(!strcmp(path,"/proc/self/auxv") || !strcmp(path,"/proc/1/auxv")) {
@@ -660,10 +680,14 @@ static uint64_t fs_open(void) {
         } else if((proc=fs_proc_file(path,"status"))) {
             unsigned long long kib=resource_used>>10;ProcInfo info;proc_info(proc,&info);
             char state=info.state;
+            /* Signal sets as Linux shows them (the JDK's attach API requires SigCgt to show SIGQUIT caught). */
+            uint64_t sets[4]={0,0,0,0};int64_t own=proc_resolve(proc);if(own>0)guest_signal_sets((uint64_t)own,sets);
             length=(size_t)snprintf(text,sizeof text,"Name:\t%s\nState:\t%c (%s)\nTgid:\t%llu\nPid:\t%llu\nPPid:\t%llu\nUid:\t%u\t%u\t%u\t%u\n"
-                "Gid:\t%u\t%u\t%u\t%u\nVmSize:\t%llu kB\nVmRSS:\t%llu kB\nThreads:\t%u\n",info.comm,state,state=='S'?"sleeping":state=='T'?"stopped":"running",
+                "Gid:\t%u\t%u\t%u\t%u\nVmSize:\t%llu kB\nVmRSS:\t%llu kB\nThreads:\t%u\nSigQ:\t0/63432\nSigPnd:\t%016llx\nShdPnd:\t%016llx\n"
+                "SigBlk:\t%016llx\nSigIgn:\t%016llx\nSigCgt:\t%016llx\n",info.comm,state,state=='S'?"sleeping":state=='T'?"stopped":"running",
                 (unsigned long long)proc,(unsigned long long)proc,(unsigned long long)info.ppid,info.uid,info.uid,info.uid,info.uid,
-                guest_gid,guest_gid,guest_gid,guest_gid,kib,kib,info.threads);
+                guest_gid,guest_gid,guest_gid,guest_gid,kib,kib,info.threads,0ull,(unsigned long long)sets[0],
+                (unsigned long long)sets[1],(unsigned long long)sets[2],(unsigned long long)sets[3]);
         } else if(!strcmp(path,"/proc/mounts") || fs_proc_file(path,"mounts") || fs_proc_file(path,"mountinfo")) {
             /* The container's mounts (Java's FileStore looks a path's mount point up here). */
             int info=strstr(path,"mountinfo")!=NULL;
@@ -701,6 +725,8 @@ static uint64_t fs_open(void) {
                 length+=(size_t)snprintf(text+length,sizeof(text)-length,"intr 0\nctxt 0\nbtime %llu\nprocesses %u\nprocs_running %u\nprocs_blocked 0\n",
                     (unsigned long long)(runtime_started_ns/1000000000u),processes,running?running:1);
             }
+        } else if(fs_proc_sys_value(path)) {
+            length=(size_t)snprintf(text,sizeof text,"%s",fs_proc_sys_value(path));
         } else if(!strcmp(path,"/proc/net/if_inet6")) {
             /* IPv6 is up on lo (nginx's entrypoint then also listens on [::]). */
             length=(size_t)snprintf(text,sizeof text,"00000000000000000000000000000001 01 80 10 80       lo\n");
@@ -737,7 +763,7 @@ static uint64_t fs_open(void) {
     if(flags&4096) options|=O_DSYNC;
     if((flags&1052672)==1052672) options|=O_SYNC;
     if(flags&16384) options|=O_DIRECTORY;
-    if((flags&64) && (fs_created>=4096 || fs_entries>=8192)) { close(parent);return linux_error(28); }
+    if((flags&64) && fs_count_full()) { close(parent);return linux_error(28); }
     /* Validate the existing leaf before a possible truncate; only regular files/dirs.
        An unfollowed symlink reaches openat, which fails with ELOOP or EEXIST as on Linux. */
     struct stat before;
@@ -778,6 +804,10 @@ static void fs_stat_pack(unsigned char *out,const struct stat *st) {
     for(unsigned i=0;i<3;i++) { fs_pack(out,72+i*16,(uint64_t)times[i]->tv_sec,8);fs_pack(out,80+i*16,(uint64_t)times[i]->tv_nsec,8); }
 }
 /* One read/write of at most 1 MiB at the file position, or at offset (pread/pwrite) when it is >= 0. */
+/* mapping.h: a write to a file also updates its live MAP_SHARED mappings (as Linux's
+   page cache does; bbolt reads its pages through one and writes them with pwrite). */
+static unsigned file_shares_live;
+static void file_share_written(int fd,uint64_t at,const unsigned char *data,size_t bytes);
 static uint64_t fs_transfer_chunk(int fd,uint64_t call,int64_t offset) {
         uint64_t count=cpu->gpr[2]>1024*1024?1024*1024:cpu->gpr[2];
         unsigned char *buffer=count?lookup(cpu->gpr[1],count,call==63?2:4):(unsigned char *)"";
@@ -803,6 +833,7 @@ static uint64_t fs_transfer_chunk(int fd,uint64_t call,int64_t offset) {
                                 :(call==63?read(fd,buffer,(size_t)count):write(fd,buffer,(size_t)count));
         if(result<0) return fs_error();
         if(call==64) { /* atomic: file writes also run without the runtime lock */
+            if(__atomic_load_n(&file_shares_live,__ATOMIC_RELAXED))file_share_written(fd,write_position,buffer,(size_t)result);
             __atomic_fetch_add(&fs_written,(uint64_t)result,__ATOMIC_RELAXED);uint64_t end=write_position+(uint64_t)result;
             if(end>previous_size)__atomic_fetch_add(&fs_storage_bytes,end-previous_size,__ATOMIC_RELAXED);
         }
@@ -822,6 +853,36 @@ static uint64_t fs_transfer_at(int fd,uint64_t call,int64_t offset) {
     cpu->gpr[1]=base;cpu->gpr[2]=count;return done;
 }
 static uint64_t fs_transfer(int fd,uint64_t call) { return fs_transfer_at(fd,call,-1); }
+/* sendfile and copy_file_range between regular files (libuv's fs.copyFile, coreutils
+   cp): through the host, at most 1 MiB per call (callers loop, as on Linux), with
+   write(2)'s limits and accounting. in_at, out_at: guest offsets to use and update,
+   or 0 for the descriptors' positions. */
+static uint64_t fs_copy_between(uint64_t in_guest,uint64_t out_guest,uint64_t in_at,uint64_t out_at,uint64_t count) {
+    int in=fs_host(in_guest),out=fs_host(out_guest),in_slot=fs_slot(in_guest),out_slot=fs_slot(out_guest);
+    if(in<0 || out<0)return linux_error(9);
+    if(fs_dirs[in_slot] || fs_dirs[out_slot])return linux_error(21);
+    if(fs_ro[out_slot])return linux_error(30);
+    unsigned char *pin=in_at?lookup(in_at,8,6):NULL,*pout=out_at?lookup(out_at,8,6):NULL;
+    if((in_at && !pin) || (out_at && !pout))return linux_error(14);
+    off_t from=pin?(off_t)le(pin,8):lseek(in,0,SEEK_CUR);if(from<0)return pin?linux_error(22):fs_error();
+    struct stat st;if(fstat(out,&st)<0)return fs_error();
+    int append=(fcntl(out,F_GETFL)&O_APPEND)!=0;
+    off_t to=pout?(off_t)le(pout,8):append?st.st_size:lseek(out,0,SEEK_CUR);if(to<0)return pout?linux_error(22):fs_error();
+    if(count>1024*1024)count=1024*1024;
+    if(!count)return 0;
+    if((uint64_t)to>fs_file_limit || count>fs_file_limit-(uint64_t)to || (fs_write_limit && count>fs_write_limit-fs_written))return linux_error(27);
+    if(fs_storage_limit && (uint64_t)to+count>(uint64_t)st.st_size && (uint64_t)to+count-(uint64_t)st.st_size>fs_storage_limit-fs_storage_bytes)return linux_error(28);
+    unsigned char *buffer=malloc((size_t)count);if(!buffer)return linux_error(12);
+    ssize_t got=pread(in,buffer,(size_t)count,from),put=got>0?pwrite(out,buffer,(size_t)got,to):got;
+    if(put>0 && __atomic_load_n(&file_shares_live,__ATOMIC_RELAXED))file_share_written(out,(uint64_t)to,buffer,(size_t)put);
+    int saved=errno;free(buffer);errno=saved;
+    if(got<0 || put<0)return fs_error();
+    __atomic_fetch_add(&fs_written,(uint64_t)put,__ATOMIC_RELAXED);
+    if((uint64_t)(to+put)>(uint64_t)st.st_size)__atomic_fetch_add(&fs_storage_bytes,(uint64_t)(to+put)-(uint64_t)st.st_size,__ATOMIC_RELAXED);
+    if(pin)fs_pack(pin,0,(uint64_t)(from+put),8);else lseek(in,from+put,SEEK_SET);
+    if(pout)fs_pack(pout,0,(uint64_t)(to+put),8);else if(!append)lseek(out,to+put,SEEK_SET);
+    return (uint64_t)put;
+}
 static uint64_t io_epoch; /* io.h: changes wake blocked tasks */
 /* POSIX record locks (fcntl F_GETLK/F_SETLK/F_SETLKW, and the OFD variants as the
    same), kept here: every guest process shares this host process, whose own locks
@@ -895,7 +956,7 @@ static uint64_t fs_flock(int fd) {
 static uint64_t fs_call(uint64_t call) {
     if(call==166) { unsigned previous=fs_umask;fs_umask=(unsigned)cpu->gpr[0]&0777;return previous; }
     if(call==52 || call==53) {
-        uint64_t mode=cpu->gpr[call==52?1:2];if(mode&~UINT64_C(07777))return linux_error(22); /* setuid/setgid/sticky allowed, as on Linux */
+        uint64_t mode=cpu->gpr[call==52?1:2]&UINT64_C(07777); /* Linux ignores other bits (libuv passes st_mode); setuid/setgid/sticky allowed */
         int fd=fs_host(cpu->gpr[0]),owned=0;
         if(call==52 && fs_slot(cpu->gpr[0])>=0 && fs_ro[fs_slot(cpu->gpr[0])])return linux_error(30);
         if(call==53) {
@@ -915,12 +976,18 @@ static uint64_t fs_call(uint64_t call) {
         int saved=errno;if(owned)close(fd);errno=saved;return result<0?fs_error():0;
     }
     if(call==78) {
-        if(!cpu->gpr[3] || cpu->gpr[3]>4096)return linux_error(22);
+        if(!cpu->gpr[3] || (int64_t)(int32_t)cpu->gpr[3]<=0)return linux_error(22);
+        if(cpu->gpr[3]>4096)cpu->gpr[3]=4096;                     /* any buffer size, as on Linux (libc++ passes more) */
         unsigned char *out=lookup(cpu->gpr[2],cpu->gpr[3],2);if(!out)return linux_error(14);
         char path[1025],exe[1025];
         if(fs_string(cpu->gpr[1],path)==0 && fs_proc_exe(path,exe)) { /* readlink /proc/<pid>/exe */
             size_t n=strlen(exe);if(n>cpu->gpr[3])n=(size_t)cpu->gpr[3];memcpy(out,exe,n);return n;
         }
+        if(!strcmp(path,"/proc/self") || !strcmp(path,"/proc/thread-self")) {          /* the caller's pid */
+            char pid[24];size_t n=(size_t)snprintf(pid,sizeof pid,"%llu",(unsigned long long)proc_display(process_pid));
+            if(n>cpu->gpr[3])n=(size_t)cpu->gpr[3];memcpy(out,pid,n);return n;
+        }
+        if(fs_proc_kind(path))return linux_error(22);  /* our /proc files and directories are not links (glibc's realpath asks) */
         char leaf[1025];int parent=fs_parent_nofollow(cpu->gpr[0],cpu->gpr[1],leaf);if(parent<0)return fs_error();
         /* Read the final link's text; ancestors are resolved inside the root. */
         ssize_t result=readlinkat(parent,leaf,(char *)out,(size_t)cpu->gpr[3]);
@@ -928,7 +995,7 @@ static uint64_t fs_call(uint64_t call) {
     }
     if(call==36) { /* symlinkat(target, dirfd, path): the target is kept verbatim and resolved inside the root */
         char target[1025];if(fs_string(cpu->gpr[0],target)<0)return fs_error();
-        if(fs_created>=4096 || fs_entries>=8192)return linux_error(28);
+        if(fs_count_full())return linux_error(28);
         char leaf[1025];int parent=fs_parent_nofollow(cpu->gpr[1],cpu->gpr[2],leaf);if(parent<0)return fs_error();
         if(!fs_path_writable()) { close(parent);return linux_error(30); }
         if(!strcmp(leaf,".")) { close(parent);return linux_error(17); }
@@ -938,7 +1005,7 @@ static uint64_t fs_call(uint64_t call) {
     }
     if(call==37) { /* linkat(olddirfd, old, newdirfd, new, flags): a hard link within one mount */
         uint64_t flags=cpu->gpr[4];if(flags&~UINT64_C(0x400))return linux_error(22);   /* AT_SYMLINK_FOLLOW */
-        if(fs_created>=4096 || fs_entries>=8192)return linux_error(28);
+        if(fs_count_full())return linux_error(28);
         char from[1025];int source=fs_lookup(cpu->gpr[0],cpu->gpr[1],from,(flags&0x400)!=0,NULL);if(source<0)return fs_error();
         int where=fs_where;
         char leaf[1025];int parent=fs_parent_nofollow(cpu->gpr[2],cpu->gpr[3],leaf);if(parent<0) { uint64_t e=fs_error();close(source);return e; }
@@ -1046,7 +1113,7 @@ static uint64_t fs_call(uint64_t call) {
     if(call==33) { /* mknodat: FIFOs (mkfifo) and regular files; devices need privileges we do not grant */
         unsigned type=(unsigned)(cpu->gpr[2]&0170000);mode_t mode=(mode_t)(cpu->gpr[2]&0777&~fs_umask);
         if(type!=0010000 && type!=0100000 && type)return linux_error(1);
-        if(fs_created>=4096 || fs_entries>=8192)return linux_error(28);
+        if(fs_count_full())return linux_error(28);
         char leaf[1025];int parent=fs_parent_nofollow(cpu->gpr[0],cpu->gpr[1],leaf);if(parent<0)return fs_error();
         if(!fs_path_writable()) { close(parent);return linux_error(30); }
         int result;
@@ -1055,7 +1122,7 @@ static uint64_t fs_call(uint64_t call) {
         uint64_t e=result<0?fs_error():0;close(parent);if(!e)fs_count_created();return e;
     }
     if(call==34 || call==35 || call==38) {
-        if(call==34 && (fs_created>=4096 || fs_entries>=8192)) return linux_error(28);
+        if(call==34 && fs_count_full()) return linux_error(28);
         if(call==35 && cpu->gpr[2]!=0 && cpu->gpr[2]!=512) return linux_error(22);
         /* These act on a final symlink itself, never its target. */
         char leaf[1025];int parent=fs_parent_nofollow(cpu->gpr[0],cpu->gpr[1],leaf);if(parent<0) return fs_error();
@@ -1071,7 +1138,11 @@ static uint64_t fs_call(uint64_t call) {
             if(!strcmp(target,".")) { close(other);close(parent);return linux_error(fs_where>0?16:13); }
             result=renameat(parent,leaf,other,target);int saved=errno;close(other);errno=saved;
         }
-        uint64_t e=result<0?fs_error():0;close(parent);return e;
+        uint64_t e=result<0?fs_error():0;
+        /* unlink of a directory: Darwin says EPERM, Linux EISDIR (glibc's remove(), and so
+           Java's File.delete, then retries with rmdir). */
+        if(call==35 && !cpu->gpr[2] && result<0 && errno==EPERM) { struct stat st;if(!fstatat(parent,leaf,&st,AT_SYMLINK_NOFOLLOW) && S_ISDIR(st.st_mode))e=linux_error(21); }
+        close(parent);return e;
     }
     int fd=fs_host(cpu->gpr[0]);if(fd<0) return linux_error(9);
     unsigned slot=(unsigned)fs_slot(cpu->gpr[0]);

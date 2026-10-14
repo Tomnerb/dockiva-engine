@@ -346,6 +346,7 @@ static uint64_t logical_mask(uint32_t ins,unsigned width) {
 #include "terminal.h"
 #include "signals.h"
 #include "sysinfo.h"
+#include "seccomp.h"
 #include "syscall.h"
 #ifdef VMFREE_HVF
 #include "hvf_backend.h"
@@ -615,7 +616,7 @@ static int run(uint64_t steps) {
             /* NOP */
         } break;
         case 31: {
-            int result=guest_syscall();if(result!=-3)return result;
+            int result=seccomp_check();if(!result)result=guest_syscall();if(result!=-3)return result;
         } break;
         case 32: {
             unsigned width=(ins>>31)?64:32;

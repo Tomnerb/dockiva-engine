@@ -347,6 +347,10 @@ static uint64_t io_call(uint64_t call) {
     if(call==25) {
         if(cpu->gpr[1]==1)return f->cloexec;
         if(cpu->gpr[1]==2) { if(cpu->gpr[2]>1)return linux_error(22);f->cloexec=(unsigned)cpu->gpr[2];return 0; }
+        if(cpu->gpr[1]==1031 || cpu->gpr[1]==1032) {               /* F_SETPIPE_SZ, F_GETPIPE_SZ: pipes hold PIPE_CAP */
+            if(f->kind!=IO_READ && f->kind!=IO_WRITE)return linux_error(9);
+            return cpu->gpr[1]==1031 && cpu->gpr[2]>PIPE_CAP?linux_error(1):PIPE_CAP;
+        }
         if(cpu->gpr[1]==4 && f->kind==IO_EVENT) { f->pipe->write_nonblock=(cpu->gpr[2]&2048)!=0;io_epoch++;return 0; }
         if(cpu->gpr[1]==3 && f->kind==IO_EVENT)return 2|(f->pipe->write_nonblock?2048:0);
         if(cpu->gpr[1]==4 && (f->kind==IO_READ || f->kind==IO_WRITE)) {

@@ -29,6 +29,12 @@ static char guest_state_of(uint64_t pid) {
     if(!schedule_active || pid==process_pid)return 'R';
     unsigned state=schedule_tasks[pid-1].state;return state==2?'S':state==3?'T':'R';
 }
+static void guest_signal_sets(uint64_t pid,uint64_t sets[4]) {
+    if(!schedule_active || !pid || pid>PROCESS_LIMIT+1)return;
+    ScheduledTask *t=&schedule_tasks[pid-1];
+    sets[0]=t->signal_pending;sets[1]=pid==process_pid?*signal_mask_now():t->signal_mask;sets[2]=t->signal_ignored;
+    for(unsigned i=0;i<64;i++)if(t->signal_handler[i] && !(t->signal_ignored&(UINT64_C(1)<<i)))sets[3]|=UINT64_C(1)<<i;
+}
 static int guest_process_exists(uint64_t pid) { return pid==process_pid || (schedule_active && pid && pid<=PROCESS_LIMIT+1 && schedule_tasks[pid-1].state); }
 static uint64_t io_signals_pending(void) { return schedule_active?schedule_tasks[process_pid-1].signal_pending:0; }
 static unsigned io_signal_take(unsigned signal) {
@@ -127,8 +133,8 @@ static int64_t fd_carry_receive(int carrier,int cloexec) {
     return fd;
 }
 /* sendfile(out, in, offset, count) from a file to a socket (nginx serves static
-   files this way), through Darwin's sendfile. Other destinations: EINVAL, on which
-   callers (busybox, coreutils) copy with read and write. */
+   files this way), through Darwin's sendfile, or to a file (fs_copy_between). Other
+   destinations: EINVAL, on which callers (busybox, coreutils) copy with read and write. */
 #ifdef __APPLE__
 struct sf_hdtr;
 int sendfile(int,int,off_t,off_t *,struct sf_hdtr *,int); /* <sys/socket.h> hides it from strict C11 */
@@ -138,6 +144,7 @@ static uint64_t guest_sendfile(void) {
     return linux_error(22);
 #else
     int in=fs_host(cpu->gpr[1]),out=net_host(cpu->gpr[0]);
+    if(in>=0 && fs_host(cpu->gpr[0])>=0)return fs_copy_between(cpu->gpr[1],cpu->gpr[0],cpu->gpr[2],0,cpu->gpr[3]);
     if(in<0 || (out<0 && !fd_kind[cpu->gpr[0]<GUEST_FD_LIMIT?cpu->gpr[0]:0]))return linux_error(9);
     if(out<0 || fs_dirs[fs_slot(cpu->gpr[1])])return linux_error(22);
     unsigned slot=(unsigned)net_slot(cpu->gpr[0]);
@@ -196,10 +203,12 @@ static int guest_syscall_dispatch(void) {
             uint64_t call=cpu->gpr[8];cpu->exclusive_valid=0;
             if(profiling && call<512) profile_syscalls[call]++;
             if(trace) fprintf(stderr,"pid %" PRIu64 " syscall %" PRIu64 ": x0..5=[%" PRIu64 ", %" PRIu64 ", %" PRIu64 ", %" PRIu64 ", %" PRIu64 ", %" PRIu64 "]\n",process_pid,call,cpu->gpr[0],cpu->gpr[1],cpu->gpr[2],cpu->gpr[3],cpu->gpr[4],cpu->gpr[5]);
+            if(trace && (call==56 || call==79 || call==48 || call==35 || call==78 || call==34)) { char path[1025];if(!fs_string(cpu->gpr[1],path))fprintf(stderr,"  path %s\n",path); }
             if(call==139 && job_control_enabled) { signal_return();if(schedule_tasks[process_pid-1].terminate_signal || schedule_tasks[process_pid-1].stop_signal)return -1;return -3; }
             if(call==137) { uint64_t r=signal_timedwait();if(r==IO_BLOCK) { cpu->pc-=4;return -2; }cpu->gpr[0]=r;return -3; }
             if(call==133) { uint64_t r=signal_suspend();if(r==IO_BLOCK) { cpu->pc-=4;return -2; }cpu->gpr[0]=r;return -3; }
             if(call==134 || call==135) { cpu->gpr[0]=signal_call(call);if(schedule_active && (schedule_tasks[process_pid-1].terminate_signal || schedule_tasks[process_pid-1].stop_signal))return -1;return -3; }
+            if(call==285) { cpu->gpr[0]=cpu->gpr[5]?linux_error(22):fs_copy_between(cpu->gpr[0],cpu->gpr[2],cpu->gpr[1],cpu->gpr[3],cpu->gpr[4]);return -3; } /* copy_file_range */
             if(call==71) { uint64_t r=guest_sendfile();if(r==IO_BLOCK) { cpu->pc-=4;return -2; }cpu->gpr[0]=r;return -3; }
             if(call==160) {
                 unsigned char *out=lookup(cpu->gpr[0],390,2);
@@ -285,6 +294,15 @@ static int guest_syscall_dispatch(void) {
             if(call==19) { cpu->gpr[0]=io_eventfd();return -3; }
             if(call>=85 && call<=87) { cpu->gpr[0]=io_timerfd(call);return -3; }
             if(call>=26 && call<=28) { cpu->gpr[0]=io_inotify(call);return -3; }
+            if(call==79 && (cpu->gpr[3]&0x1000) && (int64_t)cpu->gpr[0]>=0 && cpu->gpr[0]<GUEST_FD_LIMIT && fs_host(cpu->gpr[0])<0) {
+                /* fstatat(fd, "", AT_EMPTY_PATH), glibc's fstat, on a pipe, socket or synthetic file: fstat */
+                const unsigned char *name=lookup(cpu->gpr[1],1,4);
+                if(name && !*name) {
+                    uint64_t saved=cpu->gpr[1];cpu->gpr[1]=cpu->gpr[2];cpu->gpr[8]=80;
+                    int result=guest_syscall_dispatch();
+                    cpu->gpr[8]=79;if(result!=-3)cpu->gpr[1]=saved;return result;
+                }
+            }
             if(call==79 || call==48 || call==439) {   /* /dev/fd/N (bash's process substitution): the descriptor itself */
                 char path[1025];int64_t n=fs_string(cpu->gpr[1],path)==0?guest_fd_path(path):-1;
                 if(n>=0) {
@@ -349,6 +367,33 @@ static int guest_syscall_dispatch(void) {
                 return -3;
             }
             if(call==122) { cpu->gpr[0]=guest_id_exists(cpu->gpr[0])?0:linux_error(3);return -3; } /* sched_setaffinity: accepted */
+            if(call==32 && fs_host(cpu->gpr[0])<0) {                                          /* flock on a pipe, socket or synthetic file */
+                cpu->gpr[0]=cpu->gpr[0]<GUEST_FD_LIMIT && fd_kind[cpu->gpr[0]]?0:linux_error(9);return -3;
+            }
+            if(call>=118 && call<=121) {
+                /* Scheduling policy, as an unprivileged Docker container sees it: every task is
+                   SCHED_OTHER at priority 0; the real-time policies need CAP_SYS_NICE (EPERM).
+                   .NET's Thread.Priority asks for them. */
+                if(!guest_id_exists(cpu->gpr[0])) { cpu->gpr[0]=linux_error(3);return -3; }
+                uint64_t param=call==119?cpu->gpr[2]:cpu->gpr[1],policy=call==119?cpu->gpr[1]&~UINT64_C(0x40000000):0;
+                unsigned char *p=call==120?(unsigned char *)"":lookup(param,4,call==121?2:4);
+                if(!p) { cpu->gpr[0]=linux_error(param?14:22);return -3; }
+                if(call==121) { fs_pack(p,0,0,4);cpu->gpr[0]=0; }
+                else if(call==120)cpu->gpr[0]=0;                                              /* SCHED_OTHER */
+                else if(policy==1 || policy==2)cpu->gpr[0]=linux_error(1);                    /* SCHED_FIFO, SCHED_RR */
+                else cpu->gpr[0]=(policy==0 || policy==3 || policy==5) && !le(p,4)?0:linux_error(22);
+                return -3;
+            }
+            if(call==140 || call==141) {                                                         /* setpriority, getpriority */
+                /* ponytail: nice values are accepted and not kept (the host schedules the runtime);
+                   getpriority reports nice 0 (the raw call returns 20 - nice). */
+                if(cpu->gpr[0]>2) { cpu->gpr[0]=linux_error(22);return -3; }
+                cpu->gpr[0]=call==141?20:0;return -3;
+            }
+            if(call==125 || call==126) {                                                        /* sched_get_priority_max/min */
+                uint64_t policy=cpu->gpr[0];
+                cpu->gpr[0]=policy==1 || policy==2?(call==125?99:1):policy==0 || policy==3 || policy==5?0:linux_error(22);return -3;
+            }
             if(call==232) { /* mincore: every page reported resident */
                 uint64_t pages=(cpu->gpr[1]+4095)/4096;unsigned char *out=pages?lookup(cpu->gpr[2],pages,2):NULL;
                 if(cpu->gpr[0]%4096 || (pages && !out))cpu->gpr[0]=linux_error(cpu->gpr[0]%4096?22:14);
@@ -370,6 +415,7 @@ static int guest_syscall_dispatch(void) {
                fallback. Never report successful robust-list/rseq registration. */
             if(call==99 || call==293) { cpu->gpr[0]=linux_error(38);return -3; }
             if(call==167) { cpu->gpr[0]=guest_prctl();return -3; }
+            if(call==277) { cpu->gpr[0]=guest_seccomp();return -3; }
             if(call==283) { /* membarrier: the native backend first moves running sibling threads through an exception */
                 uint64_t cmd=cpu->gpr[0];const uint64_t supported=1|8|16; /* GLOBAL, PRIVATE_EXPEDITED, REGISTER_PRIVATE_EXPEDITED */
                 cpu->gpr[0]=cmd==0?supported:(cmd&supported) && !(cmd&(cmd-1)) && !cpu->gpr[1]?0:linux_error(22);return -3;

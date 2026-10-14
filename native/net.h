@@ -688,7 +688,15 @@ static uint64_t net_call(uint64_t number) {
         if(cpu->gpr[1]==8 || cpu->gpr[1]==9)return 0; /* F_SETOWN, F_GETOWN: accepted; no SIGIO is sent (see FIOASYNC) */
         return linux_error(95);
     }
-    if(number==210) { if(cpu->gpr[1]>2)return linux_error(22);return shutdown(fd,(int)cpu->gpr[1])<0?net_error():0; }
+    if(number==210) {
+        if(cpu->gpr[1]>2)return linux_error(22);
+        if(shutdown(fd,(int)cpu->gpr[1])==0)return 0;
+        /* A listening socket: Darwin says ENOTCONN, Linux succeeds (and SHUT_RD stops it
+           accepting; servers shut their listeners down before closing them). */
+        int listening=0;socklen_t size=sizeof(listening);
+        if(errno==ENOTCONN && !getsockopt(fd,SOL_SOCKET,SO_ACCEPTCONN,&listening,&size) && listening)return 0;
+        return net_error();
+    }
     if(number==202 || number==242) {
         net_description(slot)->reads++;
         if(number==242 && (cpu->gpr[3]&~UINT64_C(526336)))return linux_error(22);

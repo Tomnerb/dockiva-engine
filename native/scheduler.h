@@ -4,7 +4,7 @@
    scheduled on its own, so threads of a process run on several workers at once.
    They share the process's memory, descriptors and signal handlers; each has its
    own registers, wait, signal mask and thread-directed pending signals. */
-#define THREAD_LIMIT 128
+#define THREAD_LIMIT 1024 /* ClickHouse starts 140; tables are calloc'd, so untouched slots cost nothing */
 typedef struct {
     unsigned state;               /* 0 free, 1 runnable, 2 futex wait, 3 blocked call (retries when woken) */
     unsigned worker;              /* 1 + the index of the worker running it, or 0 */
@@ -247,8 +247,9 @@ static void task_load(ScheduledTask *t) {
     proc_now=&t->ps;image_home_scheduled=&t->image.memory;image_restore(&t->image);t->saved=0;
     io_table=&t->io;net_table=&t->net;net_wait_now=&t->network_wait;fs_table=&t->fs;fd_table=&t->fds;
 }
+static void seccomp_forget(uint64_t pid); /* seccomp.h */
 static void task_free(void) {
-    fs_cwd_release();image_free();io_cleanup();net_cleanup();fs_locks_release(0,0,process_pid);io_fifo_forget(process_pid);
+    seccomp_forget(process_pid);fs_cwd_release();image_free();io_cleanup();net_cleanup();fs_locks_release(0,0,process_pid);io_fifo_forget(process_pid);
     for(unsigned i=0;i<FS_SLOTS;i++) {
         fs_directory_release(fs_dirs[i]);
         if(fs_fd[i])close(fs_fd[i]-1);

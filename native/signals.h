@@ -157,7 +157,11 @@ static void signal_deliver(int blocked) {
     if(suspended) { frame_mask=task->suspend_mask;task->suspending=task->sigwaiting=0; }
     unsigned *wait_masked;uint64_t *wait_saved;signal_wait_state(&wait_masked,&wait_saved);
     if(*wait_masked) { frame_mask=*wait_saved;*wait_masked=0;suspended=1; }         /* ppoll/pselect6: EINTR, never restarted */
-    if(blocked && (suspended || !(flags&UINT64_C(0x10000000)))) { cpu->pc+=4;cpu->gpr[0]=linux_error(4);net_wait.active=0;io_fifo_forget(process_pid); }
+    /* Linux never restarts these after a handler, SA_RESTART or not (signal(7)): epoll_pwait(2),
+       ppoll, pselect6, nanosleep and clock_nanosleep return EINTR. PostgreSQL's latches rely on it. */
+    uint64_t call=cpu->gpr[8];
+    int never_restart=call==22 || call==441 || call==73 || call==72 || call==101 || call==115;
+    if(blocked && (suspended || never_restart || !(flags&UINT64_C(0x10000000)))) { cpu->pc+=4;cpu->gpr[0]=linux_error(4);net_wait.active=0;io_fifo_forget(process_pid); }
     memset(out,0,SIGNAL_FRAME_SIZE);
     fs_pack(out,0,index+1,4);fs_pack(out,16,task->signal_sender[index],4);
     if(from_thread && th->fault_signal==index+1) { /* a fault: si_code and si_addr */
@@ -165,7 +169,7 @@ static void signal_deliver(int blocked) {
     } else if(task->signal_fault_code[index]) {
         fs_pack(out,8,task->signal_fault_code[index],4);fs_pack(out,16,task->signal_fault_addr[index],8);
         task->signal_fault_code[index]=0;
-    }
+    } else if(from_thread)fs_pack(out,8,(uint64_t)-6,4);     /* SI_TKILL: glibc's setuid/setgid broadcast (SIGSETXID) requires it */
     fs_pack(out,144,cpu->altstack_sp,8);fs_pack(out,160,cpu->altstack_size,8);   /* uc_stack, as interrupted */
     fs_pack(out,152,!cpu->altstack_size?2:on_altstack?1:0,4);                    /* SS_DISABLE / SS_ONSTACK */
     fs_pack(out,168,frame_mask,8);

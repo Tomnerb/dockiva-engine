@@ -776,7 +776,7 @@ static int hvf_unlocked_exit(void) {
         } else hvf_views[process_pid].stale=HVF_STALE_COW;
         hvf_resume_el0(elr,spsr);return 1;
     }
-    if(ec!=0x15)return 0;                                                     /* SVC from EL0 */
+    if(ec!=0x15 || seccomp_active())return 0;                                 /* SVC from EL0; filtered calls take the locked path */
     hvf_check(hv_vcpu_get_reg(hvf_vcpu,HV_REG_X8,&call),"get x8");
     int memory=call==222 || call==215 || call==226 || call==233 || call==214;
     if(!memory && call!=22 && call!=56 && call!=79 && call!=80 && (call<62 || call>68) && call!=82 && call!=83 && call!=206 && call!=207)return 0;
@@ -899,7 +899,8 @@ static int hvf_slice_run(void) {
             int fork=call==220 && !(flags&0x10000);
             if(call==220 || call==221 || call==139)hvf_fp_pull(); /* clone/fork copy, exec and sigreturn replace the whole CPU state */
             if(fork)hvf_views[process_pid].stale=HVF_STALE_COW; /* a fork shares this process's private pages */
-            int result=hvf_thread_call(call);
+            int denied=seccomp_check();
+            int result=denied?denied:hvf_thread_call(call);
             if(result==HVF_UNHANDLED) {
                 /* Sibling threads stay out of guest code while their memory is
                    snapshotted or replaced. */

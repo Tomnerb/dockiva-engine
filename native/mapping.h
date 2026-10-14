@@ -47,6 +47,26 @@ static unsigned map_find(GuestAddressSpace *space,unsigned pages) {
     return start;
 }
 static void file_share_unmapped(MemoryBacking *backing); /* below */
+/* Turns the uncharged file copies overlapping [address, address+bytes) that it does
+   not wholly cover (all of them, with partial 0) into ordinary private arena pages,
+   charged now: ld.so maps a library's whole span, then maps its segments over it
+   (MAP_FIXED) and protects the gaps, which needs ordinary pages. 0 if out of memory. */
+static int file_copy_demote(uint64_t address,uint64_t bytes,int partial) {
+    for(unsigned i=0;i<address_space->nseg;i++) {
+        Segment s=address_space->seg[i];
+        if(!(s.flags&SEG_FILE_COPY) || s.base>=address+bytes || s.base+s.size<=address)continue;
+        if(partial && s.base>=address && s.base+s.size<=address+bytes)continue;
+        if(!backing_data(address_space->map_backing)) { address_space->map_backing=backing_reserve(address_space->map_capacity);if(!backing_data(address_space->map_backing))return 0; }
+        size_t offset=(size_t)(s.base-MAP_BASE);unsigned first=(unsigned)(offset/4096),pages=(unsigned)(s.size/4096);
+        if(!address_space_make_private(address_space,address_space->map_backing,offset,(size_t)s.size))return 0;
+        memcpy(backing_data(address_space->map_backing)+offset,segment_data(&s),(size_t)s.size);
+        address_space->seg[i]=address_space->seg[--address_space->nseg];backing_release(s.backing);
+        for(unsigned p=first;p<first+pages;p++)address_space->map_flags[p]=(unsigned char)(8|16|(s.flags&7));
+        address_space_arena_changed(address_space,first,first+pages);address_space_changed(address_space);
+        i=(unsigned)-1;                                                  /* the table changed: start over */
+    }
+    return 1;
+}
 /* Shared memory: a segment over arena pages marked MAP_RESERVED. backing is the
    memory to share (System V shm) or NULL for fresh zeroed memory (MAP_SHARED|
    MAP_ANONYMOUS, charged in full now). fixed is a page address in the arena, or 0. */
@@ -92,12 +112,32 @@ static uint64_t shared_unmap(uint64_t address,uint64_t bytes) {
 /* Writable MAP_SHARED file mappings (POSIX semaphores in /dev/shm, SQLite's WAL
    index). Every process of the container lives in this runtime, so all mappings of
    one file share one backing, filled from the file and written back to it on msync
-   and when the last mapping goes; keyed by the file's device and inode.
-   ponytail: read()/write() of the file do not see unflushed mapped changes (Linux's
-   page cache unifies them); flush on every write if that ever matters. */
-#define FILE_SHARES 64
-static struct FileShare { dev_t dev;ino_t ino;int fd;MemoryBacking *backing;size_t size; } file_shares[FILE_SHARES];
+   and when the last mapping goes (if it was ever writable); keyed by the file's
+   device and inode. Writes to the file update the backing (file_share_written).
+   ponytail: read() of the file does not see unflushed mapped changes (Linux's page
+   cache unifies them); flush before reads if that ever matters. */
+#define FILE_SHARES 1024 /* .NET maps each assembly it loads MAP_SHARED */
+static struct FileShare { dev_t dev;ino_t ino;int fd;MemoryBacking *backing;size_t size;int writable; } file_shares[FILE_SHARES];
+/* Guards the table against file writes, which also run without the runtime lock. */
+static pthread_mutex_t file_share_lock=PTHREAD_MUTEX_INITIALIZER;
+static void file_share_written(int fd,uint64_t at,const unsigned char *data,size_t bytes) {
+    struct stat st;if(fstat(fd,&st)<0)return;
+    pthread_mutex_lock(&file_share_lock);
+    for(unsigned i=0;i<FILE_SHARES;i++) {
+        struct FileShare *f=&file_shares[i];
+        if(!f->backing || f->dev!=st.st_dev || f->ino!=st.st_ino || at>=f->size)continue;
+        memcpy(backing_data(f->backing)+at,data,bytes<f->size-at?bytes:(size_t)(f->size-at));
+    }
+    pthread_mutex_unlock(&file_share_lock);
+}
+static void file_share_forget(struct FileShare *f) {
+    pthread_mutex_lock(&file_share_lock);
+    close(f->fd);backing_release(f->backing);memset(f,0,sizeof(*f));
+    pthread_mutex_unlock(&file_share_lock);
+    __atomic_fetch_sub(&file_shares_live,1,__ATOMIC_RELAXED);
+}
 static void file_share_flush(struct FileShare *f) {
+    if(!f->writable)return;                             /* never written through a mapping */
     struct stat st;if(fstat(f->fd,&st)<0)return;
     size_t bytes=(size_t)st.st_size<f->size?(size_t)st.st_size:f->size;
     for(size_t done=0;done<bytes;) {
@@ -108,8 +148,7 @@ static void file_share_flush(struct FileShare *f) {
 /* A shared segment went away: when only the table still holds the backing, flush and forget. */
 static void file_share_unmapped(MemoryBacking *backing) {
     for(unsigned i=0;i<FILE_SHARES;i++)if(file_shares[i].backing==backing && backing->refs==2) {
-        file_share_flush(&file_shares[i]);close(file_shares[i].fd);
-        backing_release(backing);memset(&file_shares[i],0,sizeof(file_shares[i]));return;
+        file_share_flush(&file_shares[i]);file_share_forget(&file_shares[i]);return;
     }
 }
 static int file_share_find(uint64_t guestfd) {
@@ -129,7 +168,7 @@ static uint64_t file_share_map(uint64_t fixed,uint64_t length,uint64_t prot,uint
     }
     if(f && end>f->size) {
         if(f->backing->refs>1)return linux_error(12); /* mapped beyond what others share */
-        file_share_flush(f);close(f->fd);backing_release(f->backing);memset(f,0,sizeof(*f));free_entry=f;f=NULL;
+        file_share_flush(f);file_share_forget(f);free_entry=f;f=NULL;
     }
     if(!f) {
         if(!free_entry)return linux_error(23);
@@ -141,10 +180,14 @@ static uint64_t file_share_map(uint64_t fixed,uint64_t length,uint64_t prot,uint
         }
         int keep=dup(fd);if(keep<0) { backing_release(backing);return fs_error(); }
         fcntl(keep,F_SETFD,FD_CLOEXEC);
-        f=free_entry;*f=(struct FileShare){st.st_dev,st.st_ino,keep,backing,size};
+        pthread_mutex_lock(&file_share_lock);
+        f=free_entry;*f=(struct FileShare){st.st_dev,st.st_ino,keep,backing,size,0};
+        pthread_mutex_unlock(&file_share_lock);
+        __atomic_fetch_add(&file_shares_live,1,__ATOMIC_RELAXED);
     }
+    if(prot&2)f->writable=1;
     uint64_t result=shared_map(fixed,length,prot,f->backing,(size_t)offset);
-    if((int64_t)result<0 && f->backing->refs==1) { close(f->fd);backing_release(f->backing);memset(f,0,sizeof(*f)); }
+    if((int64_t)result<0 && f->backing->refs==1)file_share_forget(f);
     return result;
 }
 /* msync: write mapped files back (all of them; cheap at this scale). */
@@ -199,6 +242,18 @@ static MemoryBacking *reserve_window(uint64_t window) {
     }
     return NULL;
 }
+/* Join adjacent segments over consecutive bytes of one backing with the same protection. */
+static void segments_merge(void) {
+    for(int merged=1;merged;) {
+        merged=0;
+        for(unsigned i=0;i<address_space->nseg && !merged;i++)for(unsigned j=0;j<address_space->nseg && !merged;j++) {
+            Segment *a=&address_space->seg[i],*b=&address_space->seg[j];
+            if(i==j || a->backing!=b->backing || a->flags!=b->flags || a->base+a->size!=b->base || a->offset+a->size!=b->offset)continue;
+            a->size+=b->size;backing_release(b->backing);address_space->seg[j]=address_space->seg[--address_space->nseg];merged=1;
+        }
+    }
+    address_space_changed(address_space);
+}
 static uint64_t reserve_commit_piece(uint64_t address,uint64_t size,unsigned flags) {
     uint64_t window=address&~(RESERVE_WINDOW-1);size_t offset=(size_t)(address-window);
     MemoryBacking *backing=reserve_window(window);
@@ -219,15 +274,7 @@ static uint64_t reserve_commit_piece(uint64_t address,uint64_t size,unsigned fla
         if(address_space->nseg>=128) { backing_release(backing);return linux_error(12); }
         address_space->seg[address_space->nseg++]=(Segment){address,size,flags,backing,offset};
     }
-    for(int merged=1;merged;) {                                                      /* the grown one may now meet another */
-        merged=0;
-        for(unsigned i=0;i<address_space->nseg && !merged;i++)for(unsigned j=0;j<address_space->nseg && !merged;j++) {
-            Segment *a=&address_space->seg[i],*b=&address_space->seg[j];
-            if(i==j || a->backing!=b->backing || a->flags!=b->flags || a->base+a->size!=b->base || a->offset+a->size!=b->offset)continue;
-            a->size+=b->size;backing_release(b->backing);address_space->seg[j]=address_space->seg[--address_space->nseg];merged=1;
-        }
-    }
-    address_space_changed(address_space);
+    segments_merge();
     return 0;
 }
 static uint64_t reserve_commit(uint64_t address,uint64_t length,uint64_t prot) {
@@ -238,6 +285,34 @@ static uint64_t reserve_commit(uint64_t address,uint64_t length,uint64_t prot) {
         at=next;
     }
     return address;
+}
+/* mprotect inside a reservation (.NET's GC commits its regions this way): committed
+   pages change protection and keep their bytes, as on Linux; uncommitted ones are
+   committed, zero, unless the protection is PROT_NONE (then they stay reserved). */
+static uint64_t reserve_protect(uint64_t address,uint64_t bytes,uint64_t prot) {
+    unsigned flags=(unsigned)(((prot&1)?4:0)|((prot&2)?2:0)|((prot&4)?1:0));uint64_t end=address+bytes;
+    for(unsigned i=0;i<address_space->nseg;i++) {
+        Segment *s=&address_space->seg[i];uint64_t begin=s->base,top=s->base+s->size;
+        if(top<=address || begin>=end || (s->flags&SEG_SHARED))continue;
+        unsigned extra=(begin<address)+(top>end);
+        if(address_space->nseg+extra>128 || !backing_retain(s->backing,extra))return linux_error(12);
+        Segment old=*s;uint64_t low=begin<address?address:begin,high=top>end?end:top;
+        *s=(Segment){low,high-low,flags,old.backing,old.offset+(size_t)(low-begin)};
+        if(begin<address)address_space->seg[address_space->nseg++]=(Segment){begin,address-begin,old.flags,old.backing,old.offset};
+        if(top>end)address_space->seg[address_space->nseg++]=(Segment){end,top-end,old.flags,old.backing,old.offset+(size_t)(end-begin)};
+    }
+    for(uint64_t at=address;prot && at<end;) {                                     /* the gaps */
+        uint64_t next=end;int inside=0;
+        for(unsigned i=0;i<address_space->nseg;i++) {
+            Segment *s=&address_space->seg[i];
+            if(s->base<=at && at<s->base+s->size) { at=s->base+s->size;inside=1;break; }
+            if(s->base>at && s->base<next)next=s->base;
+        }
+        if(inside)continue;
+        uint64_t e=reserve_commit(at,next-at,prot);if((int64_t)e<0)return e;
+        at=next;
+    }
+    segments_merge();return 0;
 }
 /* munmap beyond the arena: commits and reservations in the range go; 0 if none was there. */
 static int reserve_unmap(uint64_t address,uint64_t bytes) {
@@ -295,6 +370,25 @@ static uint64_t guest_dynamic_mmap(void) {
         return file_share_map((flags&16)?addr:0,length,prot,cpu->gpr[4],offset);
     if((flags&3) && (flags&3)!=2 && !(flags&32) && !(prot&2))flags=(flags&~UINT64_C(3))|2;
     if((flags&~UINT64_C(0x32)) || (flags&3)!=2)return linux_error(95);
+    if(!(flags&48) && !(prot&2) && page_up(length)>=(UINT64_C(16)<<20)) {
+        /* A large read-only private file mapping (ClickHouse maps its own 755 MiB binary,
+           in two processes): like the loader's text, not charged to the memory budget, as
+           Linux keeps such pages in its reclaimable page cache. ponytail: it is a shared
+           segment, so a later mprotect to writable would share writes across fork; copy
+           on such an mprotect if that ever matters. */
+        int fd=fs_host(cpu->gpr[4]);if(fd<0)return linux_error(9);
+        struct stat st;if(fstat(fd,&st)<0)return fs_error();if(!S_ISREG(st.st_mode))return linux_error(19);
+        MemoryBacking *text=backing_alloc_text((size_t)page_up(length));if(!text)return linux_error(12);
+        for(size_t done=0;done<length;) {
+            ssize_t n=pread(fd,backing_data(text)+done,(size_t)(length-done),(off_t)(offset+done));
+            if(n<0 && errno==EINTR)continue;
+            if(n<0) { uint64_t e=fs_error();backing_release(text);return e; }
+            if(!n)break;done+=(size_t)n;
+        }
+        uint64_t result=shared_map(0,length,prot,text,0);backing_release(text);
+        for(unsigned i=0;(int64_t)result>0 && i<address_space->nseg;i++)if(address_space->seg[i].base==result)address_space->seg[i].flags|=SEG_FILE_COPY;
+        return result;
+    }
     int fd=-1;
     if(!(flags&32)) { fd=fs_host(cpu->gpr[4]);if(fd<0)return linux_error(9);
         struct stat st;if(fstat(fd,&st)<0)return fs_error();if(!S_ISREG(st.st_mode))return linux_error(19);
@@ -302,6 +396,7 @@ static uint64_t guest_dynamic_mmap(void) {
     unsigned pages=(unsigned)(page_up(length)/4096),start=0;
     if(flags&16) {
         if(addr%4096 || addr<MAP_BASE || addr-MAP_BASE>=address_space->map_capacity || page_up(length)>address_space->map_capacity-(addr-MAP_BASE))return linux_error(22);
+        if(!file_copy_demote(addr,page_up(length),0))return linux_error(12);  /* MAP_FIXED over a file copy */
         start=(unsigned)((addr-MAP_BASE)/4096);
     } else {
         start=map_hint(address_space,hint,pages);if(start==address_space->map_capacity/4096)start=map_find(address_space,pages);
@@ -337,6 +432,7 @@ static uint64_t guest_mprotect(void) {
     uint64_t bytes=page_up(length);
     if(addr<MAP_BASE || addr-MAP_BASE>=address_space->map_capacity || bytes>address_space->map_capacity-(addr-MAP_BASE)) {
         if(bytes>UINT64_MAX-addr)return linux_error(22);
+        if(reserve_find(addr,bytes)>=0)return reserve_protect(addr,bytes,prot);
         for(unsigned i=0;i<address_space->nseg;i++) {
             Segment old=address_space->seg[i];uint64_t end=addr+bytes,oldend=old.base+old.size;
             if(addr<(old.base&~UINT64_C(4095)) || end>oldend || end<=old.base || addr>=oldend)continue;
@@ -351,11 +447,11 @@ static uint64_t guest_mprotect(void) {
             if(end<oldend)address_space->seg[address_space->nseg++]=(Segment){end,oldend-end,old.flags,old.backing,old.offset+(size_t)(end-old.base)};
             address_space_changed(address_space);return 0;
         }
-        if(reserve_find(addr,bytes)>=0)return prot?linux_error(12):0;               /* reserved, uncommitted: already PROT_NONE */
         return linux_error(95);
     }
     unsigned first=(unsigned)((addr-MAP_BASE)/4096),pages=(unsigned)(bytes/4096);
     if(!address_space->map_flags)return linux_error(12);
+    if(!file_copy_demote(addr,bytes,1))return linux_error(12);            /* part of a file copy */
     for(unsigned i=0;i<address_space->nseg;i++) {                         /* a whole shared segment */
         Segment *s=&address_space->seg[i];
         if(!(s->flags&SEG_SHARED) || s->base+s->size<=addr || s->base>=addr+bytes)continue;
@@ -374,6 +470,15 @@ static uint64_t guest_mprotect(void) {
    guest address is passed to host madvise. */
 static uint64_t guest_madvise(void) {
     uint64_t addr=cpu->gpr[0],length=cpu->gpr[1];int32_t advice=(int32_t)cpu->gpr[2];
+    if(!(addr&4095) && length && length<=RESERVE_END && reserve_find(addr,page_up(length))>=0) {
+        /* Inside a reservation: hints are accepted; MADV_DONTNEED zeroes committed pages. */
+        if(advice==4)
+            for(unsigned i=0;i<address_space->nseg;i++) {
+                Segment *s=&address_space->seg[i];uint64_t low=s->base>addr?s->base:addr,high=s->base+s->size<addr+page_up(length)?s->base+s->size:addr+page_up(length);
+                if(low<high && !(s->flags&SEG_SHARED) && !address_space_discard(address_space,s->backing,s->offset+(size_t)(low-s->base),(size_t)(high-low)))return linux_error(12);
+            }
+        return advice==4 || (advice>=0 && advice<=3) || (advice>=12 && advice<=17)?0:linux_error(22);
+    }
     if(advice==4) {
         /* MADV_DONTNEED on anonymous mmap-arena pages: zero them and give the memory
            back. Other memory, including file-backed pages, keeps EINVAL. MADV_FREE
@@ -480,4 +585,34 @@ static uint64_t shm_control(void) {
     fs_pack(out,72,shm_segments[id].ctime,8);fs_pack(out,80,shm_segments[id].cpid,4);fs_pack(out,84,shm_segments[id].lpid,4);
     fs_pack(out,88,shm_segments[id].backing->refs-1,8);                        /* shm_nattch */
     return command==13?id:0;
+}
+/* /proc/self/maps: this process's mappings in address order, as Linux lists them
+   (glibc's pthread_getattr_np finds the main thread's stack here; .NET needs that).
+   Segments, the heap, runs of equally protected arena pages and reservations; names
+   only for [stack], [heap] and [vdso]. */
+typedef struct { uint64_t from,to;unsigned perm;const char *name; } ProcMap;
+static int proc_map_order(const void *a,const void *b) {
+    uint64_t x=((const ProcMap *)a)->from,y=((const ProcMap *)b)->from;return x<y?-1:x>y;
+}
+static size_t proc_maps(char *out,size_t capacity) {
+    GuestAddressSpace *space=address_space;size_t limit=space->nseg+space->nreserve+2+(space->map_flags?space->map_top:0),n=0,used=0;
+    ProcMap *m=malloc(limit*sizeof(*m));if(!m)return 0;
+    for(unsigned i=0;i<space->nseg;i++) {
+        Segment *s=&space->seg[i];
+        m[n++]=(ProcMap){s->base,s->base+s->size,(s->flags&7)|((s->flags&SEG_SHARED)?8:0),
+            s->base==STACK_TOP-STACK_SIZE?"[stack]":s->base==STACK_TOP-STACK_SIZE-UINT64_C(0x100000)?"[vdso]":""};
+    }
+    if(space->brk_pages)m[n++]=(ProcMap){space->brk_base,space->brk_base+page_up(space->brk_pages),6,"[heap]"};
+    for(unsigned p=0;space->map_flags && p<space->map_top && p<space->map_capacity/4096;) {
+        unsigned char f=space->map_flags[p];unsigned q=p+1;
+        while(q<space->map_top && space->map_flags[q]==f)q++;
+        if(f && f!=MAP_RESERVED)m[n++]=(ProcMap){MAP_BASE+(uint64_t)p*4096,MAP_BASE+(uint64_t)q*4096,f&7,""};
+        p=q;
+    }
+    for(unsigned i=0;i<space->nreserve;i++)m[n++]=(ProcMap){space->reserve_base[i],space->reserve_base[i]+space->reserve_size[i],0,""};
+    qsort(m,n,sizeof(*m),proc_map_order);
+    for(size_t i=0;i<n && used+128<capacity;i++)
+        used+=(size_t)snprintf(out+used,capacity-used,"%llx-%llx %c%c%c%c 00000000 00:00 0%s%s\n",(unsigned long long)m[i].from,(unsigned long long)m[i].to,
+            (m[i].perm&4)?'r':'-',(m[i].perm&2)?'w':'-',(m[i].perm&1)?'x':'-',(m[i].perm&8)?'s':'p',*m[i].name?"                          ":"",m[i].name);
+    free(m);return used;
 }

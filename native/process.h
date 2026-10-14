@@ -1,3 +1,4 @@
+static void seccomp_inherit(uint64_t child,uint64_t parent); /* seccomp.h */
 /* Bounded guest processes; optional scheduled trees. No host process is spawned. */
 /* Thread-local: each scheduler worker runs its own current process. */
 static _Thread_local uint64_t process_steps,process_pid=1;
@@ -211,6 +212,7 @@ static uint64_t process_clone(void) {
     uint64_t pid=2+slot;cpu->gpr[0]=0;
     memcpy(proc_exe[pid],proc_exe[process_pid],sizeof(proc_exe[0])); /* /proc/<pid>/exe and cmdline are inherited */
     memcpy(proc_cmdline[pid],proc_cmdline[process_pid],sizeof(proc_cmdline[0]));proc_cmdline_size[pid]=proc_cmdline_size[process_pid];
+    seccomp_inherit(pid,process_pid);                                                  /* seccomp filters are inherited */
     if(!vfork && (flags&0x1000000))fs_pack(lookup(child_tid,4,2),0,(unsigned)pid,4); /* child's private memory */
     if(slot==process_count)process_count++;
     memset(&process_children[slot],0,sizeof(process_children[slot]));

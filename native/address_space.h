@@ -26,6 +26,9 @@
 /* Segment flag: MAP_SHARED memory (shared anonymous mappings, System V shm). Its
    backing is never copied on write, so fork keeps every process on the same bytes. */
 #define SEG_SHARED 8u
+/* Segment flag: a shared segment holding an uncharged copy of a large read-only file
+   mapping (mapping.h); any change to part of it makes it ordinary arena pages first. */
+#define SEG_FILE_COPY 16u
 /* map_flags value for arena pages lent to a shared segment (no arena access). */
 #define MAP_RESERVED 0x20u
 
