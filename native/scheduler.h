@@ -15,6 +15,7 @@ typedef struct {
     NetWait network;
     uint64_t signal_pending,signal_mask;
     unsigned fault_signal,fault_code;uint64_t fault_addr; /* a synchronous fault of this thread awaiting delivery */
+    unsigned wait_masked;uint64_t wait_saved_mask;       /* ppoll/pselect6 with a mask: the thread's own, to restore */
     MemoryBacking *futex_backing; /* a futex in shared memory: keyed by its memory, across processes */
     size_t futex_offset;
 } Thread;
@@ -36,6 +37,7 @@ typedef struct {
     /* A fault raised as a signal (SIGSEGV, SIGILL): siginfo's si_code and si_addr. */
     unsigned signal_fault_code[64];uint64_t signal_fault_addr[64];
     unsigned suspending;uint64_t suspend_mask; /* rt_sigsuspend: the mask to restore after its handler */
+    unsigned wait_masked;uint64_t wait_saved_mask; /* ppoll/pselect6 of a single-threaded process (Thread has its own) */
     unsigned sigwaiting;uint64_t sigwait_set,sigwait_info; /* rt_sigtimedwait: the signals it takes, its siginfo (mask in suspend_mask) */
     ThreadTable *threads;unsigned running,exit_pending,exit_signal;int exit_result;
     pthread_mutex_t mm;
@@ -227,7 +229,7 @@ static void task_load(ScheduledTask *t) {
     io_table=&t->io;net_table=&t->net;net_wait_now=&t->network_wait;fs_table=&t->fs;fd_table=&t->fds;
 }
 static void task_free(void) {
-    fs_cwd_release();image_free();io_cleanup();net_cleanup();fs_locks_release(0,0,process_pid);
+    fs_cwd_release();image_free();io_cleanup();net_cleanup();fs_locks_release(0,0,process_pid);io_fifo_forget(process_pid);
     for(unsigned i=0;i<FS_SLOTS;i++) {
         fs_directory_release(fs_dirs[i]);
         if(fs_fd[i])close(fs_fd[i]-1);

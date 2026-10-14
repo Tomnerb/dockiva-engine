@@ -169,9 +169,11 @@ static int address_space_zero_partial(GuestAddressSpace *space,MemoryBacking *ba
 #endif
     return 1;
 }
-static int address_space_discard_map(GuestAddressSpace *space,size_t offset,size_t size) {
-    if(!space->map_backing || !size)return 1;
-    MemoryBacking *backing=address_space_unshare(space,space->map_backing);if(!backing)return 0;
+/* Zero [offset,offset+size) of one of this space's private backings: whole host pages
+   are released (and uncharged), partial ones zeroed in place. */
+static int address_space_discard(GuestAddressSpace *space,MemoryBacking *shared,size_t offset,size_t size) {
+    if(!shared || !size)return 1;
+    MemoryBacking *backing=address_space_unshare(space,shared);if(!backing)return 0;
     size_t end=offset+size;
 #ifdef __APPLE__
     size_t low=(offset+backing->page_size-1)/backing->page_size*backing->page_size,high=end/backing->page_size*backing->page_size;
@@ -181,4 +183,7 @@ static int address_space_discard_map(GuestAddressSpace *space,size_t offset,size
     }
 #endif
     return address_space_zero_partial(space,backing,offset,end);
+}
+static int address_space_discard_map(GuestAddressSpace *space,size_t offset,size_t size) {
+    return address_space_discard(space,space->map_backing,offset,size);
 }

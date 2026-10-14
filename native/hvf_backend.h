@@ -933,6 +933,18 @@ static int hvf_slice_run(void) {
                 hvf_resume_el0(elr,spsr);fast=1;continue;
             }
         }
+        /* A read or instruction fetch that the address space allows (lookup: 4 read,
+           1 execute) faulted: the tables are stale, which is the runtime's fault, not
+           the guest's. Rebuild them and retry once; report it, so it can be found. */
+        if((ec==0x24 && !(esr&(UINT64_C(1)<<6)) && lookup(far,1,4)) || (ec==0x20 && lookup(far,1,1))) {
+            static _Thread_local uint64_t stale_pc,stale_far,stale_generation;static int reported;
+            if(elr!=stale_pc || far!=stale_far || address_space->generation!=stale_generation) {
+                stale_pc=elr;stale_far=far;stale_generation=address_space->generation;
+                if(!reported) { reported=1;fprintf(stderr,"vmfree: stale page tables at pc=0x%" PRIx64 " address=0x%" PRIx64 "; rebuilt (please report)\n",elr,far); }
+                hvf_views[process_pid].stale=HVF_STALE_NEW;hvf_views[process_pid].generation=UINT64_MAX;
+                hvf_resume_el0(elr,spsr);fast=1;continue;
+            }
+        }
         hvf_get_regs(1,elr,spsr);
         return hvf_fault(ec==0x24 || ec==0x20?11:4,elr,far,ec);
     }

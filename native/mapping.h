@@ -156,9 +156,7 @@ static uint64_t guest_msync(void) {
 /* Reservations beyond the arena: an anonymous private PROT_NONE mapping the arena
    cannot hold (MariaDB reserves 128 GiB for its buffer pool's maximum, a JVM its heap)
    is address space alone, unmapped, from 16 TiB up. A MAP_FIXED anonymous mapping
-   inside one commits that range as a segment with its own backing; munmap gives both
-   back. ponytail: each commit is a segment (at most 128 per process); merge adjacent
-   commits if a program commits in many small pieces. */
+   inside one commits that range (reserve_commit); munmap gives both back. */
 #define RESERVE_BASE UINT64_C(0x100000000000)
 #define RESERVE_END UINT64_C(0x700000000000)
 static int reserve_find(uint64_t address,uint64_t bytes) {
@@ -189,13 +187,55 @@ static uint64_t segments_remove(uint64_t low,uint64_t high) {
     }
     address_space_changed(address_space);return 0;
 }
+/* Each 1 GiB window of the reservation space has one lazily charged backing, found
+   through any segment that maps it (its base minus its offset is the window). A
+   commit zeroes its range there, maps it, and merges with neighbouring segments of
+   the same backing, so a heap committed region by region stays a few segments. */
+#define RESERVE_WINDOW (UINT64_C(1)<<30)
+static MemoryBacking *reserve_window(uint64_t window) {
+    for(unsigned i=0;i<address_space->nseg;i++) {
+        Segment *s=&address_space->seg[i];
+        if(s->base>=window && s->base-window<RESERVE_WINDOW && s->base-s->offset==window && s->backing && s->backing->size==RESERVE_WINDOW)return s->backing;
+    }
+    return NULL;
+}
+static uint64_t reserve_commit_piece(uint64_t address,uint64_t size,unsigned flags) {
+    uint64_t window=address&~(RESERVE_WINDOW-1);size_t offset=(size_t)(address-window);
+    MemoryBacking *backing=reserve_window(window);
+    if(backing) {                                                                    /* fresh pages read zero, as on Linux */
+        if(!address_space_discard(address_space,backing,offset,(size_t)size))return linux_error(12);
+        backing=reserve_window(window);                                              /* a copy, if it was shared after fork */
+        if(!backing || !backing_retain(backing,1))return linux_error(12);
+    } else if(!(backing=backing_reserve((size_t)RESERVE_WINDOW)))return linux_error(12);
+    uint64_t e=segments_remove(address,address+size);
+    if(e || !flags) { backing_release(backing);return e; }
+    for(unsigned i=0;i<address_space->nseg;i++) {                                    /* grow a neighbour instead */
+        Segment *s=&address_space->seg[i];
+        if(s->backing!=backing || s->flags!=flags)continue;
+        if(s->base+s->size==address && s->offset+s->size==offset) { s->size+=size;backing_release(backing);backing=NULL;break; }
+        if(address+size==s->base && offset+size==s->offset) { s->base=address;s->offset=offset;s->size+=size;backing_release(backing);backing=NULL;break; }
+    }
+    if(backing) {
+        if(address_space->nseg>=128) { backing_release(backing);return linux_error(12); }
+        address_space->seg[address_space->nseg++]=(Segment){address,size,flags,backing,offset};
+    }
+    for(int merged=1;merged;) {                                                      /* the grown one may now meet another */
+        merged=0;
+        for(unsigned i=0;i<address_space->nseg && !merged;i++)for(unsigned j=0;j<address_space->nseg && !merged;j++) {
+            Segment *a=&address_space->seg[i],*b=&address_space->seg[j];
+            if(i==j || a->backing!=b->backing || a->flags!=b->flags || a->base+a->size!=b->base || a->offset+a->size!=b->offset)continue;
+            a->size+=b->size;backing_release(b->backing);address_space->seg[j]=address_space->seg[--address_space->nseg];merged=1;
+        }
+    }
+    address_space_changed(address_space);
+    return 0;
+}
 static uint64_t reserve_commit(uint64_t address,uint64_t length,uint64_t prot) {
-    uint64_t size=page_up(length),e=segments_remove(address,address+size);if(e)return e;
-    if(prot) {
-        if(address_space->nseg>=128)return linux_error(12);
-        MemoryBacking *backing=backing_reserve((size_t)size);if(!backing)return linux_error(12);
-        address_space->seg[address_space->nseg++]=(Segment){address,size,(unsigned)(((prot&1)?4:0)|((prot&2)?2:0)|((prot&4)?1:0)),backing,0};
-        address_space_changed(address_space);
+    unsigned flags=(unsigned)(((prot&1)?4:0)|((prot&2)?2:0)|((prot&4)?1:0));
+    for(uint64_t at=address,end=address+page_up(length);at<end;) {
+        uint64_t next=(at&~(RESERVE_WINDOW-1))+RESERVE_WINDOW;if(next>end)next=end;
+        uint64_t e=reserve_commit_piece(at,next-at,flags);if(e)return e;
+        at=next;
     }
     return address;
 }

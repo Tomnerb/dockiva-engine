@@ -64,6 +64,24 @@ static uint64_t signal_suspend(void) {
     }
     return IO_BLOCK;
 }
+/* The thread's (or single-threaded process's) record of a mask set for one wait. */
+static void signal_wait_state(unsigned **masked,uint64_t **saved) {
+    Thread *th=thread_current();ScheduledTask *task=&schedule_tasks[process_pid-1];
+    *masked=th?&th->wait_masked:&task->wait_masked;*saved=th?&th->wait_saved_mask:&task->wait_saved_mask;
+}
+static int signal_wait_mask(uint64_t mask) {
+    if(!job_control_enabled || !schedule_active)return 0;                           /* no guest signals: nothing to unblock */
+    unsigned *masked;uint64_t *saved,*now=signal_mask_now();signal_wait_state(&masked,&saved);
+    if(!*masked) { *saved=*now;*masked=1; }                                         /* a retried wait keeps the first */
+    *now=mask&~((UINT64_C(1)<<8)|(UINT64_C(1)<<18));
+    ScheduledTask *task=&schedule_tasks[process_pid-1];Thread *th=thread_current();
+    return (((task->signal_pending|(th?th->signal_pending:0))&~*now&~task->signal_ignored))!=0;
+}
+static void signal_wait_unmask(void) {
+    if(!job_control_enabled || !schedule_active)return;
+    unsigned *masked;uint64_t *saved;signal_wait_state(&masked,&saved);
+    if(*masked) { *signal_mask_now()=*saved;*masked=0; }
+}
 /* A signal taken by rt_sigtimedwait: its siginfo (number, SI_USER, sender, uid) if
    asked for; returns the number. */
 static uint64_t signal_waited(ScheduledTask *task,unsigned index) {
@@ -137,7 +155,9 @@ static void signal_deliver(int blocked) {
        EINTR (never restarted); other interrupted calls restart under SA_RESTART. */
     uint64_t frame_mask=*mask;int suspended=(int)(task->suspending || task->sigwaiting);
     if(suspended) { frame_mask=task->suspend_mask;task->suspending=task->sigwaiting=0; }
-    if(blocked && (suspended || !(flags&UINT64_C(0x10000000)))) { cpu->pc+=4;cpu->gpr[0]=linux_error(4);net_wait.active=0; }
+    unsigned *wait_masked;uint64_t *wait_saved;signal_wait_state(&wait_masked,&wait_saved);
+    if(*wait_masked) { frame_mask=*wait_saved;*wait_masked=0;suspended=1; }         /* ppoll/pselect6: EINTR, never restarted */
+    if(blocked && (suspended || !(flags&UINT64_C(0x10000000)))) { cpu->pc+=4;cpu->gpr[0]=linux_error(4);net_wait.active=0;io_fifo_forget(process_pid); }
     memset(out,0,SIGNAL_FRAME_SIZE);
     fs_pack(out,0,index+1,4);fs_pack(out,16,task->signal_sender[index],4);
     if(from_thread && th->fault_signal==index+1) { /* a fault: si_code and si_addr */

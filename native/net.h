@@ -716,12 +716,8 @@ static uint64_t net_call(uint64_t number) {
 
 /* ppoll over sockets, pipes, stdio and files; no signal mask, at most 1024 entries.
    Sockets wait on the host; pipe changes wake the task through io_epoch. */
-static uint64_t net_poll(void) {
-    /* ppoll's signal mask (x3, x4 bytes) is checked, then waited under the current
-       mask, as pselect6 does. ponytail: a mask that unblocks a signal for the wait
-       only delays it to the next unblocking; apply it per thread if a program relies on that. */
+static uint64_t net_poll_wait(void) {
     if(cpu->gpr[1]>NET_FD_LIMIT)return linux_error(22);
-    if(cpu->gpr[3] && (cpu->gpr[4]!=8 || !lookup(cpu->gpr[3],8,4)))return linux_error(cpu->gpr[4]!=8?22:14);
     unsigned count=(unsigned)cpu->gpr[1];
     unsigned char *in=count?lookup(cpu->gpr[0],count*8,4):NULL,*out=count?lookup(cpu->gpr[0],count*8,2):NULL;
     if(count && (!in || !out))return linux_error(14);
@@ -765,7 +761,7 @@ static uint64_t net_poll(void) {
 }
 /* pselect6 as ppoll over the descriptors in its sets (Linux fd_set: 64 per word).
    The signal mask is ignored, as ppoll's is unsupported; the timeout is not updated. */
-static uint64_t net_select(void) {
+static uint64_t net_select_wait(void) {
     uint64_t nfds=cpu->gpr[0];if(nfds>NET_FD_LIMIT)return linux_error(22);
     unsigned bytes=(unsigned)((nfds+63)/64*8);
     /* The sets are read before they are rewritten (in and out are the same memory). */
@@ -815,4 +811,31 @@ static uint64_t net_select(void) {
         if((value&2) && out[2] && (in[2][byte]>>bit&1)) { out[2][byte]|=(unsigned char)(1u<<bit);total++; }
     }
     return total;
+}
+/* ppoll and pselect6 wait under the signal mask they are given, if any, and put the
+   thread's own back when they return (signal_deliver does it, in the handler's
+   frame, when a signal it lets through ends the wait with EINTR). */
+static int signal_wait_mask(uint64_t mask);   /* signals.h: 1 if a signal is already deliverable */
+static void signal_wait_unmask(void);
+static uint64_t net_masked_wait(uint64_t (*wait)(void),uint64_t pointer) {
+    if(pointer) {
+        const unsigned char *set=lookup(pointer,8,4);if(!set)return linux_error(14);
+        if(signal_wait_mask(le(set,8)))return linux_error(4);
+    }
+    uint64_t result=wait();
+    if(pointer && result!=IO_BLOCK)signal_wait_unmask();
+    return result;
+}
+static uint64_t net_poll(void) {
+    if(cpu->gpr[3] && cpu->gpr[4]!=8)return linux_error(22);
+    return net_masked_wait(net_poll_wait,cpu->gpr[3]);
+}
+static uint64_t net_select(void) {
+    /* x5: {const sigset_t *mask, size_t size}, as glibc and musl pass it */
+    uint64_t pointer=0;
+    if(cpu->gpr[5]) {
+        const unsigned char *pair=lookup(cpu->gpr[5],16,4);if(!pair)return linux_error(14);
+        pointer=le(pair,8);if(pointer && le(pair+8,8)!=8)return linux_error(22);
+    }
+    return net_masked_wait(net_select_wait,pointer);
 }

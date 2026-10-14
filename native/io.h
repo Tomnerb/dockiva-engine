@@ -180,8 +180,9 @@ static uint64_t io_event_transfer(GuestIO *f,int writing) {
    unlinks, must be the one that waits). A writer let in before its reader writes
    into a pipe that waits for that reader. Nonblocking: readers open at once,
    writers get ENXIO without a reader. O_RDWR is a read end that also counts as a
-   writer, so it never waits or sees end of file.
-   ponytail: a wait given up (a signal) leaves its process marked as waiting. */
+   writer, so it never waits or sees end of file. A process's marks as a waiting
+   opener go when a signal ends its wait or it exits (io_fifo_forget); a wait that
+   goes on re-marks itself on every retry. */
 static uint64_t io_fifo_open(dev_t dev,ino_t ino,uint64_t flags) {
     struct GuestPipe *p=NULL;unsigned entry=IO_FIFOS;
     for(unsigned i=0;i<IO_FIFOS;i++) {
@@ -215,6 +216,10 @@ static uint64_t io_fifo_open(dev_t dev,ino_t ino,uint64_t flags) {
     IO(fd)=(GuestIO){reading?IO_READ:IO_WRITE,cloexec,-1,p,NULL,NULL,NULL};
     io_pipe_changed(p);
     return (uint64_t)fd;
+}
+static void io_fifo_forget(uint64_t pid) {
+    uint64_t bit=UINT64_C(1)<<(pid-1);
+    for(unsigned i=0;i<IO_FIFOS;i++)if(io_fifos[i].pipe) { io_fifos[i].pipe->want_read&=~bit;io_fifos[i].pipe->want_write&=~bit; }
 }
 /* A synthetic read-only file (fs_open): its own copy of the text, a new descriptor. */
 static uint64_t io_text_open(const void *data,size_t size,int cloexec) {
