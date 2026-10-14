@@ -117,12 +117,25 @@ func (l *logReader) close() {
 	}
 }
 
-// follow writes new output every 100 ms until done reports the run is over (then
-// drains what is left) or ctx ends. done must not panic.
+// backoff paces a polling loop: a short interval first (a short run ends within
+// milliseconds of starting, and docker run waits for that), doubling to max while
+// nothing happens, and short again after activity.
+type backoff struct{ next, min, max time.Duration }
+
+func newBackoff(min, max time.Duration) *backoff { return &backoff{min, min, max} }
+func (b *backoff) after() <-chan time.Time {
+	d := b.next
+	b.next = min(b.next*2, b.max)
+	return time.After(d)
+}
+func (b *backoff) reset() { b.next = b.min }
+
+// follow writes new output (checking within 2 ms at first, every 25 ms when idle)
+// until done reports the run is over (then drains what is left) or ctx ends. done
+// must not panic.
 func (l *logReader) follow(ctx context.Context, write func([]byte) error, done func() bool) {
 	defer l.close()
-	tick := time.NewTicker(cmp.Or(l.every, 100*time.Millisecond))
-	defer tick.Stop()
+	pace := newBackoff(2*time.Millisecond, cmp.Or(l.every, 25*time.Millisecond))
 	for {
 		finished := done()
 		for {
@@ -133,6 +146,7 @@ func (l *logReader) follow(ctx context.Context, write func([]byte) error, done f
 			if write(chunk) != nil {
 				return
 			}
+			pace.reset()
 		}
 		if finished {
 			return
@@ -140,7 +154,7 @@ func (l *logReader) follow(ctx context.Context, write func([]byte) error, done f
 		select {
 		case <-ctx.Done():
 			return
-		case <-tick.C:
+		case <-pace.after():
 		}
 	}
 }
@@ -246,8 +260,7 @@ func (b *engine) wait(w http.ResponseWriter, r *http.Request, name, condition st
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush() // the client may start the container once its wait is registered
 	}
-	tick := time.NewTicker(100 * time.Millisecond)
-	defer tick.Stop()
+	pace := newBackoff(2*time.Millisecond, 25*time.Millisecond) // a status read is cheap; docker run waits on this
 	for {
 		s := b.statusOf(p)
 		if s != nil && s["exit_code"] != nil {
@@ -262,6 +275,12 @@ func (b *engine) wait(w http.ResponseWriter, r *http.Request, name, condition st
 		switch condition {
 		case "removed":
 			done = s == nil
+			if s != nil && !live(s) {
+				select { // ended: have the watcher report it and remove it now
+				case watchNow <- struct{}{}:
+				default:
+				}
+			}
 		case "next-exit":
 			recent := s != nil && s["finished_at"] != nil && asked-floatOf(s["finished_at"]) < 2
 			done = s == nil || (!live(s) && (s["generation"] != initial["generation"] || live(initial) || recent))
@@ -278,7 +297,7 @@ func (b *engine) wait(w http.ResponseWriter, r *http.Request, name, condition st
 		select {
 		case <-r.Context().Done():
 			return
-		case <-tick.C:
+		case <-pace.after():
 		}
 	}
 }
@@ -333,6 +352,10 @@ func containerEvent(action, name, image string, attributes obj) obj {
 }
 
 // watch publishes container events and removes exited --rm containers.
+// watchNow asks the watcher for a pass at once (docker run --rm waits for the removal
+// it does, which would otherwise wait for the next 250 ms tick).
+var watchNow = make(chan struct{}, 1)
+
 func (b *engine) watch(stop <-chan struct{}) {
 	type seen struct {
 		live       bool
@@ -386,6 +409,7 @@ func (b *engine) watch(stop <-chan struct{}) {
 		case <-stop:
 			return
 		case <-tick.C:
+		case <-watchNow:
 		}
 	}
 }

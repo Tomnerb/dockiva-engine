@@ -12,8 +12,11 @@ struct BackingPageGroup { size_t live,count;unsigned uncharged;BackingPage pages
    pages at once, a write to a snapshot's source can show through in the snapshot. */
 /* hvf_ipa, hvf_epoch: the hypervisor backend's guest-physical address for it, valid
    while hvf_epoch matches (see hvf_block_ipa). */
+/* used: one past the highest page ever owned; every page above it is unowned, so
+   snapshots and releases need not walk the rest (a 12 GiB arena is 786,432 pages,
+   and a forked process usually touches a few hundred). */
 typedef struct {
-    size_t refs,size,mapped_size,page_size;
+    size_t refs,size,mapped_size,page_size,used;
     unsigned frozen;
     unsigned char *bytes;
     uint64_t hvf_ipa,hvf_epoch;

@@ -11,8 +11,13 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <fcntl.h>
 static volatile sig_atomic_t stopping;
 static void stop(int signal) { (void)signal;stopping=1; }
+/* SIGCHLD writes here, so the wait below sees the worker's exit at once (a SIGCHLD
+   alone would not end poll, and docker run would wait out a 100 ms tick). */
+static int exited[2]={-1,-1};
+static void child_exited(int signal) { (void)signal;int saved=errno;(void)!write(exited[1],"x",1);errno=saved; }
 static void wake(int signal) { (void)signal; }
 static void limit(int resource,rlim_t value) { struct rlimit lim={value,value};if(setrlimit(resource,&lim)) { perror("worker limit");exit(125); } }
 int main(int argc,char **argv) {
@@ -35,8 +40,11 @@ int main(int argc,char **argv) {
     if(sigaction(SIGINT,terminal?&pass:&action,NULL))return 125;
     if(terminal && (sigaction(SIGQUIT,&pass,NULL) || sigaction(SIGHUP,&pass,NULL) || signal(SIGTSTP,SIG_IGN)==SIG_ERR ||
                     signal(SIGTTIN,SIG_IGN)==SIG_ERR || signal(SIGTTOU,SIG_IGN)==SIG_ERR))return 125;
+    if(pipe(exited) || fcntl(exited[0],F_SETFD,FD_CLOEXEC) || fcntl(exited[1],F_SETFD,FD_CLOEXEC) || fcntl(exited[1],F_SETFL,O_NONBLOCK))return 125;
+    struct sigaction reaped={0};reaped.sa_handler=child_exited;sigemptyset(&reaped.sa_mask);reaped.sa_flags=SA_NOCLDSTOP;
+    if(sigaction(SIGCHLD,&reaped,NULL))return 125;
     pid_t child=fork();if(child<0)return 125;
-    if(!child) { close(3);execv(argv[1],argv+1);perror("worker exec");_exit(125); }
+    if(!child) { close(3);signal(SIGCHLD,SIG_DFL);execv(argv[1],argv+1);perror("worker exec");_exit(125); }
     unsigned stopping_ticks=0;
     for(;;) {
         int status;pid_t result=waitpid(child,&status,WNOHANG);
@@ -45,7 +53,8 @@ int main(int argc,char **argv) {
         /* The supervisor signals the whole process group, so the runtime already has
            the stop signal (repeating it can force an unclean exit); kill after 10 s. */
         if(stopping && ++stopping_ticks>=100)(void)kill(child,SIGKILL);
-        struct pollfd watch={3,POLLIN|POLLHUP,0};int ready=poll(&watch,1,100);
+        struct pollfd watch[2]={{3,POLLIN|POLLHUP,0},{exited[0],POLLIN,0}};int ready=poll(watch,2,100);
+        if(ready>0 && watch[1].revents) { char drain[16];(void)!read(exited[0],drain,sizeof drain);continue; } /* reap above */
         if(ready>0 || (ready<0&&errno!=EINTR)) {
             /* Our dedicated process group contains only this guard and worker.
                Supervisor crash closes the pipe; never leave an orphan guest. */

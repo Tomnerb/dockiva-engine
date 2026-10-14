@@ -96,6 +96,43 @@ static void epoll_forget_socket(int host);
 #include "epoll.h"
 #include "compat.h"
 #include "vdso.h"
+/* Read-only segments of programs run recently, shared by later execs of the same
+   file (Linux serves them from its page cache): an exec reuses their bytes instead of
+   copying them, and the hypervisor mapping that goes with them. Keyed by the file's
+   identity and the segment; a write still copies the page it touches. Bounded in
+   entries and bytes; the oldest goes first. */
+#define TEXT_CACHE 64
+#define TEXT_CACHE_BYTES (UINT64_C(1)<<30)
+static struct TextCache { dev_t dev;ino_t ino;off_t size;long mtime_s,mtime_ns;uint64_t off,bytes,mem,last;MemoryBacking *backing; } text_cache[TEXT_CACHE];
+static uint64_t text_cache_clock,text_cache_bytes;
+static int text_cache_same(const struct TextCache *c,const struct stat *st,uint64_t off,uint64_t bytes,uint64_t mem) {
+    return c->backing && c->dev==st->st_dev && c->ino==st->st_ino && c->size==st->st_size && c->mtime_s==(long)st->st_mtimespec.tv_sec
+        && c->mtime_ns==(long)st->st_mtimespec.tv_nsec && c->off==off && c->bytes==bytes && c->mem==mem;
+}
+static MemoryBacking *text_cache_find(const struct stat *st,uint64_t off,uint64_t bytes,uint64_t mem) {
+    for(unsigned i=0;i<TEXT_CACHE;i++)if(text_cache_same(&text_cache[i],st,off,bytes,mem)) {
+        if(!backing_retain(text_cache[i].backing,1))return NULL;
+        text_cache[i].last=++text_cache_clock;return text_cache[i].backing;
+    }
+    return NULL;
+}
+static void text_cache_add(const struct stat *st,uint64_t off,uint64_t bytes,uint64_t mem,MemoryBacking *backing) {
+    if(mem>TEXT_CACHE_BYTES/4 || !backing_retain(backing,1))return;
+    for(;;) {                                                  /* room: a free slot and the byte budget */
+        unsigned victim=0,free_slot=TEXT_CACHE;
+        for(unsigned i=0;i<TEXT_CACHE;i++) {
+            if(!text_cache[i].backing) { if(free_slot==TEXT_CACHE)free_slot=i;continue; }
+            if(!text_cache[victim].backing || text_cache[i].last<text_cache[victim].last)victim=i;
+        }
+        if(free_slot<TEXT_CACHE && text_cache_bytes+mem<=TEXT_CACHE_BYTES) {
+            text_cache[free_slot]=(struct TextCache){st->st_dev,st->st_ino,st->st_size,(long)st->st_mtimespec.tv_sec,(long)st->st_mtimespec.tv_nsec,
+                off,bytes,mem,++text_cache_clock,backing};
+            text_cache_bytes+=mem;return;
+        }
+        if(!text_cache[victim].backing) { backing_release(backing);return; }
+        text_cache_bytes-=text_cache[victim].mem;backing_release(text_cache[victim].backing);memset(&text_cache[victim],0,sizeof(text_cache[victim]));
+    }
+}
 static void load_stream_inner(FILE *f,int interpreter) {
     char interpreter_path[1025]={0};
     struct stat input_stat;
@@ -168,9 +205,13 @@ static void load_stream_inner(FILE *f,int interpreter) {
         }
         /* Read-only segments (text) are not charged to the memory limit: Linux keeps
            them in its reclaimable page cache (grafana's binary is 485 MB). */
-        MemoryBacking *buffer=(flags&2)?backing_alloc((size_t)mem,1):backing_alloc_text((size_t)mem);
-        if(!buffer) fail("Allocation failed");
-        memcpy(backing_data(buffer),d+(size_t)off,(size_t)bytes);
+        MemoryBacking *buffer=(flags&2)?NULL:text_cache_find(&input_stat,off,bytes,mem);
+        if(!buffer) {
+            buffer=(flags&2)?backing_alloc((size_t)mem,1):backing_alloc_text((size_t)mem);
+            if(!buffer) fail("Allocation failed");
+            memcpy(backing_data(buffer),d+(size_t)off,(size_t)bytes);
+            if(!(flags&2))text_cache_add(&input_stat,off,bytes,mem,buffer);
+        }
         if(address_space->nseg>=SEGMENT_LIMIT) { backing_release(buffer);fail("Too many load segments"); }
         address_space->seg[address_space->nseg++]=(Segment){addr,mem,flags,buffer,0};
         address_space_changed(address_space);
@@ -210,6 +251,8 @@ static uint64_t read_mem(uint64_t addr, unsigned bytes) {
 static int native_cpu;
 static uint64_t hwcap_bits(int second) {
     if(!native_cpu)return 0;
+    static uint64_t cached[2];static int known[2];                             /* the host's CPU does not change: ask once */
+    if(known[second!=0])return cached[second!=0];
     static const struct { const char *feature;unsigned bit,second; } features[]={
         {"FEAT_AES",3,0},{"FEAT_PMULL",4,0},{"FEAT_SHA1",5,0},{"FEAT_SHA256",6,0},{"FEAT_CRC32",7,0},{"FEAT_LSE",8,0},
         {"FEAT_FP16",9,0},{"FEAT_FP16",10,0},{"FEAT_RDM",12,0},{"FEAT_JSCVT",13,0},{"FEAT_FCMA",14,0},{"FEAT_LRCPC",15,0},
@@ -224,6 +267,7 @@ static uint64_t hwcap_bits(int second) {
         if(!sysctlbyname(name,&value,&size,NULL,0) && value)bits|=UINT64_C(1)<<features[i].bit;
     }
 #endif
+    cached[second!=0]=bits;known[second!=0]=1;
     return bits;
 }
 static void startup(int argc, const char **argv, unsigned envc, const char **env) {
@@ -1101,7 +1145,8 @@ int main(int argc,char **argv) {
 #ifndef VMFREE_HVF
         fail("Hypervisor backend is not compiled into this executable");
 #else
-        if(terminal_enabled || profiling)fail("Hypervisor backend does not yet support terminal or profiling options");
+        if(terminal_enabled)fail("Hypervisor backend does not yet support terminal options");
+        /* --profile under the hypervisor counts system calls only (guest code runs natively). */
         schedule_enabled=net_scheduled=1; /* each guest thread is a scheduler entity */
         map_rwx_allowed=1;
 #endif

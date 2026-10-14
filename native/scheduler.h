@@ -9,6 +9,7 @@ typedef struct {
     unsigned state;               /* 0 free, 1 runnable, 2 futex wait, 3 blocked call (retries when woken) */
     unsigned worker;              /* 1 + the index of the worker running it, or 0 */
     unsigned tid,private_wait,realtime,blocked,input_wait;
+    unsigned child_wait;          /* blocked in wait4/waitid: only a child's event or a signal wakes it */
     uint32_t bitset;
     uint64_t clear_tid,futex_address,deadline_ns,epoch,wakeups;
     GuestCpuState regs;           /* while it is not running */
@@ -31,6 +32,7 @@ typedef struct {
     ProcessImage image;IoTable io;NetTable net;NetWait network_wait;
     ProcShared ps;FsTable fs;FdTable fds;
     unsigned vfork_child,saved,state,terminate_signal,pgid,input_wait,stop_signal,execed,blocked,worker;uint64_t epoch,wakeups;
+    unsigned child_wait;  /* blocked in wait4/waitid (single-threaded): woken by a child's event or a signal, not by I/O */
     uint64_t signal_mask,signal_ignored,signal_pending,timer_deadline,timer_interval;
     uint64_t signal_flags[64],signal_action_mask[64],signal_restorer[64],signal_handler[64];
     unsigned signal_sender[64];
@@ -139,7 +141,7 @@ static void schedule_signal_apply(ScheduledTask *task,unsigned signal) {
         task->stop_signal=0;task->signal_pending&=~(UINT64_C(15)<<18);
         if(task->state==3) {
             task->state=1;io_epoch++;schedule_wake(task);
-            if(slot) { process_children[slot-1].event_status=65535;schedule_signal(&schedule_tasks[process_children[slot-1].parent-1],17); }
+            if(slot) { process_children[slot-1].event_status=65535;schedule_wake(&schedule_tasks[process_children[slot-1].parent-1]);schedule_signal(&schedule_tasks[process_children[slot-1].parent-1],17); }
         }
     }
     if(job_control_enabled && signal>=19 && signal<=22)task->signal_pending&=~(UINT64_C(1)<<17);
@@ -316,9 +318,15 @@ static void schedule_kick(void) {
     if(schedule_idle)(schedule_done?pthread_cond_broadcast:pthread_cond_signal)(&schedule_idle_cond); /* one idle worker per event */
     if(schedule_polling && schedule_poke[1]>=0) { char c=0;(void)!write(schedule_poke[1],&c,1); }
 }
+static int schedule_waiting_runnable(void);
 static void schedule_notify(void) {
     if(schedule_events==schedule_notified_events && io_epoch==schedule_notified_epoch)return;
-    schedule_notified_events=schedule_events;schedule_notified_epoch=io_epoch;schedule_kick();
+    schedule_notified_events=schedule_events;schedule_notified_epoch=io_epoch;
+    /* Only wake an idle worker for a task that can now run: every pipe transfer moves
+       io_epoch, and a futile wake costs the lock and a sleep (1.6M of them per 512 MiB
+       through a shell pipe). */
+    if(schedule_idle && !schedule_done && !schedule_waiting_runnable())return;
+    schedule_kick();
 }
 /* Attach this worker to thread i of t: the process's state is shared in place;
    the registers and the wait are the thread's. Detach stores the registers. */
@@ -346,7 +354,7 @@ static int thread_runnable(const Thread *th) {
     if(!th->state || th->worker)return 0;
     if(th->state==1)return 1;
     if(th->state==2)return th->deadline_ns && thread_time_ns((int)th->realtime)>=th->deadline_ns;
-    return !(th->network.active && th->network.targeted) && th->epoch!=io_epoch;
+    return !(th->network.active && th->network.targeted) && !th->child_wait && th->epoch!=io_epoch;
 }
 /* wait: block (without the lock) until a blocked task's socket is ready, its
    deadline passes, or the poke pipe is written. Returns the number of tasks (and
@@ -417,7 +425,18 @@ static int schedule_runnable(const ScheduledTask *t) {
         if(child->state && !child->execed)return 0;
     }
     if(t->state==2 && t->network_wait.active && t->network_wait.targeted && !t->terminate_signal && !t->stop_signal)return 0;
-    return t->state && (t->terminate_signal || (t->state!=3 && (t->stop_signal || t->state==1 || t->epoch!=io_epoch)));
+    return t->state && (t->terminate_signal || (t->state!=3 && (t->stop_signal || t->state==1 || (!t->child_wait && t->epoch!=io_epoch))));
+}
+/* Whether a task or thread that no worker runs could run now. */
+static int schedule_waiting_runnable(void) {
+    for(unsigned i=0;i<=process_count && i<=PROCESS_LIMIT;i++) {
+        const ScheduledTask *t=&schedule_tasks[i];
+        if(!t->state)continue;
+        if(t->threads) { for(unsigned j=0;j<t->threads->top;j++)if(thread_runnable(&t->threads->thread[j]))return 1;
+            if(t->terminate_signal || t->stop_signal)return 1; }
+        else if(schedule_runnable(t))return 1;
+    }
+    return 0;
 }
 /* A thread of threaded task t to run now, or -1. A pending termination or stop
    runs on any thread that is not already running. */
@@ -465,7 +484,7 @@ static void schedule_wait_idle(unsigned ms) {
 }
 /* Nothing is runnable for this worker: wait for work, or diagnose a deadlock. */
 static void schedule_idle_step(void) {
-    terminal_pump(0);host_signal_pump();timer_pump();
+    terminal_pump(0);host_signal_pump();timer_pump();proc_publish_flush();
     int thread;if(schedule_pick(0,&thread)>=0)return;
     unsigned running=0;for(unsigned i=0;i<worker_count;i++)running+=workers[i]->task>=0 && workers[i]!=worker;
     if(!schedule_polling && network_pump(1)) { terminal_pump(0);return; }
@@ -498,8 +517,10 @@ static void schedule_unload(void) { task_load(&schedule_spare);thread_now=-1; }
    Returns 1 when it was the root: the run is over. */
 static int schedule_finish(int current,int result,unsigned terminating) {
     ScheduledTask *t=&schedule_tasks[current];
-    task_free();t->state=0;t->terminate_signal=0;t->exit_pending=0;t->running=0;io_epoch++;schedule_vfork_done((uint64_t)current+1);
-    free(t->threads);t->threads=NULL;thread_now=-1;
+    /* saved: a threaded process's last thread detached it; freed now, its slot is free. */
+    task_free();t->state=0;t->saved=0;t->terminate_signal=0;t->exit_pending=0;t->running=0;io_epoch++;schedule_vfork_done((uint64_t)current+1);
+    /* This worker's wait still names the freed thread table's: point it back at the task's. */
+    net_wait_now=&t->network_wait;free(t->threads);t->threads=NULL;thread_now=-1;
     if(!current) {                                       /* the root exited: every worker stops */
         schedule_result=result;schedule_done=1;schedule_kick();
         for(unsigned i=0;i<worker_count;i++)if(workers[i]!=worker && worker_interrupt)worker_interrupt(workers[i]);
@@ -509,6 +530,7 @@ static int schedule_finish(int current,int result,unsigned terminating) {
     process_children[current-1].live=0;process_children[current-1].status=terminating?terminating:(unsigned)result<<8;schedule_live--;
     proc_publish((uint64_t)current+1);
     ScheduledTask *parent=&schedule_tasks[process_children[current-1].parent-1];
+    schedule_wake(parent);                                                       /* a waiting wait4 */
     if(job_control_enabled)schedule_signal(parent,17);
     if((parent->signal_ignored&(UINT64_C(1)<<16)) || (parent->signal_flags[16]&2))process_children[current-1].pid=0;
     return 0;
@@ -537,7 +559,7 @@ static int schedule_loop(int current) {
         worker->task=current;
         if(!schedule_polling) {
             uint64_t now=thread_time_ns(0);
-            if(now-network_pump_last_ns>=NETWORK_PUMP_INTERVAL_NS) { network_pump_last_ns=now;timer_pump();network_pump(0); }
+            if(now-network_pump_last_ns>=NETWORK_PUMP_INTERVAL_NS) { network_pump_last_ns=now;timer_pump();network_pump(0);proc_publish_flush(); }
         }
         terminal_pump(0);host_signal_pump();terminal_waiting=0;
         process_pid=(uint64_t)current+1;process_depth=current!=0;schedule_slice=4096;
@@ -549,10 +571,12 @@ static int schedule_loop(int current) {
         if(job_control_enabled && !t->terminate_signal && !t->stop_signal && !t->exit_pending) { mm_lock(t);signal_deliver((int)*blocked_call);mm_unlock(t); }
         if(th)th->state=1;else t->state=1;
         *blocked_call=0;
+        if(th)th->child_wait=0;else t->child_wait=0;              /* set again if it blocks in wait4 once more */
         /* Events for this task while it runs (other workers act meanwhile) count as
            having happened after it blocks: it retries rather than miss them. */
         uint64_t epoch_seen=io_epoch,wakeups_seen=th?th->wakeups:t->wakeups;
         int result=t->exit_pending?-1:t->terminate_signal?128+(int)t->terminate_signal:t->stop_signal?-3:run(0);
+        if(profiling && result==-2)__atomic_fetch_add(&profile_blocks,1,__ATOMIC_RELAXED);
         if(!th && t->threads)th=task_thread(t);                  /* the slice made the process threaded */
         if(th) { th->worker=0;t->running--; } else t->worker=0;
         if(th && (t->exit_pending || !th->state)) {              /* the process ended, or exec ended this thread */
@@ -591,6 +615,7 @@ static int schedule_loop(int current) {
             if(current) {
                 process_children[current-1].event_status=(t->stop_signal<<8)|127;
                 ScheduledTask *parent=&schedule_tasks[process_children[current-1].parent-1];
+                schedule_wake(parent);                                               /* a waiting wait4 */
                 if(!(parent->signal_flags[16]&1))schedule_signal(parent,17);
             }
             t->stop_signal=0;io_epoch++;

@@ -3,12 +3,13 @@
 static int profiling;
 static volatile sig_atomic_t profile_requested;
 static uint64_t profile_instructions, profile_lookups, profile_probes, profile_cache_hits;
+static uint64_t profile_write_faults,profile_blocks; /* blocks: calls that blocked (a scheduler round trip each) */ /* hypervisor: first writes to lazily charged or copy-on-write pages */
 static uint64_t profile_syscalls[512];
 static uint64_t profile_decode_checks, profile_decode_hits, profile_decode_misses;
 static void profile_signal(int number) { (void)number; profile_requested=1; }
 static void profile_dump(void) {
     if(!profiling) return;
-    fprintf(stderr,"VMFREE_PROFILE {\"instructions\":%" PRIu64 ",\"memory_lookups\":%" PRIu64 ",\"segment_probes\":%" PRIu64 ",\"syscalls\":{",profile_instructions,profile_lookups,profile_probes);
+    fprintf(stderr,"VMFREE_PROFILE {\"blocks\":%" PRIu64 ",\"write_faults\":%" PRIu64 ",\"instructions\":%" PRIu64 ",\"memory_lookups\":%" PRIu64 ",\"segment_probes\":%" PRIu64 ",\"syscalls\":{",profile_blocks,profile_write_faults,profile_instructions,profile_lookups,profile_probes);
     int comma=0;
     for(unsigned i=0;i<512;i++) if(profile_syscalls[i]) {
         fprintf(stderr,"%s\"%u\":%" PRIu64,comma?",":"",i,profile_syscalls[i]);comma=1;

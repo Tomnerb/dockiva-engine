@@ -199,6 +199,18 @@ static int guest_id_exists(uint64_t id) {
     if(t)for(unsigned i=0;i<t->top;i++)if(t->thread[i].state && t->thread[i].tid==id)return 1;
     return 0;
 }
+/* Rewrites a Linux struct stat (128 bytes, as newfstatat wrote it into out) as a struct statx. */
+static void statx_from_stat(unsigned char *out) {
+    unsigned char st[128];memcpy(st,out,128);memset(out,0,256);
+    fs_pack(out,0,0x7ff,4);fs_pack(out,4,le(st+56,4),4);                     /* STATX_BASIC_STATS; blksize */
+    fs_pack(out,16,le(st+20,4),4);fs_pack(out,20,le(st+24,4),4);fs_pack(out,24,le(st+28,4),4);
+    fs_pack(out,28,le(st+16,4),2);fs_pack(out,32,le(st+8,8),8);               /* mode; ino */
+    fs_pack(out,40,le(st+48,8),8);fs_pack(out,48,le(st+64,8),8);              /* size; blocks */
+    const unsigned from[3]={72,104,88},to[3]={64,96,112};                     /* atime, ctime, mtime */
+    for(unsigned i=0;i<3;i++) { fs_pack(out,to[i],le(st+from[i],8),8);fs_pack(out,to[i]+8,le(st+from[i]+8,8),4); }
+    uint64_t rdev=le(st+32,8);
+    fs_pack(out,128,((rdev>>8)&0xfff)|((rdev>>32)&~UINT64_C(0xfff)),4);fs_pack(out,132,(rdev&0xff)|((rdev>>12)&~UINT64_C(0xff)),4);
+}
 static int guest_syscall_dispatch(void) {
             uint64_t call=cpu->gpr[8];cpu->exclusive_valid=0;
             if(profiling && call<512) profile_syscalls[call]++;
@@ -333,7 +345,14 @@ static int guest_syscall_dispatch(void) {
             if(io_managed(cpu->gpr[0]) && (call==57 || call==63 || call==64 || call==25 || call==29 || call==80 || call==62 || call==67 || call==61)) { uint64_t result=io_call(call);if(result==IO_BLOCK) { cpu->pc-=4;return -2; }cpu->gpr[0]=result;return -3; }
             if(call==220) { cpu->gpr[0]=process_clone();return -3; }
             if(call==221) { uint64_t result=process_exec();if(result)cpu->gpr[0]=result;return -3; }
-            if(call==260 || call==95) { uint64_t result=call==95?process_waitid():process_wait();if(result==IO_BLOCK) { cpu->pc-=4;return -2; }cpu->gpr[0]=result;return -3; }
+            if(call==260 || call==95) {
+                uint64_t result=call==95?process_waitid():process_wait();
+                if(result==IO_BLOCK) {                          /* only a child's event (or a signal) can change the answer */
+                    if(schedule_active) { Thread *th=thread_current();if(th)th->child_wait=1;else schedule_tasks[process_pid-1].child_wait=1; }
+                    cpu->pc-=4;return -2;
+                }
+                cpu->gpr[0]=result;return -3;
+            }
             if(call==153) { /* times: process CPU times are not measured; the clock in ticks (100 Hz) */
                 if(cpu->gpr[0]) { unsigned char *out=lookup(cpu->gpr[0],32,2);if(!out) { cpu->gpr[0]=linux_error(14);return -3; }memset(out,0,32); }
                 cpu->gpr[0]=net_now()/10;return -3;
@@ -484,16 +503,7 @@ static int guest_syscall_dispatch(void) {
                 memcpy(cpu->gpr,saved,sizeof(saved));
                 if(r!=-3) { cpu->gpr[0]=linux_error(38);return -3; }
                 if((int64_t)result<0) { cpu->gpr[0]=result;return -3; }
-                unsigned char st[128];memcpy(st,out,128);memset(out,0,256);
-                fs_pack(out,0,0x7ff,4);fs_pack(out,4,le(st+56,4),4);                     /* STATX_BASIC_STATS; blksize */
-                fs_pack(out,16,le(st+20,4),4);fs_pack(out,20,le(st+24,4),4);fs_pack(out,24,le(st+28,4),4);
-                fs_pack(out,28,le(st+16,4),2);fs_pack(out,32,le(st+8,8),8);               /* mode; ino */
-                fs_pack(out,40,le(st+48,8),8);fs_pack(out,48,le(st+64,8),8);              /* size; blocks */
-                const unsigned from[3]={72,104,88},to[3]={64,96,112};                     /* atime, ctime, mtime */
-                for(unsigned i=0;i<3;i++) { fs_pack(out,to[i],le(st+from[i],8),8);fs_pack(out,to[i]+8,le(st+from[i]+8,8),4); }
-                uint64_t rdev=le(st+32,8);
-                fs_pack(out,128,((rdev>>8)&0xfff)|((rdev>>32)&~UINT64_C(0xfff)),4);fs_pack(out,132,(rdev&0xff)|((rdev>>12)&~UINT64_C(0xff)),4);
-                cpu->gpr[0]=0;return -3;
+                statx_from_stat(out);cpu->gpr[0]=0;return -3;
             }
             if((call==206 || call==207 || call==211 || call==212 || call==269) && net_host(cpu->gpr[0])<0) { /* sendto/recvfrom/sendmsg/recvmsg/sendmmsg need a socket */
                 uint64_t fd=cpu->gpr[0];cpu->gpr[0]=(fs_host(fd)>=0 || (io_managed(fd) && IO(fd).kind))?linux_error(88):linux_error(9);return -3;
@@ -533,7 +543,28 @@ static int guest_syscall_unlocked(void) {
     int file=fs_host(fd)>=0 && !fs_dirs[fs_slot(fd)],socket=!file && net_host(fd)>=0;
     int epoll=call==22 && io_managed(fd) && IO(fd).kind==IO_EPOLL && epolls[IO(fd).host].refs==1;
     /* openat and newfstatat by path, except under /proc (process tables). */
-    char path[1025];int named=(call==56 || call==79) && fs_string(cpu->gpr[1],path)==0 && strncmp(path,"/proc",5) && strncmp(path,"/dev/",5) && !(path[0]!='/' && fs_cwd && !strncmp(fs_cwd->path,"/proc",5));
+    char path[1025];int named=(call==56 || call==79 || call==291) && fs_string(cpu->gpr[1],path)==0 && strncmp(path,"/proc",5) && strncmp(path,"/dev/",5) && !(path[0]!='/' && fs_cwd && !strncmp(fs_cwd->path,"/proc",5));
+    if(call==291) {
+        /* statx of a path (npm stats thousands): newfstatat without the lock, rewritten. */
+        uint64_t flags=cpu->gpr[2],buffer=cpu->gpr[4];
+        if(!named || !path[0] || (flags&~UINT64_C(0x100|0x800|0x6000)))return 0;
+        unsigned char *out=lookup(buffer,256,2);if(!out)return 0;
+        uint64_t saved[9];memcpy(saved,cpu->gpr,sizeof(saved));
+        cpu->gpr[2]=buffer;cpu->gpr[3]=flags&(0x100|0x800);cpu->gpr[8]=79;
+        cpu->exclusive_valid=0;syscall_unlocked=1;syscall_abort=0;
+        uint64_t result=fs_call(79);
+        syscall_unlocked=0;memcpy(cpu->gpr,saved,sizeof(saved));
+        if(syscall_abort || result==IO_BLOCK)return 0;
+        if((int64_t)result>=0) { statx_from_stat(out);result=0; }
+        cpu->gpr[0]=result;return 1;
+    }
+    /* fcntl's descriptor flags on a file: this process's own (record locks take the lock). */
+    if(call==25 && file && cpu->gpr[1]>=1 && cpu->gpr[1]<=4) {
+        cpu->exclusive_valid=0;syscall_unlocked=1;syscall_abort=0;
+        uint64_t result=fs_call(25);syscall_unlocked=0;
+        if(syscall_abort)return 0;
+        cpu->gpr[0]=result;return 1;
+    }
     if(!epoll && !named && !((call==62 || call==63 || call==64 || call==65 || call==66 || call==67 || call==68 || call==80 || call==82 || call==83) && file) && !((call==63 || call==64 || call==65 || call==206 || call==207) && socket))return 0;
     cpu->exclusive_valid=0;
     int clamp=(call==63 || call==64 || call==206 || call==207) && count>1024*1024 && fs_host(cpu->gpr[0])<0; /* files: fs_transfer_at */

@@ -34,7 +34,7 @@ static MemoryBacking *backing_descriptor(size_t size) {
 static void backing_vm_release(MemoryBacking *backing) {
     if(backing->bytes && mach_vm_deallocate(mach_task_self(),(mach_vm_address_t)backing->bytes,backing->mapped_size)!=KERN_SUCCESS)
         fail("Cannot release guest VM backing");
-    for(size_t i=0;i<backing->mapped_size/backing->page_size;i++)
+    for(size_t i=0;i<backing->used;i++)
         if(backing->pages[i])backing_page_release(backing->pages[i],backing->page_size);
     free(backing);
 }
@@ -46,6 +46,7 @@ static MemoryBacking *backing_alloc_charged(size_t size,int charge) {
     BackingPageGroup *group=backing_page_group(count,backing->page_size,charge);
     if(!group) { free(backing);return NULL; }
     for(size_t i=0;i<count;i++)backing->pages[i]=&group->pages[i];
+    backing->used=count;
     mach_vm_address_t address=0;
     if(mach_vm_allocate(mach_task_self(),&address,backing->mapped_size,VM_FLAGS_ANYWHERE)!=KERN_SUCCESS) {
         backing_vm_release(backing);errno=ENOMEM;return NULL;
@@ -76,7 +77,7 @@ static void backing_discard(MemoryBacking *backing,size_t offset,size_t size) {
 }
 static MemoryBacking *backing_snapshot(MemoryBacking *source) {
     MemoryBacking *copy=backing_descriptor(source->size);if(!copy)return NULL;
-    size_t count=source->mapped_size/source->page_size;
+    size_t count=source->used;
     for(size_t i=0;i<count;i++)if(source->pages[i] && source->pages[i]->refs==SIZE_MAX) { free(copy);errno=ENOMEM;return NULL; }
     mach_vm_address_t address=0;vm_prot_t current=0,maximum=0;
     source->frozen=1;
@@ -85,6 +86,7 @@ static MemoryBacking *backing_snapshot(MemoryBacking *source) {
     if(result!=KERN_SUCCESS) { free(copy);errno=ENOMEM;return NULL; }
     copy->bytes=(unsigned char *)address;
     for(size_t i=0;i<count;i++) { copy->pages[i]=source->pages[i];if(copy->pages[i])__atomic_fetch_add(&copy->pages[i]->refs,1,__ATOMIC_ACQ_REL); }
+    copy->used=count;
     return copy;
 }
 /* Stage the entire charge before changing metadata. A failed multi-page range
@@ -101,5 +103,6 @@ static int backing_prepare(MemoryBacking *backing,size_t offset,size_t size,int 
         if(backing->pages[i])backing_page_release(backing->pages[i],backing->page_size);
         backing->pages[i]=&group->pages[next++];
     }
+    if(last+1>backing->used)backing->used=last+1;
     *changed=1;return 1;
 }

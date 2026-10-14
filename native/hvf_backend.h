@@ -757,12 +757,19 @@ static int hvf_fault(unsigned signal,uint64_t pc,uint64_t address,unsigned ec) {
 /* Right after a guest exit, without the runtime lock (the process's mm lock is
    held): serve the system call if it is one guest_syscall_unlocked takes, and say
    whether the guest can just resume. Changed tables are synced before it does. */
+/* Whether signal_deliver would act now: a pending signal this thread does not block or ignore. */
+static int signal_deliverable(void) {
+    if(!job_control_enabled || !schedule_active)return 0;
+    ScheduledTask *task=&schedule_tasks[process_pid-1];Thread *th=thread_current();
+    return ((task->signal_pending|(th?th->signal_pending:0)) & ~*signal_mask_now() & ~task->signal_ignored)!=0;
+}
 static int hvf_unlocked_exit(void) {
     if(hvf_exit->reason!=HV_EXIT_REASON_EXCEPTION || (hvf_exit->exception.syndrome>>26)!=0x16)return 0;
     uint64_t esr=0,elr=0,spsr=0,call=0,far=0;
     hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_ESR_EL1,&esr),"get esr");
     unsigned ec=(unsigned)(esr>>26);
     if(ec==0x24 && (esr&(UINT64_C(1)<<6))) {
+        if(profiling)__atomic_fetch_add(&profile_write_faults,1,__ATOMIC_RELAXED);
         /* A write to a copy-on-write or not yet charged page: the same handling as
            under the lock. A genuine fault goes to the locked path. */
         hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_FAR_EL1,&far),"get far");
@@ -779,7 +786,7 @@ static int hvf_unlocked_exit(void) {
     if(ec!=0x15 || seccomp_active())return 0;                                 /* SVC from EL0; filtered calls take the locked path */
     hvf_check(hv_vcpu_get_reg(hvf_vcpu,HV_REG_X8,&call),"get x8");
     int memory=call==222 || call==215 || call==226 || call==233 || call==214;
-    if(!memory && call!=22 && call!=56 && call!=79 && call!=80 && (call<62 || call>68) && call!=82 && call!=83 && call!=206 && call!=207)return 0;
+    if(!memory && call!=22 && call!=25 && call!=56 && call!=79 && call!=80 && (call<62 || call>68) && call!=82 && call!=83 && call!=206 && call!=207 && call!=291)return 0;
     hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_ELR_EL1,&elr),"get elr");
     hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_SPSR_EL1,&spsr),"get spsr");
     hvf_get_regs(1,elr,spsr);
@@ -828,7 +835,7 @@ static int hvf_slice_run(void) {
        first run on into its HVC exit. */
     int fast=0,in_vector=0;
     for(;;) {
-        if(job_control_enabled && schedule_active && !fast) {
+        if(job_control_enabled && schedule_active && !fast && signal_deliverable()) {
             hvf_fp_pull(); /* a signal frame saves and restores the whole CPU state */
             signal_deliver(0);
             if(task->terminate_signal || task->stop_signal)return -1;
@@ -901,6 +908,7 @@ static int hvf_slice_run(void) {
             if(fork)hvf_views[process_pid].stale=HVF_STALE_COW; /* a fork shares this process's private pages */
             int denied=seccomp_check();
             int result=denied?denied:hvf_thread_call(call);
+            if(profiling && result!=HVF_UNHANDLED && call<512)profile_syscalls[call]++;   /* served here, not by the dispatcher */
             if(result==HVF_UNHANDLED) {
                 /* Sibling threads stay out of guest code while their memory is
                    snapshotted or replaced. */
@@ -922,6 +930,7 @@ static int hvf_slice_run(void) {
             continue;
         }
         if(ec==0x24 && (esr&(UINT64_C(1)<<6))) {
+        if(profiling)__atomic_fetch_add(&profile_write_faults,1,__ATOMIC_RELAXED);
             /* Write to a read-only view: lookup() detaches a copy-on-write page when the
                guest mapping is writable; a genuine read-only page stays a fault. */
             uint64_t layout=address_space->layout;

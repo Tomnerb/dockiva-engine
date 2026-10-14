@@ -186,6 +186,7 @@ func (b *engine) start(name string) {
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	deadline := time.Now().Add(10 * time.Second)
+	pace := newBackoff(2*time.Millisecond, 20*time.Millisecond)
 	for time.Now().Before(deadline) {
 		s = readObject(filepath.Join(p, "status.json"))
 		if s["generation"] == generation {
@@ -197,9 +198,8 @@ func (b *engine) start(name string) {
 		select {
 		case <-done:
 			panic(apiError{409, "Supervisor exited; inspect supervisor.log"})
-		default:
+		case <-pace.after():
 		}
-		time.Sleep(20 * time.Millisecond)
 	}
 	_ = cmd.Process.Signal(syscall.SIGTERM)
 	panic(apiError{409, "Start status timeout; inspect state before retrying"})
@@ -653,7 +653,22 @@ func supervise(p, native, worker, generation string) (result error) {
 	launch()
 	restarts, delay := 0, time.Duration(0)
 	var restartAt <-chan time.Time
+	// Control connections arrive on a channel, so the loop below waits for them, the
+	// run's end and signals at once (it noticed an exit only between 100 ms accepts).
+	conns := make(chan net.Conn)
+	accepted := listener
+	go func() {
+		for {
+			conn, e := accepted.Accept()
+			if e != nil {
+				close(conns) // the listener closed: the supervisor is ending
+				return
+			}
+			conns <- conn
+		}
+	}()
 	for {
+		var conn net.Conn
 		select {
 		case <-done:
 			code := finish()
@@ -672,14 +687,13 @@ func supervise(p, native, worker, generation string) (result error) {
 		case <-signals:
 			terminate(grace)
 			return nil
-		default:
+		case next, ok := <-conns:
+			reject(ok, "Supervisor control listener closed")
+			conn = next
 		}
-		check(listener.(*net.TCPListener).SetDeadline(time.Now().Add(100 * time.Millisecond)))
-		conn, e := listener.Accept()
-		if ne, ok := e.(net.Error); ok && ne.Timeout() {
+		if conn == nil {
 			continue
 		}
-		check(e)
 		_ = conn.SetDeadline(time.Now().Add(time.Second))
 		lines := bufio.NewReaderSize(conn, 128)
 		line, e := lines.ReadSlice('\n')

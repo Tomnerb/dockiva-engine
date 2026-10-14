@@ -513,8 +513,22 @@ static void proc_peer_load(void) {
 }
 /* The main run's table, rewritten (atomically) when its processes start, exec or end
    (ended: a pid whose task is gone but may still be the current one). */
+/* Writes are coalesced: at most one per 20 ms (a build forks thousands of processes;
+   each rewrite cost 0.4 ms of a fork). A change within that time is written by the
+   scheduler's next pump (proc_publish_flush), so readers lag by at most about that. */
+#define PROC_PUBLISH_NS UINT64_C(20000000)
+static int proc_publish_pending;static uint64_t proc_publish_last_ns;
+static void proc_publish_write(uint64_t ended);
 static void proc_publish(uint64_t ended) {
     if(!proc_publish_path)return;
+    if(clock_gettime_nsec_np(CLOCK_UPTIME_RAW)-proc_publish_last_ns>=PROC_PUBLISH_NS)proc_publish_write(ended);
+    else proc_publish_pending=1;
+}
+static void proc_publish_flush(void) {
+    if(proc_publish_pending && clock_gettime_nsec_np(CLOCK_UPTIME_RAW)-proc_publish_last_ns>=PROC_PUBLISH_NS)proc_publish_write(0);
+}
+static void proc_publish_write(uint64_t ended) {
+    proc_publish_pending=0;proc_publish_last_ns=clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
     char temporary[1100];snprintf(temporary,sizeof(temporary),"%s.%d",proc_publish_path,(int)getpid());
     FILE *f=fopen(temporary,"wb");if(!f)return;
     for(uint64_t pid=1;pid<=PROCESS_LIMIT+1;pid++)if(pid!=ended && guest_process_exists(pid)) {
