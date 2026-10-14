@@ -392,6 +392,44 @@ static uint64_t net_message(int fd,unsigned slot,uint64_t header,uint64_t flag_w
     return (uint64_t)result;
 }
 /* ioctl on a socket: FIONBIO, FIONREAD (TIOCINQ), FIOCLEX and FIONCLEX. */
+/* Interface queries on a socket (Java's NetworkInterface; Elasticsearch derives its
+   publish address from them): lo, and eth0 on a private network with its /24 (the
+   Mac is .1). Linux struct ifreq is 40 bytes: the name, then a 24-byte union. */
+static void net_put_ipv4(unsigned char *at,uint32_t address) { memset(at,0,16);at[0]=2;for(unsigned i=0;i<4;i++)at[4+i]=(unsigned char)(address>>(24-8*i)); }
+static uint64_t net_interface_ioctl(uint64_t request) {
+    unsigned count=net_ip?2:1;
+    if(request==0x8912) {                                                           /* SIOCGIFCONF */
+        unsigned char *conf=lookup(cpu->gpr[2],16,6);if(!conf)return linux_error(14);
+        uint64_t length=le(conf,4),buffer=le(conf+8,8);
+        if(!buffer) { fs_pack(conf,0,count*40,4);return 0; }                         /* the size needed */
+        unsigned n=length/40<count?(unsigned)(length/40):count;
+        unsigned char *out=n?lookup(buffer,n*40,2):NULL;if(n && !out)return linux_error(14);
+        for(unsigned i=0;i<n;i++) {
+            memset(out+i*40,0,40);strcpy((char *)out+i*40,i?"eth0":"lo");
+            net_put_ipv4(out+i*40+16,i?net_ip:UINT32_C(0x7f000001));
+        }
+        fs_pack(conf,0,n*40,4);return 0;
+    }
+    unsigned char *ifr=lookup(cpu->gpr[2],40,6);if(!ifr)return linux_error(14);
+    char name[17]={0};memcpy(name,ifr,16);
+    int index=!strcmp(name,"lo")?0:(net_ip && !strcmp(name,"eth0"))?1:-1;
+    if(index<0)return linux_error(19);                                              /* ENODEV */
+    unsigned char *u=ifr+16;
+    switch(request) {
+        case 0x8913:memset(u,0,24);fs_pack(u,0,index?0x1043:0x49,2);return 0;      /* SIOCGIFFLAGS: UP, RUNNING, LOOPBACK or BROADCAST|MULTICAST */
+        case 0x8915:net_put_ipv4(u,index?net_ip:UINT32_C(0x7f000001));return 0;    /* SIOCGIFADDR */
+        case 0x891b:net_put_ipv4(u,index?UINT32_C(0xffffff00):UINT32_C(0xff000000));return 0; /* SIOCGIFNETMASK */
+        case 0x8919:if(!index)return linux_error(99);net_put_ipv4(u,net_ip|0xff);return 0; /* SIOCGIFBRDADDR */
+        case 0x8921:memset(u,0,24);fs_pack(u,0,index?1500:65536,4);return 0;      /* SIOCGIFMTU */
+        case 0x8933:memset(u,0,24);fs_pack(u,0,(uint64_t)index+1,4);return 0;     /* SIOCGIFINDEX */
+        case 0x8927: {                                                              /* SIOCGIFHWADDR: 02:42 and the address, as Docker does */
+            memset(u,0,24);fs_pack(u,0,index?1:772,2);
+            if(index) { u[2]=0x02;u[3]=0x42;for(unsigned i=0;i<4;i++)u[4+i]=(unsigned char)(net_ip>>(24-8*i)); }
+            return 0;
+        }
+        default:return linux_error(22);
+    }
+}
 static uint64_t net_ioctl(void) {
     int fd=net_host(cpu->gpr[0]);if(fd<0)return linux_error(9);
     unsigned slot=(unsigned)net_slot(cpu->gpr[0]);uint64_t request=cpu->gpr[1];
@@ -410,6 +448,7 @@ static uint64_t net_ioctl(void) {
         for(unsigned i=0;i<4;i++)p[i]=(unsigned char)((unsigned)n>>(8*i));
         return 0;
     }
+    if(request>=0x8912 && request<=0x8933)return net_interface_ioctl(request);
     return linux_error(25);
 }
 /* Common socket options: Linux level and name to the host's; 0 when unknown. */
@@ -417,7 +456,8 @@ static int net_option(uint64_t level,uint64_t name,int *host_level,int *host_nam
     if(level==1) { /* SOL_SOCKET */
         *host_level=SOL_SOCKET;
         *host_name=name==2?SO_REUSEADDR:name==9?SO_KEEPALIVE:name==7?SO_SNDBUF:name==8?SO_RCVBUF:name==15?SO_REUSEPORT:name==13?SO_LINGER:name==6?SO_BROADCAST:-1;
-    } else if(level==6) { /* IPPROTO_TCP */
+    } else if(level==0 && name==1) { *host_level=IPPROTO_IP;*host_name=IP_TOS;return 1; } /* IP_TOS */
+    else if(level==6) { /* IPPROTO_TCP */
         *host_level=IPPROTO_TCP;
         *host_name=name==1?TCP_NODELAY:name==3?TCP_NOPUSH:name==4?TCP_KEEPALIVE:name==5?TCP_KEEPINTVL:name==6?TCP_KEEPCNT:-1; /* TCP_CORK: Darwin's TCP_NOPUSH */
     } else *host_name=-1;
@@ -451,6 +491,14 @@ static uint64_t net_call(uint64_t number) {
         if(cpu->gpr[2]==17)net_credentials(out);
         for(unsigned i=0;i<4;i++)lenout[i]=(unsigned char)(want>>(8*i));
         return 0;
+    }
+    if((number==208 || number==209) && cpu->gpr[1]==1 && cpu->gpr[2]==12) {
+        /* SO_PRIORITY has no Darwin counterpart: accepted, and reads back 0 (Erlang's
+           inet driver saves it around TOS changes). */
+        if(number==208)return cpu->gpr[4]<4?linux_error(22):lookup(cpu->gpr[3],4,4)?0:linux_error(14);
+        unsigned char *len=lookup(cpu->gpr[4],4,4),*lenout=lookup(cpu->gpr[4],4,2),*out=lookup(cpu->gpr[3],4,2);
+        if(!len || !lenout || !out)return linux_error(14);if(le(len,4)<4)return linux_error(22);
+        fs_pack(out,0,0,4);fs_pack(lenout,0,4,4);return 0;
     }
     if(number==209 && !(cpu->gpr[1]==1 && cpu->gpr[2]==4)) {
         /* Options set through setsockopt read back from the host (Java reads its buffer sizes). */
@@ -669,7 +717,11 @@ static uint64_t net_call(uint64_t number) {
 /* ppoll over sockets, pipes, stdio and files; no signal mask, at most 1024 entries.
    Sockets wait on the host; pipe changes wake the task through io_epoch. */
 static uint64_t net_poll(void) {
-    if(cpu->gpr[1]>NET_FD_LIMIT || cpu->gpr[3])return linux_error(95);
+    /* ppoll's signal mask (x3, x4 bytes) is checked, then waited under the current
+       mask, as pselect6 does. ponytail: a mask that unblocks a signal for the wait
+       only delays it to the next unblocking; apply it per thread if a program relies on that. */
+    if(cpu->gpr[1]>NET_FD_LIMIT)return linux_error(22);
+    if(cpu->gpr[3] && (cpu->gpr[4]!=8 || !lookup(cpu->gpr[3],8,4)))return linux_error(cpu->gpr[4]!=8?22:14);
     unsigned count=(unsigned)cpu->gpr[1];
     unsigned char *in=count?lookup(cpu->gpr[0],count*8,4):NULL,*out=count?lookup(cpu->gpr[0],count*8,2):NULL;
     if(count && (!in || !out))return linux_error(14);

@@ -117,7 +117,8 @@ static void signal_deliver(int blocked) {
     if(!pending)return;
     unsigned index=0;while(!(pending&(UINT64_C(1)<<index)))index++;
     uint64_t bit=UINT64_C(1)<<index,handler=task->signal_handler[index],flags=task->signal_flags[index];
-    if(own&bit)th->signal_pending&=~bit;else task->signal_pending&=~bit;
+    int from_thread=(own&bit)!=0;
+    if(from_thread)th->signal_pending&=~bit;else task->signal_pending&=~bit;
     if(task->sigwaiting && (task->sigwait_set&bit)) {          /* rt_sigtimedwait takes it */
         task->sigwaiting=0;*mask=task->suspend_mask;
         if(blocked)cpu->pc+=4;
@@ -139,7 +140,9 @@ static void signal_deliver(int blocked) {
     if(blocked && (suspended || !(flags&UINT64_C(0x10000000)))) { cpu->pc+=4;cpu->gpr[0]=linux_error(4);net_wait.active=0; }
     memset(out,0,SIGNAL_FRAME_SIZE);
     fs_pack(out,0,index+1,4);fs_pack(out,16,task->signal_sender[index],4);
-    if(task->signal_fault_code[index]) { /* a fault: si_code and si_addr */
+    if(from_thread && th->fault_signal==index+1) { /* a fault: si_code and si_addr */
+        fs_pack(out,8,th->fault_code,4);fs_pack(out,16,th->fault_addr,8);th->fault_signal=0;
+    } else if(task->signal_fault_code[index]) {
         fs_pack(out,8,task->signal_fault_code[index],4);fs_pack(out,16,task->signal_fault_addr[index],8);
         task->signal_fault_code[index]=0;
     }

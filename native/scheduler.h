@@ -14,6 +14,7 @@ typedef struct {
     GuestCpuState regs;           /* while it is not running */
     NetWait network;
     uint64_t signal_pending,signal_mask;
+    unsigned fault_signal,fault_code;uint64_t fault_addr; /* a synchronous fault of this thread awaiting delivery */
     MemoryBacking *futex_backing; /* a futex in shared memory: keyed by its memory, across processes */
     size_t futex_offset;
 } Thread;

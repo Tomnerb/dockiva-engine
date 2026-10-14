@@ -737,9 +737,12 @@ static int hvf_fault(unsigned signal,uint64_t pc,uint64_t address,unsigned ec) {
         ScheduledTask *task=&schedule_tasks[process_pid-1];unsigned index=signal-1;uint64_t bit=UINT64_C(1)<<index;
         if(job_control_enabled && task->signal_handler[index] && !(*signal_mask_now()&bit) && !(task->signal_ignored&bit)) {
             /* ILL_ILLOPC at the instruction; SEGV_ACCERR on a mapped page, else SEGV_MAPERR. */
-            task->signal_fault_code[index]=signal==4?1u:(lookup(address,1,4) || lookup(address,1,1))?2u:1u;
-            task->signal_fault_addr[index]=signal==4?pc:address;
+            /* Per thread: JVM safepoints fault many threads at once, and each handler
+               needs its own si_code and si_addr. */
+            unsigned code=signal==4?1u:(lookup(address,1,4) || lookup(address,1,1))?2u:1u;uint64_t where=signal==4?pc:address;
             Thread *th=thread_current();
+            if(th) { th->fault_signal=signal;th->fault_code=code;th->fault_addr=where; }
+            else { task->signal_fault_code[index]=code;task->signal_fault_addr[index]=where; }
             if(th)th->signal_pending|=bit;else task->signal_pending|=bit;
             return -1; /* delivered before the instruction runs again (signal_deliver) */
         }

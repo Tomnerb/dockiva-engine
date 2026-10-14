@@ -53,6 +53,8 @@ typedef struct {
        (0 pages: unknown); first fit for at least that many skips most of it */
     unsigned map_large_from,map_large_pages;
     unsigned map_top;                 /* no arena page at or above it has ever been mapped */
+    /* Reservations beyond the arena (mapping.h): address space only, PROT_NONE. */
+    uint64_t reserve_base[8],reserve_size[8],reserve_next;unsigned nreserve;
     uint64_t layout; /* unique revision of the mapping layout (not of page contents) */
     /* mmap-arena changes since revision arena_dirty_since all lie in pages
        [arena_dirty_lo,arena_dirty_hi); a backend may update just that range. */

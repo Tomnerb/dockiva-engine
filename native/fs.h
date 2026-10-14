@@ -460,8 +460,20 @@ static uint64_t fs_memfd(void) {
 }
 static unsigned guest_cpus(void); /* scheduler.h */
 static uint64_t io_text_open(const void *data,size_t size,int cloexec); /* io.h */
+static uint64_t io_fifo_open(dev_t dev,ino_t ino,uint64_t flags);          /* io.h */
 static char prctl_name[16];       /* compat.h: PR_SET_NAME */
-static uint64_t guest_ppid(void);static unsigned guest_threads(void); /* syscall.h */
+static uint64_t guest_ppid_of(uint64_t pid);static unsigned guest_threads_of(uint64_t pid); /* syscall.h */
+static int guest_process_exists(uint64_t pid);
+/* /proc/self/NAME or /proc/PID/NAME of a process of the container: its pid, or 0. */
+static uint64_t fs_proc_file(const char *path,const char *name) {
+    const char *rest=NULL;uint64_t pid=process_pid;
+    if(!strncmp(path,"/proc/self/",11))rest=path+11;
+    else if(!strncmp(path,"/proc/",6)) {
+        pid=0;const char *p=path+6;while(*p>='0' && *p<='9' && pid<100000)pid=pid*10+(uint64_t)(*p++-'0');
+        if(p>path+6 && *p=='/' && guest_process_exists(pid))rest=p+1;
+    }
+    return rest && !strcmp(rest,name)?pid:0;
+}
 static uint64_t fs_open(void) {
     uint64_t flags=cpu->gpr[2];
     /* O_NOCTTY (256), O_NONBLOCK (2048) and O_NOATIME (262144) have no effect on regular
@@ -469,15 +481,19 @@ static uint64_t fs_open(void) {
        caching hint (MySQL and InnoDB ask for it); O_DSYNC (4096) and O_SYNC (1052672)
        map to Darwin's. */
     const uint64_t allowed=3|64|128|256|512|1024|2048|4096|16384|32768|65536|131072|262144|524288|1052672;
-    /* Like Linux, ignore bits open(2) does not define (MySQL passes a mode there);
-       O_PATH and O_TMPFILE are defined but unsupported. */
-    if((flags&(UINT64_C(0x200000)|UINT64_C(0x400000))) || (flags&3)==3) return linux_error(95);
+    /* Like Linux, ignore bits open(2) does not define (MySQL passes a mode there).
+       O_PATH (a descriptor for *at calls, fstat and close; MariaDB walks directories
+       with it) opens read-only. ponytail: Linux needs no read permission for O_PATH
+       and can open a symlink itself (with O_NOFOLLOW); here those fail as plain opens.
+       O_TMPFILE is unsupported (callers fall back to a named file). */
+    if((flags&UINT64_C(0x400000)) || (flags&3)==3) return linux_error(95);
+    if(flags&UINT64_C(0x200000))flags&=UINT64_C(16384|32768|524288);              /* O_DIRECTORY, O_NOFOLLOW, O_CLOEXEC */
     flags&=allowed;
     unsigned slot=0;while(slot<FS_SLOTS && fs_fd[slot]) slot++;
     if(slot==FS_SLOTS || fd_lowest(0)<0) return linux_error(24);
     char path[1025];
     if(fs_string(cpu->gpr[1],path)==0) {
-        char text[16384];size_t length=0;int known=1;
+        char text[16384];size_t length=0;int known=1;uint64_t proc=0;
         if(!strcmp(path,"/proc/self/auxv") || !strcmp(path,"/proc/1/auxv")) {
             /* This process's auxiliary vector (CPU features: Go's x/sys/cpu reads it). */
             for(unsigned i=0;i<address_space->auxv_count;i++)fs_pack((unsigned char *)text,i*8,address_space->auxv[i],8);
@@ -505,15 +521,25 @@ static uint64_t fs_open(void) {
                 if(n<0 || length+(size_t)n>sizeof text)break;
                 memcpy(text+length,entry,(size_t)n);length+=(size_t)n;
             }
-        } else if(!strcmp(path,"/proc/self/stat") || (sscanf(path,"/proc/%u/stat%c",&(unsigned){0},&(char){0})==1 && (uint64_t)atoi(path+6)==process_pid)) {
+        } else if((proc=fs_proc_file(path,"stat"))) {
             /* This process's status line (MongoDB's diagnostics read it); CPU times are the runtime's. */
             struct rusage use;getrusage(RUSAGE_SELF,&use);
-            unsigned threads=guest_threads();uint64_t ppid=guest_ppid();
+            unsigned threads=guest_threads_of(proc);uint64_t ppid=guest_ppid_of(proc);
             length=(size_t)snprintf(text,sizeof text,"%llu (%s) R %llu %llu %llu 0 -1 0 %ld 0 %ld 0 %ld %ld 0 0 20 0 %u 0 0 %llu %llu"
                 " 18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n",
-                (unsigned long long)process_pid,*prctl_name?prctl_name:"guest",(unsigned long long)ppid,(unsigned long long)process_pid,(unsigned long long)process_pid,
+                (unsigned long long)proc,*prctl_name?prctl_name:"guest",(unsigned long long)ppid,(unsigned long long)proc,(unsigned long long)proc,
                 (long)use.ru_minflt,(long)use.ru_majflt,(long)use.ru_utime.tv_sec*100+use.ru_utime.tv_usec/10000,(long)use.ru_stime.tv_sec*100+use.ru_stime.tv_usec/10000,
                 threads,(unsigned long long)resource_used,(unsigned long long)(resource_used/4096));
+        } else if(fs_proc_file(path,"statm")) {
+            /* Pages: size resident shared text lib data dt (RabbitMQ's memory monitor). */
+            unsigned long long pages=resource_used/4096;
+            length=(size_t)snprintf(text,sizeof text,"%llu %llu 0 0 0 %llu 0\n",pages,pages,pages);
+        } else if((proc=fs_proc_file(path,"status"))) {
+            unsigned long long kib=resource_used>>10;
+            length=(size_t)snprintf(text,sizeof text,"Name:\t%s\nState:\tR (running)\nTgid:\t%llu\nPid:\t%llu\nPPid:\t%llu\nUid:\t%u\t%u\t%u\t%u\n"
+                "Gid:\t%u\t%u\t%u\t%u\nVmSize:\t%llu kB\nVmRSS:\t%llu kB\nThreads:\t%u\n",*prctl_name?prctl_name:"guest",
+                (unsigned long long)proc,(unsigned long long)proc,(unsigned long long)guest_ppid_of(proc),guest_uid,guest_uid,guest_uid,guest_uid,
+                guest_gid,guest_gid,guest_gid,guest_gid,kib,kib,guest_threads_of(proc));
         } else if(!strcmp(path,"/proc/mounts") || !strcmp(path,"/proc/self/mounts") || !strcmp(path,"/proc/self/mountinfo") || !strcmp(path,"/proc/1/mountinfo")) {
             /* The container's mounts (Java's FileStore looks a path's mount point up here). */
             int info=strstr(path,"mountinfo")!=NULL;
@@ -565,6 +591,12 @@ static uint64_t fs_open(void) {
     /* Validate the existing leaf before a possible truncate; only regular files/dirs.
        An unfollowed symlink reaches openat, which fails with ELOOP or EEXIST as on Linux. */
     struct stat before;
+    if(fstatat(parent,leaf,&before,AT_SYMLINK_NOFOLLOW)==0 && S_ISFIFO(before.st_mode)) { /* a named pipe: the container's shared pipe */
+        close(parent);
+        if((flags&(64|128))==(64|128))return linux_error(17);
+        if(syscall_unlocked) { syscall_abort=1;return linux_error(11); }             /* pipe tables need the lock */
+        return io_fifo_open(before.st_dev,before.st_ino,flags);
+    }
     if(fstatat(parent,leaf,&before,AT_SYMLINK_NOFOLLOW)==0 && !S_ISREG(before.st_mode) && !S_ISDIR(before.st_mode) && !S_ISLNK(before.st_mode)) {
         close(parent);return linux_error(13);
     }
@@ -813,7 +845,7 @@ static uint64_t fs_call(uint64_t call) {
         int writable=fs_path_writable();
         struct stat st;int result=fstatat(parent,leaf,&st,AT_SYMLINK_NOFOLLOW);
         int saved=errno;close(parent);errno=saved;if(result<0)return fs_error();
-        if(!S_ISREG(st.st_mode) && !S_ISDIR(st.st_mode) && !S_ISSOCK(st.st_mode))return linux_error(13);
+        if(!S_ISREG(st.st_mode) && !S_ISDIR(st.st_mode) && !S_ISSOCK(st.st_mode) && !S_ISFIFO(st.st_mode))return linux_error(13);
         if((cpu->gpr[2]&2) && !writable)return linux_error(30);
         if(guest_uid && (cpu->gpr[2]&~((unsigned)st.st_mode>>6)))return linux_error(13);
         if((cpu->gpr[2]&1) && S_ISREG(st.st_mode) && !(st.st_mode&0111))return linux_error(13);
@@ -842,7 +874,7 @@ static uint64_t fs_call(uint64_t call) {
         struct stat st;const char *device=fs_device(canon);
         int result=device?stat(device,&st):fstatat(parent,leaf,&st,AT_SYMLINK_NOFOLLOW);
         int saved=errno;close(parent);errno=saved;if(result<0)return fs_error();
-        if(!S_ISREG(st.st_mode) && !S_ISDIR(st.st_mode) && !S_ISLNK(st.st_mode) && !S_ISSOCK(st.st_mode) && !device)return linux_error(13);
+        if(!S_ISREG(st.st_mode) && !S_ISDIR(st.st_mode) && !S_ISLNK(st.st_mode) && !S_ISSOCK(st.st_mode) && !S_ISFIFO(st.st_mode) && !device)return linux_error(13);
         fs_stat_pack(out,&st);return 0;
     }
     if(call==56) return fs_open();
@@ -852,6 +884,17 @@ static uint64_t fs_call(uint64_t call) {
             struct stat st;int present=!strcmp(leaf,".") || !fstatat(parent,leaf,&st,AT_SYMLINK_NOFOLLOW);close(parent);
             if(present)return linux_error(17);
         }
+    }
+    if(call==33) { /* mknodat: FIFOs (mkfifo) and regular files; devices need privileges we do not grant */
+        unsigned type=(unsigned)(cpu->gpr[2]&0170000);mode_t mode=(mode_t)(cpu->gpr[2]&0777&~fs_umask);
+        if(type!=0010000 && type!=0100000 && type)return linux_error(1);
+        if(fs_created>=4096 || fs_entries>=8192)return linux_error(28);
+        char leaf[1025];int parent=fs_parent_nofollow(cpu->gpr[0],cpu->gpr[1],leaf);if(parent<0)return fs_error();
+        if(!fs_path_writable()) { close(parent);return linux_error(30); }
+        int result;
+        if(type==0010000)result=mkfifoat(parent,leaf,mode);
+        else { int fd=openat(parent,leaf,O_CREAT|O_EXCL|O_WRONLY|O_CLOEXEC,mode);result=fd<0?-1:close(fd); }
+        uint64_t e=result<0?fs_error():0;close(parent);if(!e)fs_count_created();return e;
     }
     if(call==34 || call==35 || call==38) {
         if(call==34 && (fs_created>=4096 || fs_entries>=8192)) return linux_error(28);

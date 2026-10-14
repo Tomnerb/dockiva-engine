@@ -109,6 +109,10 @@ static uint64_t guest_epoll(uint64_t call) {
         }
         unsigned slot=(unsigned)(op==1?free_slot:found);key.active=1;e->watch[slot]=key;
         if(slot>=e->high)e->high=slot+1;
+        /* A thread blocked in epoll_wait polls what it saw when it blocked; Linux applies
+           the change to waits in progress (Erlang adds sockets while its poll thread
+           waits). This process's waiting threads look again. */
+        if(schedule_active)schedule_wake_mask(UINT64_C(1)<<(process_pid-1));
         return 0;
     }
     int maxevents=(int32_t)cpu->gpr[2],timeout=(int32_t)cpu->gpr[3];
@@ -127,7 +131,7 @@ static uint64_t guest_epoll(uint64_t call) {
         for(unsigned i=0;i<high;i++) {
             EpollWatch *w=&e->watch[i];if(!w->active || !w->kind || w->disabled)continue;
             if(w->kind==IO_SIGNAL)ready|=(io_signals_pending()&((struct GuestSignalfd *)(void *)w->pipe)->mask)!=0;
-            else if(w->kind==IO_READ)ready|=w->pipe->used || !w->pipe->writers;
+            else if(w->kind==IO_READ)ready|=w->pipe->used || pipe_hung_up(w->pipe);
             else if(w->kind==IO_EVENT)ready|=w->pipe->used || (w->events&4);
             else ready|=PIPE_CAP-w->pipe->used>=4096 || !w->pipe->readers;
         }
@@ -173,7 +177,7 @@ static uint64_t guest_epoll(uint64_t call) {
                 avail[i]=w->pipe->used;reads[i]=w->pipe->reads;writes[i]=w->pipe->writes;
             } else if(w->kind==IO_READ) {
                 if(w->pipe->used)level[i]|=1;
-                if(!w->pipe->writers)level[i]|=16;
+                if(pipe_hung_up(w->pipe))level[i]|=16;
                 avail[i]=w->pipe->used;reads[i]=w->pipe->reads;writes[i]=w->pipe->writes;
             } else {
                 if(PIPE_CAP-w->pipe->used>=4096)level[i]|=4;

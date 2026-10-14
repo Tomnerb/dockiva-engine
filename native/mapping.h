@@ -153,12 +153,82 @@ static uint64_t guest_msync(void) {
     for(unsigned i=0;i<FILE_SHARES;i++)if(file_shares[i].backing)file_share_flush(&file_shares[i]);
     return 0;
 }
+/* Reservations beyond the arena: an anonymous private PROT_NONE mapping the arena
+   cannot hold (MariaDB reserves 128 GiB for its buffer pool's maximum, a JVM its heap)
+   is address space alone, unmapped, from 16 TiB up. A MAP_FIXED anonymous mapping
+   inside one commits that range as a segment with its own backing; munmap gives both
+   back. ponytail: each commit is a segment (at most 128 per process); merge adjacent
+   commits if a program commits in many small pieces. */
+#define RESERVE_BASE UINT64_C(0x100000000000)
+#define RESERVE_END UINT64_C(0x700000000000)
+static int reserve_find(uint64_t address,uint64_t bytes) {
+    for(unsigned i=0;i<address_space->nreserve;i++)
+        if(address>=address_space->reserve_base[i] && bytes<=address_space->reserve_size[i]-(address-address_space->reserve_base[i]))return (int)i;
+    return -1;
+}
+static uint64_t reserve_new(uint64_t length) {
+    uint64_t size=page_up(length),base=address_space->reserve_next?address_space->reserve_next:RESERVE_BASE;
+    if(address_space->nreserve==8 || size>RESERVE_END-base)return linux_error(12);
+    address_space->reserve_base[address_space->nreserve]=base;address_space->reserve_size[address_space->nreserve++]=size;
+    address_space->reserve_next=base+size+(UINT64_C(1)<<30);                     /* a guard gap */
+    return base;
+}
+/* Take segments, or their parts, out of [low, high): commits inside a reservation. */
+static uint64_t segments_remove(uint64_t low,uint64_t high) {
+    for(unsigned i=0;i<address_space->nseg;) {
+        Segment *s=&address_space->seg[i];uint64_t begin=s->base,end=s->base+s->size;
+        if(end<=low || begin>=high) { i++;continue; }
+        if(low<=begin && high>=end) { backing_release(s->backing);address_space->seg[i]=address_space->seg[--address_space->nseg];continue; }
+        if(low>begin && high<end) {                                                  /* split around the hole */
+            if(address_space->nseg>=128 || !backing_retain(s->backing,1))return linux_error(12);
+            address_space->seg[address_space->nseg++]=(Segment){high,end-high,s->flags,s->backing,s->offset+(size_t)(high-begin)};
+            s->size=low-begin;
+        } else if(low<=begin) { s->offset+=(size_t)(high-begin);s->size=end-high;s->base=high; }
+        else s->size=low-begin;
+        i++;
+    }
+    address_space_changed(address_space);return 0;
+}
+static uint64_t reserve_commit(uint64_t address,uint64_t length,uint64_t prot) {
+    uint64_t size=page_up(length),e=segments_remove(address,address+size);if(e)return e;
+    if(prot) {
+        if(address_space->nseg>=128)return linux_error(12);
+        MemoryBacking *backing=backing_reserve((size_t)size);if(!backing)return linux_error(12);
+        address_space->seg[address_space->nseg++]=(Segment){address,size,(unsigned)(((prot&1)?4:0)|((prot&2)?2:0)|((prot&4)?1:0)),backing,0};
+        address_space_changed(address_space);
+    }
+    return address;
+}
+/* munmap beyond the arena: commits and reservations in the range go; 0 if none was there. */
+static int reserve_unmap(uint64_t address,uint64_t bytes) {
+    int found=0;uint64_t end=address+bytes;
+    for(unsigned i=0;i<address_space->nreserve;) {
+        uint64_t base=address_space->reserve_base[i],top=base+address_space->reserve_size[i];
+        if(top<=address || base>=end) { i++;continue; }
+        found=1;
+        if(address<=base && end>=top) {
+            address_space->reserve_base[i]=address_space->reserve_base[--address_space->nreserve];
+            address_space->reserve_size[i]=address_space->reserve_size[address_space->nreserve];continue;
+        }
+        if(address<=base) { address_space->reserve_base[i]=end;address_space->reserve_size[i]=top-end; }
+        else if(end>=top)address_space->reserve_size[i]=address-base;
+        i++;                                                                         /* a hole inside: the range stays reserved */
+    }
+    if(found)(void)segments_remove(address,end);
+    return found;
+}
 /* Private file-backed guest mappings. Bytes remain ordinary non-executable host
-   allocations; MAP_FIXED is confined to the bounded guest mmap arena. */
+   allocations; MAP_FIXED is confined to the bounded guest mmap arena, or a reservation. */
 static int dynamic_enabled;
 static uint64_t guest_dynamic_mmap(void) {
     uint64_t addr=cpu->gpr[0],length=cpu->gpr[1],prot=cpu->gpr[2],flags=cpu->gpr[3],offset=cpu->gpr[5],hint=(flags&16)?0:addr;
-    if(length>address_space->map_capacity)return linux_error(12); /* more than the arena holds: ENOMEM, as Linux */
+    int anonymous_private=(flags&32) && (flags&3)==2 && !(flags&0x100000);
+    if(anonymous_private && (flags&16) && !(addr%4096) && length && length<=RESERVE_END && reserve_find(addr,page_up(length))>=0) {
+        if(prot>7 || ((prot&6)==6 && !map_rwx_allowed))return linux_error(22);
+        return reserve_commit(addr,length,prot);                                     /* a commit inside a reservation */
+    }
+    int reservable=anonymous_private && !(flags&16) && !prot && length && length<=RESERVE_END;
+    if(length>address_space->map_capacity)return reservable?reserve_new(length):linux_error(12); /* more than the arena holds */
     if(!length || offset%4096 || offset>INT64_MAX-length || prot>7 || ((prot&6)==6 && !map_rwx_allowed))return linux_error(22);
     if(!address_space_map_flags(address_space))return linux_error(12);
     /* Linux ignores MAP_DENYWRITE, MAP_EXECUTABLE and MAP_STACK. Stack guards
@@ -195,7 +265,7 @@ static uint64_t guest_dynamic_mmap(void) {
         start=(unsigned)((addr-MAP_BASE)/4096);
     } else {
         start=map_hint(address_space,hint,pages);if(start==address_space->map_capacity/4096)start=map_find(address_space,pages);
-        if(start==address_space->map_capacity/4096)return linux_error(12);
+        if(start==address_space->map_capacity/4096)return reservable?reserve_new(length):linux_error(12);
         if(start==address_space->map_free_hint)address_space->map_free_hint=start+pages;
     }
     /* Read into a temporary buffer first, so a failed fixed mapping preserves
@@ -241,6 +311,7 @@ static uint64_t guest_mprotect(void) {
             if(end<oldend)address_space->seg[address_space->nseg++]=(Segment){end,oldend-end,old.flags,old.backing,old.offset+(size_t)(end-old.base)};
             address_space_changed(address_space);return 0;
         }
+        if(reserve_find(addr,bytes)>=0)return prot?linux_error(12):0;               /* reserved, uncommitted: already PROT_NONE */
         return linux_error(95);
     }
     unsigned first=(unsigned)((addr-MAP_BASE)/4096),pages=(unsigned)(bytes/4096);

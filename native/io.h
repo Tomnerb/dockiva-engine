@@ -37,7 +37,13 @@ static void epoll_ref(int slot,int change);
 static void epoll_forget_socket(int host);
 static void epoll_forget_pipe(void *pipe,unsigned kind);
 /* waiters: scheduler task slots blocked in epoll_wait on this pipe (woken by its next change). */
-static struct GuestPipe { unsigned char *data;size_t used;unsigned readers,writers,read_nonblock,write_nonblock,reads,writes,semaphore;uint64_t waiters; } io_pipes[PIPE_SLOTS];
+static struct GuestPipe { unsigned char *data;size_t used;unsigned readers,writers,read_nonblock,write_nonblock,reads,writes,semaphore,fifo,had_writer;uint64_t waiters,want_read,want_write; } io_pipes[PIPE_SLOTS]; /* want_*: processes waiting to open a FIFO */
+/* Named pipes (mkfifo): every open of one FIFO node in the container shares a pipe slot. */
+#define IO_FIFOS 64
+static struct { dev_t dev;ino_t ino;struct GuestPipe *pipe; } io_fifos[IO_FIFOS];
+/* A read end at end of file: no writers left. A FIFO only once a writer has come
+   (until then a reader waits, as a Linux reader's open would have). */
+static int pipe_hung_up(const struct GuestPipe *p) { return !p->writers && (!p->fifo || p->had_writer); }
 static void schedule_wake_mask(uint64_t mask);
 static void io_pipe_changed(struct GuestPipe *p) {
     io_epoch++;
@@ -77,7 +83,10 @@ static void io_release(GuestIO *f) {
         struct GuestPipe *p=f->pipe;io_pipe_changed(p);
         if(f->kind!=IO_WRITE)p->readers--;else p->writers--;
         if((f->kind!=IO_WRITE && !p->readers) || (f->kind==IO_WRITE && !p->writers))epoll_forget_pipe(p,f->kind);
-        if(!p->readers && !p->writers) { free(p->data);memset(p,0,sizeof(*p)); }
+        if(!p->readers && !p->writers) {
+            if(p->fifo)for(unsigned i=0;i<IO_FIFOS;i++)if(io_fifos[i].pipe==p)memset(&io_fifos[i],0,sizeof(io_fifos[i]));
+            free(p->data);memset(p,0,sizeof(*p));
+        }
     }
     memset(f,0,sizeof(*f));
 }
@@ -108,7 +117,7 @@ static int io_poll_ready(uint64_t guest,unsigned events) {
         case IO_FILE:case IO_TEXT:return (int)(in|out);
         case IO_EOF:return (int)in;    /* reads return end of file at once */
         case IO_OUTPUT:return (int)out;
-        case IO_READ:return (int)((f->pipe->used?in:0)|(f->pipe->writers?0:16));
+        case IO_READ:return (int)((f->pipe->used?in:0)|(pipe_hung_up(f->pipe)?16:0));
         case IO_WRITE:return f->pipe->readers?(int)(f->pipe->used<PIPE_CAP?out:0):8;
         case IO_SIGNAL:return (io_signals_pending()&f->signals->mask)?(int)in:0;
         case IO_EVENT:return (int)((f->pipe->used?in:0)|out);
@@ -164,6 +173,48 @@ static uint64_t io_event_transfer(GuestIO *f,int writing) {
     if(!e->used)return e->write_nonblock || !schedule_active?linux_error(11):IO_BLOCK;
     uint64_t value=e->semaphore?1:e->used;e->used-=value;fs_pack(p,0,value,8);
     e->reads++;io_pipe_changed(e);return 8;
+}
+/* open of a FIFO node (fs_open), with Linux's rendezvous: the side that arrives
+   second opens at once; the first waits until the other end has opened (a waiting
+   open retries by path, so the creator, which Elasticsearch's ML controller then
+   unlinks, must be the one that waits). A writer let in before its reader writes
+   into a pipe that waits for that reader. Nonblocking: readers open at once,
+   writers get ENXIO without a reader. O_RDWR is a read end that also counts as a
+   writer, so it never waits or sees end of file.
+   ponytail: a wait given up (a signal) leaves its process marked as waiting. */
+static uint64_t io_fifo_open(dev_t dev,ino_t ino,uint64_t flags) {
+    struct GuestPipe *p=NULL;unsigned entry=IO_FIFOS;
+    for(unsigned i=0;i<IO_FIFOS;i++) {
+        if(io_fifos[i].pipe && io_fifos[i].dev==dev && io_fifos[i].ino==ino) { p=io_fifos[i].pipe;break; }
+        if(!io_fifos[i].pipe && entry==IO_FIFOS)entry=i;
+    }
+    if(!p) {
+        if(entry==IO_FIFOS)return linux_error(23);
+        unsigned i=0;while(i<PIPE_SLOTS && io_pipes[i].data)i++;
+        if(i==PIPE_SLOTS)return linux_error(23);
+        p=&io_pipes[i];if(!(p->data=malloc(PIPE_CAP)))return linux_error(12);
+        p->used=0;p->readers=p->writers=0;p->fifo=1;p->had_writer=0;p->waiters=p->want_read=p->want_write=0;
+        io_fifos[entry].dev=dev;io_fifos[entry].ino=ino;io_fifos[entry].pipe=p;
+    }
+    unsigned mode=(unsigned)(flags&3);int reading=mode!=1,writing=mode!=0;
+    uint64_t self=UINT64_C(1)<<(process_pid-1);
+    if(!reading && !p->readers && (flags&2048))return linux_error(6);                /* ENXIO */
+    if(!reading && !p->readers && !(p->want_read&~self)) {                          /* a writer waits for a reader */
+        if(!schedule_active)return linux_error(95);
+        p->want_write|=self;p->waiters|=self;return IO_BLOCK;
+    }
+    if(reading && !writing && !(flags&2048) && !p->writers && !(p->want_write&~self)) { /* a reader waits for a writer */
+        if(!schedule_active)return linux_error(95);
+        p->want_read|=self;p->waiters|=self;return IO_BLOCK;
+    }
+    p->want_read&=~self;p->want_write&=~self;
+    int fd=io_free_slot(0);if(fd<0)return linux_error(24);
+    unsigned cloexec=(flags&524288)!=0,nonblock=(flags&2048)!=0;
+    if(reading) { p->readers++;p->read_nonblock=nonblock; } else { p->writers++;p->write_nonblock=nonblock; }
+    if(writing) { p->had_writer=1;if(reading)p->writers++; }
+    IO(fd)=(GuestIO){reading?IO_READ:IO_WRITE,cloexec,-1,p,NULL,NULL,NULL};
+    io_pipe_changed(p);
+    return (uint64_t)fd;
 }
 /* A synthetic read-only file (fs_open): its own copy of the text, a new descriptor. */
 static uint64_t io_text_open(const void *data,size_t size,int cloexec) {
@@ -370,13 +421,14 @@ static uint64_t io_call(uint64_t call) {
     struct GuestPipe *pipe=f->pipe;
     if(writing)pipe->writes++;else pipe->reads++; /* activity for edge-triggered epoll */
     if(writing) {
+        if(!pipe->readers && pipe->fifo && pipe->want_read)return io_would_block(f);   /* its reader is opening */
         if(!pipe->readers)return linux_error(32); /* Signals are still unsupported. */
         size_t free_bytes=PIPE_CAP-pipe->used;
         if(!free_bytes || (count<=4096 && count>free_bytes))return io_would_block(f);
         if(count>free_bytes)count=free_bytes;
         memcpy(pipe->data+pipe->used,p,(size_t)count);pipe->used+=(size_t)count;io_pipe_changed(pipe);return count;
     }
-    if(!pipe->used)return pipe->writers?io_would_block(f):0;
+    if(!pipe->used)return pipe_hung_up(pipe)?0:io_would_block(f);
     if(count>pipe->used)count=pipe->used;
     memcpy(p,pipe->data,(size_t)count);pipe->used-=(size_t)count;
     memmove(pipe->data,pipe->data+count,pipe->used);io_pipe_changed(pipe);return count;

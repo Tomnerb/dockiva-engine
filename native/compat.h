@@ -112,6 +112,7 @@ static uint64_t guest_writev(void) {
     }
     if(managed && IO(guestfd).kind==IO_WRITE && total) {
         struct GuestPipe *pipe=IO(guestfd).pipe;
+        if(!pipe->readers && pipe->fifo && pipe->want_read)return io_would_block(&IO(guestfd));   /* its reader is opening */
         if(!pipe->readers)return linux_error(32);
         if(total<=4096 && total>PIPE_CAP-pipe->used)return io_would_block(&IO(guestfd));
     }

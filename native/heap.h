@@ -53,10 +53,12 @@ static uint64_t guest_mmap(uint64_t length,uint64_t prot,uint64_t flags,uint64_t
     address_space_arena_changed(address_space,start,start+pages);return MAP_BASE+(uint64_t)start*4096;
 }
 static uint64_t shared_unmap(uint64_t address,uint64_t bytes); /* mapping.h */
+static int reserve_unmap(uint64_t address,uint64_t bytes);      /* mapping.h */
 static uint64_t guest_munmap(uint64_t addr,uint64_t length) {
     if(addr%4096 || !length || length>UINT64_MAX-4095) return linux_error(22);
     uint64_t bytes=page_up(length);
-    if(addr<MAP_BASE || addr-MAP_BASE>=address_space->map_capacity || bytes>address_space->map_capacity-(addr-MAP_BASE)) return linux_error(95);
+    if(addr<MAP_BASE || addr-MAP_BASE>=address_space->map_capacity || bytes>address_space->map_capacity-(addr-MAP_BASE))
+        return reserve_unmap(addr,bytes)?0:linux_error(95);
     unsigned first=(unsigned)((addr-MAP_BASE)/4096), pages=(unsigned)(bytes/4096);
     if(!address_space->map_flags) return 0;
     uint64_t shared=shared_unmap(addr,bytes);if(shared) return shared;

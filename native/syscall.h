@@ -22,8 +22,10 @@ static int64_t guest_fd_path(const char *path) {
     int64_t n=0;for(;*p;p++) { if(*p<'0' || *p>'9' || n>100000)return -1;n=n*10+(*p-'0'); }
     return n;
 }
-static uint64_t guest_ppid(void) { return process_depth?process_children[process_pid-2].parent:0; }
-static unsigned guest_threads(void) { return schedule_active && schedule_tasks[process_pid-1].threads?schedule_tasks[process_pid-1].threads->top:1; }
+static uint64_t guest_ppid_of(uint64_t pid) { return pid>1?process_children[pid-2].parent:0; }
+static uint64_t guest_ppid(void) { return guest_ppid_of(process_pid); }
+static unsigned guest_threads_of(uint64_t pid) { return schedule_active && schedule_tasks[pid-1].threads?schedule_tasks[pid-1].threads->top:1; }
+static int guest_process_exists(uint64_t pid) { return pid==process_pid || (schedule_active && pid && pid<=PROCESS_LIMIT+1 && schedule_tasks[pid-1].state); }
 static uint64_t io_signals_pending(void) { return schedule_active?schedule_tasks[process_pid-1].signal_pending:0; }
 static unsigned io_signal_take(unsigned signal) {
     ScheduledTask *t=&schedule_tasks[process_pid-1];t->signal_pending&=~(UINT64_C(1)<<(signal-1));return t->signal_sender[signal-1];
@@ -189,7 +191,7 @@ static int guest_id_exists(uint64_t id) {
 static int guest_syscall_dispatch(void) {
             uint64_t call=cpu->gpr[8];cpu->exclusive_valid=0;
             if(profiling && call<512) profile_syscalls[call]++;
-            if(trace) fprintf(stderr,"syscall %" PRIu64 ": x0..5=[%" PRIu64 ", %" PRIu64 ", %" PRIu64 ", %" PRIu64 ", %" PRIu64 ", %" PRIu64 "]\n",call,cpu->gpr[0],cpu->gpr[1],cpu->gpr[2],cpu->gpr[3],cpu->gpr[4],cpu->gpr[5]);
+            if(trace) fprintf(stderr,"pid %" PRIu64 " syscall %" PRIu64 ": x0..5=[%" PRIu64 ", %" PRIu64 ", %" PRIu64 ", %" PRIu64 ", %" PRIu64 ", %" PRIu64 "]\n",process_pid,call,cpu->gpr[0],cpu->gpr[1],cpu->gpr[2],cpu->gpr[3],cpu->gpr[4],cpu->gpr[5]);
             if(call==139 && job_control_enabled) { signal_return();if(schedule_tasks[process_pid-1].terminate_signal || schedule_tasks[process_pid-1].stop_signal)return -1;return -3; }
             if(call==137) { uint64_t r=signal_timedwait();if(r==IO_BLOCK) { cpu->pc-=4;return -2; }cpu->gpr[0]=r;return -3; }
             if(call==133) { uint64_t r=signal_suspend();if(r==IO_BLOCK) { cpu->pc-=4;return -2; }cpu->gpr[0]=r;return -3; }
@@ -402,7 +404,7 @@ static int guest_syscall_dispatch(void) {
                 fs_pack(out,48,host.f_ffree,8);fs_pack(out,64,255,8);fs_pack(out,72,host.f_bsize,8);
                 cpu->gpr[0]=0;return -3;
             }
-            if(call==166 || call==52 || call==53 || call==78 || call==88 || call==36 || call==37 || call==48 || call==439 || call==45 || call==82 || call==83 || call==61 || (call==25 && fs_host(cpu->gpr[0])>=0) || call==79 || call==56 || call==34 || call==35 || call==38 || call==46 || call==62 || call==80 || ((call==57 || call==63 || call==64 || call==67 || call==68 || call==69 || call==70 || call==286 || call==287 || call==47 || call==84 || call==32) && fs_host(cpu->gpr[0])>=0)) {
+            if(call==166 || call==52 || call==53 || call==78 || call==88 || call==36 || call==37 || call==48 || call==439 || call==45 || call==82 || call==83 || call==61 || (call==25 && fs_host(cpu->gpr[0])>=0) || call==79 || call==56 || call==33 || call==34 || call==35 || call==38 || call==46 || call==62 || call==80 || ((call==57 || call==63 || call==64 || call==67 || call==68 || call==69 || call==70 || call==286 || call==287 || call==47 || call==84 || call==32) && fs_host(cpu->gpr[0])>=0)) {
                 uint64_t result=fs_call(call);
                 if(result==IO_BLOCK) { cpu->pc-=4;return -2; }  /* F_SETLKW waits for the lock */
                 cpu->gpr[0]=result;return -3;
@@ -511,5 +513,7 @@ static int guest_syscall(void) {
     net_wait.targeted=0; /* set again only by this call's own net_suspend */
     int result=guest_syscall_dispatch();
     if(clamp)cpu->gpr[2]=count;
+    if(trace && result==-3 && cpu->gpr[0]>=(uint64_t)-4095)                /* failures, with what they were given */
+        fprintf(stderr,"pid %" PRIu64 " syscall %" PRIu64 " failed: %" PRId64 "\n",process_pid,call,(int64_t)cpu->gpr[0]);
     return result;
 }
