@@ -29,7 +29,9 @@ build/dockiva-go/dockiva-engine/dockivad --home /tmp/dockivad-local \
 `--pull registry/repository:tag` performs a verified scoped registry pull. OCI
 linux/arm64 only: no links/devices, 32 layers, 32 MiB per blob, 128 MiB packed,
 64 MiB expanded, 4096 members/paths. General stock-image support is not implied.
-`--insecure-local` is restricted to literal 127.0.0.1 for registry tests.
+`--insecure-local` (for `--pull` and for the daemon's pull and push) lets
+loopback registries (`127.0.0.1`, `localhost`) use plain HTTP; every other
+registry, and loopback without the flag, is HTTPS only.
 
 Tests (macOS needs external linking with the local Go 1.22 toolchain):
 
@@ -65,7 +67,7 @@ container's first process; KILL ends it), `wait`, `rm` (with `-v`), `ps`,
 written before this engine version carry their file's last write time), `pause`
 and `unpause` (SIGSTOP and SIGCONT to the run's and its execs' processes;
 healthchecks wait), `attach`, `events`
-(create, start, die, destroy), `pull`, `images`, `tag`, `rmi`, `cp` (both
+(create, start, die, destroy), `pull`, `push` (`--all-tags`), `images`, `tag`, `rmi`, `cp` (both
 ways, including into volumes and bind mounts; read-only paths are refused),
 `stats` (host CPU time and resident memory of the container's processes),
 `volume` (`create`, `ls`, `inspect`, `rm`, `prune`), `network` (`create`, `ls`,
@@ -80,6 +82,26 @@ Dockerfile on the engine's classic builder: linux/arm64 only, results go to the
 image store, and BuildKit-only features (`RUN --mount`, heredocs,
 `--build-context`, `--output`, `--call`/`--check`) are refused. Not supported:
 tmpfs mounts.
+
+Registries: `docker pull` and `docker push` use `docker login`'s credentials
+(X-Registry-Auth: Basic, or Bearer tokens from the registry's token service,
+including identity tokens). A push sends the stored manifest, config and layers
+byte for byte (Docker v2 schema 2 or OCI, as the image has them), so pulling the
+pushed tag gives the same image ID. Blobs the registry has are skipped ("Layer
+already exists"); a blob another cached repository of the same registry holds is
+mounted from it first ("Mounted from ..."); others upload (POST, PATCH, PUT).
+`docker build --push` (buildx) pushes through the same API and reads the result
+back with `GET /distribution/NAME/json`. Try it against a local registry:
+
+```sh
+dockiva-engine --insecure-local &
+docker run -d -p 127.0.0.1:5055:5000 registry:2
+docker tag alpine 127.0.0.1:5055/demo:1 && docker push 127.0.0.1:5055/demo:1
+docker build --push -t 127.0.0.1:5055/app:1 .
+```
+
+Port 5000 is taken by macOS's AirPlay receiver; pick another. `FROM` in a build
+pulls over HTTPS only.
 
 Networks: the default bridge and user networks give each container an address
 in 10.89.N.0/24 and private ports (two containers can both listen on 5432, and

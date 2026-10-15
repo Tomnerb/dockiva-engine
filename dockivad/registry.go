@@ -3,10 +3,13 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -62,36 +65,162 @@ func shortName(name string) string {
 	return name
 }
 
-func pullImage(reference, cache string, insecure bool, bearer string) string {
-	host, repo, ref, name := parseReference(reference)
-	reject(bearer == "" || validToken(bearer), "Invalid registry token")
-	reject(!insecure || strings.Split(host, ":")[0] == "127.0.0.1", "Plain HTTP only allowed for literal 127.0.0.1")
-	scheme := "https"
-	if insecure {
-		scheme = "http"
+// credentials are docker login's, as the docker CLI sends them in X-Registry-Auth.
+type credentials struct {
+	Username      string `json:"username"`
+	Password      string `json:"password"`
+	IdentityToken string `json:"identitytoken"`
+	RegistryToken string `json:"registrytoken"`
+}
+
+// registryCredentials decodes X-Registry-Auth (base64url JSON; "" when absent).
+func registryCredentials(header string) credentials {
+	var c credentials
+	if header == "" {
+		return c
 	}
-	origin := scheme + "://" + host
-	transport := &http.Transport{Proxy: nil, ResponseHeaderTimeout: time.Minute}
-	defer transport.CloseIdleConnections()
-	// A large image over a slow link may take long; a transfer that stalls fails sooner.
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
-	defer cancel()
-	// Registries such as Docker Hub serve blobs through CDN redirects. Follow them, but
-	// never forward the registry token, and never downgrade from HTTPS. Blob content is
-	// still verified against its digest after download.
-	client := &http.Client{Transport: transport, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+	raw, e := base64.URLEncoding.DecodeString(header)
+	if e != nil {
+		raw, e = base64.StdEncoding.DecodeString(header)
+	}
+	reject(e == nil && json.Unmarshal(raw, &c) == nil, "Invalid X-Registry-Auth header")
+	reject(c.RegistryToken == "" || validToken(c.RegistryToken), "Invalid registry token")
+	return c
+}
+
+// loopback is a registry host --insecure-local lets plain HTTP reach.
+func loopback(host string) bool {
+	if h, _, e := net.SplitHostPort(host); e == nil {
+		host = h
+	}
+	return host == "127.0.0.1" || host == "localhost"
+}
+
+// allowedURL: HTTPS, or plain HTTP to a loopback host when plain is allowed.
+func allowedURL(u *url.URL, plain bool) bool {
+	return u.Scheme == "https" || plain && u.Scheme == "http" && loopback(u.Host)
+}
+
+// registryClient follows redirects (registries serve blobs through CDNs) without
+// the registry's Authorization, and never from HTTPS to plain HTTP.
+func registryClient(plain bool) *http.Client {
+	return &http.Client{Transport: &http.Transport{Proxy: nil, ResponseHeaderTimeout: time.Minute}, CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 5 {
 			return fmt.Errorf("too many registry redirects")
 		}
-		if req.URL.Scheme != "https" && !(insecure && req.URL.Scheme == "http" && req.URL.Hostname() == "127.0.0.1") {
+		if !allowedURL(req.URL, plain) {
 			return fmt.Errorf("registry redirect to %s refused", req.URL.Scheme)
 		}
 		req.Header.Del("Authorization")
 		return nil
 	}}
+}
+
+// registryError is a registry's error response as Docker words it ("denied:
+// requested access to the resource is denied"), else its HTTP status.
+func registryError(response *http.Response) string {
+	raw, _ := io.ReadAll(io.LimitReader(response.Body, 1<<16))
+	var body struct {
+		Errors  []struct{ Code, Message string }
+		Details string
+	}
+	if json.Unmarshal(raw, &body) == nil {
+		if len(body.Errors) > 0 {
+			e := body.Errors[0]
+			return strings.ToLower(strings.ReplaceAll(e.Code, "_", " ")) + ": " + e.Message
+		}
+		if body.Details != "" {
+			return "unauthorized: " + body.Details
+		}
+	}
+	return fmt.Sprintf("registry %s %s: HTTP %d", response.Request.Method, response.Request.URL.Path, response.StatusCode)
+}
+
+// authorize answers a registry's 401 challenge (WWW-Authenticate) and returns the
+// Authorization value: Basic with the credentials, or a Bearer token for scopes
+// from the challenge's token service (OAuth2 refresh with an identity token, else
+// a GET with the credentials as Basic, else anonymous).
+func authorize(ctx context.Context, client *http.Client, challenge string, scopes []string, c credentials, plain bool) string {
+	scheme, _, _ := strings.Cut(challenge, " ")
+	switch strings.ToLower(scheme) {
+	case "basic":
+		reject(c.Username != "", "unauthorized: authentication required")
+		return "Basic " + base64.StdEncoding.EncodeToString([]byte(c.Username+":"+c.Password))
+	case "bearer":
+	default:
+		panic(apiError{502, "Unsupported registry authentication"})
+	}
+	fields := map[string]string{}
+	for _, m := range challengeField.FindAllStringSubmatch(challenge, -1) {
+		fields[m[1]] = m[2]
+	}
+	realm, e := url.Parse(fields["realm"])
+	check(e)
+	reject(allowedURL(realm, plain) && realm.Hostname() != "" && realm.User == nil && realm.Fragment == "", "Invalid HTTPS token realm")
+	var req *http.Request
+	if c.IdentityToken != "" {
+		form := url.Values{"grant_type": {"refresh_token"}, "refresh_token": {c.IdentityToken}, "service": {fields["service"]}, "scope": {strings.Join(scopes, " ")}, "client_id": {"dockiva"}}
+		req, e = http.NewRequestWithContext(ctx, "POST", realm.String(), strings.NewReader(form.Encode()))
+		check(e)
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	} else {
+		query := realm.Query()
+		query.Set("service", fields["service"])
+		query["scope"] = scopes
+		realm.RawQuery = query.Encode()
+		req, e = http.NewRequestWithContext(ctx, "GET", realm.String(), nil)
+		check(e)
+		if c.Username != "" {
+			req.SetBasicAuth(c.Username, c.Password)
+		}
+	}
+	response, e := client.Do(req)
+	if e != nil {
+		panic(apiError{502, "Token service request failed: " + e.Error()})
+	}
+	defer response.Body.Close()
+	if response.StatusCode != 200 {
+		panic(apiError{502, registryError(response)})
+	}
+	raw, e := io.ReadAll(io.LimitReader(response.Body, maxJSON+1))
+	check(e)
+	auth := decode(raw, maxJSON)
+	token := text(auth["token"])
+	if token == "" {
+		token = text(auth["access_token"])
+	}
+	reject(validToken(token), "Invalid registry token")
+	return "Bearer " + token
+}
+
+func pullImage(reference, cache string, insecure bool, bearer string) string {
+	return pullWith(reference, cache, insecure, credentials{RegistryToken: bearer})
+}
+
+// pullWith pulls with docker login's credentials. insecure (--insecure-local) lets
+// a loopback registry (127.0.0.1, localhost) use plain HTTP; others are HTTPS.
+func pullWith(reference, cache string, insecure bool, creds credentials) string {
+	host, repo, ref, name := parseReference(reference)
+	reject(creds.RegistryToken == "" || validToken(creds.RegistryToken), "Invalid registry token")
+	plain := insecure && loopback(host)
+	scheme := "https"
+	if plain {
+		scheme = "http"
+	}
+	origin := scheme + "://" + host
+	client := registryClient(plain)
+	defer client.CloseIdleConnections()
+	// A large image over a slow link may take long; a transfer that stalls fails sooner.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
+	defer cancel()
+	// Blob content from a CDN redirect is still verified against its digest.
+	authorization := ""
+	if creds.RegistryToken != "" {
+		authorization = "Bearer " + creds.RegistryToken
+	}
 	used := int64(0)
 	// request GETs address; to, when given, receives the body (streamed, up to limit).
-	request := func(address string, limit int64, auth bool, to io.Writer) ([]byte, http.Header, int) {
+	request := func(address string, limit int64, to io.Writer) ([]byte, http.Header, int) {
 		// Each request ends if no bytes arrive for two minutes.
 		reqCtx, stop := context.WithCancel(ctx)
 		defer stop()
@@ -101,8 +230,8 @@ func pullImage(reference, cache string, insecure bool, bearer string) string {
 		check(e)
 		req.Header.Set("Accept", strings.Join([]string{manifestMedia, indexMedia, dockerManifest, dockerList}, ", "))
 		req.Header.Set("Accept-Encoding", "identity")
-		if bearer != "" && auth {
-			req.Header.Set("Authorization", "Bearer "+bearer)
+		if authorization != "" {
+			req.Header.Set("Authorization", authorization)
 		}
 		response, e := client.Do(req)
 		if e != nil {
@@ -119,6 +248,9 @@ func pullImage(reference, cache string, insecure bool, bearer string) string {
 			reject(used <= maxBlob, "Pull exceeds 64 GiB")
 			return nil, response.Header, response.StatusCode
 		}
+		if response.StatusCode != 200 && response.StatusCode != 401 {
+			panic(apiError{502, registryError(response)})
+		}
 		data, e := io.ReadAll(io.LimitReader(response.Body, min(limit, maxJSON)+1))
 		check(e)
 		reject(int64(len(data)) <= min(limit, maxJSON), "Registry object exceeds limit")
@@ -126,30 +258,10 @@ func pullImage(reference, cache string, insecure bool, bearer string) string {
 		return data, response.Header, response.StatusCode
 	}
 	fetch := func(path string, limit int64, to io.Writer) []byte {
-		data, headers, status := request(origin+path, limit, true, to)
-		if status == 401 && bearer == "" {
-			challenge := headers.Get("WWW-Authenticate")
-			reject(strings.HasPrefix(strings.ToLower(challenge), "bearer "), "Unsupported registry authentication")
-			fields := map[string]string{}
-			for _, m := range challengeField.FindAllStringSubmatch(challenge, -1) {
-				fields[m[1]] = m[2]
-			}
-			realm, e := url.Parse(fields["realm"])
-			check(e)
-			reject(realm.Scheme == "https" && realm.Hostname() != "" && realm.User == nil && realm.Fragment == "", "Invalid HTTPS token realm")
-			query := realm.Query()
-			query.Set("service", fields["service"])
-			query.Set("scope", "repository:"+repo+":pull")
-			realm.RawQuery = query.Encode()
-			raw, _, code := request(realm.String(), maxJSON, false, nil)
-			reject(code == 200, "Token service request failed")
-			auth := decode(raw, maxJSON)
-			bearer = text(auth["token"])
-			if bearer == "" {
-				bearer = text(auth["access_token"])
-			}
-			reject(validToken(bearer), "Invalid registry token")
-			data, headers, status = request(origin+path, limit, true, to)
+		data, headers, status := request(origin+path, limit, to)
+		if status == 401 && creds.RegistryToken == "" {
+			authorization = authorize(ctx, client, headers.Get("WWW-Authenticate"), []string{"repository:" + repo + ":pull"}, creds, plain)
+			data, headers, status = request(origin+path, limit, to)
 		}
 		reject(status == 200, fmt.Sprintf("Registry request failed with HTTP %d", status))
 		if d := headers.Get("Docker-Content-Digest"); d != "" && to == nil {
