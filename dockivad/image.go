@@ -248,7 +248,7 @@ func (im *image) unpack(root string) int64 {
 	}
 	// The runtime serves /dev/null, /dev/zero and /dev/urandom beneath /dev.
 	if _, e := os.Lstat(filepath.Join(root, "dev")); os.IsNotExist(e) {
-		check(os.Mkdir(filepath.Join(root, "dev"), 0o755))
+		check(mkdirGuest(filepath.Join(root, "dev")))
 	}
 	return size
 }
@@ -383,7 +383,7 @@ func layerDir(root, dir string, create bool) (string, bool) {
 			if !create {
 				return "", false
 			}
-			check(os.Mkdir(p, 0o755))
+			check(mkdirGuest(p))
 			continue
 		}
 		check(e)
@@ -576,7 +576,7 @@ func commitImage(cache, name, layout string) string {
 		cloneTree(noLinks(source, "rootfs"), filepath.Join(stage, "rootfs")) // docker tag: the same files
 		size = readObject(filepath.Join(source, "image.json"))["size"]
 	} else {
-		check(os.Mkdir(filepath.Join(stage, "rootfs"), 0o755))
+		check(mkdirGuest(filepath.Join(stage, "rootfs")))
 		size = im.unpack(filepath.Join(stage, "rootfs"))
 	}
 	save(filepath.Join(stage, "image.json"), obj{"name": name, "digest": im.Digest, "size": size})

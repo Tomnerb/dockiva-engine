@@ -878,9 +878,7 @@ func resolvConf(host []byte) string {
 // container root whose parent directories contain no symlinks.
 func writeGuestFile(root, relative, content string) {
 	dir := filepath.Dir(relative)
-	if _, e := os.Lstat(filepath.Join(root, dir)); os.IsNotExist(e) {
-		check(os.MkdirAll(filepath.Join(root, dir), 0o755))
-	}
+	layerDir(root, dir, true)
 	p := filepath.Join(noLinks(root, dir), filepath.Base(relative))
 	if s, e := os.Lstat(p); e == nil {
 		reject(s.Mode().IsRegular() || s.Mode()&os.ModeSymlink != 0, "Cannot replace "+relative)

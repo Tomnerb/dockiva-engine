@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -249,5 +250,23 @@ func TestBuildCache(t *testing.T) {
 	left := b.buildCacheEntries()
 	if failure != "" || len(left) != 1 || !strings.Contains(stream, "COPY big /2\n ---> "+left[0].(obj)["ID"].(string)[:12]+"\n") {
 		t.Fatalf("eviction: %q %v\n%s", failure, left, stream)
+	}
+}
+
+// Directories a build makes are 0755, as in Docker, under the engine's private umask.
+func TestBuildDirectoriesAreWorldReadable(t *testing.T) {
+	old := syscall.Umask(0o077)
+	defer syscall.Umask(old)
+	b := testEngine(t)
+	ctx := tarOf(t, map[string]string{"Dockerfile": "FROM dockiva/shell:demo\nWORKDIR /app/sub\nCOPY f.txt /opt/new/f.txt\n", "f.txt": "x"})
+	if _, _, failure := buildResult(t, buildMessages(t, b, "t=perm:1", ctx)); failure != "" {
+		t.Fatal(failure)
+	}
+	root := b.image("perm:1").Root
+	for _, dir := range []string{"app", "app/sub", "opt/new"} {
+		st, e := os.Stat(filepath.Join(root, dir))
+		if e != nil || st.Mode().Perm() != 0o755 {
+			t.Fatalf("%s: %v %v", dir, st.Mode(), e)
+		}
 	}
 }

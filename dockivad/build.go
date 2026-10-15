@@ -531,7 +531,7 @@ func (bd *builder) from(in instruction) {
 		st.digest, st.baseRoot, st.baseLayout = parent.digest, parent.baseRoot, parent.baseLayout
 		st.baseLayers, st.baseDiffs, st.baseHistory = parent.baseLayers, parent.baseDiffs, parent.baseHistory
 	case strings.EqualFold(ref, "scratch"):
-		check(os.Mkdir(st.root, 0o755))
+		check(mkdirGuest(st.root))
 		st.digest = "sha256:" + strings.Repeat("0", 64)
 		st.cacheID = st.digest
 	default:
