@@ -551,8 +551,9 @@ static int guest_syscall_dispatch(void) {
             if(call==198) { cpu->gpr[0]=net_socket(cpu->gpr[0],cpu->gpr[1],cpu->gpr[2]); return -3; }
             if(call==199) { cpu->gpr[0]=schedule_active && !net_scheduled?linux_error(95):net_socketpair(cpu->gpr[0],cpu->gpr[1],cpu->gpr[2],cpu->gpr[3]);return -3; }
             if(call==243) { cpu->gpr[0]=linux_error(38);return -3; } /* recvmmsg */
-            /* Probed with a fallback, so not worth a log line: io_uring, and mremap (malloc
-               and realloc copy instead). */
+            if(call==216 && dynamic_enabled) { cpu->gpr[0]=guest_mremap();return -3; }
+            /* Probed with a fallback, so not worth a log line: io_uring, and mremap of a
+               static program (malloc and realloc copy instead). */
             if(call==216 || call==425 || call==426 || call==427 || call==434 || call==235 || call==236 || call==237 || call==238 || call==239) { /* also NUMA policy */ cpu->gpr[0]=linux_error(38);return -3; } /* also pidfd_open */
             if(call==291) { /* statx: newfstatat (or fstat of a descriptor), rewritten in statx's layout */
                 uint64_t dirfd=cpu->gpr[0],path=cpu->gpr[1],flags=cpu->gpr[2],buffer=cpu->gpr[4];

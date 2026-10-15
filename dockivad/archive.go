@@ -110,7 +110,7 @@ func makeParents(root, relative string) string {
 		if part == "" || part == "." {
 			continue
 		}
-		if e := os.Mkdir(filepath.Join(p, part), 0o755); !errors.Is(e, fs.ErrExist) {
+		if e := mkdirGuest(filepath.Join(p, part)); !errors.Is(e, fs.ErrExist) {
 			check(e)
 		}
 		p = noLinks(p, part)

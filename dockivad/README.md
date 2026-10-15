@@ -29,7 +29,9 @@ build/dockiva-go/dockiva-engine/dockivad --home /tmp/dockivad-local \
 `--pull registry/repository:tag` performs a verified scoped registry pull. OCI
 linux/arm64 only: no links/devices, 32 layers, 32 MiB per blob, 128 MiB packed,
 64 MiB expanded, 4096 members/paths. General stock-image support is not implied.
-`--insecure-local` is restricted to literal 127.0.0.1 for registry tests.
+`--insecure-local` (for `--pull` and for the daemon's pull and push) lets
+loopback registries (`127.0.0.1`, `localhost`) use plain HTTP; every other
+registry, and loopback without the flag, is HTTPS only.
 
 Tests (macOS needs external linking with the local Go 1.22 toolchain):
 
@@ -56,37 +58,105 @@ docker run --rm redis:7-alpine sh -c 'echo hello'
 ```
 
 Supported docker commands: `run` (foreground or `-d`, `-i`, `-t`, `--rm`,
-`-p`, `-e`, `-u`, `-m`, `--cpus`, `--entrypoint`, `-w`, `-v`, `--mount`,
+`-p`, `-P`, `-e`, `-u`, `-m`, `--cpus`, `--entrypoint`, `-w`, `-v`, `--mount`,
 `--read-only`, `--network`, `--network-alias`, `-h`, `--add-host`, `--restart`,
 `--health-*`, `--stop-timeout`, `--init`), `exec` (`-i`, `-t`, `-u`, `-w`, `-e`, `-d`), `create`, `start`,
 `stop`, `restart`, `kill` (TERM, INT, QUIT, HUP, USR1, USR2 reach the
-container's first process; KILL ends it), `wait`, `rm` (with `-v`), `ps`,
-`inspect`, `logs` (with `-f`, `--tail`, `-t`, `--since` and `--until`; logs
-written before this engine version carry their file's last write time), `pause`
-and `unpause` (SIGSTOP and SIGCONT to the run's and its execs' processes;
-healthchecks wait), `attach`, `events`
-(create, start, die, destroy), `pull`, `images`, `tag`, `rmi`, `cp` (both
+container's first process; KILL ends it; a paused container takes KILL only, as
+in Docker), `wait` (and the API's `next-exit` and `removed` conditions), `rm`
+(with `-v`), `ps`, `inspect`, `logs` (with `-f`, `--tail`, `-t`, `--since` and
+`--until`; stdout and stderr lines come in the order they were written, and
+`--tail` counts both; logs written before this engine version carry their
+file's last write time), `pause` and `unpause` (SIGSTOP and SIGCONT to the run's
+and its execs' processes; healthchecks wait), `attach`, `rename` (stopped or
+created containers; the ID stays), `update` (`-m`, `--cpus`, `--restart`; limits
+apply from the next start, a policy from the run's next end), `events`
+(container create, start, kill, die, stop, restart, pause, unpause, attach,
+exec_create, exec_start, exec_die, health_status, rename, update, destroy; image
+pull, tag, untag, delete, load, save; Docker's Actor attributes; `--since` and
+`--until` over the latest 256; `type`, `container`, `event`, `image` and `label`
+filters), `pull`, `push` (`--all-tags`), `images`, `tag`, `rmi`, `cp` (both
 ways, including into volumes and bind mounts; read-only paths are refused),
-`stats` (host CPU time and resident memory of the container's processes),
+`stats` (host CPU time, resident memory and disk I/O of the container's
+processes, and its guest threads as PIDs; no network counters),
 `volume` (`create`, `ls`, `inspect`, `rm`, `prune`), `network` (`create`, `ls`,
 `inspect`, `rm`, `prune`, `connect`, `disconnect`), `docker compose` (`up`,
 `down`, `ps`, `logs`, `exec`, `start`, `stop`, `restart`, healthchecks and
 `depends_on` conditions), `system df` (`-v`), `save`, `load` (classic and OCI
 archives, plain or gzip; linux/arm64 images only, others are skipped),
-`container prune`, `image prune` (`-a`), `system prune` (`until` and `label`
-filters), `version`/`info`, and `build` and `compose build` (plain, through
+`container prune`, `image prune` (`-a`), `system prune` (`until`, `label`
+and `label!` filters), `version`/`info`, and `build` and `compose build` (plain, through
 buildx's `docker` driver, or with `DOCKER_BUILDKIT=0`). Builds run the
 Dockerfile on the engine's classic builder: linux/arm64 only, results go to the
-image store, and BuildKit-only features (`RUN --mount`, heredocs,
-`--build-context`, `--output`, `--call`/`--check`) are refused. Not supported:
-tmpfs mounts.
+image store, and `--build-context`, `--output`, `--call`/`--check` are refused.
+Not supported: tmpfs mounts (`docker run --tmpfs`).
+
+Builds read the Dockerfile 1.x syntax (`# syntax=docker/dockerfile:1...` is
+accepted; other frontends are refused, and `# check=` is ignored):
+
+- `RUN --mount=type=cache,target=DIR[,id=,sharing=,from=,source=,mode=,ro]`: a
+  directory kept across builds, keyed by `id` (the target by default), seeded
+  from `from`/`source` when first made. Each one is a build cache entry of type
+  `exec.cachemount`, so `docker buildx du`, `docker system df -v` and
+  `docker builder prune` count and remove it (entries in use are kept).
+  `sharing=locked` runs one step at a time per cache; `shared` and `private`
+  both share it. `uid`/`gid` are accepted and ignored.
+- `RUN --mount=type=bind[,source=,target=,from=,rw]`: a path of the build
+  context, a stage or an image, read-only unless `rw` (a clone; changes are
+  discarded). A context source's content is part of the step's cache key.
+- `RUN --mount=type=tmpfs,target=DIR`: an empty directory, discarded after the step.
+- `RUN --mount=type=secret,id=ID[,target=,env=,required,mode=]`: a secret from
+  `docker build --secret id=ID,src=FILE` (buildx only; `DOCKER_BUILDKIT=0` has
+  no secrets, so a `required` one fails), as a read-only file
+  (`/run/secrets/ID` by default) and/or an environment variable. Secret values
+  never enter the image or the cache key.
+- `RUN --mount=type=ssh` is refused (no SSH agent forwarding).
+- `RUN --network=default|none|host`; `RUN --security=insecure` is refused.
+- Here-documents: `RUN <<EOF` (the script, run by its `#!` line or the shell),
+  `RUN python3 <<EOF` and several documents in one instruction (the shell does
+  the redirecting), `<<-EOF` (leading tabs dropped), quoted delimiters
+  (`<<'EOF'`: no expansion in `COPY`), and `COPY <<EOF /path` / `ADD` (an inline
+  file, mode 0644 unless `--chmod`).
+
+Mount points made for a step are removed from the stage's files afterwards.
+
+Registries: `docker pull` and `docker push` use `docker login`'s credentials
+(X-Registry-Auth: Basic, or Bearer tokens from the registry's token service,
+including identity tokens). A push sends the stored manifest, config and layers
+byte for byte (Docker v2 schema 2 or OCI, as the image has them), so pulling the
+pushed tag gives the same image ID. Blobs the registry has are skipped ("Layer
+already exists"); a blob another cached repository of the same registry holds is
+mounted from it first ("Mounted from ..."); others upload (POST, PATCH, PUT).
+`docker build --push` (buildx) pushes through the same API and reads the result
+back with `GET /distribution/NAME/json`. Try it against a local registry:
+
+```sh
+dockiva-engine --insecure-local &
+docker run -d -p 127.0.0.1:5055:5000 registry:2
+docker tag alpine 127.0.0.1:5055/demo:1 && docker push 127.0.0.1:5055/demo:1
+docker build --push -t 127.0.0.1:5055/app:1 .
+```
+
+Port 5000 is taken by macOS's AirPlay receiver; pick another. `FROM` in a build
+pulls over HTTPS, or plain HTTP from a loopback registry with `--insecure-local`.
 
 Networks: the default bridge and user networks give each container an address
 in 10.89.N.0/24 and private ports (two containers can both listen on 5432, and
 unpublished ports stay off the Mac). On a user network (Compose's default)
 containers find each other by name and alias; `host.docker.internal` is the
 Mac; `--network host` shares the Mac's network as before. One network per
-container. Restart policies and healthchecks are run by each container's
+container.
+
+Published ports: `-p 8080:80` listens on 127.0.0.1 only, so nothing is reachable
+from the network by default; with `--default-bind-ip 0.0.0.0` it listens on every
+address of the Mac (0.0.0.0 and ::, as Docker does). `-p 127.0.0.1:8080:80`, `-p 192.168.1.5:8080:80` and
+`-p [::]:8080:80` bind that address only. Port ranges (`-p 8000-8005:8000-8005`),
+`-p 80` and `-P` (free host ports for every exposed port) and UDP (`-p 53:53/udp`)
+work. The container binds a private loopback port and its supervisor forwards
+each published address to it (TCP with half-closes, UDP with a session per
+client that ends after 90 idle seconds); a single TCP port on 127.0.0.1 is bound
+by the container directly. A port already in use fails the start, as in Docker.
+macOS may ask once whether `dockiva-engine` may accept incoming connections. Restart policies and healthchecks are run by each container's
 supervisor; `always` and `unless-stopped` containers start again with the
 engine.
 

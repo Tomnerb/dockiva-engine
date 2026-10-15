@@ -64,6 +64,18 @@ func fileSyncServer(files map[string]string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/grpc")
 		w.WriteHeader(200)
+		if r.URL.Path == "/moby.buildkit.secrets.v1.Secrets/GetSecret" { // buildx --secret: "secret/ID" in files
+			m, _ := grpcRead(r.Body)
+			value, ok := files["secret/"+pbDecode(m).str(1)]
+			if !ok {
+				w.Header().Set(http.TrailerPrefix+"Grpc-Status", "5")
+				w.Header().Set(http.TrailerPrefix+"Grpc-Message", "rpc error: code = NotFound desc = not found")
+				return
+			}
+			grpcWrite(w, pbuf{}.str(1, value))
+			w.Header().Set(http.TrailerPrefix+"Grpc-Status", "0")
+			return
+		}
 		defer w.Header().Set(http.TrailerPrefix+"Grpc-Status", "0")
 		if r.URL.Path == "/grpc.health.v1.Health/Check" {
 			grpcRead(r.Body)
@@ -131,7 +143,10 @@ func TestBuildKitDockerfileBuild(t *testing.T) {
 	addr := srv.Listener.Addr().String()
 	files := map[string]string{
 		"dockerfile/Dockerfile": "FROM dockiva/shell:demo\nARG V\nENV X=$V\nCOPY . /files/\n",
-		"dockerfile/Bad":        "FROM dockiva/shell:demo\nRUN --mount=type=cache,target=/c true\n",
+		"dockerfile/Bad":        "FROM dockiva/shell:demo\nRUN --mount=type=secret,id=missing,required true\n",
+		"dockerfile/Secret": "FROM dockiva/shell:demo\nRUN --mount=type=secret,id=tok,env=TOK --mount=type=secret,id=tok,target=/s,mode=0444 " +
+			"busybox sh -c 'busybox echo \"$TOK\" > /got; busybox cat /s >> /got'\n",
+		"secret/tok":            "s3cret",
 		"context/.dockerignore": "# not this\nignored.txt\n",
 		"context/a.txt":         "A",
 		"context/sub/b.txt":     "B",
@@ -207,8 +222,22 @@ func TestBuildKitDockerfileBuild(t *testing.T) {
 	}
 
 	_, gateway, solveErr, vertexes = build(ref+"-bad", "Bad")
-	if gateway == nil || !strings.Contains(gateway.Error(), "RUN --mount needs BuildKit") || solveErr == nil || !strings.Contains(solveErr.Error(), "RUN --mount") ||
-		!strings.Contains(vertexes[len(vertexes)-1], "[2/2] RUN --mount=type=cache,target=/c true RUN --mount needs BuildKit") {
-		t.Fatalf("unsupported feature: %v / %v / %q", gateway, solveErr, vertexes)
+	missing := "RUN --mount=type=secret,id=missing: no such secret; pass it with docker build --secret id=missing,src=FILE"
+	if gateway == nil || !strings.Contains(gateway.Error(), missing) || solveErr == nil || !strings.Contains(solveErr.Error(), missing) ||
+		!strings.Contains(vertexes[len(vertexes)-1], "[2/2] RUN --mount=type=secret,id=missing,required true "+missing) {
+		t.Fatalf("missing secret: %v / %v / %q", gateway, solveErr, vertexes)
+	}
+
+	// A secret from the session: a file and a variable, outside the image.
+	if !exists("../build/dockivad") {
+		t.Skip("RUN needs ../build/dockivad (scripts/bundle_dockiva_engine.py)")
+	}
+	b.Self, b.Worker = "../build/dockivad", "../build/dockiva-worker"
+	if _, gateway, solveErr, _ = build(ref+"-secret", "Secret"); gateway != nil || solveErr != nil {
+		t.Fatalf("secret build: %v %v", gateway, solveErr)
+	}
+	root := b.image("bk-unit:two").Root
+	if got := string(readBounded(root, "got", 100)); got != "s3cret\ns3cret" || exists(filepath.Join(root, "s")) {
+		t.Fatalf("secret: %q", got)
 	}
 }

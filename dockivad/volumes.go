@@ -33,7 +33,7 @@ func (b *engine) createVolume(name string, labels obj, anonymous bool) obj {
 	if !exists(dir) {
 		stage, e := os.MkdirTemp(volumesDir(b.Home), ".creating-")
 		check(e)
-		check(os.Mkdir(filepath.Join(stage, "_data"), 0o755))
+		check(mkdirGuest(filepath.Join(stage, "_data")))
 		save(filepath.Join(stage, "meta.json"), obj{"name": name, "created_at": now(), "labels": labels, "anonymous": anonymous, "populated": false})
 		if os.Rename(stage, dir) != nil { // created meanwhile
 			_ = os.RemoveAll(stage)
@@ -288,7 +288,7 @@ func mountPoint(root, guest string, directory bool) {
 				check(e)
 				f.Close()
 			} else {
-				check(os.Mkdir(p, 0o755))
+				check(mkdirGuest(p))
 			}
 			continue
 		}

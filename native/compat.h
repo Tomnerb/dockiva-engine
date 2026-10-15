@@ -182,6 +182,12 @@ static void cap_after_setuid(const GuestIds *old,const GuestIds *now) {
     if((!old->ruid || !old->uid || !old->suid) && now->ruid && now->uid && now->suid && !prctl_keepcaps)cap_held[0]=cap_held[1]=0;
 }
 static char prctl_name[16];
+/* PR_SET_MEM_MODEL / PR_GET_MEM_MODEL (the Apple/Asahi kernel ABI; FEX asks for TSO
+   with it): model 1 runs the calling thread under the CPU's TSO memory model, kept
+   across clone and fork, reset by exec. Offered only where the vCPUs take
+   ACTLR_EL1.EnTSO (hvf_backend.h sets guest_tso); elsewhere EINVAL, as from a kernel
+   without it, and translators order memory accesses themselves. */
+static int guest_tso;
 static uint64_t seccomp_install(uint64_t flags,uint64_t address); /* seccomp.h */
 static int seccomp_active(void);
 static uint64_t guest_prctl(void) {
@@ -203,6 +209,8 @@ static uint64_t guest_prctl(void) {
         case 39:return prctl_no_new_privs;
         case 21:return seccomp_active()?2:0;                                                       /* PR_GET_SECCOMP */
         case 22:return arg==2?seccomp_install(0,cpu->gpr[2]):linux_error(22);                     /* PR_SET_SECCOMP: filters only */
+        case 0x4d4d444c:if(!guest_tso || arg>1)return linux_error(22);cpu->mem_model=(unsigned)arg;return 0; /* PR_SET_MEM_MODEL */
+        case 0x6d4d444c:return guest_tso?cpu->mem_model:linux_error(22);                           /* PR_GET_MEM_MODEL */
     }
     return linux_error(22);
 }

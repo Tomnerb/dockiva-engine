@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -10,15 +11,20 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
+	"unsafe"
 )
 
-// usage is a container's host CPU time and resident memory: its worker and every
-// host process below it (the runtime runs all guest processes inside them).
+// usage is a container's host CPU time, resident memory and disk bytes read and
+// written: its worker and every host process below it (the runtime runs all guest
+// processes inside them); and its guest threads, from the process table its run
+// publishes.
 type usage struct {
-	cpu    time.Duration
-	memory int64
-	at     time.Time
+	cpu                 time.Duration
+	memory, read, wrote int64
+	pids                int64
+	at                  time.Time
 }
 
 func (b *engine) usage(p string) usage {
@@ -56,8 +62,37 @@ func (b *engine) usage(p string) usage {
 	for pid := range in {
 		u.cpu += rows[pid].cpu
 		u.memory += rows[pid].rss << 10
+		read, wrote := diskIO(pid)
+		u.read, u.wrote = u.read+read, u.wrote+wrote
 	}
+	data, _ := os.ReadFile(filepath.Join(p, "procs"))
+	u.pids = guestThreads(data)
 	return u
+}
+
+// diskIO is a host process's disk bytes read and written (proc_pid_rusage's
+// rusage_info_v2: ri_diskio_bytesread and ri_diskio_byteswritten); 0 once it is gone.
+func diskIO(pid int64) (read, wrote int64) {
+	var info [256]byte
+	const pidRusage, rusageInfoV2 = 9, 2 // PROC_INFO_CALL_PIDRUSAGE, RUSAGE_INFO_V2
+	if _, _, e := syscall.Syscall6(syscall.SYS_PROC_INFO, pidRusage, uintptr(pid), rusageInfoV2, 0, uintptr(unsafe.Pointer(&info[0])), 0); e != 0 {
+		return 0, 0
+	}
+	return int64(binary.LittleEndian.Uint64(info[144:])), int64(binary.LittleEndian.Uint64(info[152:]))
+}
+
+// guestThreads counts a published process table's threads: the seventh field of
+// each "=pid utime stime start vsz rss threads state" line.
+func guestThreads(data []byte) int64 {
+	n := int64(0)
+	for _, line := range strings.Split(string(data), "\n") {
+		f := strings.Fields(line)
+		if len(f) == 8 && strings.HasPrefix(f[0], "=") && f[0] != "=boot" {
+			threads, _ := strconv.ParseInt(f[6], 10, 64)
+			n += max(threads, 1)
+		}
+	}
+	return n
 }
 
 // cpuTime parses ps's "[[dd-]hh:]mm:ss.cc".
@@ -77,13 +112,14 @@ func cpuTime(v string) time.Duration {
 
 // statsJSON is one Docker stats sample. Docker's CPU % is the CPU-time delta over
 // system_cpu_usage's delta times online_cpus, so system time is wall time × CPUs.
-func statsJSON(name string, c obj, now, before usage) obj {
+func statsJSON(id, name string, c obj, now, before usage) obj {
 	cpus := int64(min(runtime.NumCPU(), 64))
 	cpu := func(u usage) obj {
 		return obj{"cpu_usage": obj{"total_usage": u.cpu.Nanoseconds()}, "system_cpu_usage": u.at.UnixNano() * cpus, "online_cpus": cpus, "throttling_data": obj{}}
 	}
-	return obj{"id": key(name), "name": "/" + name, "read": now.at.UTC().Format(time.RFC3339Nano), "preread": before.at.UTC().Format(time.RFC3339Nano),
-		"cpu_stats": cpu(now), "precpu_stats": cpu(before), "pids_stats": obj{}, "networks": obj{}, "blkio_stats": obj{}, "num_procs": 0,
+	return obj{"id": id, "name": "/" + name, "read": now.at.UTC().Format(time.RFC3339Nano), "preread": before.at.UTC().Format(time.RFC3339Nano),
+		"cpu_stats": cpu(now), "precpu_stats": cpu(before), "pids_stats": obj{"current": now.pids}, "networks": obj{}, "num_procs": 0,
+		"blkio_stats":  obj{"io_service_bytes_recursive": []any{obj{"major": 0, "minor": 0, "op": "read", "value": now.read}, obj{"major": 0, "minor": 0, "op": "write", "value": now.wrote}}},
 		"memory_stats": obj{"usage": now.memory, "limit": memoryMiB(c) << 20, "stats": obj{}}}
 }
 
@@ -97,7 +133,7 @@ func (b *engine) stats(w http.ResponseWriter, r *http.Request, name string, stre
 		if !oneShot {
 			time.Sleep(time.Second)
 		}
-		send(w, 200, statsJSON(name, c, b.usage(p), before))
+		send(w, 200, statsJSON(b.idOf(name), name, c, b.usage(p), before))
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -107,7 +143,7 @@ func (b *engine) stats(w http.ResponseWriter, r *http.Request, name string, stre
 	defer tick.Stop()
 	for {
 		now := b.usage(p)
-		if encoder.Encode(statsJSON(name, c, now, before)) != nil {
+		if encoder.Encode(statsJSON(b.idOf(name), name, c, now, before)) != nil {
 			return
 		}
 		http.NewResponseController(w).Flush()

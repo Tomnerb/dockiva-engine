@@ -54,6 +54,7 @@ type image struct {
 	StopSignal       string   // signal name sent on stop: SIGTERM unless the image sets one
 	User             string   // USER: name or uid, with an optional :group or :gid; "" for root
 	Volumes          []string // declared VOLUME paths, sorted
+	Exposed          []string // EXPOSE: "80/tcp", "53/udp"
 	Healthcheck      obj      // HEALTHCHECK, as Config.Healthcheck (Test, Interval, ...)
 	Root             string
 	layout           string
@@ -205,6 +206,11 @@ func loadImage(layout string) *image {
 		im.Volumes = append(im.Volumes, v)
 	}
 	sort.Strings(im.Volumes)
+	for k := range object(settings["ExposedPorts"]) {
+		if port, proto, _ := strings.Cut(k, "/"); proto == "" || proto == "tcp" || proto == "udp" { // not sctp
+			im.Exposed = append(im.Exposed, port+"/"+cmp.Or(proto, "tcp"))
+		}
+	}
 	return im
 }
 
@@ -248,7 +254,7 @@ func (im *image) unpack(root string) int64 {
 	}
 	// The runtime serves /dev/null, /dev/zero and /dev/urandom beneath /dev.
 	if _, e := os.Lstat(filepath.Join(root, "dev")); os.IsNotExist(e) {
-		check(os.Mkdir(filepath.Join(root, "dev"), 0o755))
+		check(mkdirGuest(filepath.Join(root, "dev")))
 	}
 	return size
 }
@@ -383,7 +389,7 @@ func layerDir(root, dir string, create bool) (string, bool) {
 			if !create {
 				return "", false
 			}
-			check(os.Mkdir(p, 0o755))
+			check(mkdirGuest(p))
 			continue
 		}
 		check(e)
@@ -576,7 +582,7 @@ func commitImage(cache, name, layout string) string {
 		cloneTree(noLinks(source, "rootfs"), filepath.Join(stage, "rootfs")) // docker tag: the same files
 		size = readObject(filepath.Join(source, "image.json"))["size"]
 	} else {
-		check(os.Mkdir(filepath.Join(stage, "rootfs"), 0o755))
+		check(mkdirGuest(filepath.Join(stage, "rootfs")))
 		size = im.unpack(filepath.Join(stage, "rootfs"))
 	}
 	save(filepath.Join(stage, "image.json"), obj{"name": name, "digest": im.Digest, "size": size})
