@@ -76,7 +76,7 @@ def cycle(command, port, key, first):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--runtime',type=Path,default=ROOT/'build/vmfree-c-hvf')
+    parser.add_argument('--runtime',type=Path,default=ROOT/'build/dockiva-hvf')
     parser.add_argument('--fixtures',type=Path,default=ROOT/'build/database-fixtures-current')
     parser.add_argument('--report',type=Path,default=ROOT/'evidence/redis-native/acceptance.json')
     parser.add_argument('--trace',action='store_true')

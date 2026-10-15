@@ -60,7 +60,7 @@ def verify(native,reference=None):
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--native',type=Path,default=ROOT/'build/vmfree-c')
+    p.add_argument('--native',type=Path,default=ROOT/'build/dockiva-runtime')
     g=p.add_mutually_exclusive_group();g.add_argument('--qemu');g.add_argument('--native-linux',action='store_true')
     p.add_argument('--report',type=Path);a=p.parse_args()
     if a.native_linux and (platform.system()!='Linux' or platform.machine() not in ('aarch64','arm64')):p.error('--native-linux requires ARM64 Linux')

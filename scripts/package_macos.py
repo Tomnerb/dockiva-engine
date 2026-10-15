@@ -23,11 +23,11 @@ def main():
             shutil.copytree(ROOT/item,stage/item,ignore=shutil.ignore_patterns('__pycache__'))
         for pth in ROOT.glob('*.py'):shutil.copy2(pth,stage/pth.name)
         for name in ('README.md','VALIDATION.md'):shutil.copy2(ROOT/name,stage/name)
-        (stage/'build').mkdir();shutil.copy2(ROOT/'build/vmfree-c',stage/'build/vmfree-c')
+        (stage/'build').mkdir();shutil.copy2(ROOT/'build/dockiva-runtime',stage/'build/dockiva-runtime')
         shutil.copy2(ROOT/'scripts/install_macos.py',stage/'install.py')
         if a.identity:
-            subprocess.run(['codesign','--force','--options','runtime','--timestamp','--sign',a.identity,str(stage/'build/vmfree-c')],check=True)
-            subprocess.run(['codesign','--verify','--strict','--verbose=2',str(stage/'build/vmfree-c')],check=True)
+            subprocess.run(['codesign','--force','--options','runtime','--timestamp','--sign',a.identity,str(stage/'build/dockiva-runtime')],check=True)
+            subprocess.run(['codesign','--verify','--strict','--verbose=2',str(stage/'build/dockiva-runtime')],check=True)
         (stage/'distribution.json').write_text(json.dumps(dict(platform=platform.platform(),signed=bool(a.identity),requires='Python 3.10+ installed by the user',version='0.17.0'),indent=2))
         subprocess.run(['ditto','-c','-k','--keepParent',str(stage),str(a.output.resolve())],check=True)
     if a.notary_profile:

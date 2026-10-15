@@ -73,7 +73,7 @@ def startup_probe(command,root,label):
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--report',type=Path,default=ROOT/'evidence/database-probes.json')
-    parser.add_argument('--native',type=Path,default=ROOT/'build/vmfree-c')
+    parser.add_argument('--native',type=Path,default=ROOT/'build/dockiva-runtime')
     parser.add_argument('--readelf',default='/opt/homebrew/opt/llvm/bin/llvm-readelf')
     parser.add_argument('--expanded-limits',action='store_true')
     parser.add_argument('--target',choices=[row[0] for row in TARGETS])

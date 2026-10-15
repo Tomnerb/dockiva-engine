@@ -20,9 +20,8 @@ def main():
         parser.error('A C compiler is required. On macOS, install Xcode Command Line Tools.')
     out = ROOT / 'build'
     out.mkdir(exist_ok=True)
-    name = 'vmfree-c-sanitize' if args.sanitize else 'vmfree-c'
-    if args.with_hvf:
-        name += '-hvf'
+    name = {(False, False): 'dockiva-runtime', (True, False): 'dockiva-runtime-sanitize',
+            (False, True): 'dockiva-hvf', (True, True): 'dockiva-hvf-sanitize'}[(args.sanitize, args.with_hvf)]
     flags = ['-std=c11', '-O2', '-Wall', '-Wextra', '-Werror', '-pedantic']
     if args.sanitize:
         flags += ['-g', '-fsanitize=address,undefined', '-fno-omit-frame-pointer']

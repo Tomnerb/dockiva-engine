@@ -296,7 +296,7 @@ def main():
     parser.add_argument('--schedule', action='store_true', help='Enable cooperative guest process scheduling')
     parser.add_argument('--max-steps', type=int, help='Shared guest instruction budget')
     parser.add_argument('--writable', action='store_true', help='Allow writes in the temporary guest root (discarded after exit)')
-    parser.add_argument('--native', type=Path, default=ROOT / 'build/vmfree-c')
+    parser.add_argument('--native', type=Path, default=ROOT / 'build/dockiva-runtime')
     # Everything after -- replaces image Cmd without invoking a shell.
     raw = sys.argv[1:]
     override = None

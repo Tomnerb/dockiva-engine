@@ -38,7 +38,7 @@ def main():
     p.add_argument('--report',type=Path,default=Path('m2-benchmark.json'))
     args=p.parse_args()
     if not 3<=args.samples<=100 or not 1000<=args.steps<=10000000:p.error('Use 3..100 samples and 1000..10000000 steps')
-    native=ROOT/'build/vmfree-c'
+    native=ROOT/'build/dockiva-runtime'
     if not native.exists():p.error('Run python3 scripts/build_native.py first')
     results={}
     with tempfile.TemporaryDirectory() as tmp:
@@ -63,7 +63,7 @@ def main():
             results[workload]['python_over_c_wall_ratio']=results[workload]['python']['median_wall_ms']/results[workload]['c']['median_wall_ms']
     report=dict(host=platform.platform(),python=sys.version,samples=args.samples,branch_steps=args.steps,
                 native_sha256=hashlib.sha256(native.read_bytes()).hexdigest(),
-                build=json.loads((ROOT/'build/vmfree-c.json').read_text()),workloads=results,
+                build=json.loads((ROOT/'build/dockiva-runtime.json').read_text()),workloads=results,
                 limitations=['Synthetic microbenchmarks, not Docker workloads or native ARM64 application execution.',
                 'Wall time includes process launch, ELF loading and teardown; branch budget exhaustion is deliberate.',
                 'CPU and peak RSS are OS child-process accounting; inherited spawn memory can set an RSS floor.',

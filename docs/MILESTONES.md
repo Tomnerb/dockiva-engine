@@ -159,7 +159,7 @@ and rerun the build. The build uses your Mac's default architecture.
 To run one program manually:
 
 ```sh
-./build/vmfree-c run examples/independent/stdout.elf --trace
+./build/dockiva-runtime run examples/independent/stdout.elf --trace
 ```
 
 The original Python tests remain available:
@@ -207,7 +207,7 @@ was implemented. Those remain separate parts of the broader backend research.
 
 ```sh
 python3 scripts/build_native.py --sanitize
-python3 scripts/verify_m2.py --native build/vmfree-c-sanitize
+python3 scripts/verify_m2.py --native build/dockiva-runtime-sanitize
 ```
 
 The Linux validation here used AddressSanitizer and UndefinedBehaviorSanitizer.
@@ -256,7 +256,7 @@ unittest methods passing. `Linux reference: not-run` is expected in the Mac chec
 Manual example:
 
 ```sh
-./build/vmfree-c run examples/m3/demo.elf --env MODE=demo -- 12345
+./build/dockiva-runtime run examples/m3/demo.elf --env MODE=demo -- 12345
 ```
 
 Expected stdout:
@@ -398,7 +398,7 @@ Expect 17 M4 PASS lines, 22 M3 PASS lines and 20 M2 PASS lines.
 `Linux reference: not-run` is expected for Mac verification.
 
 ```sh
-./build/vmfree-c run examples/m4/demo.elf
+./build/dockiva-runtime run examples/m4/demo.elf
 ```
 
 Expected stdout: `heap allocation OK` followed by a newline. Exit status: 0.
@@ -527,7 +527,7 @@ verifier starts and cleans up its own one-request servers on ephemeral ports.
 Prepare two terminals in the extracted project. In terminal 1:
 
 ```sh
-./build/vmfree-c run examples/m5/server.elf
+./build/dockiva-runtime run examples/m5/server.elf
 ```
 
 It prints `PORT 18080`. Within 30 seconds, run in terminal 2:
@@ -548,7 +548,7 @@ If 18080 is already in use, start with `-- auto` to request an ephemeral port an
 use the printed port in curl instead:
 
 ```sh
-./build/vmfree-c run examples/m5/server.elf -- auto
+./build/dockiva-runtime run examples/m5/server.elf -- auto
 ```
 
 Any extra guest argument currently selects an ephemeral port; this is not a port
@@ -824,7 +824,7 @@ the current user and have permissions 0700.
 ### M9: an ordinary static musl program
 
 ```sh
-./build/vmfree-c run examples/m9/libc-demo.elf
+./build/dockiva-runtime run examples/m9/libc-demo.elf
 python3 oci.py run examples/m7_10/libc-image
 ```
 
@@ -1323,7 +1323,7 @@ Create `benchmark-config.json` using your real absolute project/rootfs paths:
   {
     "name": "VM-free",
     "kind": "vmfree",
-    "command": ["/ABS/PROJECT/build/vmfree-c", "run", "/ABS/HOME/.vmfree/containers/bench-root/rootfs/app/server", "--root", "/ABS/HOME/.vmfree/containers/bench-root/rootfs", "--max-steps", "10000000", "--", "0"]
+    "command": ["/ABS/PROJECT/build/dockiva-runtime", "run", "/ABS/HOME/.vmfree/containers/bench-root/rootfs/app/server", "--root", "/ABS/HOME/.vmfree/containers/bench-root/rootfs", "--max-steps", "10000000", "--", "0"]
   },
   {
     "name": "Linux VM through Docker",
@@ -1977,7 +1977,7 @@ C11 compiler. No guest compiler is needed to run the bundled fixtures.
 python3 scripts/build_m19.py --cc /path/to/clang --ld /path/to/ld.lld
 python3 scripts/build_native.py --sanitize
 python3 scripts/verify_m19_native.py --sanitize
-python3 scripts/verify_m19.py --native build/vmfree-c-sanitize
+python3 scripts/verify_m19.py --native build/dockiva-runtime-sanitize
 ```
 
 The manifest under examples/m19 hashes the shell, probe, startup, syscall helper,
@@ -2096,7 +2096,7 @@ run the bundled ELFs without a guest compiler:
 python3 scripts/build_m20.py --cc /path/to/clang --ld /path/to/ld.lld
 python3 scripts/build_native.py --sanitize
 python3 scripts/verify_m20_native.py --sanitize
-python3 scripts/verify_m20.py --native build/vmfree-c-sanitize
+python3 scripts/verify_m20.py --native build/dockiva-runtime-sanitize
 ```
 
 The build manifest hashes the guest sources and ELFs plus the reused M18 BusyBox
@@ -2216,7 +2216,7 @@ terminals, job control and general POSIX/BusyBox ash compatibility remain open.
 python3 scripts/build_m21.py --cc /path/to/clang --ld /path/to/ld.lld
 python3 scripts/build_native.py --sanitize
 python3 scripts/verify_m21_native.py --sanitize
-python3 scripts/verify_m21.py --native build/vmfree-c-sanitize
+python3 scripts/verify_m21.py --native build/dockiva-runtime-sanitize
 ```
 
 Guest sources, ELFs and the reused BusyBox ELF are hashed in the M21 manifest.

@@ -26,7 +26,7 @@ def main():
     info = json.loads(inspected.stdout)[0]
     if info['Architecture'] != 'arm64' or info['Os'] != 'linux':
         parser.error('reference image must be Linux ARM64')
-    native = ROOT / 'build/vmfree-c'
+    native = ROOT / 'build/dockiva-runtime'
     actual = subprocess.run([str(native), 'run', str(probe), '--schedule', '--',
                              'portable-signal-status'], capture_output=True, timeout=20)
     name = 'vmfree-m22-reference-' + uuid.uuid4().hex

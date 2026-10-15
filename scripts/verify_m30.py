@@ -12,7 +12,7 @@ def classify(actual,expected,reference=None,reference_expected=None,gap=None):
     if actual==reference:return 'matched'
     return 'declared-policy-gap' if gap else 'unclassified-discrepancy'
 def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--native',type=Path,default=ROOT/'build/vmfree-c');p.add_argument('--report',type=Path,required=True);p.add_argument('--linux-reference',action='store_true');p.add_argument('--corpus',type=Path,default=ROOT/'tests/corpus/m30/compatibility.json');a=p.parse_args()
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--native',type=Path,default=ROOT/'build/dockiva-runtime');p.add_argument('--report',type=Path,required=True);p.add_argument('--linux-reference',action='store_true');p.add_argument('--corpus',type=Path,default=ROOT/'tests/corpus/m30/compatibility.json');a=p.parse_args()
     corpus=json.loads(a.corpus.read_text());rows=[];image=json.loads((ROOT/'examples/m28/build-manifest.json').read_text())['image_id']
     pins={}
     for name in ['build-manifest.json','probe-manifest.json']:

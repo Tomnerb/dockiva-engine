@@ -9,7 +9,7 @@ def main():
     if platform.system()!='Darwin':p.error('This installer targets macOS')
     if sys.version_info<(3,10):p.error('Python 3.10+ required')
     source=a.source or (Path(__file__).resolve().parent if Path(__file__).name=='install.py' else Path(__file__).resolve().parents[1])
-    if not (source/'build/vmfree-c').is_file():p.error('Package lacks a Mac executable; run package_macos.py first')
+    if not (source/'build/dockiva-runtime').is_file():p.error('Package lacks a Mac executable; run package_macos.py first')
     prefix=a.prefix.expanduser().absolute()
     if prefix.is_symlink():p.error('Install prefix cannot be a symlink')
     prefix.mkdir(parents=True,exist_ok=True,mode=0o700)

@@ -19,7 +19,7 @@ def measured(command,limit):
                     peak_rss_bytes=usage.ru_maxrss*(1 if platform.system()=='Darwin' else 1024)),stdout
 
 def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--native',type=Path,default=ROOT/'build/vmfree-c');p.add_argument('--report',type=Path,required=True);p.add_argument('--repetitions',type=int,default=8);a=p.parse_args()
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--native',type=Path,default=ROOT/'build/dockiva-runtime');p.add_argument('--report',type=Path,required=True);p.add_argument('--repetitions',type=int,default=8);a=p.parse_args()
     if not 2<=a.repetitions<=100:p.error('Use 2..100 repetitions')
     rows=[];payload=b'0123456789abcdef'*(1024*1024//16)
     for workload in ['shell-startup','fetch-1mib']:

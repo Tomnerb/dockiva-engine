@@ -3,7 +3,7 @@
 import argparse,json,select,signal,subprocess,time,uuid
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
-p=argparse.ArgumentParser(description=__doc__);p.add_argument('--native',type=Path,default=ROOT/'build/vmfree-c');p.add_argument('--report',type=Path,required=True);p.add_argument('--linux-reference',action='store_true');a=p.parse_args();rows=[]
+p=argparse.ArgumentParser(description=__doc__);p.add_argument('--native',type=Path,default=ROOT/'build/dockiva-runtime');p.add_argument('--report',type=Path,required=True);p.add_argument('--linux-reference',action='store_true');a=p.parse_args();rows=[]
 for mode,code,wanted in [('validation',0,b'timer validation and error side effects match Linux\n'),('inherit',0,b'fork clears child timer and preserves parent timer\n'),('periodic',0,b'periodic alarm interrupts blocked guest reads\n'),('default',142,b''),('cancel',143,b'')]:
     child=subprocess.Popen([str(a.native.resolve()),'run',str(ROOT/'examples/m29/timer.elf'),'--job-control','--max-steps','1000000','--',mode],stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
     start=time.monotonic()

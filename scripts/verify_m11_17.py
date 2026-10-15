@@ -44,7 +44,7 @@ def freeport():
     with socket.socket() as s:s.bind(('127.0.0.1',0));return s.getsockname()[1]
 
 def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--native',type=Path,default=ROOT/'build/vmfree-c');p.add_argument('--report',type=Path);p.add_argument('--docker');p.add_argument('--compose');p.add_argument('--qemu');a=p.parse_args()
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--native',type=Path,default=ROOT/'build/dockiva-runtime');p.add_argument('--report',type=Path);p.add_argument('--docker');p.add_argument('--compose');p.add_argument('--qemu');a=p.parse_args()
     native=str(a.native.resolve());d=ROOT/'examples/m11_17';rows=[];processes=[]
     def check(name,passed,**detail):
         rows.append(dict(name=name,passed=bool(passed),**detail));print(('PASS ' if passed else 'FAIL ')+name,flush=True)

@@ -27,7 +27,7 @@ batch after the profiling experiment, not completion of the service roadmap.
 
 ### Implemented
 
-- A separate `vmfree-c-unicorn` build and explicit `--cpu-backend unicorn` option.
+- A separate `dockiva-runtime-unicorn` build and explicit `--cpu-backend unicorn` option.
   The standard build/default backend remains the interpreter. The standard build
   rejects an unavailable Unicorn backend explicitly.
 - Both execution engines use the same Linux syscall dispatcher, extracted into
@@ -113,7 +113,7 @@ Then, from the repository root:
 
 ```sh
 python3 scripts/build_native.py --with-unicorn
-codesign --force --sign - --options runtime --entitlements experiments/unicorn-adapter/jit.entitlements.plist build/vmfree-c-unicorn
+codesign --force --sign - --options runtime --entitlements experiments/unicorn-adapter/jit.entitlements.plist build/dockiva-runtime-unicorn
 python3 scripts/verify_unicorn_backend.py
 python3 scripts/verify_redis_unicorn.py
 ```

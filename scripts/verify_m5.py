@@ -73,7 +73,7 @@ def verify(native,reference):
     return dict(host=platform.platform(),passed=all(r['passed'] for r in rows),cases=rows)
 
 def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--native',type=Path,default=ROOT/'build/vmfree-c');p.add_argument('--report',type=Path)
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--native',type=Path,default=ROOT/'build/dockiva-runtime');p.add_argument('--report',type=Path)
     g=p.add_mutually_exclusive_group();g.add_argument('--qemu');g.add_argument('--native-linux',action='store_true');a=p.parse_args()
     if a.qemu and platform.system()!='Linux':p.error('QEMU reference requires Linux')
     if a.native_linux and (platform.system()!='Linux' or platform.machine() not in ('aarch64','arm64')):p.error('Native reference requires ARM64 Linux')

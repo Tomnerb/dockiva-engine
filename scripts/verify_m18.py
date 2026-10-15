@@ -4,7 +4,7 @@ import argparse,hashlib,json,os,subprocess,sys,tempfile,time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 def main():
- p=argparse.ArgumentParser(description=__doc__);p.add_argument('--native',type=Path,default=ROOT/'build/vmfree-c');p.add_argument('--qemu');p.add_argument('--report',type=Path);a=p.parse_args()
+ p=argparse.ArgumentParser(description=__doc__);p.add_argument('--native',type=Path,default=ROOT/'build/dockiva-runtime');p.add_argument('--qemu');p.add_argument('--report',type=Path);a=p.parse_args()
  d=ROOT/'examples/m18';native=str(a.native.resolve());elf=str(d/'busybox.elf');results=[]
  def check(name,passed,**details):
   results.append(dict(name=name,passed=bool(passed),**details));print(('PASS ' if passed else 'FAIL ')+name,flush=True)

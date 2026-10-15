@@ -201,7 +201,7 @@ func savedProfile(config obj) *effectiveProfile {
 }
 func runtimeForBackend(native, backend string) string {
 	if backend == "hvf" {
-		native = engineBinary(filepath.Dir(native), "dockiva-hvf", "vmfree-c-hvf")
+		native = filepath.Join(filepath.Dir(native), "dockiva-hvf")
 	}
 	st, err := os.Stat(native)
 	if err != nil || !st.Mode().IsRegular() || st.Mode().Perm()&0111 == 0 {

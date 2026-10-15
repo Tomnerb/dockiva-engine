@@ -16,7 +16,7 @@ sys.path.insert(0,str(ROOT))
 from scripts.verify_m5 import serve
 
 def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--native',type=Path,default=ROOT/'build/vmfree-c');p.add_argument('--report',type=Path);p.add_argument('--qemu');a=p.parse_args()
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--native',type=Path,default=ROOT/'build/dockiva-runtime');p.add_argument('--report',type=Path);p.add_argument('--qemu');a=p.parse_args()
     if a.qemu and platform.system()!='Linux':p.error('QEMU reference requires Linux')
     native=str(a.native.resolve());d=ROOT/'examples/m7_10';rows=[]
     def record(name,good,**details):

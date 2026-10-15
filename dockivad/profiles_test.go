@@ -49,7 +49,7 @@ func TestProfileSchemaAndSelection(t *testing.T) {
 }
 func TestProfileNativeNegotiation(t *testing.T) {
 	c := cloneCatalog()
-	interpreter := probeRuntime(runtimeForBackend("../build/vmfree-c", "interpreter"))
+	interpreter := probeRuntime(runtimeForBackend("../build/dockiva-runtime", "interpreter"))
 	native := probeRuntime(runtimeForBackend(fakeRuntime(t, true), "hvf"))
 	c.selectProfile("sha256:" + strings.Repeat("0", 64)).negotiate(interpreter)
 	accelerated := c.selectProfile(c.Images[0].ImageDigests[0])
@@ -175,7 +175,7 @@ func TestDefaultProfileRunsDynamicUnbounded(t *testing.T) {
 	}
 }
 
-// fakeRuntime writes vmfree-c and vmfree-c-hvf scripts that answer the capability
+// fakeRuntime writes dockiva-runtime and dockiva-hvf scripts that answer the capability
 // probe; hvf controls whether the hypervisor backend is advertised.
 func fakeRuntime(t *testing.T, hvf bool) string {
 	dir := t.TempDir()
@@ -184,10 +184,10 @@ func fakeRuntime(t *testing.T, hvf bool) string {
 		backends += `,"hvf":["elf64-arm64","private-rootfs","loopback-tcp","bounded-dynamic-elf","native-threads"]`
 	}
 	script := "#!/bin/sh\necho '{\"schema_version\":1,\"runtime_abi\":\"" + runtimeABI + "\",\"backends\":{" + backends + "}}'\n"
-	for _, name := range []string{"vmfree-c", "vmfree-c-hvf"} {
+	for _, name := range []string{"dockiva-runtime", "dockiva-hvf"} {
 		check(os.WriteFile(filepath.Join(dir, name), []byte(script), 0700))
 	}
-	return filepath.Join(dir, "vmfree-c")
+	return filepath.Join(dir, "dockiva-runtime")
 }
 func TestNativeProfileSelection(t *testing.T) {
 	for _, hvf := range []bool{true, false} {

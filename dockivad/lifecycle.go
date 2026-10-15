@@ -427,7 +427,7 @@ func runtimeCommand(p, native string, c obj, command []string, argv0 string, env
 		args = append(args, "--proc-peer", filepath.Join(p, "procs"))
 	}
 	if c["cpu_backend"] == "hvf" {
-		native = regularExecutable(engineBinary(filepath.Dir(native), "dockiva-hvf", "vmfree-c-hvf"))
+		native = regularExecutable(filepath.Join(filepath.Dir(native), "dockiva-hvf"))
 		// Like Docker, a container may use every core: one vCPU per host CPU.
 		cpus := min(runtime.NumCPU(), 64)
 		if c["cpus"] != nil {

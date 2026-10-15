@@ -52,7 +52,7 @@ service replay uses a 64 MiB mmap arena for PostgreSQL so parent/exec-child imag
 fit within the unchanged 256 MiB aggregate allocation cap; Redis/Valkey use 128 MiB.
 Separate network-disabled, read-only Linux reference containers successfully
 print each version. Docker is used for fixture acquisition and reference only;
-the VM-free probes execute through `build/vmfree-c` on macOS.
+the VM-free probes execute through `build/dockiva-runtime` on macOS.
 Fixture/reference containers and their owned anonymous volumes are removed.
 Existing user database containers are untouched.
 
@@ -72,7 +72,7 @@ Replay already prepared, hash-checked fixtures without invoking Docker:
 
 ```sh
 python3 scripts/verify_database_services.py --report evidence/database-services.json
-python3 scripts/verify_database_services.py --native build/vmfree-c-sanitize \
+python3 scripts/verify_database_services.py --native build/dockiva-runtime-sanitize \
   --report evidence/database-services-sanitize.json
 ```
 

@@ -176,8 +176,8 @@ modules. The local Go 1.22/macOS toolchain needs external linking and explicit
 ad-hoc signing. Each executable is verified before bundle publication. `dockivad`
 and `dockiva-engine` (the name Dockiva starts) contain the same Go program and
 are separately signed copies. The bundle ships the C runtime as
-`_internal/build/dockiva-runtime`, `dockiva-hvf` and `dockiva-worker`; dockivad
-also finds the source build's names (`vmfree-c`, `vmfree-c-hvf`, `vmfree-worker`).
+`_internal/build/dockiva-runtime`, `dockiva-hvf` and `dockiva-worker`, the names
+`scripts/build_native.py` builds them under.
 
 Dockiva packaging validates the five Go/C executable entries, rejects Python
 files, and replaces its generated helper directory so obsolete CPython files

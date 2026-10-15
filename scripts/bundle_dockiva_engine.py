@@ -36,7 +36,7 @@ def main():
     validate_profile_pins(json.loads((ROOT/'dockivad/profiles.json').read_text()), fixture_digests)
     subprocess.run(['go', 'build', '-trimpath', '-ldflags=-linkmode=external', '-o', str(ROOT/'build/dockivad'), '.'], cwd=ROOT/'dockivad', check=True)
     subprocess.run(['cc', '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror', '-pedantic',
-                    str(ROOT/'native/worker_launcher.c'), '-o', str(ROOT/'build/vmfree-worker')], check=True)
+                    str(ROOT/'native/worker_launcher.c'), '-o', str(ROOT/'build/dockiva-worker')], check=True)
     output = args.output.absolute()
     output.mkdir(parents=True, exist_ok=True)
     target = output/'dockiva-engine'
@@ -48,9 +48,8 @@ def main():
         shutil.copy2(ROOT/'build/dockivad', stage/'dockivad')
         # Dockiva starts the engine by this name, and it shows in Activity Monitor.
         shutil.copy2(stage/'dockivad', stage/'dockiva-engine')
-        # The build's names, as shipped (dockivad finds either).
-        for name, shipped in (('vmfree-c', 'dockiva-runtime'), ('vmfree-c-hvf', 'dockiva-hvf'), ('vmfree-worker', 'dockiva-worker')):
-            shutil.copy2(ROOT/'build'/name, stage/'_internal/build'/shipped)
+        for name in ('dockiva-runtime', 'dockiva-hvf', 'dockiva-worker'):
+            shutil.copy2(ROOT/'build'/name, stage/'_internal/build'/name)
         for relative in ('examples/m19/shell-image', 'examples/m11_17/http-image', 'examples/redis-preview'):
             shutil.copytree(ROOT/relative, stage/'_internal'/relative)
         for executable in (stage/'dockivad', stage/'dockiva-engine', stage/'_internal/build/dockiva-runtime', stage/'_internal/build/dockiva-worker'):

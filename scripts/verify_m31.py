@@ -3,7 +3,7 @@
 import argparse,hashlib,json,subprocess
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
-p=argparse.ArgumentParser(description=__doc__);p.add_argument('--native',type=Path,default=ROOT/'build/vmfree-c');p.add_argument('--report',type=Path,required=True);a=p.parse_args();rows=[]
+p=argparse.ArgumentParser(description=__doc__);p.add_argument('--native',type=Path,default=ROOT/'build/dockiva-runtime');p.add_argument('--report',type=Path,required=True);a=p.parse_args();rows=[]
 for budget in [48,96]:
     for cache in [[],['--no-decode-cache'],['--no-lookup-cache']]:
         r=subprocess.run([str(a.native.resolve()),'run',str(ROOT/'examples/m31/probe.elf'),'--schedule','--memory-limit-mib',str(budget),'--profile','--max-steps','1000000',*cache,'--',*(['sufficient'] if budget==96 else [])],capture_output=True,timeout=10)

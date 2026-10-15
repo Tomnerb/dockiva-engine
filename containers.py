@@ -89,7 +89,7 @@ def supervise(path, fd, native, generation):
         invocation = [native, 'run', str(executable), '--root', str(path / 'rootfs'),
                       '--argv0', command[0], '--max-steps', str(config.get('max_steps',10000000))]
         if config.get('cpu_backend')=='hvf':
-            invocation[0]=str(Path(native).with_name('vmfree-c-hvf').resolve(strict=True))
+            invocation[0]=str(Path(native).with_name('dockiva-hvf').resolve(strict=True))
             invocation+=['--cpu-backend','hvf','--elf-limit-mib','64','--mmap-limit-mib','64']
         if config.get('schedule', False):invocation.append('--schedule')
         if config.get('process_tree', False):invocation.append('--process-tree')
@@ -150,7 +150,7 @@ def main():
         return 0
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--state-dir', type=Path, default=Path.home() / '.vmfree/containers')
-    parser.add_argument('--native', type=Path, default=ROOT / 'build/vmfree-c')
+    parser.add_argument('--native', type=Path, default=ROOT / 'build/dockiva-runtime')
     sub = parser.add_subparsers(dest='action', required=True)
     p = sub.add_parser('create'); p.add_argument('name'); p.add_argument('image', type=Path)
     p.add_argument('--env', action='append', default=[]);p.add_argument('--entrypoint', action='append');p.add_argument('--labels-json', default='{}');

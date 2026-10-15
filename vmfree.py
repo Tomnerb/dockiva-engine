@@ -11,7 +11,7 @@ def main():
     scripts={'engine':'daemon.py','image':'registry.py','container':'containers.py','compose':'compose.py'}
     if action in scripts:os.execv(sys.executable,[sys.executable,str(ROOT/scripts[action]),*args])
     if action=='doctor':
-        native=ROOT/'build/vmfree-c';home=Path.home()/'.vmfree'
+        native=ROOT/'build/dockiva-runtime';home=Path.home()/'.vmfree'
         print(json.dumps(dict(version='0.17.0',host=platform.platform(),machine=platform.machine(),python=sys.version.split()[0],native_exists=native.is_file(),native_sha256=hashlib.sha256(native.read_bytes()).hexdigest() if native.is_file() else None,engine_connection_recorded=(home/'connection.json').exists(),docker_cli=shutil.which('docker'),security_status='prototype; independent isolation review pending'),indent=2));return 0
     if action=='docker':
         # Explicitly target our engine without changing the user's Docker context.

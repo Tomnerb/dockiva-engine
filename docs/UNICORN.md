@@ -459,8 +459,8 @@ Build and run from the repository root:
 
 ```sh
 python3 scripts/bundle_dockiva_engine.py --output build/dockiva-fork
-python3 scripts/verify_unicorn_fork.py --runtime build/dockiva-fork/vmfree-engine/_internal/build/vmfree-c-unicorn
-python3 scripts/verify_redis_fork.py --runtime build/dockiva-fork/vmfree-engine/_internal/build/vmfree-c-unicorn
+python3 scripts/verify_unicorn_fork.py --runtime build/dockiva-fork/vmfree-engine/_internal/build/dockiva-runtime-unicorn
+python3 scripts/verify_redis_fork.py --runtime build/dockiva-fork/vmfree-engine/_internal/build/dockiva-runtime-unicorn
 ```
 
 The separate signed helper is `build/dockiva-fork/vmfree-engine/vmfree-engine`.

@@ -3,7 +3,7 @@
 import argparse,hashlib,json,shutil,subprocess,tempfile
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
-p=argparse.ArgumentParser(description=__doc__);p.add_argument('--native',type=Path,default=ROOT/'build/vmfree-c');p.add_argument('--report',type=Path,required=True);p.add_argument('--linux-reference',action='store_true');a=p.parse_args()
+p=argparse.ArgumentParser(description=__doc__);p.add_argument('--native',type=Path,default=ROOT/'build/dockiva-runtime');p.add_argument('--report',type=Path,required=True);p.add_argument('--linux-reference',action='store_true');a=p.parse_args()
 rows=[]
 cases=[('echo',['echo','dynamic'],b'dynamic\n'),('shell',['sh','-c','x=4; echo $((x+3)); for x in a b; do echo "$x"; done'],b'7\na\nb\n'),('nested',['sh','-c','echo hello | cat; sh -c "echo child"; echo done'],b'hello\nchild\ndone\n'),('files',['sh','-c','cd /bin; echo abc >/out; cat /out; pwd'],b'abc\n/bin\n')]
 for cache in [[],['--no-decode-cache'],['--no-lookup-cache']]:

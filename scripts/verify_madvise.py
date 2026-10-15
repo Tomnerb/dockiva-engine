@@ -23,7 +23,7 @@ def main():
                     '-fno-stack-protector','-fno-pic','-mgeneral-regs-only','-c',str(ROOT/'tests/native/madvise_guest.c'),'-o',str(obj)],check=True)
     subprocess.run([str(linker),'-m','aarch64elf','-static','-e','_start',str(obj),'-o',str(elf)],check=True)
     rows=[]
-    for backend,binary in [('interpreter','vmfree-c'),('hvf','vmfree-c-hvf')]:
+    for backend,binary in [('interpreter','dockiva-runtime'),('hvf','dockiva-hvf')]:
         r=subprocess.run([str(ROOT/'build'/binary),'run',str(elf),'--dynamic','--cpu-backend',backend,*(['--process-tree','--scheduled-network'] if backend=='hvf' else [])],capture_output=True,timeout=10)
         rows.append(dict(backend=backend,exit=r.returncode,results=list(r.stdout),stderr=r.stderr.decode(errors='replace'),passed=r.returncode==0 and list(r.stdout)==EXPECTED))
     if a.linux:

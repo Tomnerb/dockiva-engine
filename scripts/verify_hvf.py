@@ -16,7 +16,7 @@ def main():
     parser.add_argument('--root', type=Path, help='an extracted alpine root (for the busybox checks)')
     args = parser.parse_args()
     subprocess.run([sys.executable, str(ROOT/'scripts/build_native.py'), '--with-hvf'], check=True, capture_output=True)
-    runtime = ROOT/'build/vmfree-c-hvf'
+    runtime = ROOT/'build/dockiva-hvf'
     folder = ROOT/'build/hvf'
     folder.mkdir(parents=True, exist_ok=True)
     linker = next((Path.home()/'.rustup/toolchains').glob('*/lib/rustlib/*/bin/gcc-ld/ld.lld'))

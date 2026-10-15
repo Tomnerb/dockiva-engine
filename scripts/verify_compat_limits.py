@@ -8,7 +8,7 @@ with tempfile.TemporaryDirectory() as temp:
     binary=Path(temp)/'large.elf'
     binary.write_bytes((ROOT/'examples/m18/busybox.elf').read_bytes())
     with binary.open('r+b') as stream:stream.truncate(17*1024*1024)
-    for runtime in ['vmfree-c','vmfree-c-sanitize']:
+    for runtime in ['dockiva-runtime','dockiva-runtime-sanitize']:
         def check(options,good):
             p=subprocess.run([str(ROOT/'build'/runtime),'run',str(binary),'--argv0','busybox',*options,'--','echo','bounded'],capture_output=True,timeout=15)
             assert (p.returncode==0 and p.stdout==b'bounded\n' and not p.stderr) if good else (p.returncode==125 and not p.stdout), (runtime,options,p.returncode,p.stdout,p.stderr)

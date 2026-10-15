@@ -46,7 +46,7 @@ def main():
     common = ['--memory-limit-mib', '64', '--max-steps', '2000000000']
     failed = 0
     cpus = int(sys.argv[sys.argv.index('--cpus')+1]) if '--cpus' in sys.argv else 1  # hvf workers running tasks at once
-    for backend, binary in (('interpreter', 'vmfree-c'), ('hvf', 'vmfree-c-hvf')):
+    for backend, binary in (('interpreter', 'dockiva-runtime'), ('hvf', 'dockiva-hvf')):
         runtime = ROOT/'build'/binary
         if not runtime.exists():
             print(f'{backend}: skipped ({runtime} not built)')

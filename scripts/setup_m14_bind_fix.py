@@ -21,7 +21,7 @@ def main():
     subprocess.run([sys.executable, str(ROOT / 'containers.py'), 'create', name,
                     str(ROOT / 'examples/m11_17/http-image'), '--read-only'], check=True)
     rootfs = Path.home() / '.vmfree/containers' / name / 'rootfs'
-    native[0]['command'] = [str(ROOT / 'build/vmfree-c'), 'run', str(rootfs / 'app/server'),
+    native[0]['command'] = [str(ROOT / 'build/dockiva-runtime'), 'run', str(rootfs / 'app/server'),
                            '--root', str(rootfs), '--max-steps', '10000000', '--', '0']
     destination = ROOT / 'benchmark-config-bind-fixed.json'
     destination.write_text(json.dumps(specs, indent=2) + '\n')

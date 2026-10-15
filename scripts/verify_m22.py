@@ -4,7 +4,7 @@ import argparse,hashlib,json,platform,subprocess,tempfile,shutil,sys
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--native',type=Path,default=ROOT/'build/vmfree-c');p.add_argument('--report',type=Path);a=p.parse_args()
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--native',type=Path,default=ROOT/'build/dockiva-runtime');p.add_argument('--report',type=Path);a=p.parse_args()
     binary=str(a.native.resolve());d=ROOT/'examples/m22';rows=[]
     def check(name,r,code,out=b'',err=b''):
         good=r.returncode==code and r.stdout==out and r.stderr==err

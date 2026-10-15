@@ -49,7 +49,7 @@ def check(native):
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--native',type=Path,default=ROOT/'build/vmfree-c')
+    p.add_argument('--native',type=Path,default=ROOT/'build/dockiva-runtime')
     p.add_argument('--report',type=Path)
     args=p.parse_args()
     try:

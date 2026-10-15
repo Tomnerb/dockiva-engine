@@ -3,7 +3,7 @@
     "name": "VM-free",
     "kind": "vmfree",
     "command": [
-      "/Users/macbookpro16m2max/Documents/vmfree-runtime/build/vmfree-c",
+      "/Users/macbookpro16m2max/Documents/vmfree-runtime/build/dockiva-runtime",
       "run",
       "/Users/macbookpro16m2max/.vmfree/containers/bench-root-62dd0dba/rootfs/app/server",
       "--root",

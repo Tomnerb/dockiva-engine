@@ -37,7 +37,7 @@ with tempfile.TemporaryDirectory() as temp:
             results.append({'name':'linux_wildcard_http' if wildcard else 'linux_loopback_only','passed':True})
         finally:
             proc.terminate();proc.wait(timeout=5)
-    proc=subprocess.run([str(project/'build/vmfree-c'),'run',str(root/'server'),'--root',str(root),'--max-steps','10000000','--','0','0','--bind-any'],capture_output=True,timeout=5)
+    proc=subprocess.run([str(project/'build/dockiva-runtime'),'run',str(root/'server'),'--root',str(root),'--max-steps','10000000','--','0','0','--bind-any'],capture_output=True,timeout=5)
     assert proc.returncode==74,(proc.returncode,proc.stderr)
     results.append({'name':'native_wildcard_still_rejected','passed':True})
 print(json.dumps(results,indent=2))

@@ -19,7 +19,7 @@ with tempfile.TemporaryDirectory(prefix='vmfree-vfork-') as temporary:
     check=root/'shared-check'
     subprocess.run(['cc','-std=c11','-O2','-Wall','-Wextra','-Werror','-pedantic','-fsanitize=address,undefined',str(ROOT/'tests/native/m34_shared_image.c'),'-o',str(check)],check=True)
     subprocess.run([str(check)],check=True,timeout=10)
-    for native in ['vmfree-c','vmfree-c-sanitize']:
+    for native in ['dockiva-runtime','dockiva-runtime-sanitize']:
         subprocess.run([str(ROOT/'build'/native),'run',str(elf),'--root',str(root),'--schedule','--max-steps','1000000'],check=True,timeout=10)
         print('PASS',native,'vfork shared writes, suspension, exec detach and wait')
     if args.linux:

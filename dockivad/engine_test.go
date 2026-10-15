@@ -137,7 +137,7 @@ func testEngine(t *testing.T) *engine {
 	t.Helper()
 	home := t.TempDir()
 	check(os.Chmod(home, 0700))
-	b := &engine{Home: home, State: private(filepath.Join(home, "containers")), Cache: private(filepath.Join(home, "images")), Assets: "..", Native: "../build/vmfree-c", MaxContainers: 64}
+	b := &engine{Home: home, State: private(filepath.Join(home, "containers")), Cache: private(filepath.Join(home, "images")), Assets: "..", Native: "../build/dockiva-runtime", MaxContainers: 64}
 	commitImage(b.Cache, "dockiva/shell:demo", "../examples/m19/shell-image")
 	// Hermetic default: the host's hypervisor availability must not change test results.
 	nativeProbe.Lock()

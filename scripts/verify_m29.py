@@ -3,7 +3,7 @@
 import argparse,hashlib,json,shutil,socket,subprocess,tempfile,threading,time,signal,sys
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
-p=argparse.ArgumentParser(description=__doc__);p.add_argument('--native',type=Path,default=ROOT/'build/vmfree-c');p.add_argument('--report',type=Path,required=True);p.add_argument('--host-sandbox',action='store_true');a=p.parse_args();rows=[]
+p=argparse.ArgumentParser(description=__doc__);p.add_argument('--native',type=Path,default=ROOT/'build/dockiva-runtime');p.add_argument('--report',type=Path,required=True);p.add_argument('--host-sandbox',action='store_true');a=p.parse_args();rows=[]
 class Server:
     def __init__(self,mode):
         self.mode=mode;self.socket=socket.socket();self.socket.bind(('127.0.0.1',0));self.socket.listen(4);self.socket.settimeout(6)

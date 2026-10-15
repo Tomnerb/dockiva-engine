@@ -218,7 +218,7 @@ class LocalUnix(Bounded,UnixServer):pass
 
 def main():
     os.umask(0o077)
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--home',type=Path,default=Path.home()/'.vmfree');p.add_argument('--native',type=Path,default=ROOT/'build/vmfree-c');p.add_argument('--tcp',type=int,help='Loopback-only port; 0 selects an ephemeral port');a=p.parse_args()
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--home',type=Path,default=Path.home()/'.vmfree');p.add_argument('--native',type=Path,default=ROOT/'build/dockiva-runtime');p.add_argument('--tcp',type=int,help='Loopback-only port; 0 selects an ephemeral port');a=p.parse_args()
     backend=Backend(a.home,a.native)
     lock=os.open(backend.home/'daemon.lock',os.O_CREAT|os.O_RDWR,0o600)
     import fcntl

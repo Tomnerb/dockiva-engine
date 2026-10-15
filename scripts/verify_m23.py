@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--native', type=Path, default=ROOT / 'build/vmfree-c')
+    parser.add_argument('--native', type=Path, default=ROOT / 'build/dockiva-runtime')
     parser.add_argument('--report', type=Path, required=True)
     args = parser.parse_args()
     native = str(args.native.resolve())

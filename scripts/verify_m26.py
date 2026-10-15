@@ -24,7 +24,7 @@ CASES = {
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--native', type=Path, default=ROOT / 'build/vmfree-c')
+    parser.add_argument('--native', type=Path, default=ROOT / 'build/dockiva-runtime')
     parser.add_argument('--report', type=Path, required=True)
     parser.add_argument('--linux-reference', action='store_true')
     parser.add_argument('--lifecycle', action='store_true')

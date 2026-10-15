@@ -24,9 +24,8 @@ def main():
         report['checks'].append(name);print('PASS',name,flush=True)
     with tempfile.TemporaryDirectory(prefix='dv-prof-',dir='/tmp') as tmp:
         home=Path(tmp);native=home/'native';native.mkdir()
-        # The bundle's names, copied under the source build's (dockivad finds either).
-        for name,shipped in (('vmfree-c','dockiva-runtime'),('vmfree-c-hvf','dockiva-hvf')):
-            shutil.copy2(helper.parent/'_internal/build'/shipped,native/name)
+        for name in ('dockiva-runtime','dockiva-hvf'):
+            shutil.copy2(helper.parent/'_internal/build'/name,native/name)
         subprocess.run([str(helper),'--home',str(home),'--import-name','alias/prepared:renamed',
                         '--import-layout',str(helper.parent/'_internal/examples/redis-preview/image')],check=True,capture_output=True)
         def api(method,path,body=None):
@@ -42,7 +41,7 @@ def main():
             return raw
         def launch():
             with (home/'engine.log').open('ab') as log:
-                p=subprocess.Popen([str(helper),'--home',str(home),'--native',str(native/'vmfree-c')],
+                p=subprocess.Popen([str(helper),'--home',str(home),'--native',str(native/'dockiva-runtime')],
                                    stdout=log,stderr=log,env=dict(os.environ,PATH='/usr/bin:/bin'))
             def ready():
                 if p.poll() is not None:raise AssertionError((home/'engine.log').read_text())
@@ -51,7 +50,7 @@ def main():
             except BaseException:p.kill();p.wait();raise
         engine=launch()
         try:
-            for binary,backend in [('vmfree-c','interpreter'),('vmfree-c-hvf','hvf')]:
+            for binary,backend in [('dockiva-runtime','interpreter'),('dockiva-hvf','hvf')]:
                 caps=json.loads(subprocess.check_output([str(native/binary),'capabilities']))
                 check('packaged native handshake '+backend,caps['schema_version']==1 and backend in caps['backends'])
             expect('POST','/containers/create?name=readonly',400,
@@ -64,14 +63,14 @@ def main():
                   info['ProfileID']=='prepared-redis-7.4.2-native' and info['RuntimeABI']=='dockiva-native-v1')
             before=(home/'containers/alias/config.json').read_bytes()
             # Simulate an incorrectly packaged/replaced backend without modifying the real bundle.
-            replacement=native/'replacement';shutil.copy2(native/'vmfree-c',replacement)
-            replacement.replace(native/'vmfree-c-hvf')
+            replacement=native/'replacement';shutil.copy2(native/'dockiva-runtime',replacement)
+            replacement.replace(native/'dockiva-hvf')
             failure=expect('POST','/containers/alias/start',409)
             check('missing required backend fails without interpreter fallback',b'required backend: hvf' in failure)
             state=json.loads((home/'containers/alias/status.json').read_text())
             check('failed negotiation launches no guest worker',state['state']=='created' and not (home/'containers/alias/control.json').exists())
             shutil.copy2(helper.parent/'_internal/build/dockiva-hvf',replacement)
-            replacement.replace(native/'vmfree-c-hvf')
+            replacement.replace(native/'dockiva-hvf')
             expect('POST','/containers/alias/start',204)
             result=json.loads(expect('POST','/containers/alias/wait',200))
             logs=expect('GET','/containers/alias/logs?stdout=1&stderr=1',200)

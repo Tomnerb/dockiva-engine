@@ -12,7 +12,7 @@ with tempfile.TemporaryDirectory() as tmp:
     obj=Path(tmp)/'probe.o';elf=ROOT/'examples/m35/acquire_release.elf'
     subprocess.run(['clang','--target=aarch64-linux-gnu','-c',str(ROOT/'examples/m35/acquire_release.S'),'-o',str(obj)],check=True)
     subprocess.run([str(linker),'-m','aarch64elf','-static','-e','_start',str(obj),'-o',str(elf)],check=True)
-    for native in ['vmfree-c','vmfree-c-sanitize']:
+    for native in ['dockiva-runtime','dockiva-runtime-sanitize']:
         for options in [[],['--no-decode-cache'],['--no-lookup-cache']]:
             subprocess.run([str(ROOT/'build'/native),'run',str(elf),*options],check=True,timeout=10)
             print('PASS',native,options)

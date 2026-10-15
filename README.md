@@ -5,7 +5,7 @@ Silicon macOS with no Linux VM: guest code runs on the host CPU under
 Hypervisor.framework and this runtime implements the Linux system calls. The app
 bundle ships it as `Dockiva.app/Contents/Resources/dockiva-engine/`; its state lives
 in `~/.dockiva-engine`. The notes below keep the project's history and its original
-development names (`vmfree.py`, `build/vmfree-c*`).
+development name for the Python tooling (`vmfree.py`).
 
 ## History
 
@@ -18,7 +18,7 @@ Sustained same-Mac HTTP comparisons and both cache optimizations have been measu
 Whole-VM accounting, production security and signed clean-Mac distribution remain open. This is a development prototype, not general Docker compatibility or
 a production isolation boundary. The default CPU backend remains interpreted.
 **2026-10-12:** the Unicorn adapter has been removed. Its role is taken by the native
-backend (`build/vmfree-c-hvf`, `--cpu-backend hvf`): guest code runs on the host CPU under
+backend (`build/dockiva-hvf`, `--cpu-backend hvf`): guest code runs on the host CPU under
 Hypervisor.framework with no guest kernel, and all Linux syscalls go through this runtime.
 `scripts/verify_hvf.py` and `scripts/verify_fork_sockets.py` cover it. The notes below
 describe the project's history.
