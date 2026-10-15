@@ -105,6 +105,7 @@ static uint64_t shared_map(uint64_t fixed,uint64_t length,uint64_t prot,MemoryBa
     unsigned flags=SEG_SHARED|((prot&1)?4:0)|((prot&2)?2:0)|((prot&4)?1:0);
     address_space->seg[address_space->nseg++]=(Segment){MAP_BASE+(uint64_t)start*4096,(uint64_t)pages*4096,flags,backing,offset};
     for(unsigned i=start;i<start+pages;i++)address_space->map_flags[i]=MAP_RESERVED;
+    if(start+pages>address_space->map_top)address_space->map_top=start+pages;   /* fork and reuse copy or clear below it */
     address_space_changed(address_space);return MAP_BASE+(uint64_t)start*4096;
 }
 static int reserve_remove(uint64_t address,uint64_t bytes);
@@ -774,7 +775,10 @@ static uint64_t guest_mremap(void) {
         if(shared && old+old_size==shared->base+shared->size && extra<=shared->backing->size-shared->offset-(size_t)shared->size) {
             int inside=map_in_arena(old,old_size);
             if(inside!=map_in_arena(grow,extra))goto move;
-            if(inside)memset(address_space->map_flags+(grow-MAP_BASE)/4096,MAP_RESERVED,(size_t)(extra/4096));
+            if(inside) {
+                memset(address_space->map_flags+(grow-MAP_BASE)/4096,MAP_RESERVED,(size_t)(extra/4096));
+                unsigned end=(unsigned)((grow+extra-MAP_BASE)/4096);if(end>address_space->map_top)address_space->map_top=end;
+            }
             else if(!reserve_add(grow,extra))goto move;
             shared->size+=extra;address_space_changed(address_space);return old;
         }

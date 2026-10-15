@@ -123,7 +123,7 @@ static _Thread_local unsigned image_dead_count;
 static int image_destroy_later(GuestAddressSpace *space) {
     if(!schedule_active || !worker_threads || !runtime_held || image_dead_count==IMAGE_DEAD_LIMIT)return 0;
     GuestAddressSpace *dead=malloc(sizeof(*dead));if(!dead)return 0;
-    *dead=*space;address_space_reset(space);image_dead[image_dead_count++]=dead;
+    address_space_assign(dead,space);address_space_reset(space);image_dead[image_dead_count++]=dead;
     return 1;
 }
 static void image_destroy_dead(void) {

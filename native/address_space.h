@@ -51,7 +51,6 @@ static unsigned char *segment_data(const Segment *segment) {
    snapshots; private fork retains COW backing, while vfork shares its owning image.
    General MAP_SHARED is not implemented. */
 typedef struct {
-    Segment seg[SEGMENT_LIMIT+1];
     unsigned nseg;uint64_t map_capacity; /* mmap arena bytes (--mmap-limit-mib) */
     unsigned char *file_data; /* Loader input (a read-only host mapping of the file), not a guest mapping. */
     size_t file_size;
@@ -80,5 +79,6 @@ typedef struct {
     MemoryBacking *private_range_backing;
     size_t private_range_offset,private_range_size;
     uint64_t private_range_previous;
+    Segment seg[SEGMENT_LIMIT+1];     /* last: copies take the nseg in use (address_space_assign) */
 } GuestAddressSpace;
 #endif

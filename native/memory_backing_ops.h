@@ -16,13 +16,18 @@ static int backing_retain(MemoryBacking *backing,size_t count) {
     if(!backing || !backing->refs || count>SIZE_MAX-backing->refs) { errno=ENOMEM;return 0; }
     __atomic_fetch_add(&backing->refs,count,__ATOMIC_ACQ_REL);return 1;
 }
-static void (*backing_release_hook)(MemoryBacking *); /* the hypervisor backend forgets the memory first */
 /* Drop count references; holders in other processes may drop theirs concurrently. */
 static void backing_drop(MemoryBacking *backing,size_t count) {
     if(!backing)return;
     size_t refs=__atomic_load_n(&backing->refs,__ATOMIC_ACQUIRE);
     if(refs<count)fail("Invalid memory backing ownership");
+#ifdef __APPLE__
+    if(!backing_dead_image)__atomic_store_n(&backing->unpooled,1,__ATOMIC_RELAXED);
+#endif
     if(!__atomic_sub_fetch(&backing->refs,count,__ATOMIC_ACQ_REL)) {
+#ifdef __APPLE__
+        if(backing_reap(backing))return;
+#endif
         if(backing_release_hook)backing_release_hook(backing);
 #ifdef __APPLE__
         backing_vm_release(backing);

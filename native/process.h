@@ -31,13 +31,13 @@ static _Thread_local GuestAddressSpace *image_home_scheduled=&runtime_context.me
 static GuestAddressSpace *image_place(SharedImage *shared) { return shared?&shared->state.memory:image_home; }
 static void image_save(ProcessImage *im) {
     im->shared=shared_image;im->cpu=*cpu;im->mask=fs_umask;
-    if(&im->memory!=address_space) { im->memory=*address_space;memset(im->memory.lookup_cache,0,sizeof(im->memory.lookup_cache)); }
+    if(&im->memory!=address_space) { address_space_assign(&im->memory,address_space);memset(im->memory.lookup_cache,0,sizeof(im->memory.lookup_cache)); }
 }
 static void image_restore(const ProcessImage *im) {
     GuestAddressSpace *place=image_place(im->shared);
     const GuestAddressSpace *source=im->shared?&im->shared->state.memory:&im->memory;
     shared_image=im->shared;address_space=place;
-    if(source!=place)*place=*source;
+    address_space_assign(place,source);
     *cpu=im->cpu;fs_umask=im->mask;
     address_space_touched(address_space);cpu->exclusive_valid=0;
 }
@@ -50,7 +50,7 @@ static void image_free(void) {
     if(shared_image) {
         SharedImage *shared=shared_image;
         if(--shared->refs) { image_clear();return; }
-        if(address_space!=image_home)*image_home=shared->state.memory;   /* the last sharer takes the memory */
+        if(address_space!=image_home)address_space_assign(image_home,&shared->state.memory);   /* the last sharer takes the memory */
         shared_image=NULL;free(shared);address_space=image_home;
     }
     if(!image_destroy_later(address_space))address_space_destroy(address_space);
@@ -155,6 +155,7 @@ static uint64_t process_exec_at(uint64_t dir,unsigned r) {
     return 0;
 }
 static uint64_t process_clone(void) {
+    fork_shared_private=0;
     if(epoll_live() && !schedule_active)return linux_error(95); /* scheduled children share inherited epoll instances */
     /* vfork shares memory, but never files or signal handlers. The scheduler
        holds the parent until child exec or exit. General threads remain unsupported. */
@@ -202,9 +203,10 @@ static uint64_t process_clone(void) {
             return linux_error(12);
         }
         shared_image->refs=1;
-        shared_image->state.memory=*address_space;address_space=&shared_image->state.memory; /* parent and child use it from now on */
+        address_space_assign(&shared_image->state.memory,address_space);address_space=&shared_image->state.memory; /* parent and child use it from now on */
     }
-    ProcessImage parent,child;image_save(&parent);child=parent;
+    ProcessImage parent,child;image_save(&parent);
+    child.shared=parent.shared;child.cpu=parent.cpu;child.mask=parent.mask;address_space_assign(&child.memory,&parent.memory);
     if(share)shared_image->refs++;
     else {
         child.shared=NULL;

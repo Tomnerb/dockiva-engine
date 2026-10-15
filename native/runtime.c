@@ -133,6 +133,29 @@ static void text_cache_add(const struct stat *st,uint64_t off,uint64_t bytes,uin
         text_cache_bytes-=text_cache[victim].mem;backing_release(text_cache[victim].backing);memset(&text_cache[victim],0,sizeof(text_cache[victim]));
     }
 }
+/* Mappings of programs run recently (keyed as text_cache): a later exec of the same
+   file reads its headers and data from pages already mapped, instead of mapping,
+   faulting in and unmapping the file each time (a shell script runs the same few
+   programs, and every one of them the same loader). Read-only, never charged; the
+   loader never keeps a pointer into one past load_stream. Execs are serialized. */
+#define ELF_MAP_CACHE 16
+static struct ElfMap { dev_t dev;ino_t ino;off_t size;long mtime_s,mtime_ns;void *map;uint64_t last; } elf_map_cache[ELF_MAP_CACHE];
+static uint64_t elf_map_clock;
+static void *elf_map(int fd,const struct stat *st) {
+    struct ElfMap *victim=&elf_map_cache[0];
+    for(unsigned i=0;i<ELF_MAP_CACHE;i++) {
+        struct ElfMap *e=&elf_map_cache[i];
+        if(e->map && e->dev==st->st_dev && e->ino==st->st_ino && e->size==st->st_size && e->mtime_s==(long)st->st_mtimespec.tv_sec && e->mtime_ns==(long)st->st_mtimespec.tv_nsec) {
+            e->last=++elf_map_clock;return e->map;
+        }
+        if(!e->map || (victim->map && e->last<victim->last))victim=e;
+    }
+    void *mapped=mmap(NULL,(size_t)st->st_size,PROT_READ,MAP_PRIVATE,fd,0);
+    if(mapped==MAP_FAILED)return mapped;
+    if(victim->map)munmap(victim->map,(size_t)victim->size);
+    *victim=(struct ElfMap){st->st_dev,st->st_ino,st->st_size,(long)st->st_mtimespec.tv_sec,(long)st->st_mtimespec.tv_nsec,mapped,++elf_map_clock};
+    return mapped;
+}
 /* Returns the load bias. */
 static uint64_t load_stream_inner(FILE *f,int interpreter) {
     char interpreter_path[1025]={0};
@@ -142,7 +165,7 @@ static uint64_t load_stream_inner(FILE *f,int interpreter) {
     size_t size=(size_t)input_stat.st_size;
     /* Mapped, not read: pages load lazily and are not charged to the guest's memory
        limit (an executable is page cache on Linux). Segments are copied out below. */
-    void *mapped=size?mmap(NULL,size,PROT_READ,MAP_PRIVATE,fileno(f),0):MAP_FAILED;
+    void *mapped=size?elf_map(fileno(f),&input_stat):MAP_FAILED;
     fclose(f);
     if(mapped==MAP_FAILED)fail("ELF input could not be read");
     address_space->file_data=mapped;address_space->file_size=size;
@@ -239,16 +262,16 @@ static uint64_t load_stream_inner(FILE *f,int interpreter) {
         int fd=fs_open_root_file(interpreter_path);if(fd<0)fail("Cannot open guest interpreter");
         FILE *input=fdopen(fd,"rb");if(!input) { close(fd);fail("Cannot read guest interpreter"); }
         uint64_t main_entry=address_space->entry,main_ph=address_space->phaddr,main_count=address_space->phcount;
-        munmap(address_space->file_data,address_space->file_size);address_space->file_data=NULL;
+        address_space->file_data=NULL;
         address_space->interpreter_base=load_stream_inner(input,1);address_space->entry=main_entry;address_space->phaddr=main_ph;address_space->phcount=main_count;
     }
     return bias;
 }
-/* The file mapping is loader input only: drop it as soon as the segments are copied,
-   so no image (vfork shares its parent's) ever holds, and later unmaps, it. */
+/* The file mapping is loader input only (elf_map_cache owns it): drop it as soon as
+   the segments are copied, so no image (vfork shares its parent's) ever holds it. */
 static void load_stream(FILE *f) {
     (void)load_stream_inner(f,0);
-    if(address_space->file_data) { munmap(address_space->file_data,address_space->file_size);address_space->file_data=NULL; }
+    address_space->file_data=NULL;
 }
 static void store_le(uint64_t addr, uint64_t value, unsigned bytes) {
     cpu->exclusive_valid=0;
@@ -324,7 +347,11 @@ static void startup(int argc, const char **argv, unsigned envc, const char **env
             next+=length;
         }
     cursor-=16;
+#ifdef __APPLE__
+    arc4random_buf(backing_data(data)+(size_t)(cursor-base),16); /* no system call per exec */
+#else
     if(getentropy(backing_data(data)+(size_t)(cursor-base),16)<0)fail("Cannot initialize guest startup randomness");
+#endif
     uint64_t random_address=cursor;
     /* The strings were copied into the backing directly: charge their pages now. */
     if(!address_space_make_private(address_space,data,(size_t)(cursor-base),(size_t)(base+size-cursor))) fail("Guest memory budget exhausted (--memory-limit-mib)");
@@ -1171,6 +1198,8 @@ int main(int argc,char **argv) {
            and in-place futex waits (guest code runs natively); the fast paths stay on. */
         schedule_enabled=net_scheduled=1; /* each guest thread is a scheduler entity */
         map_rwx_allowed=1;
+        fork_copy_pages=16; /* 256 KiB per backing: see address_space_fork_private */
+        backing_reaping=1;
 #endif
     }
     if(fs_root>=0 && fs_storage_limit && fs_scan_budget(fs_root,0)<0)fail("Guest root exceeds storage, entry or traversal budget");

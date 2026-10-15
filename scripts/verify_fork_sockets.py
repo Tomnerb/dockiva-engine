@@ -35,6 +35,13 @@ def main():
     cow_stress, smp_atomic, fork_churn, thread_smp, out_edge, around = (build(n, folder, linker) for n in ('cow_stress_guest', 'smp_atomic_guest', 'fork_churn_guest', 'thread_smp_guest', 'epoll_out_edge_guest', 'fault_around_guest'))
     setuid, setuid_leaf, ping, many_procs, inet6, bigfile = (build(n, folder, linker) for n in ('setuid_guest', 'setuid_leaf', 'ping_guest', 'many_procs_guest', 'inet6_guest', 'bigfile_guest'))
     lazy_charge, lazy_leaf, oom_kill = (build(n, folder, linker) for n in ('lazy_charge_guest', 'lazy_charge_leaf', 'oom_kill_guest'))
+    stress, stress_leaf = (build(n, folder, linker) for n in ('fork_exec_stress_guest', 'fork_exec_stress_leaf'))
+    stress_root = folder/'stress-root'  # fork_exec_stress_guest execs /leaf in /d0../d2 and reads /data
+    shutil.rmtree(stress_root, ignore_errors=True)
+    for d in ('d0', 'd1', 'd2'):
+        (stress_root/d).mkdir(parents=True)
+    shutil.copy(stress_leaf, stress_root/'leaf')
+    (stress_root/'data').write_bytes(b'x'*4096)
     lazy_root = folder/'lazy-root'  # lazy_charge_guest execs /leaf
     shutil.rmtree(lazy_root, ignore_errors=True)
     lazy_root.mkdir()
@@ -73,7 +80,8 @@ def main():
                                      (thread_group, [], b''), (futex, [], struct.pack('<I', 11)), (thread_limit, [], b''),
                                      (fp_preserve, [], b'fp-preserve PASS\n'), (sleep, [], b'sleep PASS\n'), (lazy, ['--mmap-limit-mib', '2048'], b'lazy-memory PASS\n'), (writev, [], b'x'*64+b'\n'), (many, [], b'many-sockets PASS\n'), (vdso, [], b'vdso PASS\n'), (udp, [], b'udp loopback PASS\n'), (udp, ['--outbound'], b'udp outbound PASS\n'), (unix, ['--root', str(shared), '--writable'], b'unix PASS\n'), (session, [], b'session PASS\n'), (fdtable, ['--root', str(shared), '--writable'], b'fd-table PASS\n'), (sigmask, ['--signals'], b'sigmask PASS\n'), (setuid, ['--root', str(setuid_root), '--uid', '1000', '--gid', '1000'], b'setuid PASS\n'), (ping, ['--process-tree'], b'ping PASS\n'), (many_procs, ['--memory-limit-mib', '512'], b'many-procs PASS\n'), (inet6, [], b'inet6 PASS\n'), (lazy_charge, ['--root', str(lazy_root), '--memory-limit-mib', '256', '--mmap-limit-mib', '12288'], b'lazy-charge PASS\n'), (oom_kill, ['--memory-limit-mib', '256', '--mmap-limit-mib', '2048'], b'oom-kill PASS\n'), (bigfile, ['--root', str(shared), '--writable', '--file-limit-mib', '1048576', '--storage-limit-mib', '0'], b'bigfile PASS\n'),
                                      (cow_stress, [], b'cow-stress PASS\n'), (smp_atomic, [], b'smp-atomic PASS\n'), (fork_churn, [], b'fork-churn PASS\n'), (thread_smp, [], b'thread-smp PASS\n'), (out_edge, [], b'epoll-out-edge PASS\n'),
-                                     (around, ['--mmap-limit-mib', '256', '--signals'], b'fault-around PASS\n')):
+                                     (around, ['--mmap-limit-mib', '256', '--signals'], b'fault-around PASS\n'),
+                                     (stress, ['--root', str(stress_root), '--signals'], b'fork-exec-stress PASS\n')):
             if backend == 'interpreter' and elf in (threads, fork_threads, thread_group, futex, thread_limit, fp_preserve, sleep, vdso, sigmask, cow_stress, smp_atomic, fork_churn, thread_smp, out_edge, around, oom_kill):
                 continue  # the interpreter has no CLONE_THREAD support (nor these SIMD instructions); its OOM kill ends the run
             shutil.rmtree(shared, ignore_errors=True)
