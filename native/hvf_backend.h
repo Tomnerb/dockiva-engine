@@ -1226,7 +1226,8 @@ static int hvf_slice_run(void) {
             hvf_get_regs(1,elr,spsr);
             uint64_t call=cpu->gpr[8],flags=cpu->gpr[0];unsigned execs=process_exec_count;
             int fork=call==220 && !(flags&0x10000);
-            if(call==220 || call==221 || call==139)hvf_fp_pull(); /* clone/fork copy, exec and sigreturn replace the whole CPU state */
+            int exec=call==221 || call==281;                          /* execve, execveat */
+            if(call==220 || exec || call==139)hvf_fp_pull(); /* clone/fork copy, exec and sigreturn replace the whole CPU state */
             if(fork)hvf_views[process_pid].stale=HVF_STALE_COW; /* a fork shares this process's private pages */
             int denied=seccomp_check();
             int result=denied?denied:hvf_thread_call(call);
@@ -1234,12 +1235,12 @@ static int hvf_slice_run(void) {
             if(result==HVF_UNHANDLED) {
                 /* Sibling threads stay out of guest code while their memory is
                    snapshotted or replaced. */
-                if(fork || call==221)hvf_siblings_out();
+                if(fork || exec)hvf_siblings_out();
                 result=guest_syscall();
                 if(result==-3 && fork && (int64_t)cpu->gpr[0]>0) {     /* the child starts single-threaded, on new tables */
                     hvf_main_clear_tid[cpu->gpr[0]]=0;hvf_views[cpu->gpr[0]].stale=HVF_STALE_NEW;
                 }
-                if(call==221 && process_exec_count!=execs)hvf_exec_threads();
+                if(exec && process_exec_count!=execs)hvf_exec_threads();
             }
             if(result!=-3) {
                 if(result==-2 && !schedule_active)fail("Blocking syscalls need the scheduler (--process-tree)");

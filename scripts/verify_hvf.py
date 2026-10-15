@@ -5,6 +5,7 @@ import argparse
 import hashlib
 from pathlib import Path
 import platform
+import shutil
 import subprocess
 import sys
 import time
@@ -36,7 +37,17 @@ def main():
         subprocess.run(['clang', '--target=aarch64-linux-gnu', '-O1', '-ffreestanding', '-fno-builtin', '-fno-stack-protector', '-fno-pic',
                         '-c', str(ROOT/'tests/native'/(name+'.c')), '-o', str(folder/(name+'.o'))], check=True)
         subprocess.run([str(linker), '-m', 'aarch64elf', '-static', '-e', '_start', str(folder/(name+'.o')), '-o', str(folder/(name+'.elf'))], check=True)
-        r = subprocess.run([str(runtime), 'run', str(folder/(name+'.elf')), '--cpu-backend', 'hvf', '--dynamic', '--process-tree', '--signals', '--cpus', '4'],
+        extra = []
+        if name == 'translator_guest':   # its root: the program as /t, /file, /d/file and /d/abs -> /file
+            troot = folder/'translator-root'
+            shutil.rmtree(troot, ignore_errors=True)
+            (troot/'d').mkdir(parents=True)
+            shutil.copy(folder/(name+'.elf'), troot/'t')
+            (troot/'file').write_text('root')
+            (troot/'d/file').write_text('d')
+            (troot/'d/abs').symlink_to('/file')
+            extra = ['--root', str(troot)]
+        r = subprocess.run([str(runtime), 'run', str(folder/(name+'.elf')), '--cpu-backend', 'hvf', '--dynamic', '--process-tree', '--signals', '--cpus', '4', *extra],
                            capture_output=True, timeout=120)
         out = r.stdout.decode()
         if name == 'translator_guest':
