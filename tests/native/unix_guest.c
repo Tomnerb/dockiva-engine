@@ -60,6 +60,28 @@ static void abstract_names(void) {
     long sender=call(198,1,2,0,0,0,0);
     check(call(203,sender,(U)out,8,0,0,0)==0 && call(64,sender,(U)"dg",2,0,0,0)==2 && call(63,auto_,(U)buf,8,0,0,0)==2 && buf[0]=='d');
     for(long fd=dup;fd<=sender;fd++)call(57,(U)fd,0,0,0,0,0);
+    /* FEXServer's pattern: "\00.FEXServer.Socket", a client process that sends a
+       descriptor (SCM_RIGHTS) over it, and the server reading through that descriptor. */
+    static const char fex[]="0.FEXServer.Socket";unsigned char addr[40]={1,0,0};unsigned n=0;
+    while(fex[n]) { addr[3+n]=(unsigned char)fex[n];n++; }
+    long fs=call(198,1,0x80001,0,0,0,0);check(fs>=0);                             /* SOCK_STREAM|SOCK_CLOEXEC */
+    check(call(200,(U)fs,(U)addr,3+n,0,0,0)==0 && call(201,(U)fs,16,0,0,0,0)==0);
+    size=110;check(call(204,(U)fs,(U)out,(U)&size,0,0,0)==0 && size==3+n && equal(out,addr,3+n));
+    pid=call(220,17,0,0,0,0,0);
+    if(!pid) {
+        int pair[2];check(call(199,1,1,0,(U)pair,0,0)==0 && call(64,(U)pair[1],(U)"fd",2,0,0,0)==2);
+        long c=call(198,1,1,0,0,0,0);check(call(203,(U)c,(U)addr,3+n,0,0,0)==0);
+        U cmsg[3]={20,1|((U)1<<32),(U)pair[0]};                                   /* len 20, SOL_SOCKET, SCM_RIGHTS, the fd */
+        U io[2]={(U)"x",1},msg[7]={0,0,(U)io,1,(U)cmsg,24,0};
+        check(call(211,(U)c,(U)msg,0,0,0,0)==1);
+        call(94,0,0,0,0,0,0);
+    }
+    long peer2=call(202,(U)fs,0,0,0,0,0);check(peer2>=0);
+    U cmsg[3]={0,0,0};char x=0;U io[2]={(U)&x,1},msg[7]={0,0,(U)io,1,(U)cmsg,24,0};
+    check(call(212,(U)peer2,(U)msg,0,0,0,0)==1 && x=='x' && (unsigned)cmsg[1]==1 && (unsigned)(cmsg[1]>>32)==1);
+    char got[4]={0};check(call(63,(U)(unsigned)cmsg[2],(U)got,4,0,0,0)==2 && got[0]=='f');   /* the passed descriptor */
+    status=-1;check(call(260,(U)pid,(U)&status,0,0,0,0)==pid && status==0);
+    call(57,(U)peer2,0,0,0,0,0);call(57,(U)fs,0,0,0,0,0);
 }
 void _start(void) {
     roundtrip("/test.sock");
