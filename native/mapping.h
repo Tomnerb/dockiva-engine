@@ -253,7 +253,7 @@ static int reserve_overlaps(uint64_t address,uint64_t bytes) {
 /* Add [address, address+bytes), joining the reservations it overlaps or touches. 0 if
    the table is full. */
 static int reserve_add(uint64_t address,uint64_t bytes) {
-    if(!address_space->reserve && !(address_space->reserve=calloc(RESERVE_LIMIT,sizeof(Reservation))))return 0;
+    if(!address_space->reserve && !(address_space->reserve=resource_metadata(RESERVE_LIMIT*sizeof(Reservation))))return 0;
     Reservation *r=address_space->reserve;uint64_t end=address+bytes;unsigned n=address_space->nreserve,i=reserve_after(address-1),j=i;
     for(;j<n && r[j].base<=end;j++) {
         if(r[j].base<address)address=r[j].base;

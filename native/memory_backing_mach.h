@@ -27,7 +27,7 @@ static MemoryBacking *backing_descriptor(size_t size) {
     if(!size || size>SIZE_MAX-(page-1)) { errno=ENOMEM;return NULL; }
     size_t mapped=(size+page-1)/page*page,count=mapped/page;
     if(count>(SIZE_MAX-sizeof(MemoryBacking))/sizeof(BackingPage *)) { errno=ENOMEM;return NULL; }
-    MemoryBacking *backing=calloc(1,sizeof(*backing)+count*sizeof(BackingPage *));
+    MemoryBacking *backing=resource_metadata(sizeof(*backing)+count*sizeof(BackingPage *));
     if(backing) { backing->refs=1;backing->size=size;backing->mapped_size=mapped;backing->page_size=page; }
     return backing;
 }

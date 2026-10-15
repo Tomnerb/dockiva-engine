@@ -11,6 +11,7 @@
 #define PROCESS_WORDS ((PROCESS_LIMIT+64)/64)
 typedef union { max_align_t alignment;struct { size_t bytes; } value; } ResourceHeader;
 #define RESOURCE_MAPPED ((size_t)1<<(sizeof(size_t)*8-1))
+#define RESOURCE_UNCHARGED ((size_t)1<<(sizeof(size_t)*8-2)) /* resource_metadata: never charged */
 static uint64_t resource_limit=UINT64_C(256)*1024*1024,resource_used,resource_peak,resource_denials;
 /* Charge bytes against the budget, or fail; scheduler workers charge concurrently. */
 static int resource_charge(uint64_t bytes) {
@@ -48,9 +49,22 @@ static void *resource_calloc(size_t count,size_t size) {
     }
     return p+1;
 }
+/* Bookkeeping sized by an address space's capacity rather than its use (a 12 GiB
+   arena's page array and flags, the mapping table): zeroed anonymous memory the
+   memory budget does not count, of which the host commits only the pages used, as
+   Linux's page tables grow with use. Guest memory itself is charged page by page.
+   Small requests are ordinary charged ones. */
+static void *resource_metadata(size_t bytes) {
+    if(bytes<(1u<<20))return resource_calloc(1,bytes);
+    if(bytes>SIZE_MAX/4-sizeof(ResourceHeader)) { errno=ENOMEM;return NULL; }
+    ResourceHeader *p=mmap(NULL,sizeof(*p)+bytes,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
+    if(p==MAP_FAILED) { errno=ENOMEM;return NULL; }
+    p->value.bytes=(bytes+sizeof(*p))|RESOURCE_MAPPED|RESOURCE_UNCHARGED;
+    return p+1;
+}
 static void resource_free(void *p) {
-    if(!p)return;ResourceHeader *header=(ResourceHeader *)p-1;size_t bytes=header->value.bytes&~RESOURCE_MAPPED;
-    resource_uncharge(bytes);
+    if(!p)return;ResourceHeader *header=(ResourceHeader *)p-1;size_t bytes=header->value.bytes&~(RESOURCE_MAPPED|RESOURCE_UNCHARGED);
+    if(!(header->value.bytes&RESOURCE_UNCHARGED))resource_uncharge(bytes);
     if(header->value.bytes&RESOURCE_MAPPED)munmap(header,bytes);else free(header);
 }
 #define malloc resource_malloc

@@ -30,7 +30,7 @@ static void address_space_arena_changed(GuestAddressSpace *space,unsigned first,
     if(end>space->map_top)space->map_top=end;
 }
 static int address_space_map_flags(GuestAddressSpace *space) {
-    if(!space->map_flags)space->map_flags=calloc(space->map_capacity/4096,1);
+    if(!space->map_flags)space->map_flags=resource_metadata(space->map_capacity/4096);
     return space->map_flags!=NULL;
 }
 static void address_space_reset(GuestAddressSpace *space) {
@@ -53,11 +53,11 @@ static int address_space_fork_private(GuestAddressSpace *destination,GuestAddres
     memset(copy.lookup_cache,0,sizeof(copy.lookup_cache));
     for(unsigned i=0;i<copy.nseg;i++)copy.seg[i].backing=NULL;
     if(source->map_flags) {
-        if(!(copy.map_flags=malloc(source->map_capacity/4096)))goto failed;
-        memcpy(copy.map_flags,source->map_flags,source->map_capacity/4096);
+        if(!(copy.map_flags=resource_metadata(source->map_capacity/4096)))goto failed;
+        memcpy(copy.map_flags,source->map_flags,source->map_top<source->map_capacity/4096?source->map_top:source->map_capacity/4096); /* none set above map_top */
     }
     if(source->reserve) {
-        if(!(copy.reserve=malloc(RESERVE_LIMIT*sizeof(Reservation))))goto failed;
+        if(!(copy.reserve=resource_metadata(RESERVE_LIMIT*sizeof(Reservation))))goto failed;
         memcpy(copy.reserve,source->reserve,source->nreserve*sizeof(Reservation));
     }
     for(unsigned i=0;i<copy.nseg;i++) {
