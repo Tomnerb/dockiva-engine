@@ -5,6 +5,11 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <sys/mount.h>
+#include <math.h>
+#include <stddef.h>
+#ifdef __APPLE__
+#include <mach/mach.h>
+#endif
 #define FS_SLOTS 1024u /* open files and directories per process */
 /* Open files and directories of the current process (see the descriptor map in
    net.h); guest: slot -> guest descriptor. */
@@ -387,15 +392,12 @@ static const char *proc_comm(uint64_t pid) {
 }
 static _Thread_local uint64_t process_pid; /* defined with the process layer */
 static uint64_t process_pid_now(void) { return process_pid; }
+static uint64_t proc_split(const char *path,uint64_t *tid,const char **rest);static int64_t proc_resolve(uint64_t display);
 static int fs_proc_exe(const char *path,char out[1025]) {
-    uint64_t pid=0;
-    if(!strcmp(path,"/proc/self/exe"))pid=process_pid;
-    else if(!strncmp(path,"/proc/",6)) {
-        const char *p=path+6;while(*p>='0' && *p<='9' && pid<100)pid=pid*10+(uint64_t)(*p++-'0');
-        if(p==path+6 || strcmp(p,"/exe"))pid=0;
-    }
-    if(!pid || pid>PROCESS_LIMIT+1 || !proc_exe[pid][0])return 0;
-    strcpy(out,proc_exe[pid]);return 1;
+    uint64_t tid;const char *rest;uint64_t pid=proc_split(path,&tid,&rest);
+    int64_t own=pid && !strcmp(rest,"exe")?proc_resolve(pid):0;  /* another run's processes: not at hand */
+    if(own<=0 || own>PROCESS_LIMIT+1 || !proc_exe[own][0])return 0;
+    strcpy(out,proc_exe[own]);return 1;
 }
 static int fs_lookup(uint64_t dir,uint64_t ptr,char leaf[1025],int follow,char canon[1025]) {
     char path[1025];if(fs_root<0) { errno=EACCES;return -1; }
@@ -504,7 +506,9 @@ static uint64_t fs_memfd(void) {
     int guest=fd_lowest(0);fs_guest[slot]=(unsigned short)guest;fd_bind((uint64_t)guest,FD_FILE,slot);return (uint64_t)guest;
 }
 static unsigned guest_cpus(void); /* scheduler.h */
-static uint64_t io_text_open(const void *data,size_t size,int cloexec,int directory); /* io.h */
+static uint64_t io_text_open(const void *data,size_t size,int cloexec,int directory,const char *path); /* io.h: path, to read it again */
+static int proc_text(const char *path,char *text,size_t capacity,size_t *out);
+static const char *io_text_path(uint64_t fd);                              /* io.h */
 static uint64_t io_fifo_open(dev_t dev,ino_t ino,uint64_t flags);          /* io.h */
 static char prctl_name[16];       /* compat.h: PR_SET_NAME */
 static uint64_t guest_ppid_of(uint64_t pid);static unsigned guest_threads_of(uint64_t pid); /* syscall.h */
@@ -512,89 +516,289 @@ static int guest_process_exists(uint64_t pid);
 static char guest_state_of(uint64_t pid);       /* syscall.h: R, S or T */
 static uint64_t guest_group_of(uint64_t pid,int session); /* syscall.h: process group or session */
 static void guest_signal_sets(uint64_t pid,uint64_t sets[4]);  /* syscall.h: pending, blocked, ignored, caught */
-static uint64_t fs_proc_file(const char *path,const char *name);
-static uint64_t runtime_started_ns;             /* the container's boot time, for /proc/stat and uptime */
+static void guest_ids_of(uint64_t pid,uint32_t *uid,uint32_t *gid); /* syscall.h */
+/* syscall.h: a process's threads (tid, R or S, CPU ns), at most capacity; the main thread's tid is the pid. */
+static unsigned guest_thread_list(uint64_t pid,unsigned *tids,char *states,uint64_t (*cpu)[2],unsigned capacity);
+static void proc_memory(uint64_t pid,int own_held,uint64_t *vsz,uint64_t *rss); /* syscall.h */
+static uint64_t runtime_started_ns;             /* this run's start (CLOCK_REALTIME ns) */
+#define PROC_TICK_NS UINT64_C(10000000)          /* USER_HZ: AT_CLKTCK is 100 */
+static uint64_t proc_now_ns(void) { struct timespec t;clock_gettime(CLOCK_REALTIME,&t);return (uint64_t)t.tv_sec*1000000000u+(uint64_t)t.tv_nsec; }
+/* Per pid: when the process was forked (0: as this run started) and its CPU time in
+   ns (user, system), which the scheduler charges for every slice from its worker's
+   host thread usage. proc_cpu_total keeps every process's, exited ones too, so the
+   cpu lines of /proc/stat only grow (top works from their deltas). */
+static uint64_t proc_started_ns[PROCESS_LIMIT+2],proc_cpu_ns[PROCESS_LIMIT+2][2],proc_cpu_total[2];
+static void proc_start(uint64_t pid) {
+    if(pid && pid<=PROCESS_LIMIT+1) { proc_started_ns[pid]=proc_now_ns();proc_cpu_ns[pid][0]=proc_cpu_ns[pid][1]=0; }
+}
+/* A host thread's CPU time in ns (user, system). */
+#ifdef __APPLE__
+typedef mach_port_t ProcThread;
+static ProcThread proc_thread_self(void) { return pthread_mach_thread_np(pthread_self()); }
+static void proc_cpu_read(ProcThread thread,uint64_t now[2]) {
+    thread_basic_info_data_t info;mach_msg_type_number_t count=THREAD_BASIC_INFO_COUNT;now[0]=now[1]=0;
+    if(thread_info(thread,THREAD_BASIC_INFO,(thread_info_t)&info,&count)!=KERN_SUCCESS)return;
+    now[0]=(uint64_t)info.user_time.seconds*1000000000u+(uint64_t)info.user_time.microseconds*1000u;
+    now[1]=(uint64_t)info.system_time.seconds*1000000000u+(uint64_t)info.system_time.microseconds*1000u;
+}
+#else
+typedef clockid_t ProcThread;
+static ProcThread proc_thread_self(void) { clockid_t id;return pthread_getcpuclockid(pthread_self(),&id)?CLOCK_THREAD_CPUTIME_ID:id; }
+static void proc_cpu_read(ProcThread thread,uint64_t now[2]) { struct timespec t;clock_gettime(thread,&t);now[0]=(uint64_t)t.tv_sec*1000000000u+(uint64_t)t.tv_nsec;now[1]=0; }
+#endif
+/* The slice each worker runs now (pid 0: none), from mark on its host thread: a slice
+   can run long (system calls served without the runtime lock do not end it), so its
+   time so far counts too. Changed and read under the runtime lock. */
+static struct { uint64_t pid,*thread,mark[2];ProcThread host; } proc_live[64]; /* WORKER_LIMIT */
+static void proc_cpu_begin(unsigned worker_index,uint64_t pid,uint64_t *thread) {
+    if(worker_index>=64)return;
+    proc_live[worker_index].host=proc_thread_self();proc_cpu_read(proc_live[worker_index].host,proc_live[worker_index].mark);
+    proc_live[worker_index].pid=pid;proc_live[worker_index].thread=thread;
+}
+static void proc_cpu_end(unsigned worker_index) {
+    if(worker_index>=64 || !proc_live[worker_index].pid)return;
+    uint64_t now[2],pid=proc_live[worker_index].pid,*thread=proc_live[worker_index].thread;proc_cpu_read(proc_live[worker_index].host,now);
+    for(unsigned i=0;i<2;i++)if(now[i]>proc_live[worker_index].mark[i]) {
+        uint64_t used=now[i]-proc_live[worker_index].mark[i];proc_cpu_total[i]+=used;
+        if(pid<=PROCESS_LIMIT+1)proc_cpu_ns[pid][i]+=used;
+        if(thread)thread[i]+=used;
+    }
+    proc_live[worker_index].pid=0;
+}
+/* Adds the running slices' time so far: of pid (0: every process), or of one thread. */
+static void proc_cpu_live(uint64_t pid,const uint64_t *thread,uint64_t out[2]) {
+    for(unsigned w=0;w<64;w++)if(proc_live[w].pid && (thread?proc_live[w].thread==thread:!pid || proc_live[w].pid==pid)) {
+        uint64_t now[2];proc_cpu_read(proc_live[w].host,now);
+        for(unsigned i=0;i<2;i++)if(now[i]>proc_live[w].mark[i])out[i]+=now[i]-proc_live[w].mark[i];
+    }
+}
+/* Unscheduled, the one process is the whole run. */
+static void proc_rusage(uint64_t out[2]) {
+    struct rusage use;getrusage(RUSAGE_SELF,&use);
+    out[0]=(uint64_t)use.ru_utime.tv_sec*1000000000u+(uint64_t)use.ru_utime.tv_usec*1000u;
+    out[1]=(uint64_t)use.ru_stime.tv_sec*1000000000u+(uint64_t)use.ru_stime.tv_usec*1000u;
+}
 /* The container's processes as /proc shows them. An exec or healthcheck is a run of
    its own, so the main run publishes its process table (--proc-publish) and other runs
-   read it (--proc-peer): their /proc lists the main run's processes under their own
-   pids and theirs as PROC_PEER_OFFSET+pid, so the two never collide. Read-only: a
-   peer's processes cannot be signalled from another run. */
+   read it (--proc-peer): their /proc lists their own processes under the pids getpid
+   returns (/proc/self/exe, /proc/<getpid()>/stat) and the main run's as
+   PROC_PEER_OFFSET+pid, so the two never collide. Read-only: a peer's processes cannot
+   be signalled from another run.
+   The table: per process "pid ppid uid size cmdline\n" (cmdline: size bytes), then
+   "=boot boot_ns user_ticks system_ticks used_bytes load1 load5 load15 load_ns\n" and
+   per process "=pid utime stime start_ticks vsz_kib rss_kib threads state\n" (older
+   readers stop at the first '='). */
 static const char *proc_publish_path,*proc_peer_path;
 #define PROC_PEER_OFFSET 1000u
-struct ProcPeer { uint64_t pid,ppid;unsigned uid,size;char cmdline[1024]; };
+/* Writes are coalesced: at most one per 20 ms (a build forks thousands of processes;
+   each rewrite cost 0.4 ms of a fork). A change within that time is written by the
+   scheduler's next pump (proc_publish_flush), so readers lag by at most about that.
+   Usage (CPU, memory, states) is republished every 100 ms while it changes (busybox
+   top's first frame is a 100 ms delta); a write costs about 0.15 ms. */
+#define PROC_PUBLISH_NS UINT64_C(20000000)
+#define PROC_USAGE_NS UINT64_C(100000000)
+struct ProcPeer { uint64_t pid,ppid,utime,stime,start,vsz,rss;unsigned uid,size,threads;char state;char cmdline[1024]; };
 static struct ProcPeer proc_peers[PROCESS_LIMIT+2];static unsigned proc_npeers;
+static struct { uint64_t boot_ns,user,system,used,load_ns;double load[3]; } proc_main; /* the main run's totals */
+static uint64_t proc_peer_loaded_ns;
 static void proc_peer_load(void) {
-    proc_npeers=0;if(!proc_peer_path)return;
+    if(!proc_peer_path)return;
+    uint64_t now=proc_now_ns();if(now-proc_peer_loaded_ns<PROC_PUBLISH_NS)return; /* one read per burst of /proc lookups */
+    proc_peer_loaded_ns=now;proc_npeers=0;
     FILE *f=fopen(proc_peer_path,"rb");if(!f)return;
     struct ProcPeer *p;unsigned long long pid,ppid;unsigned uid,size;
     while(proc_npeers<PROCESS_LIMIT+2 && fscanf(f,"%llu %llu %u %u",&pid,&ppid,&uid,&size)==4 && fgetc(f)==' ') {
         p=&proc_peers[proc_npeers];if(size>sizeof(p->cmdline))break;
         if(fread(p->cmdline,1,size,f)!=size)break;
-        p->pid=pid;p->ppid=ppid;p->uid=uid;p->size=size;proc_npeers++;
+        memset(p,0,offsetof(struct ProcPeer,cmdline));
+        p->pid=pid+PROC_PEER_OFFSET;p->ppid=ppid?ppid+PROC_PEER_OFFSET:0;p->uid=uid;p->size=size;p->threads=1;p->state='S';proc_npeers++;
         if(fgetc(f)!='\n')break;
+    }
+    char tag[24];
+    while(fscanf(f," =%23s",tag)==1) {
+        if(!strcmp(tag,"boot")) {
+            unsigned long long v[5];double l[3];
+            if(fscanf(f,"%llu %llu %llu %llu %lf %lf %lf %llu",&v[0],&v[1],&v[2],&v[3],&l[0],&l[1],&l[2],&v[4])==8) {
+                proc_main.boot_ns=v[0];proc_main.user=v[1];proc_main.system=v[2];proc_main.used=v[3];proc_main.load_ns=v[4];
+                memcpy(proc_main.load,l,sizeof(l));
+            }
+        } else {
+            unsigned long long v[5];unsigned threads;char state;
+            if(fscanf(f,"%llu %llu %llu %llu %llu %u %c",&v[0],&v[1],&v[2],&v[3],&v[4],&threads,&state)!=7)break;
+            for(unsigned i=0;i<proc_npeers;i++)if(proc_peers[i].pid==strtoull(tag,NULL,10)+PROC_PEER_OFFSET) {
+                p=&proc_peers[i];p->utime=v[0];p->stime=v[1];p->start=v[2];p->vsz=v[3]<<10;p->rss=v[4]<<10;p->threads=threads;p->state=state;
+            }
+        }
     }
     fclose(f);
 }
-/* The main run's table, rewritten (atomically) when its processes start, exec or end
-   (ended: a pid whose task is gone but may still be the current one). */
-/* Writes are coalesced: at most one per 20 ms (a build forks thousands of processes;
-   each rewrite cost 0.4 ms of a fork). A change within that time is written by the
-   scheduler's next pump (proc_publish_flush), so readers lag by at most about that. */
-#define PROC_PUBLISH_NS UINT64_C(20000000)
-static int proc_publish_pending;static uint64_t proc_publish_last_ns;
-static void proc_publish_write(uint64_t ended);
+/* The container's boot: the main run's start. */
+static uint64_t proc_boot_ns(void) {
+    if(proc_peer_path) { proc_peer_load();if(proc_main.boot_ns)return proc_main.boot_ns; }
+    return runtime_started_ns;
+}
+/* CLOCK_BOOTTIME counts from the container's start, as in a Linux time namespace, so it
+   agrees with /proc/uptime and process start times (procps derives elapsed time and
+   %CPU from it). Host CLOCK_MONOTONIC, like BOOTTIME, includes sleep. */
+static uint64_t proc_boottime_ns(void) {
+    static uint64_t base;uint64_t now=clock_gettime_nsec_np(CLOCK_MONOTONIC);
+    if(!base) { uint64_t real=proc_now_ns(),boot=proc_boot_ns();base=now-(real>boot?real-boot:0); }
+    return now-base;
+}
+static uint64_t proc_started(uint64_t pid) { return pid<=PROCESS_LIMIT+1 && proc_started_ns[pid]?proc_started_ns[pid]:runtime_started_ns; }
+static void proc_cpu_of(uint64_t pid,uint64_t out[2]) {
+    if(!schedule_active) { proc_rusage(out);return; }
+    out[0]=proc_cpu_ns[pid][0];out[1]=proc_cpu_ns[pid][1];proc_cpu_live(pid,NULL,out);
+}
+/* Memory: the budget (docker run -m), or the host's memory if that is smaller; in use,
+   what the container's runs have charged. */
+static uint64_t proc_mem_total(void) {
+    static uint64_t host;if(!host) { size_t size=sizeof(host);if(sysctlbyname("hw.memsize",&host,&size,NULL,0))host=UINT64_MAX; }
+    return resource_limit<host?resource_limit:host;
+}
+static uint64_t proc_mem_used(void) {
+    uint64_t used=resource_used;
+    if(proc_peer_path) { proc_peer_load();used+=proc_main.used; }
+    return used;
+}
+/* Processes in state R: this run's, and the main run's as last published. */
+static unsigned proc_running(void) {
+    unsigned running=0;
+    for(uint64_t p=1;p<=PROCESS_LIMIT+1;p++)if(guest_process_exists(p))running+=guest_state_of(p)=='R';
+    proc_peer_load();for(unsigned i=0;i<proc_npeers;i++)running+=proc_peers[i].state=='R';
+    return running;
+}
+/* Load averages as Linux keeps them: runnable processes, decaying over 1, 5 and 15
+   minutes, sampled every 100 ms (proc_publish_flush) and on reads. An exec run
+   carries the main run's published averages forward. */
+static double proc_load[3];static uint64_t proc_load_ns;
+static void proc_load_sample(double out[3]) {
+    static const double period[3]={60,300,900};
+    uint64_t now=proc_now_ns();unsigned running=proc_running();
+    if(proc_peer_path && proc_main.load_ns) { memcpy(proc_load,proc_main.load,sizeof(proc_load));proc_load_ns=proc_main.load_ns; }
+    if(proc_load_ns && now>proc_load_ns)
+        for(unsigned i=0;i<3;i++) { double e=exp(-(double)(now-proc_load_ns)/1e9/period[i]);proc_load[i]=proc_load[i]*e+running*(1-e); }
+    proc_load_ns=now;
+    if(out)memcpy(out,proc_load,sizeof(proc_load));
+}
+/* The container's CPU time in ticks (user, system): every process's, ever. */
+static void proc_cpu_all(uint64_t out[2]) {
+    uint64_t own[2]={proc_cpu_total[0],proc_cpu_total[1]};proc_cpu_live(0,NULL,own);if(!schedule_active)proc_rusage(own);
+    out[0]=own[0]/PROC_TICK_NS;out[1]=own[1]/PROC_TICK_NS;
+    if(proc_peer_path) { proc_peer_load();out[0]+=proc_main.user;out[1]+=proc_main.system; }
+}
+static int proc_publish_pending;static uint64_t proc_publish_last_ns,proc_tick_ns;
+static void proc_publish_write(uint64_t ended,int own_held);
+/* A process started, exec'd or ended (ended: its pid, whose task is gone but may still
+   be the current one); the caller holds the current process's mm lock, if any. */
 static void proc_publish(uint64_t ended) {
     if(!proc_publish_path)return;
-    if(clock_gettime_nsec_np(CLOCK_UPTIME_RAW)-proc_publish_last_ns>=PROC_PUBLISH_NS)proc_publish_write(ended);
+    if(clock_gettime_nsec_np(CLOCK_UPTIME_RAW)-proc_publish_last_ns>=PROC_PUBLISH_NS)proc_publish_write(ended,1);
     else proc_publish_pending=1;
 }
+/* The scheduler's pump, busy or idle (no mm lock held). */
 static void proc_publish_flush(void) {
-    if(proc_publish_pending && clock_gettime_nsec_np(CLOCK_UPTIME_RAW)-proc_publish_last_ns>=PROC_PUBLISH_NS)proc_publish_write(0);
+    uint64_t now=clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+    if(now-proc_tick_ns>=PROC_USAGE_NS) { proc_tick_ns=now;proc_load_sample(NULL);if(proc_publish_path)proc_publish_write(0,-1); }
+    if(proc_publish_pending && now-proc_publish_last_ns>=PROC_PUBLISH_NS)proc_publish_write(0,0);
 }
-static void proc_publish_write(uint64_t ended) {
+/* own_held: the current process's mm lock is held (1), or not (0); -1 as 0, but only
+   rewrite when usage changed since the last write. */
+static void proc_publish_write(uint64_t ended,int own_held) {
+    static char usage[16384],last[16384];size_t length=0;
+    uint64_t boot=runtime_started_ns,cpu[2];proc_cpu_all(cpu);
+    length+=(size_t)snprintf(usage+length,sizeof(usage)-length,"%llu %llu %llu %llu\n",(unsigned long long)boot,
+        (unsigned long long)cpu[0],(unsigned long long)cpu[1],(unsigned long long)resource_used);
+    for(uint64_t pid=1;pid<=PROCESS_LIMIT+1 && length<sizeof(usage)-128;pid++)if(pid!=ended && guest_process_exists(pid)) {
+        uint64_t vsz,rss,used[2],start=proc_started(pid);proc_memory(pid,own_held>0,&vsz,&rss);proc_cpu_of(pid,used);
+        length+=(size_t)snprintf(usage+length,sizeof(usage)-length,"=%llu %llu %llu %llu %llu %llu %u %c\n",(unsigned long long)pid,
+            (unsigned long long)(used[0]/PROC_TICK_NS),(unsigned long long)(used[1]/PROC_TICK_NS),(unsigned long long)(start>boot?(start-boot)/PROC_TICK_NS:0),
+            (unsigned long long)(vsz>>10),(unsigned long long)(rss>>10),guest_threads_of(pid),guest_state_of(pid));
+    }
+    if(own_held<0 && !strcmp(usage,last))return;
+    memcpy(last,usage,length+1);
     proc_publish_pending=0;proc_publish_last_ns=clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
     char temporary[1100];snprintf(temporary,sizeof(temporary),"%s.%d",proc_publish_path,(int)getpid());
     FILE *f=fopen(temporary,"wb");if(!f)return;
     for(uint64_t pid=1;pid<=PROCESS_LIMIT+1;pid++)if(pid!=ended && guest_process_exists(pid)) {
-        fprintf(f,"%llu %llu %u %u ",(unsigned long long)pid,(unsigned long long)guest_ppid_of(pid),guest_uid,proc_cmdline_size[pid]);
+        uint32_t uid,gid;guest_ids_of(pid,&uid,&gid);
+        fprintf(f,"%llu %llu %u %u ",(unsigned long long)pid,(unsigned long long)guest_ppid_of(pid),uid,proc_cmdline_size[pid]);
         fwrite(proc_cmdline[pid],1,proc_cmdline_size[pid],f);fputc('\n',f);
     }
+    double load[3];proc_load_sample(load);
+    char *rest=strchr(usage,'\n');*rest=0;  /* the totals line, then the processes' */
+    fprintf(f,"=boot %s %.2f %.2f %.2f %llu\n%s",usage,load[0],load[1],load[2],(unsigned long long)proc_load_ns,rest+1);
+    *rest='\n';
     if(fclose(f)==0)rename(temporary,proc_publish_path);else unlink(temporary);
 }
-static uint64_t proc_display(uint64_t own) { return proc_peer_path?own+PROC_PEER_OFFSET:own; }
 /* A /proc pid: one of this run's (>0, its pid), a published one (<0, -(index+1)), or none (0). */
 static int64_t proc_resolve(uint64_t display) {
-    if(!proc_peer_path)return guest_process_exists(display)?(int64_t)display:0;
-    if(display>PROC_PEER_OFFSET)return guest_process_exists(display-PROC_PEER_OFFSET)?(int64_t)(display-PROC_PEER_OFFSET):0;
+    if(display<=PROCESS_LIMIT+1)return guest_process_exists(display)?(int64_t)display:0;
+    if(!proc_peer_path)return 0;
     proc_peer_load();
     for(unsigned i=0;i<proc_npeers;i++)if(proc_peers[i].pid==display)return -(int64_t)i-1;
     return 0;
 }
-typedef struct { uint64_t pid,ppid,pgrp,session;unsigned threads,uid,size;char state;char comm[16];const char *cmdline; } ProcInfo;
-static int proc_info(uint64_t display,ProcInfo *info) {
+/* What /proc shows of a process (tid: one of its threads, or 0): times in ticks
+   since boot, memory in bytes. */
+typedef struct { uint64_t pid,ppid,pgrp,session,utime,stime,start,vsz,rss;unsigned threads,uid,gid,size;char state;char comm[16];const char *cmdline; } ProcInfo;
+static int proc_info(uint64_t display,uint64_t tid,ProcInfo *info) {
     int64_t r=proc_resolve(display);if(!r)return 0;
     memset(info,0,sizeof(*info));info->pid=info->pgrp=info->session=display;
     if(r>0) {
-        uint64_t own=(uint64_t)r,ppid=guest_ppid_of(own);
-        info->ppid=ppid?proc_display(ppid):0;info->pgrp=proc_display(guest_group_of(own,0));info->session=proc_display(guest_group_of(own,1));info->threads=guest_threads_of(own);info->uid=guest_uid;info->state=guest_state_of(own);
+        uint64_t own=(uint64_t)r,ppid=guest_ppid_of(own),boot=proc_boot_ns(),start=proc_started(own),used[2];
+        info->ppid=ppid?ppid:0;info->pgrp=guest_group_of(own,0);info->session=guest_group_of(own,1);
+        info->threads=guest_threads_of(own);info->state=guest_state_of(own);
+        guest_ids_of(own,&info->uid,&info->gid);
         snprintf(info->comm,sizeof(info->comm),"%s",own==process_pid && *prctl_name?prctl_name:proc_comm(own));
         info->cmdline=proc_cmdline[own];info->size=proc_cmdline_size[own];
+        proc_cpu_of(own,used);
+        if(tid && tid!=display) {                                   /* a thread: its own state and CPU time */
+            unsigned tids[256];char states[256];uint64_t cpu[256][2];unsigned n=guest_thread_list(own,tids,states,cpu,256);
+            for(unsigned i=0;i<n;i++)if(tids[i]==tid) { info->state=states[i];used[0]=cpu[i][0];used[1]=cpu[i][1]; }
+        }
+        info->utime=used[0]/PROC_TICK_NS;info->stime=used[1]/PROC_TICK_NS;info->start=start>boot?(start-boot)/PROC_TICK_NS:0;
+        proc_memory(own,1,&info->vsz,&info->rss);
     } else {
         struct ProcPeer *p=&proc_peers[-r-1];
-        info->ppid=p->ppid;info->threads=1;info->uid=p->uid;info->state='S';info->cmdline=p->cmdline;info->size=p->size;
+        info->ppid=p->ppid;info->threads=p->threads;info->uid=info->gid=p->uid;info->state=p->state;info->cmdline=p->cmdline;info->size=p->size;
+        info->utime=p->utime;info->stime=p->stime;info->start=p->start;info->vsz=p->vsz;info->rss=p->rss;
         const char *argv0=p->size?p->cmdline:"guest",*slash=strrchr(argv0,'/');
         snprintf(info->comm,sizeof(info->comm),"%s",slash && slash[1]?slash+1:argv0);
     }
+    if(tid)info->pid=tid;
     return 1;
 }
-/* /proc/self or /proc/PID (with or without a final slash) of a process of the container: its pid, or 0. */
-static uint64_t fs_proc_dir(const char *path) {
-    if(!strcmp(path,"/proc/self") || !strcmp(path,"/proc/self/"))return proc_display(process_pid);
-    if(strncmp(path,"/proc/",6))return 0;
-    uint64_t pid=0;const char *p=path+6;while(*p>='0' && *p<='9' && pid<100000)pid=pid*10+(uint64_t)(*p++-'0');
-    return p>path+6 && (!*p || !strcmp(p,"/")) && proc_resolve(pid)?pid:0;
+/* Whether tid names a thread of the process with /proc pid display (its main thread
+   is the pid itself; another run's processes show only that one). */
+static int proc_thread_exists(uint64_t display,uint64_t tid) {
+    if(tid==display)return 1;
+    int64_t r=proc_resolve(display);if(r<=0)return 0;
+    unsigned tids[256];char states[256];uint64_t cpu[256][2];unsigned n=guest_thread_list((uint64_t)r,tids,states,cpu,256);
+    for(unsigned i=1;i<n;i++)if(tids[i]==tid)return 1;
+    return 0;
 }
-static const char *const fs_proc_root_files[]={"cpuinfo","loadavg","meminfo","mounts","stat","uptime"};
+/* A path in a process's /proc directory: /proc/self/REST, /proc/PID/REST or
+   /proc/PID/task/TID/REST, REST empty for the directory itself. Returns the /proc pid
+   (0: none of ours), the thread (0: the process) and REST. */
+static uint64_t proc_split(const char *path,uint64_t *tid,const char **rest) {
+    *tid=0;*rest="";
+    if(strncmp(path,"/proc/",6))return 0;
+    const char *p=path+6;uint64_t pid=0;
+    if(!strncmp(p,"self",4) && (!p[4] || p[4]=='/')) { pid=process_pid;p+=4; }
+    else {
+        const char *digits=p;while(*p>='0' && *p<='9' && pid<100000)pid=pid*10+(uint64_t)(*p++-'0');
+        if(p==digits || (*p && *p!='/') || !proc_resolve(pid))return 0;
+    }
+    if(*p=='/')p++;
+    if(!strncmp(p,"task/",5) && p[5]>='0' && p[5]<='9') {
+        const char *q=p+5;uint64_t t=0;while(*q>='0' && *q<='9' && t<10000000)t=t*10+(uint64_t)(*q++-'0');
+        if((*q && *q!='/') || !proc_thread_exists(pid,t))return 0;
+        *tid=t;p=*q?q+1:q;
+    }
+    *rest=p;return pid;
+}
+static const char *const fs_proc_root_files[]={"cpuinfo","loadavg","meminfo","mounts","stat","uptime","vmstat"};
 static const char *const fs_proc_pid_files[]={"auxv","cgroup","cmdline","comm","maps","mountinfo","mounts","stat","statm","status"};
 static size_t proc_maps(char *out,size_t capacity); /* mapping.h */
 /* Kernel settings programs read (Elasticsearch's bootstrap checks, ClickHouse, Redis):
@@ -605,12 +809,35 @@ static const char *fs_proc_sys_value(const char *path) {
     for(unsigned i=0;i<sizeof(fs_proc_sys)/sizeof(*fs_proc_sys);i++)if(!strcmp(path,fs_proc_sys[i][0]))return fs_proc_sys[i][1];
     return NULL;
 }
+/* A path argument as /proc sees it: relative to a /proc working directory (busybox
+   top chdirs there) or to one of our /proc directory descriptors (htop reads files
+   relative to /proc/PID), made absolute, without trailing slashes. Other paths are
+   returned as given (callers that fall through reread the guest's string). */
+static int fs_proc_path(uint64_t dir,uint64_t ptr,char path[1025]) {
+    if(fs_string(ptr,path))return -1;
+    if(path[0] && path[0]!='/') {
+        const char *base=(int32_t)dir==-100?(fs_cwd?fs_cwd->path:"/"):io_text_path(dir);
+        if(base && (int32_t)dir!=-100 && syscall_unlocked) { syscall_abort=1;return -1; }  /* process tables need the runtime lock */
+        if(base && !strncmp(base,"/proc",5) && (!base[5] || base[5]=='/')) {
+            const char *relative=path;while(relative[0]=='.' && relative[1]=='/')relative+=2;
+            char joined[1025];
+            if((size_t)snprintf(joined,sizeof(joined),"%s/%s",base,strcmp(relative,".")?relative:"")<sizeof(joined))strcpy(path,joined);
+        }
+    }
+    size_t n=strlen(path);
+    if(!strncmp(path,"/proc/",6))while(n>6 && path[n-1]=='/')path[--n]=0;
+    return 0;
+}
 /* What a /proc path is: 1 a directory, 2 a file, 0 not one of ours. */
 static int fs_proc_kind(const char *path) {
-    if(!strcmp(path,"/proc") || !strcmp(path,"/proc/") || fs_proc_dir(path))return 1;
+    if(!strcmp(path,"/proc") || !strcmp(path,"/proc/"))return 1;
     for(unsigned i=0;i<sizeof(fs_proc_root_files)/sizeof(*fs_proc_root_files);i++)
         if(!strncmp(path,"/proc/",6) && !strcmp(path+6,fs_proc_root_files[i]))return 2;
-    for(unsigned i=0;i<sizeof(fs_proc_pid_files)/sizeof(*fs_proc_pid_files);i++)if(fs_proc_file(path,fs_proc_pid_files[i]))return 2;
+    uint64_t tid;const char *rest;
+    if(proc_split(path,&tid,&rest)) {
+        if(!*rest || (!tid && !strcmp(rest,"task")))return 1;
+        for(unsigned i=0;i<sizeof(fs_proc_pid_files)/sizeof(*fs_proc_pid_files);i++)if(!strcmp(rest,fs_proc_pid_files[i]))return 2;
+    }
     return !strcmp(path,"/proc/net/if_inet6") || fs_proc_sys_value(path)?2:0;
 }
 /* A linux_dirent64 record. */
@@ -621,15 +848,124 @@ static size_t fs_dirent(char *out,size_t used,size_t capacity,uint64_t inode,con
     fs_pack(r,0,inode,8);fs_pack(r,8,used+size,8);fs_pack(r,16,size,2);r[18]=(unsigned char)type;memcpy(r+19,name,length);
     return used+size;
 }
-/* /proc/self/NAME or /proc/PID/NAME of a process of the container: its /proc pid, or 0. */
-static uint64_t fs_proc_file(const char *path,const char *name) {
-    const char *rest=NULL;uint64_t pid=proc_display(process_pid);
-    if(!strncmp(path,"/proc/self/",11))rest=path+11;
-    else if(!strncmp(path,"/proc/",6)) {
-        pid=0;const char *p=path+6;while(*p>='0' && *p<='9' && pid<100000)pid=pid*10+(uint64_t)(*p++-'0');
-        if(p>path+6 && *p=='/' && proc_resolve(pid))rest=p+1;
-    }
-    return rest && !strcmp(rest,name)?pid:0;
+/* The text of one of our synthetic files, or 0. Generated again when a reader seeks
+   back to the start, as procfs does (procps top and vmstat keep /proc/stat open). */
+static int proc_text(const char *path,char *text,size_t capacity,size_t *out) {
+    uint64_t tid=0;const char *rest="";uint64_t proc=proc_split(path,&tid,&rest);
+    size_t length=0;int known=1;ProcInfo info;
+    uint64_t now=proc_now_ns(),boot=proc_boot_ns(),up=now>boot?now-boot:0;
+    if(proc && !strcmp(rest,"auxv")) {
+        /* This process's auxiliary vector (CPU features: Go's x/sys/cpu reads it). */
+        for(unsigned i=0;i<address_space->auxv_count;i++)fs_pack((unsigned char *)text,i*8,address_space->auxv[i],8);
+        length=address_space->auxv_count*8;
+    } else if(!strcmp(path,"/proc/meminfo") || !strcmp(path,"/proc/vmstat")) {
+        /* The memory budget and what the container uses of it (free, top, vmstat). */
+        uint64_t total=proc_mem_total(),used=proc_mem_used(),free=(used<total?total-used:0)>>10;total>>=10;used>>=10;
+        if(path[6]=='m')length=(size_t)snprintf(text,capacity,"MemTotal:       %llu kB\nMemFree:        %llu kB\nMemAvailable:   %llu kB\n"
+            "Buffers:               0 kB\nCached:                0 kB\nSwapCached:            0 kB\nActive:         %llu kB\nInactive:              0 kB\n"
+            "Active(anon):   %llu kB\nInactive(anon):        0 kB\nActive(file):          0 kB\nInactive(file):        0 kB\n"
+            "Unevictable:           0 kB\nMlocked:               0 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\n"
+            "Dirty:                 0 kB\nWriteback:             0 kB\nAnonPages:      %llu kB\nMapped:                0 kB\nShmem:                 0 kB\n"
+            "KReclaimable:          0 kB\nSlab:                  0 kB\nSReclaimable:          0 kB\nSUnreclaim:            0 kB\n"
+            "KernelStack:           0 kB\nPageTables:            0 kB\nCommitLimit:    %llu kB\nCommitted_AS:   %llu kB\n"
+            "HugePages_Total:       0\nHugePages_Free:        0\nHugepagesize:       2048 kB\n",
+            (unsigned long long)total,(unsigned long long)free,(unsigned long long)free,(unsigned long long)used,(unsigned long long)used,
+            (unsigned long long)used,(unsigned long long)total,(unsigned long long)used);
+        else length=(size_t)snprintf(text,capacity,"nr_free_pages %llu\nnr_inactive_anon 0\nnr_active_anon %llu\nnr_inactive_file 0\nnr_active_file 0\n"
+            "nr_anon_pages %llu\nnr_mapped 0\nnr_file_pages 0\nnr_dirty 0\nnr_writeback 0\nnr_shmem 0\npgpgin 0\npgpgout 0\npswpin 0\npswpout 0\n"
+            "pgalloc_normal 0\npgfree 0\npgfault 0\npgmajfault 0\n",(unsigned long long)(free/4),(unsigned long long)(used/4),(unsigned long long)(used/4));
+    } else if(!strcmp(path,"/proc/cpuinfo")) {
+        /* One entry per guest CPU (MongoDB counts them), features from AT_HWCAP. */
+        static const char *const names[]={"fp","asimd","evtstrm","aes","pmull","sha1","sha2","crc32","atomics","fphp","asimdhp",
+            "cpuid","asimdrdm","jscvt","fcma","lrcpc","dcpop","sha3","sm3","sm4","asimddp","sha512","sve","asimdfhm","dit",
+            "uscat","ilrcpc","flagm","ssbs","sb","paca","pacg"};
+        uint64_t hwcap=0;char features[512]="";
+        for(unsigned i=0;i+1<address_space->auxv_count;i+=2)if(address_space->auxv[i]==16)hwcap=address_space->auxv[i+1];
+        for(unsigned i=0;i<32;i++)if(hwcap&(UINT64_C(1)<<i)) { if(*features)strcat(features," ");strcat(features,names[i]); }
+        /* ponytail: a 16 KiB pipe holds about 40 entries; larger containers list that many. */
+        unsigned cpus=guest_cpus();
+        for(unsigned i=0;i<cpus;i++) {
+            char entry[768];
+            int n=snprintf(entry,sizeof entry,"processor\t: %u\nBogoMIPS\t: 48.00\nFeatures\t: %s\nCPU implementer\t: 0x61\n"
+                "CPU architecture: 8\nCPU variant\t: 0x0\nCPU part\t: 0x000\nCPU revision\t: 0\n\n",i,features);
+            if(n<0 || length+(size_t)n>capacity)break;
+            memcpy(text+length,entry,(size_t)n);length+=(size_t)n;
+        }
+    } else if(proc && !strcmp(rest,"stat") && proc_info(proc,tid,&info)) {
+        /* ps, top, pgrep: CPU time from the host threads that ran it, memory from its backings. */
+        length=(size_t)snprintf(text,capacity,"%llu (%s) %c %llu %llu %llu 0 -1 4194560 0 0 0 0 %llu %llu 0 0 20 0 %u 0 %llu %llu %llu"
+            " 18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n",
+            (unsigned long long)info.pid,info.comm,info.state,(unsigned long long)info.ppid,(unsigned long long)info.pgrp,(unsigned long long)info.session,
+            (unsigned long long)info.utime,(unsigned long long)info.stime,info.threads,(unsigned long long)info.start,
+            (unsigned long long)info.vsz,(unsigned long long)(info.rss/4096));
+    } else if(proc && !strcmp(rest,"statm") && proc_info(proc,tid,&info)) {
+        /* Pages: size resident shared text lib data dt (RabbitMQ's memory monitor). */
+        length=(size_t)snprintf(text,capacity,"%llu %llu 0 0 0 %llu 0\n",(unsigned long long)(info.vsz/4096),(unsigned long long)(info.rss/4096),(unsigned long long)(info.vsz/4096));
+    } else if(proc && !strcmp(rest,"status") && proc_info(proc,tid,&info)) {
+        unsigned long long vsz=info.vsz>>10,rss=info.rss>>10;char state=info.state;
+        /* Signal sets as Linux shows them (the JDK's attach API requires SigCgt to show SIGQUIT caught). */
+        uint64_t sets[4]={0,0,0,0};int64_t own=proc_resolve(proc);if(own>0)guest_signal_sets((uint64_t)own,sets);
+        length=(size_t)snprintf(text,capacity,"Name:\t%s\nUmask:\t0022\nState:\t%c (%s)\nTgid:\t%llu\nNgid:\t0\nPid:\t%llu\nPPid:\t%llu\nTracerPid:\t0\n"
+            "Uid:\t%u\t%u\t%u\t%u\nGid:\t%u\t%u\t%u\t%u\nFDSize:\t256\nGroups:\t\nVmPeak:\t%llu kB\nVmSize:\t%llu kB\nVmLck:\t0 kB\nVmPin:\t0 kB\n"
+            "VmHWM:\t%llu kB\nVmRSS:\t%llu kB\nRssAnon:\t%llu kB\nRssFile:\t0 kB\nRssShmem:\t0 kB\nVmData:\t%llu kB\nVmStk:\t132 kB\nVmExe:\t0 kB\n"
+            "VmLib:\t0 kB\nVmPTE:\t0 kB\nVmSwap:\t0 kB\nThreads:\t%u\nSigQ:\t0/63432\nSigPnd:\t%016llx\nShdPnd:\t%016llx\n"
+            "SigBlk:\t%016llx\nSigIgn:\t%016llx\nSigCgt:\t%016llx\nvoluntary_ctxt_switches:\t0\nnonvoluntary_ctxt_switches:\t0\n",
+            info.comm,state,state=='S'?"sleeping":state=='T'?"stopped":"running",
+            (unsigned long long)proc,(unsigned long long)info.pid,(unsigned long long)info.ppid,info.uid,info.uid,info.uid,info.uid,
+            info.gid,info.gid,info.gid,info.gid,vsz,vsz,rss,rss,rss,vsz,info.threads,0ull,(unsigned long long)sets[0],
+            (unsigned long long)sets[1],(unsigned long long)sets[2],(unsigned long long)sets[3]);
+    } else if(!strcmp(path,"/proc/mounts") || (proc && (!strcmp(rest,"mounts") || !strcmp(rest,"mountinfo")))) {
+        /* The container's mounts (Java's FileStore looks a path's mount point up here). */
+        int mountinfo=strstr(path,"mountinfo")!=NULL;
+        static const char *const base[][4]={{"overlay","/","overlay","rw,relatime"},{"proc","/proc","proc","rw,nosuid,nodev,noexec,relatime"},
+            {"tmpfs","/dev","tmpfs","rw,nosuid,size=65536k,mode=755"},{"shm","/dev/shm","tmpfs","rw,nosuid,nodev,noexec,relatime,size=65536k"},
+            {"sysfs","/sys","sysfs","ro,nosuid,nodev,noexec,relatime"}};
+        for(unsigned i=0;i<5+fs_mount_count && length<capacity-1200;i++) {
+            char point[1100];const char *device=i<5?base[i][0]:"/dev/vda1",*type=i<5?base[i][2]:"ext4";
+            const char *options=i<5?base[i][3]:fs_mounts[i-5].readonly?"ro,relatime":"rw,relatime";
+            snprintf(point,sizeof point,"%s%s",i<5 || fs_mounts[i-5].path[0]=='/'?"":"/",i<5?base[i][1]:fs_mounts[i-5].path);
+            int n=mountinfo?snprintf(text+length,capacity-length,"%u %u 0:%u / %s %s - %s %s %s\n",20+i,i?20:1,20+i,point,options,type,device,options)
+                      :snprintf(text+length,capacity-length,"%s %s %s %s 0 0\n",device,point,type,options);
+            if(n>0)length+=(size_t)n;
+        }
+    } else if(proc && !strcmp(rest,"cmdline") && proc_info(proc,tid,&info)) {
+        memcpy(text,info.cmdline,info.size);length=info.size;
+    } else if(proc && !strcmp(rest,"comm") && proc_info(proc,tid,&info)) {
+        length=(size_t)snprintf(text,capacity,"%s\n",info.comm);
+    } else if(!strcmp(path,"/proc/stat") || !strcmp(path,"/proc/uptime") || !strcmp(path,"/proc/loadavg")) {
+        /* Boot is the container's start. Busy time is what its processes used; the
+           rest of every CPU's time since boot is idle (kept from going backwards). */
+        unsigned cpus=guest_cpus(),processes=0;uint64_t busy[2];proc_cpu_all(busy);
+        for(uint64_t p=1;p<=PROCESS_LIMIT+1;p++)processes+=guest_process_exists(p)!=0;
+        proc_peer_load();processes+=proc_npeers;
+        static uint64_t idle_last;uint64_t idle=up/PROC_TICK_NS*cpus;idle=idle>busy[0]+busy[1]?idle-busy[0]-busy[1]:0;
+        if(idle<idle_last)idle=idle_last;
+        idle_last=idle;
+        if(path[6]=='u')length=(size_t)snprintf(text,capacity,"%llu.%02llu %llu.%02llu\n",(unsigned long long)(up/1000000000u),
+            (unsigned long long)(up%1000000000u/PROC_TICK_NS),(unsigned long long)(idle/100),(unsigned long long)(idle%100));
+        else if(path[6]=='l') {
+            double load[3];proc_load_sample(load);
+            length=(size_t)snprintf(text,capacity,"%.2f %.2f %.2f %u/%u %llu\n",load[0],load[1],load[2],proc_running(),processes,(unsigned long long)process_pid);
+        } else {
+            length=(size_t)snprintf(text,capacity,"cpu  %llu 0 %llu %llu 0 0 0 0 0 0\n",(unsigned long long)busy[0],(unsigned long long)busy[1],(unsigned long long)idle);
+            for(unsigned c=0;c<cpus && length<capacity-200;c++)
+                length+=(size_t)snprintf(text+length,capacity-length,"cpu%u %llu 0 %llu %llu 0 0 0 0 0 0\n",c,(unsigned long long)(busy[0]/cpus),
+                    (unsigned long long)(busy[1]/cpus),(unsigned long long)(idle/cpus));
+            length+=(size_t)snprintf(text+length,capacity-length,"intr 0\nctxt 0\nbtime %llu\nprocesses %u\nprocs_running %u\nprocs_blocked 0\nsoftirq 0 0 0 0 0 0 0 0 0 0 0\n",
+                (unsigned long long)(boot/1000000000u),processes,proc_running());
+        }
+    } else if(fs_proc_sys_value(path)) {
+        length=(size_t)snprintf(text,capacity,"%s",fs_proc_sys_value(path));
+    } else if(!strcmp(path,"/proc/net/if_inet6")) {
+        /* IPv6 is up on lo (nginx's entrypoint then also listens on [::]). */
+        length=(size_t)snprintf(text,capacity,"00000000000000000000000000000001 01 80 10 80       lo\n");
+    } else if(proc && !strcmp(rest,"cgroup")) {
+        length=(size_t)snprintf(text,capacity,"0::/\n");                       /* cgroup v2, the container's root */
+    } else if(!strcmp(path,"/sys/devices/system/cpu/online") || !strcmp(path,"/sys/devices/system/cpu/possible")) {
+        unsigned cpus=guest_cpus();
+        length=(size_t)(cpus>1?snprintf(text,capacity,"0-%u\n",cpus-1):snprintf(text,capacity,"0\n"));
+    } else known=0;
+    *out=length;return known;
 }
 static uint64_t fs_open(void) {
     uint64_t flags=cpu->gpr[2];
@@ -648,136 +984,46 @@ static uint64_t fs_open(void) {
     flags&=allowed;
     unsigned slot=0;while(slot<FS_SLOTS && fs_fd[slot]) slot++;
     if(slot==FS_SLOTS || fd_lowest(0)<0) return linux_error(24);
-    char path[1025];
-    if(fs_string(cpu->gpr[1],path)==0 && (!strcmp(path,"/proc") || !strcmp(path,"/proc/") || fs_proc_dir(path))) {
-        /* /proc and /proc/PID: the container's processes and our files (ps, pgrep, top). */
+    char path[1025];int named=fs_proc_path(cpu->gpr[0],cpu->gpr[1],path)==0;
+    if(syscall_unlocked && syscall_abort)return linux_error(11);     /* relative to a /proc directory: the locked path retries */
+    uint64_t tid=0;const char *rest="";uint64_t proc=named?proc_split(path,&tid,&rest):0;
+    if(named && (!strcmp(path,"/proc") || !strcmp(path,"/proc/") || (proc && (!*rest || (!tid && !strcmp(rest,"task")))))) {
+        /* /proc, /proc/PID, its task directory and a thread's: the container's processes and our files (ps, pgrep, top, htop). */
         if(flags&(3|64|512|1024))return linux_error(flags&64?17:21);
-        static _Thread_local char list[16384];size_t used=0;uint64_t pid=fs_proc_dir(path);
+        static _Thread_local char list[16384];size_t used=0;char name[24];
         used=fs_dirent(list,used,sizeof(list),1,".",4);used=fs_dirent(list,used,sizeof(list),1,"..",4);
-        if(!pid) {
+        if(!proc) {
             for(unsigned i=0;i<sizeof(fs_proc_root_files)/sizeof(*fs_proc_root_files);i++)used=fs_dirent(list,used,sizeof(list),2+i,fs_proc_root_files[i],8);
             used=fs_dirent(list,used,sizeof(list),20,"self",10);
-            char name[24];proc_peer_load();
+            proc_peer_load();
             for(unsigned i=0;i<proc_npeers;i++) { snprintf(name,sizeof(name),"%llu",(unsigned long long)proc_peers[i].pid);used=fs_dirent(list,used,sizeof(list),100+proc_peers[i].pid,name,4); }
-            for(uint64_t p=1;p<=PROCESS_LIMIT+1;p++)if(guest_process_exists(p)) { snprintf(name,sizeof(name),"%llu",(unsigned long long)proc_display(p));used=fs_dirent(list,used,sizeof(list),100+proc_display(p),name,4); }
+            for(uint64_t p=1;p<=PROCESS_LIMIT+1;p++)if(guest_process_exists(p)) { snprintf(name,sizeof(name),"%llu",(unsigned long long)p);used=fs_dirent(list,used,sizeof(list),100+p,name,4); }
+        } else if(*rest) {                                                     /* task: the threads */
+            static unsigned tids[1024];static char states[1024];static uint64_t times[1024][2];
+            int64_t own=proc_resolve(proc);unsigned n=own>0?guest_thread_list((uint64_t)own,tids,states,times,1024):0;
+            if(own<0) { tids[0]=(unsigned)proc;n=1; }
+            for(unsigned i=0;i<n;i++) { snprintf(name,sizeof(name),"%u",tids[i]);used=fs_dirent(list,used,sizeof(list),2000000+tids[i],name,4); }
         } else {
-            for(unsigned i=0;i<sizeof(fs_proc_pid_files)/sizeof(*fs_proc_pid_files);i++)used=fs_dirent(list,used,sizeof(list),1000*pid+i,fs_proc_pid_files[i],8);
-            used=fs_dirent(list,used,sizeof(list),1000*pid+99,"exe",10);
+            uint64_t base=1000*(tid?tid:proc);
+            for(unsigned i=0;i<sizeof(fs_proc_pid_files)/sizeof(*fs_proc_pid_files);i++)used=fs_dirent(list,used,sizeof(list),base+i,fs_proc_pid_files[i],8);
+            used=fs_dirent(list,used,sizeof(list),base+99,"exe",10);
+            if(!tid)used=fs_dirent(list,used,sizeof(list),base+98,"task",4);
         }
-        return io_text_open(list,used,(flags&524288)!=0,1);
+        return io_text_open(list,used,(flags&524288)!=0,1,path);
     }
-    if(fs_string(cpu->gpr[1],path)==0 && fs_proc_file(path,"maps")) {
+    if(proc && !strcmp(rest,"maps")) {
         /* This process's mappings (another process's address space is not at hand: empty). */
         if(flags&(3|64|512|1024|16384))return linux_error(13);
         size_t capacity=1<<20;char *text=malloc(capacity);if(!text)return linux_error(12);
-        size_t length=fs_proc_file(path,"maps")==proc_display(process_pid)?proc_maps(text,capacity):0;
-        uint64_t result=io_text_open(text,length,(flags&524288)!=0,0);free(text);return result;
+        size_t length=proc==process_pid?proc_maps(text,capacity):0;
+        uint64_t result=io_text_open(text,length,(flags&524288)!=0,0,NULL);free(text);return result;
     }
-    if(fs_string(cpu->gpr[1],path)==0) {
-        char text[16384];size_t length=0;int known=1;uint64_t proc=0;
-        if(!strcmp(path,"/proc/self/auxv") || !strcmp(path,"/proc/1/auxv")) {
-            /* This process's auxiliary vector (CPU features: Go's x/sys/cpu reads it). */
-            for(unsigned i=0;i<address_space->auxv_count;i++)fs_pack((unsigned char *)text,i*8,address_space->auxv[i],8);
-            length=address_space->auxv_count*8;
-        } else if(!strcmp(path,"/proc/meminfo")) {
-            /* The memory budget (docker run -m), as sysinfo reports it. */
-            uint64_t total=resource_limit>>10,used=resource_used>>10,available=used<total?total-used:0;
-            length=(size_t)snprintf(text,sizeof text,"MemTotal:       %llu kB\nMemFree:        %llu kB\nMemAvailable:   %llu kB\n"
-                "Buffers:        0 kB\nCached:         0 kB\nSwapTotal:      0 kB\nSwapFree:       0 kB\n",
-                (unsigned long long)total,(unsigned long long)available,(unsigned long long)available);
-        } else if(!strcmp(path,"/proc/cpuinfo")) {
-            /* One entry per guest CPU (MongoDB counts them), features from AT_HWCAP. */
-            static const char *const names[]={"fp","asimd","evtstrm","aes","pmull","sha1","sha2","crc32","atomics","fphp","asimdhp",
-                "cpuid","asimdrdm","jscvt","fcma","lrcpc","dcpop","sha3","sm3","sm4","asimddp","sha512","sve","asimdfhm","dit",
-                "uscat","ilrcpc","flagm","ssbs","sb","paca","pacg"};
-            uint64_t hwcap=0;char features[512]="";
-            for(unsigned i=0;i+1<address_space->auxv_count;i+=2)if(address_space->auxv[i]==16)hwcap=address_space->auxv[i+1];
-            for(unsigned i=0;i<32;i++)if(hwcap&(UINT64_C(1)<<i)) { if(*features)strcat(features," ");strcat(features,names[i]); }
-            /* ponytail: a 16 KiB pipe holds about 40 entries; larger containers list that many. */
-            unsigned cpus=guest_cpus();
-            for(unsigned i=0;i<cpus;i++) {
-                char entry[768];
-                int n=snprintf(entry,sizeof entry,"processor\t: %u\nBogoMIPS\t: 48.00\nFeatures\t: %s\nCPU implementer\t: 0x61\n"
-                    "CPU architecture: 8\nCPU variant\t: 0x0\nCPU part\t: 0x000\nCPU revision\t: 0\n\n",i,features);
-                if(n<0 || length+(size_t)n>sizeof text)break;
-                memcpy(text+length,entry,(size_t)n);length+=(size_t)n;
-            }
-        } else if((proc=fs_proc_file(path,"stat"))) {
-            /* A process's status line (MongoDB's diagnostics, ps); CPU times are the runtime's. */
-            struct rusage use;getrusage(RUSAGE_SELF,&use);ProcInfo info;proc_info(proc,&info);
-            unsigned threads=info.threads;uint64_t ppid=info.ppid;
-            length=(size_t)snprintf(text,sizeof text,"%llu (%s) %c %llu %llu %llu 0 -1 0 %ld 0 %ld 0 %ld %ld 0 0 20 0 %u 0 0 %llu %llu"
-                " 18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n",
-                (unsigned long long)proc,info.comm,info.state,(unsigned long long)ppid,(unsigned long long)info.pgrp,(unsigned long long)info.session,
-                (long)use.ru_minflt,(long)use.ru_majflt,(long)use.ru_utime.tv_sec*100+use.ru_utime.tv_usec/10000,(long)use.ru_stime.tv_sec*100+use.ru_stime.tv_usec/10000,
-                threads,(unsigned long long)resource_used,(unsigned long long)(resource_used/4096));
-        } else if(fs_proc_file(path,"statm")) {
-            /* Pages: size resident shared text lib data dt (RabbitMQ's memory monitor). */
-            unsigned long long pages=resource_used/4096;
-            length=(size_t)snprintf(text,sizeof text,"%llu %llu 0 0 0 %llu 0\n",pages,pages,pages);
-        } else if((proc=fs_proc_file(path,"status"))) {
-            unsigned long long kib=resource_used>>10;ProcInfo info;proc_info(proc,&info);
-            char state=info.state;
-            /* Signal sets as Linux shows them (the JDK's attach API requires SigCgt to show SIGQUIT caught). */
-            uint64_t sets[4]={0,0,0,0};int64_t own=proc_resolve(proc);if(own>0)guest_signal_sets((uint64_t)own,sets);
-            length=(size_t)snprintf(text,sizeof text,"Name:\t%s\nState:\t%c (%s)\nTgid:\t%llu\nPid:\t%llu\nPPid:\t%llu\nUid:\t%u\t%u\t%u\t%u\n"
-                "Gid:\t%u\t%u\t%u\t%u\nVmSize:\t%llu kB\nVmRSS:\t%llu kB\nThreads:\t%u\nSigQ:\t0/63432\nSigPnd:\t%016llx\nShdPnd:\t%016llx\n"
-                "SigBlk:\t%016llx\nSigIgn:\t%016llx\nSigCgt:\t%016llx\n",info.comm,state,state=='S'?"sleeping":state=='T'?"stopped":"running",
-                (unsigned long long)proc,(unsigned long long)proc,(unsigned long long)info.ppid,info.uid,info.uid,info.uid,info.uid,
-                guest_gid,guest_gid,guest_gid,guest_gid,kib,kib,info.threads,0ull,(unsigned long long)sets[0],
-                (unsigned long long)sets[1],(unsigned long long)sets[2],(unsigned long long)sets[3]);
-        } else if(!strcmp(path,"/proc/mounts") || fs_proc_file(path,"mounts") || fs_proc_file(path,"mountinfo")) {
-            /* The container's mounts (Java's FileStore looks a path's mount point up here). */
-            int info=strstr(path,"mountinfo")!=NULL;
-            static const char *const base[][4]={{"overlay","/","overlay","rw,relatime"},{"proc","/proc","proc","rw,nosuid,nodev,noexec,relatime"},
-                {"tmpfs","/dev","tmpfs","rw,nosuid,size=65536k,mode=755"},{"shm","/dev/shm","tmpfs","rw,nosuid,nodev,noexec,relatime,size=65536k"},
-                {"sysfs","/sys","sysfs","ro,nosuid,nodev,noexec,relatime"}};
-            for(unsigned i=0;i<5+fs_mount_count && length<sizeof text-1200;i++) {
-                char point[1100];const char *device=i<5?base[i][0]:"/dev/vda1",*type=i<5?base[i][2]:"ext4";
-                const char *options=i<5?base[i][3]:fs_mounts[i-5].readonly?"ro,relatime":"rw,relatime";
-                snprintf(point,sizeof point,"%s%s",i<5 || fs_mounts[i-5].path[0]=='/'?"":"/",i<5?base[i][1]:fs_mounts[i-5].path);
-                int n=info?snprintf(text+length,sizeof text-length,"%u %u 0:%u / %s %s - %s %s %s\n",20+i,i?20:1,20+i,point,options,type,device,options)
-                          :snprintf(text+length,sizeof text-length,"%s %s %s %s 0 0\n",device,point,type,options);
-                if(n>0)length+=(size_t)n;
-            }
-        } else if((proc=fs_proc_file(path,"cmdline"))) {
-            ProcInfo info;proc_info(proc,&info);memcpy(text,info.cmdline,info.size);length=info.size;
-        } else if((proc=fs_proc_file(path,"comm"))) {
-            ProcInfo info;proc_info(proc,&info);length=(size_t)snprintf(text,sizeof text,"%s\n",info.comm);
-        } else if(!strcmp(path,"/proc/stat") || !strcmp(path,"/proc/uptime") || !strcmp(path,"/proc/loadavg")) {
-            /* Boot is the container's start; CPU time is the runtime's (procps needs btime). */
-            struct timespec now;clock_gettime(CLOCK_REALTIME,&now);
-            uint64_t now_ns=(uint64_t)now.tv_sec*1000000000u+(uint64_t)now.tv_nsec,up=now_ns>runtime_started_ns?now_ns-runtime_started_ns:0;
-            unsigned processes=0,running=0;
-            for(uint64_t p=1;p<=PROCESS_LIMIT+1;p++)if(guest_process_exists(p)) { processes++;running+=guest_state_of(p)=='R'; }
-            proc_peer_load();processes+=proc_npeers;
-            if(path[6]=='u')length=(size_t)snprintf(text,sizeof text,"%llu.%02llu 0.00\n",(unsigned long long)(up/1000000000u),(unsigned long long)(up%1000000000u/10000000u));
-            else if(path[6]=='l')length=(size_t)snprintf(text,sizeof text,"0.00 0.00 0.00 %u/%u %llu\n",running?running:1,processes,(unsigned long long)proc_display(process_pid));
-            else {
-                struct rusage use;getrusage(RUSAGE_SELF,&use);
-                unsigned long long user=(unsigned long long)use.ru_utime.tv_sec*100+(unsigned long long)use.ru_utime.tv_usec/10000,
-                    system=(unsigned long long)use.ru_stime.tv_sec*100+(unsigned long long)use.ru_stime.tv_usec/10000,idle=up/10000000u;
-                length=(size_t)snprintf(text,sizeof text,"cpu  %llu 0 %llu %llu 0 0 0 0 0 0\n",user,system,idle);
-                for(unsigned c=0;c<guest_cpus() && length<sizeof(text)-200;c++)
-                    length+=(size_t)snprintf(text+length,sizeof(text)-length,"cpu%u %llu 0 %llu %llu 0 0 0 0 0 0\n",c,user/guest_cpus(),system/guest_cpus(),idle);
-                length+=(size_t)snprintf(text+length,sizeof(text)-length,"intr 0\nctxt 0\nbtime %llu\nprocesses %u\nprocs_running %u\nprocs_blocked 0\n",
-                    (unsigned long long)(runtime_started_ns/1000000000u),processes,running?running:1);
-            }
-        } else if(fs_proc_sys_value(path)) {
-            length=(size_t)snprintf(text,sizeof text,"%s",fs_proc_sys_value(path));
-        } else if(!strcmp(path,"/proc/net/if_inet6")) {
-            /* IPv6 is up on lo (nginx's entrypoint then also listens on [::]). */
-            length=(size_t)snprintf(text,sizeof text,"00000000000000000000000000000001 01 80 10 80       lo\n");
-        } else if(fs_proc_file(path,"cgroup")) {
-            length=(size_t)snprintf(text,sizeof text,"0::/\n");                       /* cgroup v2, the container's root */
-        } else if(!strcmp(path,"/sys/devices/system/cpu/online") || !strcmp(path,"/sys/devices/system/cpu/possible")) {
-            unsigned cpus=guest_cpus();
-            length=(size_t)(cpus>1?snprintf(text,sizeof text,"0-%u\n",cpus-1):snprintf(text,sizeof text,"0\n"));
-        } else known=0;
-        if(known) {
+    if(named) {
+        static _Thread_local char text[16384];size_t length=0;
+        if(proc_text(path,text,sizeof(text),&length)) {
             /* Synthetic read-only text, seekable like procfs (Java's mount table reader seeks). */
             if(flags&(3|64|512|1024|16384))return linux_error(13);
-            return io_text_open(text,length,(flags&524288)!=0,0);
+            return io_text_open(text,length,(flags&524288)!=0,0,path);
         }
     }
     /* Linux follows a final symlink unless O_NOFOLLOW (32768) or O_CREAT|O_EXCL. */
@@ -1018,11 +1264,11 @@ static uint64_t fs_call(uint64_t call) {
         if(cpu->gpr[3]>4096)cpu->gpr[3]=4096;                     /* any buffer size, as on Linux (libc++ passes more) */
         unsigned char *out=lookup(cpu->gpr[2],cpu->gpr[3],2);if(!out)return linux_error(14);
         char path[1025],exe[1025];
-        if(fs_string(cpu->gpr[1],path)==0 && fs_proc_exe(path,exe)) { /* readlink /proc/<pid>/exe */
+        if(fs_proc_path(cpu->gpr[0],cpu->gpr[1],path)==0 && fs_proc_exe(path,exe)) { /* readlink /proc/<pid>/exe */
             size_t n=strlen(exe);if(n>cpu->gpr[3])n=(size_t)cpu->gpr[3];memcpy(out,exe,n);return n;
         }
         if(!strcmp(path,"/proc/self") || !strcmp(path,"/proc/thread-self")) {          /* the caller's pid */
-            char pid[24];size_t n=(size_t)snprintf(pid,sizeof pid,"%llu",(unsigned long long)proc_display(process_pid));
+            char pid[24];size_t n=(size_t)snprintf(pid,sizeof pid,"%llu",(unsigned long long)process_pid);
             if(n>cpu->gpr[3])n=(size_t)cpu->gpr[3];memcpy(out,pid,n);return n;
         }
         if(fs_proc_kind(path))return linux_error(22);  /* our /proc files and directories are not links (glibc's realpath asks) */
@@ -1095,7 +1341,7 @@ static uint64_t fs_call(uint64_t call) {
         __atomic_fetch_add(&fs_storage_bytes,growth,__ATOMIC_RELAXED);return 0;
     }
     if(call==48 || call==439) { /* faccessat(2); synthetic uid 0; no-link namespace policy still applies. */
-        { char proc_path[1025];if(fs_string(cpu->gpr[1],proc_path)==0 && fs_proc_kind(proc_path))return (cpu->gpr[2]&2)?linux_error(13):0; }
+        { char proc_path[1025];if(fs_proc_path(cpu->gpr[0],cpu->gpr[1],proc_path)==0 && fs_proc_kind(proc_path))return (cpu->gpr[2]&2)?linux_error(13):0; }
         if(cpu->gpr[2]&~UINT64_C(7) || (call==439 && (cpu->gpr[3]&~UINT64_C(0x300))))return linux_error(22); /* AT_EACCESS, AT_SYMLINK_NOFOLLOW */
         char leaf[1025];int parent=fs_parent(cpu->gpr[0],cpu->gpr[1],leaf);if(parent<0)return fs_error();
         int writable=fs_path_writable();
@@ -1126,10 +1372,15 @@ static uint64_t fs_call(uint64_t call) {
             fs_stat_pack(out,&st);return 0;
         }
         {   /* /proc paths of ours: directories and empty read-only files, as procfs shows them */
-            char proc_path[1025];int kind=fs_string(cpu->gpr[1],proc_path)==0?fs_proc_kind(proc_path):0;
+            char proc_path[1025];int kind=fs_proc_path(cpu->gpr[0],cpu->gpr[1],proc_path)==0?fs_proc_kind(proc_path):0;
+            if(syscall_unlocked && syscall_abort)return linux_error(11);   /* relative to a /proc directory: the locked path retries */
             if(kind) {
                 struct stat st;memset(&st,0,sizeof(st));st.st_mode=kind==1?S_IFDIR|0555:S_IFREG|0444;st.st_nlink=kind==1?2:1;st.st_blksize=4096;
-                fs_stat_pack(out,&st);return 0;
+                fs_stat_pack(out,&st);
+                /* Owned by the process's user (ps's USER column). */
+                uint64_t tid;const char *rest;uint64_t pid=proc_split(proc_path,&tid,&rest);ProcInfo info;
+                if(pid && proc_info(pid,0,&info)) { fs_pack(out,24,info.uid,4);fs_pack(out,28,info.gid,4); }
+                return 0;
             }
         }
         /* AT_SYMLINK_NOFOLLOW (256) reports a final symlink itself. */

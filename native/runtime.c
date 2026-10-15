@@ -1035,7 +1035,6 @@ int main(int argc,char **argv) {
         return 0;
     }
     atexit(cleanup);
-    sysinfo_started_ms=net_now();
     (void)umask(0); /* Creation modes are filtered by each guest task's umask. */
     if(signal(SIGPIPE,SIG_IGN)==SIG_ERR) fail("Cannot configure SIGPIPE");
     if(argc<3 || (strcmp(argv[1],"run") && strcmp(argv[1],"inspect"))) fail("Usage: dockiva-runtime run|inspect ELF [--trace] [--max-steps N] [--env KEY=VALUE] [--argv0 NAME] [-- ARGS...]");

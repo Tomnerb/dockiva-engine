@@ -45,6 +45,7 @@ static uint64_t guest_clock(uint64_t call) {
     struct timespec value;
     int result=call==113?clock_gettime(clock,&value):clock_getres(clock,&value);
     if(result<0)return net_error();
+    if(call==113 && cpu->gpr[0]==7) { uint64_t up=proc_boottime_ns();value.tv_sec=(time_t)(up/1000000000u);value.tv_nsec=(long)(up%1000000000u); } /* fs.h */
     if(out) { fs_pack(out,0,(uint64_t)value.tv_sec,8);fs_pack(out,8,(uint64_t)value.tv_nsec,8); }
     return 0;
 }

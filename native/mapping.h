@@ -594,6 +594,30 @@ typedef struct { uint64_t from,to;unsigned perm;const char *name; } ProcMap;
 static int proc_map_order(const void *a,const void *b) {
     uint64_t x=((const ProcMap *)a)->from,y=((const ProcMap *)b)->from;return x<y?-1:x>y;
 }
+/* Bytes of [offset, offset+size) of a backing that hold owned host pages (resident). */
+static uint64_t proc_resident(const MemoryBacking *backing,size_t offset,size_t size) {
+    if(!backing || !size)return 0;
+#ifdef __APPLE__
+    size_t page=backing->page_size,first=offset/page,last=(offset+size-1)/page;uint64_t owned=0;
+    for(size_t i=first;i<=last && i<backing->used;i++)owned+=backing->pages[i]!=NULL;
+    return owned*page<size?owned*page:size;
+#else
+    return size;
+#endif
+}
+/* An address space's virtual size (its mappings, as maps lists them) and resident
+   bytes (the pages its memory owns, shared ones included, as Linux counts RSS). */
+static void proc_space_memory(const GuestAddressSpace *space,uint64_t *vsz,uint64_t *rss) {
+    uint64_t size=0,resident=0;
+    for(unsigned i=0;i<space->nseg;i++) { const Segment *s=&space->seg[i];size+=s->size;resident+=proc_resident(s->backing,s->offset,(size_t)s->size); }
+    if(space->brk_pages) { size+=page_up(space->brk_pages);resident+=proc_resident(space->brk_backing,0,(size_t)page_up(space->brk_pages)); }
+    if(space->map_flags) {
+        for(unsigned p=0;p<space->map_top && p<space->map_capacity/4096;p++)size+=space->map_flags[p] && space->map_flags[p]!=MAP_RESERVED?4096:0;
+        if(space->map_backing)resident+=proc_resident(space->map_backing,0,space->map_backing->size);
+    }
+    for(unsigned i=0;i<space->nreserve;i++)size+=space->reserve_size[i];
+    *vsz=size;*rss=resident;
+}
 static size_t proc_maps(char *out,size_t capacity) {
     GuestAddressSpace *space=address_space;size_t limit=space->nseg+space->nreserve+2+(space->map_flags?space->map_top:0),n=0,used=0;
     ProcMap *m=malloc(limit*sizeof(*m));if(!m)return 0;

@@ -38,7 +38,8 @@ def main():
                 for info in (first,second):ok=ok and info['mem_unit']>0 and info['procs']>0 and 0<=info['freeram']<=info['totalram'] and info['totalram']>0
                 if backend!='Linux reference':
                     ok=ok and first['totalram']==second['totalram']==64*1024*1024 and first['mem_unit']==second['mem_unit']==1 and second['freeram']<first['freeram'] and first['procs']==second['procs']==1
-                    ok=ok and first['uptime']<30 and all(first[k]==second[k]==0 for k in ['load1','load5','load15','sharedram','bufferram','totalswap','freeswap','totalhigh','freehigh'])
+                    ok=ok and first['uptime']<30 and all(first[k]==second[k]==0 for k in ['sharedram','bufferram','totalswap','freeswap','totalhigh','freehigh'])
+                    ok=ok and all(0<=info[k]<=2*65536 for info in (first,second) for k in ['load1','load5','load15'])  # one runnable process: below 1.0, as /proc/loadavg
                 row.update(first=first,second=second,pointer_errors=errors,passed=bool(ok))
             rows.append(row)
     finally:

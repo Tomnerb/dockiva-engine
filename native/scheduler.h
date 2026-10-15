@@ -19,6 +19,7 @@ typedef struct {
     unsigned wait_masked;uint64_t wait_saved_mask;       /* ppoll/pselect6 with a mask: the thread's own, to restore */
     MemoryBacking *futex_backing; /* a futex in shared memory: keyed by its memory, across processes */
     size_t futex_offset;
+    uint64_t cpu_ns[2];           /* CPU time it used (user, system), for /proc/PID/task */
 } Thread;
 typedef struct { unsigned cursor,top;Thread thread[THREAD_LIMIT]; } ThreadTable; /* top: 1 + the highest slot ever used */
 /* Scheduled execution: one root plus at most PROCESS_LIMIT live children; reaped
@@ -591,9 +592,11 @@ static int schedule_loop(int current) {
         /* Events for this task while it runs (other workers act meanwhile) count as
            having happened after it blocks: it retries rather than miss them. */
         uint64_t epoch_seen=io_epoch,wakeups_seen=th?th->wakeups:t->wakeups;
+        proc_cpu_begin(worker->index,(uint64_t)current+1,th?th->cpu_ns:NULL);
         int result=t->exit_pending?-1:t->terminate_signal?128+(int)t->terminate_signal:t->stop_signal?-3:run(0);
         if(profiling && result==-2)__atomic_fetch_add(&profile_blocks,1,__ATOMIC_RELAXED);
-        if(!th && t->threads)th=task_thread(t);                  /* the slice made the process threaded */
+        if(!th && t->threads) { th=task_thread(t);proc_live[worker->index].thread=th?th->cpu_ns:NULL; } /* the slice made the process threaded */
+        proc_cpu_end(worker->index);
         if(th) { th->worker=0;t->running--; } else t->worker=0;
         if(th && (t->exit_pending || !th->state)) {              /* the process ended, or exec ended this thread */
             th->state=0;thread_detach(t);

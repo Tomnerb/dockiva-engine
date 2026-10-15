@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
@@ -121,7 +122,8 @@ func (b *engine) stats(w http.ResponseWriter, r *http.Request, name string, stre
 
 // top lists a running container's processes (docker top) from the table its run
 // publishes: one "pid ppid uid size cmdline" record per process, cmdline being
-// size bytes of NUL-separated arguments.
+// size bytes of NUL-separated arguments, then "=" lines with usage, of which
+// "=pid utime stime ..." gives each process's CPU time in ticks (1/100 s).
 func (b *engine) top(name string) obj {
 	item := b.inspect(name)
 	state := object(item["State"])
@@ -133,8 +135,12 @@ func (b *engine) top(name string) obj {
 		stime = started.Local().Format("15:04")
 	}
 	data, _ := os.ReadFile(filepath.Join(b.container(name), "procs"))
+	return obj{"Titles": []string{"UID", "PID", "PPID", "C", "STIME", "TTY", "TIME", "CMD"}, "Processes": topRows(data, stime)}
+}
+
+func topRows(data []byte, stime string) [][]string {
 	rows := [][]string{}
-	for len(data) > 0 {
+	for len(data) > 0 && data[0] != '=' {
 		fields := strings.SplitN(string(data[:min(len(data), 96)]), " ", 5)
 		if len(fields) < 5 {
 			break
@@ -152,5 +158,19 @@ func (b *engine) top(name string) obj {
 		rows = append(rows, []string{user, fields[0], fields[1], "0", stime, "?", "00:00:00", strings.ReplaceAll(cmdline, "\x00", " ")})
 		data = data[header+size+1:]
 	}
-	return obj{"Titles": []string{"UID", "PID", "PPID", "C", "STIME", "TTY", "TIME", "CMD"}, "Processes": rows}
+	for _, line := range strings.Split(string(data), "\n") {
+		f := strings.Fields(strings.TrimPrefix(line, "="))
+		if len(f) < 3 {
+			continue
+		}
+		utime, e1 := strconv.ParseInt(f[1], 10, 64)
+		stime, e2 := strconv.ParseInt(f[2], 10, 64)
+		for _, row := range rows {
+			if row[1] == f[0] && e1 == nil && e2 == nil {
+				s := (utime + stime) / 100
+				row[6] = fmt.Sprintf("%02d:%02d:%02d", s/3600, s/60%60, s%60)
+			}
+		}
+	}
+	return rows
 }

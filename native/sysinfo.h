@@ -1,21 +1,22 @@
 /* Linux AArch64 LP64 sysinfo is 112 bytes. Never copy the host's struct/ABI.
-   Memory describes our accounted allocation budget, not host RAM/RSS. Swap,
-   shared-memory pools, buffer caches and high memory are absent. Load-average
-   accounting is not implemented; those three fields are reserved as zero. */
-static uint64_t sysinfo_started_ms;
+   Values match /proc (fs.h): uptime since the container's start, load averages,
+   memory as the budget (or the host's, if smaller) and what the container charged.
+   Swap, shared-memory pools, buffer caches and high memory are absent. */
 static unsigned sysinfo_threads=1;
 static uint64_t guest_sysinfo(void) {
     unsigned char *out=lookup(cpu->gpr[0],112,2);
     if(!out)return linux_error(14);
-    uint64_t now=net_now(),uptime=now>=sysinfo_started_ms?(now-sysinfo_started_ms)/1000:0;
+    uint64_t now=proc_now_ns(),boot=proc_boot_ns(),uptime=now>boot?(now-boot)/1000000000u:0;
+    uint64_t total=proc_mem_total(),used=proc_mem_used();double load[3];proc_load_sample(load);
     unsigned procs=sysinfo_threads;
     for(unsigned i=0;i<process_count;i++)if(process_children[i].pid)procs++;
     /* The legacy synchronous child is executing before its waitable slot exists. */
     if(process_depth && !schedule_active)procs++;
     memset(out,0,112);
     fs_pack(out,0,uptime,8);
-    fs_pack(out,32,resource_limit,8);
-    fs_pack(out,40,resource_used<resource_limit?resource_limit-resource_used:0,8);
+    for(unsigned i=0;i<3;i++)fs_pack(out,8+i*8,(uint64_t)(load[i]*65536),8);   /* SI_LOAD_SHIFT 16 */
+    fs_pack(out,32,total,8);
+    fs_pack(out,40,used<total?total-used:0,8);
     fs_pack(out,80,procs,2);
     fs_pack(out,104,1,4); /* all memory quantities are bytes */
     return 0;

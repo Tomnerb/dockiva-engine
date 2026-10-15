@@ -59,7 +59,7 @@ static struct GuestSignalfd { unsigned refs,nonblock;uint64_t mask; } io_signalf
    in nanoseconds, and a host kqueue holding a one-shot timer for that expiration. */
 static struct GuestTimer { unsigned refs,nonblock;clockid_t clock;int kq;uint64_t deadline,interval; } io_timers[IO_TIMERS];
 /* A synthetic file's contents, shared by dup and fork, and the shared position. */
-struct GuestText { unsigned refs,directory;size_t size,position;unsigned char *data; }; /* directory: data is linux_dirent64 records */
+struct GuestText { unsigned refs,directory;size_t size,position;unsigned char *data;char path[48]; }; /* directory: data is linux_dirent64 records; path: its /proc path */
 typedef struct { unsigned kind,cloexec;int host;struct GuestPipe *pipe;struct GuestSignalfd *signals;struct GuestTimer *timer;struct GuestText *text;struct GuestInotify *inotify; } GuestIO;
 static uint64_t io_signals_pending(void);            /* the calling process's pending signals */
 static unsigned io_signal_take(unsigned signal);     /* consume one; returns its sender's pid */
@@ -228,13 +228,16 @@ static void io_fifo_forget(uint64_t pid) {
     for(unsigned i=0;i<IO_FIFOS;i++)if(io_fifos[i].pipe) { io_fifos[i].pipe->want_read&=~bit;io_fifos[i].pipe->want_write&=~bit; }
 }
 /* A synthetic read-only file (fs_open): its own copy of the text, a new descriptor. */
-static uint64_t io_text_open(const void *data,size_t size,int cloexec,int directory) {
+static uint64_t io_text_open(const void *data,size_t size,int cloexec,int directory,const char *path) {
     struct GuestText *t=calloc(1,sizeof(*t));if(!t || !(t->data=malloc(size?size:1))) { free(t);return linux_error(12); }
     memcpy(t->data,data,size);t->size=size;t->refs=1;t->directory=(unsigned)directory;
+    if(path && strlen(path)<sizeof(t->path))strcpy(t->path,path);
     int fd=io_free_slot(0);if(fd<0) { free(t->data);free(t);return linux_error(24); }
     IO(fd)=(GuestIO){IO_TEXT,cloexec!=0,-1,NULL,NULL,NULL,t,NULL};
     return (uint64_t)fd;
 }
+/* The /proc path of one of our /proc directory descriptors, or NULL (openat relative to it). */
+static const char *io_text_path(uint64_t fd) { return io_managed(fd) && IO(fd).kind==IO_TEXT && IO(fd).text->directory && IO(fd).text->path[0]?IO(fd).text->path:NULL; }
 /* timerfd: expirations are counted from the guest's clock; the kqueue only wakes
    waiters (blocking reads, poll, select and epoll treat it like a socket). */
 static uint64_t io_timer_now(clockid_t clock) { struct timespec t;clock_gettime(clock,&t);return (uint64_t)t.tv_sec*1000000000u+(uint64_t)t.tv_nsec; }
@@ -392,6 +395,10 @@ static uint64_t io_call(uint64_t call) {
             struct GuestText *t=f->text;int64_t base=cpu->gpr[2]==0?0:cpu->gpr[2]==1?(int64_t)t->position:cpu->gpr[2]==2?(int64_t)t->size:-1;
             int64_t next=base+(int64_t)cpu->gpr[1];
             if(base<0 || next<0)return linux_error(22);
+            if(!next && !t->directory && t->path[0]) {                  /* back to the start: current values, as procfs */
+                static _Thread_local char text[16384];size_t length=0;unsigned char *data;
+                if(proc_text(t->path,text,sizeof(text),&length) && (data=malloc(length?length:1))) { memcpy(data,text,length);free(t->data);t->data=data;t->size=length; }
+            }
             t->position=(size_t)next;return (uint64_t)next;
         }
         if(f->kind!=IO_FILE)return linux_error(29);

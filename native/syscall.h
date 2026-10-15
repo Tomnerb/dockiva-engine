@@ -24,15 +24,53 @@ static int64_t guest_fd_path(const char *path) {
 }
 static uint64_t guest_ppid_of(uint64_t pid) { return pid>1?process_children[pid-2].parent:0; }
 static uint64_t guest_ppid(void) { return guest_ppid_of(process_pid); }
-static unsigned guest_threads_of(uint64_t pid) { return schedule_active && schedule_tasks[pid-1].threads?schedule_tasks[pid-1].threads->top:1; }
+/* For /proc: a process's live threads, its state (R runnable or running, S blocked,
+   T stopped), its user and group, and its threads with their own state and CPU time. */
+static unsigned guest_threads_of(uint64_t pid) {
+    const ThreadTable *table=schedule_active?schedule_tasks[pid-1].threads:NULL;if(!table)return 1;
+    unsigned live=0;for(unsigned i=0;i<table->top;i++)live+=table->thread[i].state!=0;
+    return live?live:1;
+}
 /* A process's group (session 0) or session (1). */
 static uint64_t guest_group_of(uint64_t pid,int session) {
     if(!schedule_active)return pid;
     ScheduledTask *t=&schedule_tasks[pid-1];return session?t->sid:t->pgid;
 }
 static char guest_state_of(uint64_t pid) {
-    if(!schedule_active || pid==process_pid)return 'R';
-    unsigned state=schedule_tasks[pid-1].state;return state==2?'S':state==3?'T':'R';
+    if(!schedule_active)return 'R';
+    const ScheduledTask *t=&schedule_tasks[pid-1];
+    if(t->state==3)return 'T';
+    if(t->threads) { for(unsigned i=0;i<t->threads->top;i++)if(t->threads->thread[i].state==1)return 'R';return 'S'; }
+    return t->state==2?'S':'R';
+}
+static void guest_ids_of(uint64_t pid,uint32_t *uid,uint32_t *gid) {
+    const ProcShared *ps=schedule_active && pid && pid<=PROCESS_LIMIT+1?&schedule_tasks[pid-1].ps:proc_now;
+    *uid=ps->uid;*gid=ps->gid;
+}
+/* A process's memory for /proc. Another process's is read under its mm lock while a
+   worker runs it; own_held: the caller holds the current process's. */
+static void proc_memory(uint64_t pid,int own_held,uint64_t *vsz,uint64_t *rss) {
+    if(!schedule_active || !pid || pid>PROCESS_LIMIT+1) { if(pid==process_pid)proc_space_memory(address_space,vsz,rss);else *vsz=*rss=0;return; }
+    ScheduledTask *t=&schedule_tasks[pid-1];
+    int lock=!(own_held && pid==process_pid) && (t->worker || t->running);
+    if(lock)pthread_mutex_lock(&t->mm);
+    proc_space_memory(t->ps.shared?&t->ps.shared->state.memory:&t->image.memory,vsz,rss);
+    if(lock)pthread_mutex_unlock(&t->mm);
+}
+static unsigned guest_thread_list(uint64_t pid,unsigned *tids,char *states,uint64_t (*cpu)[2],unsigned capacity) {
+    const ThreadTable *table=schedule_active && capacity?schedule_tasks[pid-1].threads:NULL;
+    char state=guest_state_of(pid);
+    if(!table) { tids[0]=(unsigned)pid;states[0]=state;proc_cpu_of(pid,cpu[0]);return 1; }
+    unsigned n=0;
+    for(unsigned i=0;i<table->top && n<capacity;i++) {
+        const Thread *th=&table->thread[i];if(!th->state)continue;
+        tids[n]=th->tid==pid?(unsigned)pid:th->tid;states[n]=state=='T'?'T':th->state==1?'R':'S';
+        cpu[n][0]=th->cpu_ns[0];cpu[n][1]=th->cpu_ns[1];proc_cpu_live(pid,th->cpu_ns,cpu[n]);
+        if(th->tid==pid && n) { unsigned t=tids[0];tids[0]=tids[n];tids[n]=t;char c=states[0];states[0]=states[n];states[n]=c;  /* the main thread first */
+            uint64_t a=cpu[0][0],b=cpu[0][1];cpu[0][0]=cpu[n][0];cpu[0][1]=cpu[n][1];cpu[n][0]=a;cpu[n][1]=b; }
+        n++;
+    }
+    return n;
 }
 static void guest_signal_sets(uint64_t pid,uint64_t sets[4]) {
     if(!schedule_active || !pid || pid>PROCESS_LIMIT+1)return;
