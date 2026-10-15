@@ -69,6 +69,7 @@ static _Thread_local int hvf_resume_el1;     /* hvf_unlocked_exit left the vCPU 
 #define HVF_STALE_NEW 2
 typedef struct {
     uint64_t root;unsigned tables;int stale;  /* root 0: no tables */
+    unsigned table_low,table_high;            /* its tables lie in hvf_table_owner[table_low..table_high] */
     Segment seg[SEGMENT_LIMIT+1];unsigned nseg;uint64_t map_capacity;
     MemoryBacking *brk_backing,*map_backing;uint64_t brk_base,brk_pages;
     uint64_t layout,arena_rev,generation;
@@ -155,13 +156,29 @@ static void hvf_block_unmap(unsigned i) {
     __atomic_fetch_add(&hvf_ipa_epoch,1,__ATOMIC_RELEASE);
 }
 /* backing_release_hook: no live process maps a freed backing, and the tables of
-   a process that used to are rebuilt (its layout changed) before it runs again. */
+   a process that used to are rebuilt (its layout changed) before it runs again.
+   Its blocks are unmapped without hvf_mutex (every table build takes it): meanwhile
+   they have no host (no lookup finds them) but keep their guest-physical space. */
 static void hvf_backing_gone(MemoryBacking *backing) {
     const unsigned char *host=backing_data(backing);
-    pthread_mutex_lock(&hvf_mutex);
-    for(unsigned i=0;i<hvf_nblocks;)if(hvf_blocks[i].host>=host && hvf_blocks[i].host<host+backing->mapped_size)hvf_block_unmap(i);else i++;
+    for(;;) {
+        uint64_t ipa[16],size[16];unsigned n=0;
+        pthread_mutex_lock(&hvf_mutex);
+        for(unsigned i=0;i<hvf_nblocks && n<16;i++)if(hvf_blocks[i].host>=host && hvf_blocks[i].host<host+backing->mapped_size) {
+            hvf_blocks[i].host=NULL;ipa[n]=hvf_blocks[i].ipa;size[n++]=hvf_blocks[i].size;
+        }
+        pthread_mutex_unlock(&hvf_mutex);
+        if(!n)break;
+        for(unsigned k=0;k<n;k++)hvf_check(hv_vm_unmap(ipa[k],size[k]),"hv_vm_unmap");
+        pthread_mutex_lock(&hvf_mutex);
+        for(unsigned k=0;k<n;k++)for(unsigned i=0;i<hvf_nblocks;i++)if(!hvf_blocks[i].host && hvf_blocks[i].ipa==ipa[k]) {
+            hvf_blocks[i]=hvf_blocks[--hvf_nblocks];if(!hvf_nblocks)hvf_ipa_top=0;
+            break;
+        }
+        __atomic_fetch_add(&hvf_ipa_epoch,1,__ATOMIC_RELEASE);
+        pthread_mutex_unlock(&hvf_mutex);
+    }
     free(backing->hvf_chunks);backing->hvf_chunks=NULL;
-    pthread_mutex_unlock(&hvf_mutex);
 }
 /* The last leaf table a thread found (consecutive pages share it); hvf_table_epoch
    changes whenever table pages are freed, which invalidates every cached one. */
@@ -174,6 +191,8 @@ static uint64_t hvf_table(void) {
         unsigned i=(hvf_table_hint+n)%HVF_TABLES;
         if(hvf_table_owner[i])continue;
         hvf_table_owner[i]=(unsigned short)owner;hvf_table_hint=i+1;
+        if(!hvf_view->tables || i<hvf_view->table_low)hvf_view->table_low=i;
+        if(!hvf_view->tables || i>hvf_view->table_high)hvf_view->table_high=i;
         pthread_mutex_unlock(&hvf_mutex);
         hvf_view->tables++;memset(hvf_tables+(size_t)i*4096,0,4096);return HVF_IPA_BASE+(uint64_t)i*4096;
     }
@@ -184,7 +203,7 @@ static void hvf_tables_free(HvfView *v) {
     unsigned owner=(unsigned)(v-hvf_views);
     __atomic_add_fetch(&hvf_table_epoch,1,__ATOMIC_ACQ_REL); /* cached leaf tables may be reused */
     pthread_mutex_lock(&hvf_mutex);
-    if(v->tables)for(unsigned i=0;i<HVF_TABLES;i++)if(hvf_table_owner[i]==owner)hvf_table_owner[i]=0;
+    if(v->tables)for(unsigned i=v->table_low;i<=v->table_high;i++)if(hvf_table_owner[i]==owner)hvf_table_owner[i]=0;
     pthread_mutex_unlock(&hvf_mutex);
     v->tables=0;v->root=0;
 }
@@ -206,15 +225,18 @@ static uint64_t *hvf_leaf(HvfView *v,uint64_t va,int create) {
     hvf_walk.root=v->root;hvf_walk.key=va>>21;hvf_walk.epoch=epoch;hvf_walk.leaf=(uint64_t *)(hvf_tables+(table-HVF_IPA_BASE));
     return hvf_walk.leaf;
 }
+/* A page descriptor's bits besides the address. */
+static uint64_t hvf_descriptor_bits(unsigned flags,int system) {
+    uint64_t descriptor=3|(UINT64_C(3)<<8)|(UINT64_C(1)<<10);
+    if(system)return descriptor|UINT64_C(1)<<54;                            /* EL1 only, never EL0-executable */
+    descriptor|=(UINT64_C(1)<<6)|(UINT64_C(1)<<11)|(UINT64_C(1)<<53);       /* EL0 access; nG; PXN */
+    if(!(flags&2))descriptor|=UINT64_C(1)<<7;                               /* read-only */
+    if(!(flags&1))descriptor|=UINT64_C(1)<<54;                              /* UXN */
+    return descriptor;
+}
 static void hvf_map_page_in(HvfView *v,uint64_t va,uint64_t ipa,unsigned flags,int system) {
     uint64_t *leaf=hvf_leaf(v,va,1);if(!leaf)return;
-    uint64_t descriptor=ipa|3|(UINT64_C(3)<<8)|(UINT64_C(1)<<10);
-    if(system)descriptor|=UINT64_C(1)<<54;                                  /* EL1 only, never EL0-executable */
-    else {
-        descriptor|=(UINT64_C(1)<<6)|(UINT64_C(1)<<11)|(UINT64_C(1)<<53);   /* EL0 access; nG; PXN */
-        if(!(flags&2))descriptor|=UINT64_C(1)<<7;                           /* read-only */
-        if(!(flags&1))descriptor|=UINT64_C(1)<<54;                          /* UXN */
-    }
+    uint64_t descriptor=ipa|hvf_descriptor_bits(flags,system);
     uint64_t *slot=&leaf[(va>>12)&511];
     if(((*slot&1) && *slot!=descriptor) || (flags&1))hvf_stale_tlb=1;
     if(flags&1)hvf_stale_code=1;
@@ -232,14 +254,40 @@ static unsigned hvf_effective_flags(const GuestAddressSpace *space,MemoryBacking
     if(!page || page->refs>1)return flags&~2u;
     return flags;
 }
+/* hvf_effective_flags for every page, a leaf table (2 MiB) at a time: a build maps
+   every page of every segment (a stack alone is 2048), so the per-page work is a
+   store. Pages differ only by ownership, where the backing is private and writable. */
 static void hvf_map_range(const GuestAddressSpace *space,uint64_t base,uint64_t size,unsigned flags,MemoryBacking *backing,size_t offset) {
     if(!size || !flags || !backing)return;
     if((base|size|offset)&4095)fail("Hypervisor backend needs page-aligned guest mappings (use --dynamic)");
     HvfView *v=hvf_view;uint64_t ipa=0;
-    for(uint64_t p=0;p<size;p+=4096) {
-        if(!ipa || !((offset+p)%HVF_CHUNK)) { if(!(ipa=hvf_ipa_at(backing,offset+(size_t)p)))return;ipa-=p; } /* each chunk's address */
-        hvf_map_page_in(v,base+p,ipa+p,hvf_effective_flags(space,backing,flags,offset+(size_t)p),0);
+    int per_page=0;unsigned uniform=flags;                   /* as hvf_effective_flags decides */
+    if(flags&SEG_SHARED)uniform=flags&7;
+    else if(flags&2) {
+        if(backing->frozen || (backing->refs>1 && backing->refs>address_space_backing_refs(space,backing)))uniform=flags&~2u;
+        else per_page=1;
     }
+    uint64_t bits[2]={hvf_descriptor_bits(flags&~2u,0),hvf_descriptor_bits(flags,0)},single=hvf_descriptor_bits(uniform,0);
+    int stale=0;
+    for(uint64_t p=0;p<size;) {
+        if(!ipa || !((offset+p)%HVF_CHUNK)) { if(!(ipa=hvf_ipa_at(backing,offset+(size_t)p)))break;ipa-=p; } /* each chunk's address */
+        uint64_t *leaf=hvf_leaf(v,base+p,1);if(!leaf)break;
+        uint64_t end=p+4096*(512-((base+p)>>12&511)),chunk=p+(HVF_CHUNK-(offset+p)%HVF_CHUNK);
+        if(end>chunk)end=chunk;
+        if(end>size)end=size;
+        for(;p<end;p+=4096) {
+            uint64_t descriptor=ipa+p;
+            if(per_page) {
+                const BackingPage *page=backing->pages[(offset+p)/backing->page_size];
+                descriptor|=bits[page && page->refs==1];
+            } else descriptor|=single;
+            uint64_t *slot=&leaf[((base+p)>>12)&511];
+            stale|=(*slot&1) && *slot!=descriptor;
+            *slot=descriptor;
+        }
+    }
+    if(stale || (flags&1))hvf_stale_tlb=1;
+    if(flags&1)hvf_stale_code=1;
 }
 static void hvf_flush(void);
 static void hvf_resume_el0(uint64_t pc,uint64_t spsr);
@@ -344,15 +392,27 @@ static void hvf_activate(HvfView *v) {
     hvf_view=v;hvf_cpu->ttbr=v->root;
     hvf_check(hv_vcpu_set_sys_reg(hvf_vcpu,HV_SYS_REG_TTBR0_EL1,v->root|((uint64_t)hvf_asid(v)<<48)),"set ttbr0");
 }
+/* Give every recycled backing back (the hypervisor ran out of guest-physical space). */
+static void backing_pool_drain(void) {
+    for(;;) {
+        pthread_mutex_lock(&backing_reap_lock);
+        MemoryBacking *backing=backing_pool_count?backing_pool[--backing_pool_count]:NULL;
+        if(backing)backing_pool_large-=(unsigned)backing_large(backing);
+        pthread_mutex_unlock(&backing_reap_lock);
+        if(!backing)return;
+        backing_free_now(backing);
+    }
+}
 /* Other processes' tables go (each is rebuilt on its next run), except those another
    worker's vCPU may be using; with one worker every backing also leaves stage 2. */
 static void hvf_evict(void) {
+    backing_pool_drain();                                /* recycled memory holds guest-physical space */
     for(unsigned i=0;i<HVF_VIEWS && i<=process_count+1;i++) {
         int in_use=0;
         for(unsigned w=0;w<worker_count;w++)if(workers[w]!=worker && workers[w]->task+1==(int)i)in_use=1;
         if(!in_use)hvf_tables_free(&hvf_views[i]);
     }
-    if(!worker_threads) { pthread_mutex_lock(&hvf_mutex);while(hvf_nblocks)hvf_block_unmap(hvf_nblocks-1);pthread_mutex_unlock(&hvf_mutex); }
+    if(!worker_threads) { pthread_mutex_lock(&hvf_mutex);for(unsigned i=hvf_nblocks;i--;)if(hvf_blocks[i].host)hvf_block_unmap(i);pthread_mutex_unlock(&hvf_mutex); } /* (no host: being unmapped) */
 }
 static void hvf_map_arena_all(GuestAddressSpace *space);
 static void hvf_build(GuestAddressSpace *space) {
@@ -1197,7 +1257,7 @@ static int hvf_unlocked_exit(void) {
         hvf_put_regs();return 1;
     }
     int memory=call==222 || call==215 || call==226 || call==233 || call==214;
-    if(!memory && call!=22 && call!=25 && call!=57 && call!=56 && call!=34 && call!=35 && call!=38 && call!=48 && call!=439 && call!=78 && call!=88 && call!=132 && call!=134 && call!=135 && call!=172 && call!=178 && call!=79 && call!=80 && (call<62 || call>68) && call!=82 && call!=83 && call!=206 && call!=207 && call!=291)return 0;
+    if(!memory && call!=22 && call!=25 && call!=57 && call!=56 && call!=34 && call!=35 && call!=38 && call!=48 && call!=439 && call!=78 && call!=88 && call!=132 && call!=134 && call!=135 && call!=172 && call!=178 && call!=79 && call!=80 && (call<62 || call>68) && call!=82 && call!=83 && call!=206 && call!=207 && call!=291 && call!=221)return 0; /* 221: execve builds its image (exec_build) */
     hvf_get_regs(1,elr,spsr);
     if(!(memory?guest_memory_unlocked():guest_syscall_unlocked()))return 0;   /* the locked path rereads the same exit */
     PROFILE_ADD(profile_unlocked_calls,1);
@@ -1333,7 +1393,6 @@ static int hvf_slice_run(void) {
             int fork=call==220 && !(flags&0x10000);
             int exec=call==221 || call==281;                          /* execve, execveat */
             if(call==220 || exec || call==139)hvf_fp_pull(); /* clone/fork copy, exec and sigreturn replace the whole CPU state */
-            if(fork)hvf_views[process_pid].stale=HVF_STALE_COW; /* a fork shares this process's private pages */
             int denied=seccomp_check();
             int result=denied?denied:hvf_thread_call(call);
             if(profiling && result!=HVF_UNHANDLED && call<512)__atomic_fetch_add(&profile_syscalls[call],1,__ATOMIC_RELAXED);   /* served here, not by the dispatcher */
@@ -1345,6 +1404,7 @@ static int hvf_slice_run(void) {
                 if((call>=143 && call<=147) || call==149 || call==277)hvf_fast_push(); /* set*id, seccomp: sibling threads' answers change */
                 if(result==-3 && fork && (int64_t)cpu->gpr[0]>0) {     /* the child starts single-threaded, on new tables */
                     hvf_main_clear_tid[cpu->gpr[0]]=0;hvf_views[cpu->gpr[0]].stale=HVF_STALE_NEW;
+                    if(fork_shared_private)hvf_views[process_pid].stale=HVF_STALE_COW; /* the fork shared this process's private pages */
                 }
                 if(exec && process_exec_count!=execs)hvf_exec_threads();
             }

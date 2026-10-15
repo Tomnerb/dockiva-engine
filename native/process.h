@@ -31,13 +31,13 @@ static _Thread_local GuestAddressSpace *image_home_scheduled=&runtime_context.me
 static GuestAddressSpace *image_place(SharedImage *shared) { return shared?&shared->state.memory:image_home; }
 static void image_save(ProcessImage *im) {
     im->shared=shared_image;im->cpu=*cpu;im->mask=fs_umask;
-    if(&im->memory!=address_space) { im->memory=*address_space;memset(im->memory.lookup_cache,0,sizeof(im->memory.lookup_cache)); }
+    if(&im->memory!=address_space) { address_space_assign(&im->memory,address_space);memset(im->memory.lookup_cache,0,sizeof(im->memory.lookup_cache)); }
 }
 static void image_restore(const ProcessImage *im) {
     GuestAddressSpace *place=image_place(im->shared);
     const GuestAddressSpace *source=im->shared?&im->shared->state.memory:&im->memory;
     shared_image=im->shared;address_space=place;
-    if(source!=place)*place=*source;
+    address_space_assign(place,source);
     *cpu=im->cpu;fs_umask=im->mask;
     address_space_touched(address_space);cpu->exclusive_valid=0;
 }
@@ -50,7 +50,7 @@ static void image_free(void) {
     if(shared_image) {
         SharedImage *shared=shared_image;
         if(--shared->refs) { image_clear();return; }
-        if(address_space!=image_home)*image_home=shared->state.memory;   /* the last sharer takes the memory */
+        if(address_space!=image_home)address_space_assign(image_home,&shared->state.memory);   /* the last sharer takes the memory */
         shared_image=NULL;free(shared);address_space=image_home;
     }
     if(!image_destroy_later(address_space))address_space_destroy(address_space);
@@ -81,15 +81,37 @@ static unsigned process_slot(void) {
     for(unsigned i=0;i<process_count;i++)if(process_slot_free(i))return i;
     return process_count<PROCESS_LIMIT?process_count:PROCESS_LIMIT;
 }
+/* exec builds the new image apart from the process (exec_build), then swaps it in
+   (process_exec_at). Under the hypervisor a single-threaded process builds it
+   without the runtime lock (guest_syscall_unlocked): path lookup, file, ELF and
+   stack took most of an exec, while every other process waited for the lock. The
+   call is then redone under the lock and finds it ready. exec_lock serializes
+   the loading: the loader's caches and buffers are shared. */
+static pthread_mutex_t exec_lock=PTHREAD_MUTEX_INITIALIZER;
+static _Thread_local struct ExecStage {
+    int ready;uint64_t pid,pc,dir,arg[3],generation;unsigned r; /* the call it was built for */
+    GuestIds ids;GuestCpuState cpu;char exe[1025],cmdline[sizeof(proc_cmdline[0])];unsigned cmdline_size;
+    GuestAddressSpace space;
+} exec_stage;
+static void exec_discard(void) {
+    if(exec_stage.ready) { address_space_destroy(&exec_stage.space);exec_stage.ready=0; }
+}
 /* execve (path, argv, envp in x0..x2), or execveat (dirfd in x0, the rest from x1: r=1),
-   whose path may be relative to dirfd. */
-static uint64_t process_exec_at(uint64_t dir,unsigned r) {
-    char leaf[1025],exe[1025];int parent=fs_lookup(dir,cpu->gpr[r],leaf,1|FS_DIRECT,exe);if(parent<0)return fs_error();
+   whose path may be relative to dirfd: the new image into exec_stage. 0 or an error. */
+static _Thread_local int exec_unlocked;               /* exec_build runs without the runtime lock */
+static uint64_t exec_build_held(uint64_t dir,unsigned r) {
+    char leaf[1025],exe[1025];
+    syscall_unlocked=exec_unlocked;syscall_abort=0;int parent=fs_lookup(dir,cpu->gpr[r],leaf,1|FS_DIRECT,exe);syscall_unlocked=0;
+    if(syscall_abort) { if(parent>=0)close(parent);return linux_error(11); } /* needs the lock: the locked redo builds it */
+    if(parent<0)return fs_error();
     int fd=openat(parent,leaf,O_RDONLY|FS_NOFOLLOW_OPEN|O_NONBLOCK|O_CLOEXEC);
     int saved=errno;close(parent);errno=saved;if(fd<0)return fs_error();
     struct stat st;
     if(fstat(fd,&st)<0 || !S_ISREG(st.st_mode) || !(st.st_mode&0111)) { close(fd);return linux_error(13); }
-    static char buffer[EXEC_STRINGS],*args[EXEC_ENTRIES],*env[EXEC_ENTRIES],*rebuilt[EXEC_ENTRIES];unsigned argc,envc;size_t used=0;
+    /* Each worker's own (execs build in parallel): anonymous memory, not charged. */
+    static _Thread_local struct ExecStrings { char buffer[EXEC_STRINGS],*args[EXEC_ENTRIES],*env[EXEC_ENTRIES],*rebuilt[EXEC_ENTRIES]; } *strings;
+    if(!strings) { void *p=mmap(NULL,sizeof(*strings),PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);if(p==MAP_FAILED) { close(fd);return linux_error(12); }strings=p; }
+    char *buffer=strings->buffer,**args=strings->args,**env=strings->env,**rebuilt=strings->rebuilt;unsigned argc,envc;size_t used=0;
     int error=process_vector(cpu->gpr[r+1],args,&argc,buffer,&used);
     if(!error)error=process_vector(cpu->gpr[r+2],env,&envc,buffer,&used);
     if(error || !argc) { close(fd);return linux_error(error?error:22); }
@@ -112,7 +134,7 @@ static uint64_t process_exec_at(uint64_t dir,unsigned r) {
         char *extra[3]={interpreter,argument,script};unsigned n=0;
         for(unsigned i=0;i<3;i++) {
             if(!extra[i])continue;
-            size_t length=strlen(extra[i])+1;if(used+length>sizeof(buffer)) { close(fd);return linux_error(7); }
+            size_t length=strlen(extra[i])+1;if(used+length>EXEC_STRINGS) { close(fd);return linux_error(7); }
             memcpy(buffer+used,extra[i],length);rebuilt[n++]=buffer+used;used+=length;
         }
         for(unsigned i=1;i<argc;i++)rebuilt[n++]=args[i];
@@ -127,18 +149,55 @@ static uint64_t process_exec_at(uint64_t dir,unsigned r) {
     /* A set-user-ID or set-group-ID file runs with its owner as effective and saved
        ID, unless no_new_privs is set. ponytail: the owner is root (image files are;
        per-file ownership is not tracked), and no mount is nosuid. */
+    /* A set-user-ID or set-group-ID file runs with its owner as effective and saved
+       ID, unless no_new_privs is set. ponytail: the owner is root (image files are;
+       per-file ownership is not tracked), and no mount is nosuid. */
+    struct ExecStage *stage=&exec_stage;
     GuestIds caller=guest_ids;
     if(!prctl_no_new_privs && (st.st_mode&S_ISUID))guest_ids.uid=guest_ids.suid=0;
     if(!prctl_no_new_privs && (st.st_mode&S_ISGID))guest_ids.gid=guest_ids.sgid=0;
-    ProcessImage old;image_save(&old);image_clear();
-    /* Loader failures must leave the calling image intact. load_stream closes input. */
-    exec_loading=1;
+    /* The loader builds into the stage: this worker's address_space and cpu point there
+       meanwhile. Loader failures leave the calling image intact. load_stream closes input. */
+    GuestAddressSpace *home=address_space;GuestCpuState *regs=cpu;
+    stage->space.map_capacity=home->map_capacity;address_space_reset(&stage->space);memset(&stage->cpu,0,sizeof(stage->cpu));
+    pthread_mutex_lock(&exec_lock);
+    address_space=&stage->space;cpu=&stage->cpu;exec_staging=1;exec_loading=1;
     if(setjmp(exec_recovery)) {
-        exec_loading=0;image_free();image_restore(&old);guest_ids=caller;return linux_error(8);
+        exec_loading=exec_staging=0;pthread_mutex_unlock(&exec_lock);
+        address_space_destroy(&stage->space);address_space=home;cpu=regs;guest_ids=caller;return linux_error(8);
     }
     load_stream(input);heap_init();startup((int)argc,(const char **)args,envc,(const char **)env);
-    exec_loading=0;process_exec_count++;
-    if(process_pid<=PROCESS_LIMIT+1)snprintf(proc_exe[process_pid],sizeof(proc_exe[0]),"%s",strlen(exe)<sizeof(proc_exe[0])?exe:"");
+    exec_loading=exec_staging=0;pthread_mutex_unlock(&exec_lock);address_space=home;cpu=regs;
+    stage->ids=guest_ids;guest_ids=caller;
+    snprintf(stage->exe,sizeof(stage->exe),"%s",exe);
+    stage->cmdline_size=0;                                /* as proc_set_cmdline */
+    for(unsigned i=0;i<argc;i++) {
+        size_t length=strlen(args[i])+1;if(stage->cmdline_size+length>sizeof(stage->cmdline))break;
+        memcpy(stage->cmdline+stage->cmdline_size,args[i],length);stage->cmdline_size+=(unsigned)length;
+    }
+    return 0;
+}
+static uint64_t exec_build(uint64_t dir,unsigned r) {
+    struct ExecStage *stage=&exec_stage;exec_discard();
+    uint64_t result=exec_build_held(dir,r);
+    if(result)return result;
+    stage->ready=1;stage->pid=process_pid;stage->pc=cpu->pc;stage->dir=dir;stage->r=r;stage->generation=address_space->generation;
+    for(unsigned i=0;i<3;i++)stage->arg[i]=cpu->gpr[r+i];
+    return 0;
+}
+static uint64_t process_exec_at(uint64_t dir,unsigned r) {
+    struct ExecStage *stage=&exec_stage;
+    int ready=stage->ready && stage->pid==process_pid && stage->pc==cpu->pc && stage->dir==dir && stage->r==r &&
+              stage->generation==address_space->generation && stage->arg[0]==cpu->gpr[r] && stage->arg[1]==cpu->gpr[r+1] && stage->arg[2]==cpu->gpr[r+2];
+    if(!ready) { uint64_t result=exec_build(dir,r);if(result)return result; }
+    stage->ready=0;
+    GuestIds caller=guest_ids;guest_ids=stage->ids;
+    ProcessImage old;image_save(&old);image_clear();
+    address_space_assign(address_space,&stage->space);address_space_changed(address_space);*cpu=stage->cpu;
+    address_space_reset(&stage->space);                   /* the process owns its memory now */
+    if(process_pid && process_pid<=PROCESS_LIMIT+1) { memcpy(proc_cmdline[process_pid],stage->cmdline,stage->cmdline_size);proc_cmdline_size[process_pid]=stage->cmdline_size; }
+    proc_publish(0);process_exec_count++;
+    if(process_pid<=PROCESS_LIMIT+1)snprintf(proc_exe[process_pid],sizeof(proc_exe[0]),"%s",strlen(stage->exe)<sizeof(proc_exe[0])?stage->exe:"");
     ProcessImage next;image_save(&next);image_restore(&old);image_free();image_restore(&next);
     /* M19 preserves regular guest descriptors. CLOEXEC is tracked by the FS adapter. */
     for(unsigned i=0;i<FS_SLOTS;i++)if(fs_fd[i] && fs_cloexec[i]) {
@@ -155,6 +214,7 @@ static uint64_t process_exec_at(uint64_t dir,unsigned r) {
     return 0;
 }
 static uint64_t process_clone(void) {
+    fork_shared_private=0;
     if(epoll_live() && !schedule_active)return linux_error(95); /* scheduled children share inherited epoll instances */
     /* vfork shares memory, but never files or signal handlers. The scheduler
        holds the parent until child exec or exit. General threads remain unsupported. */
@@ -202,9 +262,10 @@ static uint64_t process_clone(void) {
             return linux_error(12);
         }
         shared_image->refs=1;
-        shared_image->state.memory=*address_space;address_space=&shared_image->state.memory; /* parent and child use it from now on */
+        address_space_assign(&shared_image->state.memory,address_space);address_space=&shared_image->state.memory; /* parent and child use it from now on */
     }
-    ProcessImage parent,child;image_save(&parent);child=parent;
+    ProcessImage parent,child;image_save(&parent);
+    child.shared=parent.shared;child.cpu=parent.cpu;child.mask=parent.mask;address_space_assign(&child.memory,&parent.memory);
     if(share)shared_image->refs++;
     else {
         child.shared=NULL;

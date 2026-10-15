@@ -29,52 +29,55 @@ static void address_space_arena_changed(GuestAddressSpace *space,unsigned first,
     space->arena_rev=space->generation;
     if(end>space->map_top)space->map_top=end;
 }
+/* Page-flag arrays of dead images, cleared, for the next image: a large arena's is
+   megabytes of anonymous memory (3 MiB for 12 GiB), and mapping and unmapping one
+   per image cost more than clearing the bytes below its map_top. Only arrays the
+   budget does not count (resource_metadata's mapped ones). */
+#define MAP_FLAGS_POOL 16u
+static struct { unsigned char *flags;uint64_t capacity; } map_flags_pool[MAP_FLAGS_POOL];
+static unsigned map_flags_pool_count;
+static pthread_mutex_t map_flags_pool_lock=PTHREAD_MUTEX_INITIALIZER;
+static unsigned char *map_flags_new(uint64_t capacity) {
+    unsigned char *flags=NULL;
+    pthread_mutex_lock(&map_flags_pool_lock);
+    for(unsigned i=map_flags_pool_count;i--;)if(map_flags_pool[i].capacity==capacity) { flags=map_flags_pool[i].flags;map_flags_pool[i]=map_flags_pool[--map_flags_pool_count];break; }
+    pthread_mutex_unlock(&map_flags_pool_lock);
+    return flags?flags:resource_metadata(capacity/4096);
+}
+static void map_flags_free(unsigned char *flags,uint64_t capacity,unsigned top) {
+    if(flags && capacity/4096>=(1u<<20) && top<=(1u<<16)) {
+        memset(flags,0,top);                                /* none set at or above map_top */
+        pthread_mutex_lock(&map_flags_pool_lock);
+        if(map_flags_pool_count<MAP_FLAGS_POOL) { map_flags_pool[map_flags_pool_count].flags=flags;map_flags_pool[map_flags_pool_count++].capacity=capacity;flags=NULL; }
+        pthread_mutex_unlock(&map_flags_pool_lock);
+    }
+    free(flags);
+}
 static int address_space_map_flags(GuestAddressSpace *space) {
-    if(!space->map_flags)space->map_flags=resource_metadata(space->map_capacity/4096);
+    if(!space->map_flags)space->map_flags=map_flags_new(space->map_capacity);
     return space->map_flags!=NULL;
+}
+/* A copy of source's state: its header and the segments in use only (all of them
+   are 41 KiB, and fork, exec and every task switch copy images several times). */
+static void address_space_assign(GuestAddressSpace *destination,const GuestAddressSpace *source) {
+    if(destination!=source)memcpy(destination,source,offsetof(GuestAddressSpace,seg)+source->nseg*sizeof(Segment));
 }
 static void address_space_reset(GuestAddressSpace *space) {
     uint64_t capacity=space->map_capacity;
-    memset(space,0,sizeof(*space));space->map_capacity=capacity;
+    memset(space,0,offsetof(GuestAddressSpace,seg)+(space->nseg<=SEGMENT_LIMIT+1?space->nseg:SEGMENT_LIMIT+1)*sizeof(Segment));space->map_capacity=capacity;
     address_space_changed(space);
 }
+/* The image is dead: no guest code runs with it (see backing_reap). */
 static void address_space_destroy(GuestAddressSpace *space) {
+#ifdef __APPLE__
+    backing_dead_image=1;
+#endif
     for(unsigned i=0;i<space->nseg;i++)backing_release(space->seg[i].backing);
-    free(space->map_flags);free(space->reserve); /* file_data: dropped by load_stream */backing_release(space->brk_backing);backing_release(space->map_backing);
+    map_flags_free(space->map_flags,space->map_capacity,space->map_top);free(space->reserve); /* file_data: dropped by load_stream */backing_release(space->brk_backing);backing_release(space->map_backing);
+#ifdef __APPLE__
+    backing_dead_image=0;
+#endif
     address_space_reset(space);
-}
-/* Private fork retains backing without copying bytes. Staging permits rollback
-   if any reference count overflows. Destination is empty or a borrowed snapshot.
-   Source must be a distinct structure; both revisions change before resuming. */
-static int address_space_fork_private(GuestAddressSpace *destination,GuestAddressSpace *source) {
-    if(destination==source) { errno=EINVAL;return 0; }
-    GuestAddressSpace copy=*source;
-    copy.file_data=NULL;copy.brk_backing=copy.map_backing=NULL;copy.map_flags=NULL;copy.reserve=NULL;
-    memset(copy.lookup_cache,0,sizeof(copy.lookup_cache));
-    for(unsigned i=0;i<copy.nseg;i++)copy.seg[i].backing=NULL;
-    if(source->map_flags) {
-        if(!(copy.map_flags=resource_metadata(source->map_capacity/4096)))goto failed;
-        memcpy(copy.map_flags,source->map_flags,source->map_top<source->map_capacity/4096?source->map_top:source->map_capacity/4096); /* none set above map_top */
-    }
-    if(source->reserve) {
-        if(!(copy.reserve=resource_metadata(RESERVE_LIMIT*sizeof(Reservation))))goto failed;
-        memcpy(copy.reserve,source->reserve,source->nreserve*sizeof(Reservation));
-    }
-    for(unsigned i=0;i<copy.nseg;i++) {
-        if(!backing_retain(source->seg[i].backing,1))goto failed;
-        copy.seg[i].backing=source->seg[i].backing;
-    }
-    if(source->brk_backing) {
-        if(!backing_retain(source->brk_backing,1))goto failed;
-        copy.brk_backing=source->brk_backing;
-    }
-    if(source->map_backing) {
-        if(!backing_retain(source->map_backing,1))goto failed;
-        copy.map_backing=source->map_backing;
-    }
-    *destination=copy;address_space_changed(source);address_space_changed(destination);return 1;
-failed:
-    address_space_destroy(&copy);return 0;
 }
 /* Multiple views in this address space are one owner for COW purposes. */
 static size_t address_space_backing_refs(const GuestAddressSpace *space,const MemoryBacking *backing) {
@@ -88,6 +91,66 @@ static size_t address_space_backing_refs(const GuestAddressSpace *space,const Me
 static int address_space_shared(const GuestAddressSpace *space,const MemoryBacking *backing) {
     for(unsigned i=0;i<space->nseg;i++)if(space->seg[i].backing==backing && (space->seg[i].flags&SEG_SHARED))return 1;
     return 0;
+}
+/* Under the hypervisor a fork copies a private writable backing that owns at most
+   fork_copy_pages host pages (a shell's data, stack, heap: a handful) instead of
+   sharing it: a shared one costs each process a snapshot on its first write (a VM
+   remap, new guest-physical space, every page table entry rebuilt) and the parent's
+   tables a copy-on-write pass, several times what copying a few pages does. The copy
+   is charged at once, where a shared page is charged on its first write.
+   ponytail: a fixed page bound; a process with more private memory shares it all. */
+static size_t fork_copy_pages;
+/* Whether the last fork shared private writable memory: the parent's pages are then
+   copy-on-write (read-only to the hypervisor until written). */
+static _Thread_local int fork_shared_private;
+static int address_space_writable_backing(const GuestAddressSpace *space,const MemoryBacking *backing) {
+    if(space->brk_backing==backing || space->map_backing==backing)return 1;
+    for(unsigned i=0;i<space->nseg;i++)if(space->seg[i].backing==backing && (space->seg[i].flags&2))return 1;
+    return 0;
+}
+/* backing as it goes into a fork: a copy (see fork_copy_pages), or itself retained. */
+static MemoryBacking *address_space_fork_backing(const GuestAddressSpace *source,MemoryBacking *backing,MemoryBacking **from,MemoryBacking **to,unsigned *copied) {
+    for(unsigned i=0;i<*copied;i++)if(from[i]==backing) { if(!backing_retain(to[i],1))return NULL;return to[i]; }
+#ifdef __APPLE__
+    if(fork_copy_pages && *copied<8 && !backing->frozen && !address_space_shared(source,backing) && address_space_writable_backing(source,backing) &&
+       backing->refs==address_space_backing_refs(source,backing)) {
+        size_t owned=0;
+        for(size_t i=0;i<backing->used && owned<=fork_copy_pages;i++)owned+=backing->pages[i]!=NULL;
+        MemoryBacking *copy=owned<=fork_copy_pages?backing_clone(backing,owned):NULL;
+        if(copy) { from[*copied]=backing;to[(*copied)++]=copy;return copy; }
+    }
+#endif
+    if(!backing_retain(backing,1))return NULL;
+    if(address_space_writable_backing(source,backing) && !address_space_shared(source,backing))fork_shared_private=1;
+    return backing;
+}
+/* Private fork retains backing without copying bytes (but see fork_copy_pages).
+   Staging permits rollback if any reference count overflows. Destination is empty
+   or a borrowed snapshot. Source must be a distinct structure; both revisions
+   change before resuming (the source's only when it shares private memory now). */
+static int address_space_fork_private(GuestAddressSpace *destination,GuestAddressSpace *source) {
+    if(destination==source) { errno=EINVAL;return 0; }
+    MemoryBacking *from[8],*to[8];unsigned copied=0;fork_shared_private=0;
+    GuestAddressSpace copy;address_space_assign(&copy,source);
+    copy.file_data=NULL;copy.brk_backing=copy.map_backing=NULL;copy.map_flags=NULL;copy.reserve=NULL;
+    memset(copy.lookup_cache,0,sizeof(copy.lookup_cache));
+    for(unsigned i=0;i<copy.nseg;i++)copy.seg[i].backing=NULL;
+    if(source->map_flags) {
+        if(!(copy.map_flags=map_flags_new(source->map_capacity)))goto failed;
+        memcpy(copy.map_flags,source->map_flags,source->map_top<source->map_capacity/4096?source->map_top:source->map_capacity/4096); /* none set above map_top */
+    }
+    if(source->reserve) {
+        if(!(copy.reserve=resource_metadata(RESERVE_LIMIT*sizeof(Reservation))))goto failed;
+        memcpy(copy.reserve,source->reserve,source->nreserve*sizeof(Reservation));
+    }
+    for(unsigned i=0;i<copy.nseg;i++)
+        if(source->seg[i].backing && !(copy.seg[i].backing=address_space_fork_backing(source,source->seg[i].backing,from,to,&copied)))goto failed;
+    if(source->brk_backing && !(copy.brk_backing=address_space_fork_backing(source,source->brk_backing,from,to,&copied)))goto failed;
+    if(source->map_backing && !(copy.map_backing=address_space_fork_backing(source,source->map_backing,from,to,&copied)))goto failed;
+    address_space_assign(destination,&copy);if(fork_shared_private)address_space_changed(source);
+    address_space_changed(destination);return 1;
+failed:
+    address_space_destroy(&copy);return 0;
 }
 static int address_space_make_private(GuestAddressSpace *space,MemoryBacking *backing,size_t offset,size_t size) {
     if(!backing || address_space_shared(space,backing))return 1;               /* MAP_SHARED: writes are visible to every sharer */

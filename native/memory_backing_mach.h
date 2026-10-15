@@ -38,33 +38,115 @@ static void backing_vm_release(MemoryBacking *backing) {
         if(backing->pages[i])backing_page_release(backing->pages[i],backing->page_size);
     free(backing);
 }
+static void backing_free_now(MemoryBacking *backing) {
+    if(backing_release_hook)backing_release_hook(backing);
+    backing_vm_release(backing);
+}
+/* With backing_reaping set (the hypervisor backend), a freed backing's host memory
+   goes back on a host thread of its own: unmapping its guest-physical space and
+   deallocating its VM took most of every exit and exec, on the path of the process
+   that runs next (a shell waiting for its child). Its pages are uncharged at once.
+   Recycling: the memory of a dead image (exit, exec) is kept instead, zeroed, still
+   mapped in guest-physical space, for the next backing of its size (a process's
+   stack, heap, mmap arena and data take a new one each, and allocating, mapping,
+   unmapping and freeing them cost more than the rest of a short process's life).
+   Only memory every holder let go of as a dead image, where no guest code still runs
+   (so no stale page table entry is used), never a snapshot or a snapshot's source
+   (their host pages are copy-on-write), and only with few pages to zero. */
+static int backing_reaping;
+static _Thread_local int backing_dead_image;    /* address_space_destroy is dropping a dead image's memory */
+static pthread_mutex_t backing_reap_lock=PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t backing_reap_cond=PTHREAD_COND_INITIALIZER;
+static MemoryBacking *backing_reap_queue;
+#define BACKING_POOL 32u
+#define BACKING_POOL_LARGE 4u                   /* of more than 256 MiB (mmap arenas): guest-physical space */
+#define BACKING_POOL_PAGES 64u                  /* host pages to zero, at most */
+static MemoryBacking *backing_pool[BACKING_POOL];
+static unsigned backing_pool_count,backing_pool_large;
+static BackingPage backing_zero_mark;           /* pages[i] of a recycled backing: owned until now, to zero */
+static int backing_large(const MemoryBacking *backing) { return backing->mapped_size>(UINT64_C(256)<<20); }
+static void *backing_reaper(void *unused) {
+    (void)unused;
+    pthread_mutex_lock(&backing_reap_lock);
+    for(;;) {
+        while(!backing_reap_queue)pthread_cond_wait(&backing_reap_cond,&backing_reap_lock);
+        MemoryBacking *dead=backing_reap_queue;backing_reap_queue=NULL;
+        pthread_mutex_unlock(&backing_reap_lock);
+        while(dead) {
+            MemoryBacking *next=dead->reap_next;
+            if(dead->recycle) {
+                for(size_t i=0;i<dead->used;i++)if(dead->pages[i]) { memset(dead->bytes+i*dead->page_size,0,dead->page_size);dead->pages[i]=NULL; }
+                dead->used=0;
+                pthread_mutex_lock(&backing_reap_lock);
+                if(backing_pool_count<BACKING_POOL && (!backing_large(dead) || backing_pool_large<BACKING_POOL_LARGE)) {
+                    backing_pool_large+=(unsigned)backing_large(dead);backing_pool[backing_pool_count++]=dead;dead=NULL;
+                }
+                pthread_mutex_unlock(&backing_reap_lock);
+            }
+            if(dead)backing_free_now(dead);            /* its pages went already: used is 0 */
+            dead=next;
+        }
+        pthread_mutex_lock(&backing_reap_lock);
+    }
+    return NULL;
+}
+/* A freed backing (refs 0): 1 when the reaper takes it. */
+static int backing_reap(MemoryBacking *backing) {
+    static int started;
+    if(!backing_reaping)return 0;
+    size_t owned=0;
+    for(size_t i=0;i<backing->used;i++)owned+=backing->pages[i]!=NULL;
+    backing->recycle=backing_dead_image && !__atomic_load_n(&backing->unpooled,__ATOMIC_RELAXED) && !backing->frozen && !backing->cow_copy && backing->bytes && owned<=BACKING_POOL_PAGES;
+    for(size_t i=0;i<backing->used;i++)if(backing->pages[i]) {
+        backing_page_release(backing->pages[i],backing->page_size);backing->pages[i]=backing->recycle?&backing_zero_mark:NULL;
+    }
+    if(!backing->recycle)backing->used=0;
+    pthread_mutex_lock(&backing_reap_lock);
+    if(!started) {
+        pthread_t thread;
+        if(pthread_create(&thread,NULL,backing_reaper,NULL) || pthread_detach(thread))fail("Cannot start the memory reaper");
+        started=1;
+    }
+    if(!backing_reap_queue)pthread_cond_signal(&backing_reap_cond); /* the reaper takes the whole queue */
+    backing->reap_next=backing_reap_queue;backing_reap_queue=backing;
+    pthread_mutex_unlock(&backing_reap_lock);
+    return 1;
+}
+/* Recycled memory of size's host-page size, or NULL. */
+static MemoryBacking *backing_pool_take(size_t size) {
+    size_t page=(size_t)vm_page_size,mapped=(size+page-1)/page*page;MemoryBacking *backing=NULL;
+    if(!backing_reaping || !size || size>SIZE_MAX-(page-1))return NULL;
+    pthread_mutex_lock(&backing_reap_lock);
+    for(unsigned i=backing_pool_count;i--;)if(backing_pool[i]->mapped_size==mapped) {
+        backing=backing_pool[i];backing_pool[i]=backing_pool[--backing_pool_count];backing_pool_large-=(unsigned)backing_large(backing);break;
+    }
+    pthread_mutex_unlock(&backing_reap_lock);
+    if(backing) { backing->refs=1;backing->size=size;backing->frozen=backing->cow_copy=backing->unpooled=backing->recycle=0; }
+    return backing;
+}
+/* A backing of size with host memory and no owned page: recycled, or new. */
+static MemoryBacking *backing_region(size_t size) {
+    MemoryBacking *backing=backing_pool_take(size);if(backing)return backing;
+    if(!(backing=backing_descriptor(size)))return NULL;
+    mach_vm_address_t address=0;
+    if(mach_vm_allocate(mach_task_self(),&address,backing->mapped_size,VM_FLAGS_ANYWHERE)!=KERN_SUCCESS) { free(backing);errno=ENOMEM;return NULL; }
+    backing->bytes=(unsigned char *)address;return backing;
+}
 /* charge 0: memory the budget does not count (read-only program text, which Linux
    keeps in its reclaimable page cache); a write copies, and charges, a page. */
 static MemoryBacking *backing_alloc_charged(size_t size,int charge) {
-    MemoryBacking *backing=backing_descriptor(size);if(!backing)return NULL;
+    MemoryBacking *backing=backing_region(size);if(!backing)return NULL;
     size_t count=backing->mapped_size/backing->page_size;
     BackingPageGroup *group=backing_page_group(count,backing->page_size,charge);
-    if(!group) { free(backing);return NULL; }
+    if(!group) { backing_free_now(backing);return NULL; }
     for(size_t i=0;i<count;i++)backing->pages[i]=&group->pages[i];
-    backing->used=count;
-    mach_vm_address_t address=0;
-    if(mach_vm_allocate(mach_task_self(),&address,backing->mapped_size,VM_FLAGS_ANYWHERE)!=KERN_SUCCESS) {
-        backing_vm_release(backing);errno=ENOMEM;return NULL;
-    }
-    backing->bytes=(unsigned char *)address;return backing;
+    backing->used=count;return backing;
 }
 static MemoryBacking *backing_alloc(size_t size,int clear) { (void)clear;return backing_alloc_charged(size,1); } /* Mach pages start zero */
 static MemoryBacking *backing_alloc_text(size_t size) { return backing_alloc_charged(size,0); }
 /* A lazily charged backing: no host page is owned (or charged) until a write
    prepares it. Unowned pages read as zero. */
-static MemoryBacking *backing_reserve(size_t size) {
-    MemoryBacking *backing=backing_descriptor(size);if(!backing)return NULL;
-    mach_vm_address_t address=0;
-    if(mach_vm_allocate(mach_task_self(),&address,backing->mapped_size,VM_FLAGS_ANYWHERE)!=KERN_SUCCESS) {
-        free(backing);errno=ENOMEM;return NULL;
-    }
-    backing->bytes=(unsigned char *)address;return backing;
-}
+static MemoryBacking *backing_reserve(size_t size) { return backing_region(size); }
 /* Zero whole host pages and give them back: ownership and charge are released and
    the host may reclaim the memory. The caller owns the backing privately. */
 static void backing_discard(MemoryBacking *backing,size_t offset,size_t size) {
@@ -84,10 +166,37 @@ static MemoryBacking *backing_snapshot(MemoryBacking *source) {
     kern_return_t result=mach_vm_remap(mach_task_self(),&address,source->mapped_size,0,
         VM_FLAGS_ANYWHERE,mach_task_self(),(mach_vm_address_t)source->bytes,TRUE,&current,&maximum,VM_INHERIT_NONE);
     if(result!=KERN_SUCCESS) { free(copy);errno=ENOMEM;return NULL; }
-    copy->bytes=(unsigned char *)address;
+    copy->bytes=(unsigned char *)address;copy->cow_copy=1;
     for(size_t i=0;i<count;i++) { copy->pages[i]=source->pages[i];if(copy->pages[i])__atomic_fetch_add(&copy->pages[i]->refs,1,__ATOMIC_ACQ_REL); }
     copy->used=count;
     return copy;
+}
+/* A private copy of source's owned pages, charged now (the fork of a small process:
+   cheaper than two snapshots, see address_space_fork_private). NULL on failure. */
+static MemoryBacking *backing_clone(const MemoryBacking *source,size_t owned) {
+    MemoryBacking *copy=backing_region(source->size);if(!copy)return NULL;
+    BackingPageGroup *group=owned?backing_page_group(owned,source->page_size,1):NULL;
+    if(owned && !group) { backing_free_now(copy);return NULL; }
+    for(size_t i=0,next=0;i<source->used;i++)if(source->pages[i]) {
+        copy->pages[i]=&group->pages[next++];copy->used=i+1;
+        memcpy(copy->bytes+i*copy->page_size,source->bytes+i*copy->page_size,copy->page_size);
+    }
+    return copy;
+}
+/* Read-only program text mapped from its file (offset a host page multiple) instead
+   of copied: pages come in from the host's page cache as the guest uses them. A
+   first exec of a 100 MB program (node) from a fresh container root otherwise read
+   and copied all of it. Owned and uncharged, as backing_alloc_text; copy-on-write
+   with the file (MAP_PRIVATE), so never recycled. NULL when it cannot be mapped. */
+static MemoryBacking *backing_map_file(int fd,off_t offset,size_t size) {
+    MemoryBacking *backing=backing_descriptor(size);if(!backing)return NULL;
+    size_t count=backing->mapped_size/backing->page_size;
+    BackingPageGroup *group=backing_page_group(count,backing->page_size,0);
+    if(!group) { free(backing);return NULL; }
+    void *bytes=mmap(NULL,backing->mapped_size,PROT_READ|PROT_WRITE,MAP_PRIVATE,fd,offset);
+    if(bytes==MAP_FAILED) { free(group);free(backing);return NULL; }
+    for(size_t i=0;i<count;i++)backing->pages[i]=&group->pages[i];
+    backing->used=count;backing->bytes=bytes;backing->cow_copy=1;return backing;
 }
 /* Stage the entire charge before changing metadata. A failed multi-page range
    leaves pointers, ownership and all guest bytes untouched. */

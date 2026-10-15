@@ -15,11 +15,14 @@ struct BackingPageGroup { size_t live,count;unsigned uncharged;BackingPage pages
 /* used: one past the highest page ever owned; every page above it is unowned, so
    snapshots and releases need not walk the rest (a 12 GiB arena is 786,432 pages,
    and a forked process usually touches a few hundred). */
+/* cow_copy: a snapshot (its host pages are copy-on-write with its source's).
+   unpooled: a reference to it went other than with a dead image (see backing_reap). */
 typedef struct {
     size_t refs,size,mapped_size,page_size,used;
-    unsigned frozen;
+    unsigned frozen,cow_copy,unpooled,recycle;
     unsigned char *bytes;
     uint64_t hvf_ipa,hvf_epoch,*hvf_chunks;
+    void *reap_next;                  /* in backing_reap's queue */
     BackingPage *pages[];
 } MemoryBacking;
 #else
@@ -29,6 +32,7 @@ typedef struct {
     _Alignas(max_align_t) unsigned char bytes[];
 } MemoryBacking;
 #endif
+static void (*backing_release_hook)(MemoryBacking *); /* the hypervisor backend forgets the memory first */
 static unsigned char *backing_data(MemoryBacking *backing) {
     return backing?backing->bytes:NULL;
 }
