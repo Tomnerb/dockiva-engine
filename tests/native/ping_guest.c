@@ -32,6 +32,10 @@ void _start(void) {
     out[0]=13;check(call(206,(U)s,(U)out,24,0,(U)loopback,16)==-22);   /* only echo requests */
     long b=call(198,2,2,1,0,0,0);unsigned char bound[16]={2,0,0x43,0x21,127,0,0,1};
     check(call(200,(U)b,(U)bound,16,0,0,0)==0 && call(203,(U)b,(U)loopback,16,0,0,0)==0);
+    long z=call(198,2,2,1,0,0,0);unsigned char any[16]={2,0};size=16;  /* binding port 0 picks an identifier */
+    check(call(200,(U)z,(U)any,16,0,0,0)==0 && call(204,(U)z,(U)from,(U)&size,0,0,0)==0 && (from[2] || from[3]));
+    unsigned char ident[2]={from[2],from[3]};request(out,0x2222,3);
+    check(call(206,(U)z,(U)out,24,0,(U)loopback,16)==24 && call(207,(U)z,(U)in,64,0,0,0)==24 && in[4]==ident[0] && in[5]==ident[1]);
     request(out,0x1111,2);                                            /* the bound port wins */
     U io[2]={(U)out,24},msg[7]={0,0,(U)io,1,0,0,0};
     check(call(211,(U)b,(U)msg,0,0,0,0)==24);

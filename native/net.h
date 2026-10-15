@@ -700,8 +700,9 @@ static uint64_t net_call(uint64_t number) {
         /* Common options, mapped from Linux numbers to the host's. Unknown ones: ENOPROTOOPT. */
         uint64_t level=cpu->gpr[1],name=cpu->gpr[2];int host_level=-1,host_name=-1;
         /* IP_MTU_DISCOVER and IP_RECVERR (glibc's resolver requires it): accepted;
-           ICMP errors on connected UDP sockets still surface as receive errors. */
-        if(level==0 && (name==10 || name==11)) return 0;
+           ICMP errors on connected UDP sockets still surface as receive errors.
+           IP_RETOPTS and IP_RECVTTL (busybox ping): accepted, no ancillary data follows. */
+        if(level==0 && (name==10 || name==11 || name==7 || name==12)) return 0;
         if(!net_option(level,name,&host_level,&host_name))return linux_error(92);
         if(host_name==SO_LINGER) {
             if(cpu->gpr[4]!=8)return linux_error(22);
@@ -724,7 +725,10 @@ static uint64_t net_call(uint64_t number) {
         struct sockaddr_in address;uint64_t invalid=net_address(cpu->gpr[1],cpu->gpr[2],&address,1,1,0);if(invalid)return invalid;
         const unsigned char *p=lookup(cpu->gpr[1],4,4);if(!p)return linux_error(14);
         if(net_description(slot)->ping_id)return linux_error(22);
-        memcpy(&net_description(slot)->ping_id,p+2,2);return 0;
+        memcpy(&net_description(slot)->ping_id,p+2,2);
+        static uint16_t rover;                                         /* port 0: one now, which getsockname reports (busybox reads it) */
+        while(!net_description(slot)->ping_id)net_description(slot)->ping_id=htons((uint16_t)(++rover^(uint16_t)getpid()));
+        return 0;
     }
     if(number==203 && net_description(slot)->v6 && !net_description(slot)->udp && !net_description(slot)->connecting) {
         uint64_t result;if(net_connect_v6only(slot,fd,&result))return result;
