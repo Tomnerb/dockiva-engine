@@ -956,14 +956,7 @@ func (bd *builder) commit(st *buildStage, tags []string) string {
 		tags = []string{"<none>:" + id[7:19]}
 	}
 	for _, t := range tags {
-		name := shortName(t)
-		target := filepath.Join(bd.b.Cache, key(name))
-		if exists(target) && text(readObject(filepath.Join(target, "image.json"))["digest"]) != id {
-			gone := filepath.Join(bd.b.Cache, ".replaced-"+token()[:16]) // the tag moves to the new image
-			check(os.Rename(target, gone))
-			go os.RemoveAll(gone)
-		}
-		commitImage(bd.b.Cache, name, layout)
+		bd.b.commitTag(shortName(t), id, layout)
 	}
 	return id
 }

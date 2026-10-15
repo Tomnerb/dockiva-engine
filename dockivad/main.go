@@ -59,13 +59,14 @@ func run() {
 	check(flags.Parse(os.Args[1:]))
 	reject(flags.NArg() == 0, "Unexpected arguments")
 	reject(*maxContainers >= 1 && *maxContainers <= 1024, "--max-containers must be 1..1024")
-	b := &engine{Home: private(*home), Self: self, Assets: *assetRoot, MaxContainers: *maxContainers}
+	b := &engine{Home: private(*home), Self: self, Assets: *assetRoot, MaxContainers: *maxContainers, quit: make(chan struct{}, 1)}
 	b.State = private(filepath.Join(b.Home, "containers"))
 	b.Cache = private(filepath.Join(b.Home, "images"))
 	lock, e := lockFile(filepath.Join(b.Home, "daemon.lock"), true)
 	check(e)
 	defer lock.Close()
 	cleanupUnpublished(b.State)
+	migrateNames(b.Cache)
 	if *importName != "" {
 		reject(*layout != "", "Import requires --import-layout")
 		fmt.Println(commitImage(b.Cache, *importName, *layout))
@@ -148,13 +149,16 @@ func run() {
 		defer docker.Close()
 	}
 	go func() {
+		// SIGTERM leaves containers running; POST /dockiva/shutdown has stopped them.
 		select {
 		case <-signals:
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
-			_ = server.Shutdown(ctx)
+		case <-b.quit:
 		case <-done:
+			return
 		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = server.Shutdown(ctx)
 	}()
 	e = server.Serve(listener)
 	if e != http.ErrServerClosed {

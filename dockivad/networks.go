@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Networks. "bridge" (the default) and user networks are private: each container
@@ -313,11 +314,15 @@ func (b *engine) networksAPI(w http.ResponseWriter, method, path string, q map[s
 		defer b.Mu.Unlock()
 		send(w, 201, b.createNetwork(body()))
 	case path == "/networks/prune" && method == "POST":
+		_, keep := pruneFilter(q) // docker system prune passes its until and label filters on
 		b.Mu.Lock()
 		defer b.Mu.Unlock()
 		deleted := []string{}
 		for _, name := range b.networkNames() {
-			if name != "bridge" && len(b.members(name)) == 0 {
+			meta := b.network(name)
+			created, e := time.Parse(time.RFC3339Nano, timestamp(meta["created"]))
+			check(e)
+			if name != "bridge" && len(b.members(name)) == 0 && keep(created, object(meta["labels"])) {
 				check(os.RemoveAll(filepath.Join(networksDir(b.Home), name)))
 				deleted = append(deleted, name)
 			}

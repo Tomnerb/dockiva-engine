@@ -443,7 +443,8 @@ func (im *image) command(override []string) []string {
 		args = override
 	}
 	cmd := append(append([]string{}, im.Entry...), args...)
-	reject(len(cmd) > 0 && len(cmd) <= 64, "Expected executable and at most 63 arguments")
+	reject(len(cmd) > 0, "No command specified")
+	reject(len(cmd) <= 64, "Expected executable and at most 63 arguments")
 	find := func(guest string) (struct{ Data []byte }, bool) {
 		head, ok := im.guestFile(guest)
 		return struct{ Data []byte }{head}, ok
@@ -503,9 +504,11 @@ func (im *image) command(override []string) []string {
 	return cmd
 }
 
-// commitImage caches an OCI layout under name: its blobs (hard links where
-// possible) and its unpacked filesystem, which containers clone.
+// commitImage caches an OCI layout under name (its familiar form, which imagePath
+// finds): its blobs (hard links where possible) and its unpacked filesystem,
+// which containers clone.
 func commitImage(cache, name, layout string) string {
+	name = shortName(name) // docker tag sends repo=docker.io/...
 	cache = private(cache)
 	im := loadImage(layout)
 	target := filepath.Join(cache, key(name))
@@ -542,6 +545,48 @@ func commitImage(cache, name, layout string) string {
 		check(e)
 	}
 	return filepath.Join(target, "layout")
+}
+
+// commitTag is commitImage of an image with this digest; a name another image has
+// moves to it (docker build -t, docker load).
+func (b *engine) commitTag(name, digest, layout string) string {
+	name = shortName(name)
+	target := filepath.Join(b.Cache, key(name))
+	if exists(target) && text(readObject(filepath.Join(target, "image.json"))["digest"]) != digest {
+		gone := filepath.Join(b.Cache, ".replaced-"+token()[:16])
+		check(os.Rename(target, gone))
+		go os.RemoveAll(gone)
+	}
+	return commitImage(b.Cache, name, layout)
+}
+
+// migrateNames moves images cached under a docker.io/ name (docker tag did, before
+// commitImage shortened names) to the familiar name imagePath looks up. One whose
+// familiar name is taken was unreachable anyway, and goes.
+func migrateNames(cache string) {
+	entries, e := os.ReadDir(cache)
+	check(e)
+	for _, entry := range entries {
+		_ = safeRun(func() {
+			dir := filepath.Join(cache, entry.Name())
+			if len(entry.Name()) != 64 || !exists(filepath.Join(dir, "image.json")) {
+				return
+			}
+			meta := readObject(filepath.Join(dir, "image.json"))
+			name := str(meta["name"])
+			if shortName(name) == name {
+				return
+			}
+			target := filepath.Join(cache, key(shortName(name)))
+			if exists(target) {
+				check(os.RemoveAll(dir))
+				return
+			}
+			meta["name"] = shortName(name)
+			save(filepath.Join(dir, "image.json"), meta)
+			check(os.Rename(dir, target))
+		})
+	}
 }
 
 // ensureUnpacked unpacks a cached image that predates unpacked images.

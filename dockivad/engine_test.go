@@ -167,7 +167,7 @@ func TestAPIContractAndRejectedOptions(t *testing.T) {
 	if request(t, h, "GET", "/v1.99/info", "", "secret").Code != 400 {
 		t.Fatal("version range")
 	}
-	for _, body := range []string{`{"Image":"dockiva/shell:demo","HostConfig":{"Privileged":true}}`, `{"Image":"dockiva/shell:demo","HostConfig":{"Binds":["/tmp:/tmp:shared"]}}`, `{"Image":"dockiva/shell:demo","NetworkingConfig":{"EndpointsConfig":{"overlay":{}}}}`, `{"Image":"dockiva/shell:demo","Cmd":[]}`, `{"Image":"dockiva/shell:demo","Env":["bad"]}`, `{"Image":"dockiva/shell:demo","Image":"duplicate"}`} {
+	for _, body := range []string{`{"Image":"dockiva/shell:demo","HostConfig":{"Privileged":true}}`, `{"Image":"dockiva/shell:demo","HostConfig":{"Binds":["/tmp:/tmp:shared"]}}`, `{"Image":"dockiva/shell:demo","NetworkingConfig":{"EndpointsConfig":{"overlay":{}}}}`, `{"Image":"dockiva/shell:demo","Env":["bad"]}`, `{"Image":"dockiva/shell:demo","Image":"duplicate"}`} {
 		r := request(t, h, "POST", "/containers/create?name=bad", body, "secret")
 		if r.Code < 400 || (r.Code >= 500 && r.Code != 501) {
 			t.Fatalf("bad option: %d %s", r.Code, r.Body.String())

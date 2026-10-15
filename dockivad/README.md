@@ -14,6 +14,9 @@ The Python command is build tooling. The resulting helper contains only Go/C
 executables and prepared OCI fixture data. `dockiva-engine` is a separately signed
 copy of `dockivad` for existing Dockiva helper discovery. Both run the same code.
 Stop the API with SIGTERM; active container supervisors continue independently.
+`POST /dockiva/shutdown` instead stops every running container as `docker stop`
+does (its stop signal and grace period), answers 204 and exits; `always` and
+`unless-stopped` containers start again with the next engine.
 Use the authenticated Docker API subset or Dockiva for container lifecycle.
 
 Import a bounded OCI layout while the daemon is stopped:
@@ -65,7 +68,10 @@ ways, including into volumes and bind mounts; read-only paths are refused),
 `volume` (`create`, `ls`, `inspect`, `rm`, `prune`), `network` (`create`, `ls`,
 `inspect`, `rm`, `prune`, `connect`, `disconnect`), `docker compose` (`up`,
 `down`, `ps`, `logs`, `exec`, `start`, `stop`, `restart`, healthchecks and
-`depends_on` conditions) and `version`/`info`. Not supported: builds, tmpfs
+`depends_on` conditions), `system df` (`-v`), `save`, `load` (classic and OCI
+archives, plain or gzip; linux/arm64 images only, others are skipped),
+`container prune`, `image prune` (`-a`), `system prune` (`until` and `label`
+filters) and `version`/`info`. Not supported: builds, tmpfs
 mounts.
 
 Networks: the default bridge and user networks give each container an address

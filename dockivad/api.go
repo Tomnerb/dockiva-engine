@@ -65,10 +65,7 @@ func (b *engine) imageInfo(name string) obj {
 // imageFilter is docker images NAME (reference: a name or pattern, with or without
 // the tag) and dangling (untagged build results, named "<none>:ID").
 func imageFilter(name string, filters obj) bool {
-	repo := name
-	if i := strings.LastIndex(name, ":"); i > strings.LastIndex(name, "/") {
-		repo = name[:i]
-	}
+	repo := repository(name)
 	for k, v := range filters {
 		values := []string{}
 		for value := range object(v) {
@@ -90,6 +87,14 @@ func imageFilter(name string, filters obj) bool {
 		}
 	}
 	return true
+}
+
+// repository is a name without its tag (a registry port is not a tag).
+func repository(name string) string {
+	if i := strings.LastIndex(name, ":"); i > strings.LastIndex(name, "/") {
+		return name[:i]
+	}
+	return name
 }
 
 var imageID = regexp.MustCompile(`^(sha256:)?[0-9a-f]{4,64}$`)
@@ -153,6 +158,15 @@ func restartPolicy(c obj) obj {
 		return obj{"Name": "no", "MaximumRetryCount": 0}
 	}
 	return obj{"Name": r["name"], "MaximumRetryCount": cmp.Or(r["max"], any(0))}
+}
+
+// psRow is a /containers/json row of an inspected container.
+func psRow(item obj) obj {
+	state, config := object(item["State"]), object(item["Config"])
+	created, e := time.Parse(time.RFC3339Nano, str(item["Created"]))
+	check(e)
+	cmd := append([]string{str(item["Path"])}, item["Args"].([]string)...)
+	return obj{"Id": item["Id"], "Names": []any{item["Name"]}, "Image": config["Image"], "ImageID": item["Image"], "Command": strings.Join(cmd, " "), "Created": created.Unix(), "State": state["Status"], "Status": psStatus(state), "Labels": config["Labels"], "Ports": portRows(item), "HostConfig": obj{"NetworkMode": object(item["HostConfig"])["NetworkMode"]}, "NetworkSettings": obj{"Networks": object(item["NetworkSettings"])["Networks"]}, "Mounts": item["Mounts"]}
 }
 
 // psStatus is docker ps's STATUS: the state, with the health while it has one.
@@ -446,9 +460,8 @@ func (b *engine) createWith(name string, body obj, prepared *image) obj {
 		reject(len(im.Entry) > 0, "Empty Entrypoint unsupported")
 	}
 	var override []string
-	if body["Cmd"] != nil {
+	if body["Cmd"] != nil { // [] clears the image's CMD: the Entrypoint runs alone
 		override = stringsOf(body["Cmd"])
-		reject(len(override) > 0, "Empty Cmd unsupported")
 	}
 	merged := map[string]string{}
 	order := []string{}
@@ -690,6 +703,24 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 			b.build(w, r, q)
 			return
 		}
+		// docker load: a docker save tar of any size, read as it arrives.
+		if path == "/images/load" && method == "POST" {
+			stream()
+			defer endStream()
+			b.loadImages(w, r.Body, yes("quiet"))
+			return
+		}
+		// docker save: GET /images/get?names=A&names=B, or /images/NAME/get.
+		if method == "GET" && (path == "/images/get" || strings.HasPrefix(path, "/images/") && strings.HasSuffix(path, "/get")) {
+			names := q["names"]
+			if path != "/images/get" {
+				names = []string{strings.TrimSuffix(strings.TrimPrefix(path, "/images/"), "/get")}
+			}
+			stream()
+			defer endStream()
+			b.saveImages(w, names)
+			return
+		}
 		if len(r.TransferEncoding) > 0 {
 			panic(apiError{400, "Chunked requests unsupported"})
 		}
@@ -729,6 +760,8 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 			b.Mu.Lock()
 			defer b.Mu.Unlock()
 			send(w, 201, b.create(name, body))
+			return
+		case b.systemAPI(w, method, path, q): // before /containers/NAME: /containers/prune
 			return
 		case path == "/containers/json" && method == "GET":
 			filters := obj{}
@@ -783,10 +816,7 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 					}
 				}
 				if include {
-					created, e := time.Parse(time.RFC3339Nano, str(item["Created"]))
-					check(e)
-					cmd := append([]string{str(item["Path"])}, item["Args"].([]string)...)
-					rows = append(rows, obj{"Id": item["Id"], "Names": []any{item["Name"]}, "Image": config["Image"], "ImageID": item["Image"], "Command": strings.Join(cmd, " "), "Created": created.Unix(), "State": state["Status"], "Status": psStatus(state), "Labels": labels, "Ports": portRows(item), "HostConfig": obj{"NetworkMode": object(item["HostConfig"])["NetworkMode"]}, "NetworkSettings": obj{"Networks": object(item["NetworkSettings"])["Networks"]}, "Mounts": item["Mounts"]})
+					rows = append(rows, psRow(item))
 				}
 			}
 			send(w, 200, rows)

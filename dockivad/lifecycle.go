@@ -30,8 +30,9 @@ type engine struct {
 	MaxContainers                                    int
 	Mu                                               sync.Mutex
 	events                                           events
-	exits                                            sync.Map // exit status of auto-removed containers, by name, for a minute
-	execs                                            sync.Map // *execJob by ID
+	exits                                            sync.Map      // exit status of auto-removed containers, by name, for a minute
+	execs                                            sync.Map      // *execJob by ID
+	quit                                             chan struct{} // POST /dockiva/shutdown asks main to exit
 }
 
 // memoryMiB is a container's guest memory limit: docker run -m, else its profile's.
