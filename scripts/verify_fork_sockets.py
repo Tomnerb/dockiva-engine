@@ -44,6 +44,7 @@ def main():
     shutil.copy(stress_leaf, stress_root/'leaf')
     (stress_root/'data').write_bytes(b'x'*4096)
     fastcall = build('fastcall_guest', folder, linker)  # hvf: syscalls answered in the EL1 vector, registers through its frame
+    sleeper = build('sleeper_guest', folder, linker)  # hvf: a sleeping thread gets the CPU from siblings looping on system calls
     lazy_root = folder/'lazy-root'  # lazy_charge_guest execs /leaf
     shutil.rmtree(lazy_root, ignore_errors=True)
     lazy_root.mkdir()
@@ -99,6 +100,20 @@ def main():
         r = subprocess.run([str(runtime), 'run', str(setuid_root/'suid'), '--root', str(setuid_root), '--uid', '1000', '--gid', '1000', *common, *extra], capture_output=True, timeout=60)
         failed += r.returncode != 10
         print(f'{backend} setuid first program: {"PASS" if r.returncode == 10 else "FAIL"} exit={r.returncode} {r.stderr.decode().strip()}')
+        if backend == 'hvf':  # fewer workers than runnable threads, whatever --cpus says: 1 and 2
+            sleeper_root = folder/'sleeper-root'
+            shutil.rmtree(sleeper_root, ignore_errors=True)
+            sleeper_root.mkdir()
+            shutil.copy(sleeper, sleeper_root/'sleeper.elf')
+            for n in (1, 2):
+                args = [str(runtime), 'run', str(sleeper), '--root', str(sleeper_root), *common, '--cpu-backend', 'hvf', '--dynamic', '--cpus', str(n), '--process-tree', '--scheduled-network']
+                try:
+                    r = subprocess.run(args, capture_output=True, timeout=30)
+                    ok, out = r.returncode == 0 and r.stdout.startswith(b'sleeper PASS'), r.stdout.decode().strip()
+                except subprocess.TimeoutExpired:
+                    ok, out = False, 'timed out (the sleeper starved)'
+                failed += not ok
+                print(f'hvf sleeper_guest --cpus {n}: {"PASS" if ok else "FAIL"} {out}')
     return 1 if failed else 0
 
 

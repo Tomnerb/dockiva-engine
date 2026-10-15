@@ -85,6 +85,7 @@ static int hvf_active;                       /* run() executes natively */
 typedef struct {
     hv_vcpu_t vcpu;hv_vcpu_exit_t *exit;HvfView *view;uint64_t ttbr;unsigned asid_flushed; /* the ASID generation its TLBs were last flushed in */
     uint64_t *frame;int framed,fp_in_cpu,fp_dirty;
+    int preempt;                             /* the watchdog's slice ended: yield at the next safe point (atomic) */
     unsigned tso;                            /* ACTLR_EL1.EnTSO as last set: the running thread's mem_model */
 } HvfCpu;
 #define hvf_cpu ((HvfCpu *)worker->backend)
@@ -737,13 +738,21 @@ static void hvf_interrupt(Worker *w) {
     if(c && atomic_load(&w->in_guest))(void)hv_vcpus_exit(&c->vcpu,1);
 }
 /* Preempt CPU-bound guests so the scheduler can switch tasks (10 ms slices), and
-   keep the vDSO's realtime offset current (only this thread refreshes it). */
+   keep the vDSO's realtime offset current (only this thread refreshes it). The
+   request is sticky: an interrupt alone is lost when the worker is serving a
+   system call (not in guest code) or the vCPU is in an EL1 routine (which runs on
+   into its exit), and a thread looping on system calls is almost always in one of
+   those; hvf_slice_run yields at its next safe point instead. */
 static void *hvf_watchdog(void *unused) {
     (void)unused;
     for(;;) {
         struct timespec slice={0,10000000};nanosleep(&slice,NULL);
         if(vdso_backing)vdso_tick();
-        for(unsigned i=0;i<worker_count;i++)hvf_interrupt(workers[i]);
+        for(unsigned i=0;i<worker_count;i++) {
+            HvfCpu *c=workers[i]->backend;
+            if(c)__atomic_store_n(&c->preempt,1,__ATOMIC_RELEASE);
+            hvf_interrupt(workers[i]);
+        }
     }
     return NULL;
 }
@@ -1305,6 +1314,7 @@ static int runtime_trylock(void) {
    with neither; system calls served without the runtime lock hold the mm lock. */
 static int hvf_slice_run(void) {
     if(!worker->backend)worker->backend=hvf_cpu_new(0); /* a worker's first slice, on its own thread */
+    __atomic_store_n(&hvf_cpu->preempt,0,__ATOMIC_RELAXED); /* a full slice from now */
     hvf_regs_invalidate(); /* the scheduler handed over a complete CPU state */
     hvf_put_regs();
     ScheduledTask *task=schedule_active?hvf_task():NULL;
@@ -1330,7 +1340,9 @@ static int hvf_slice_run(void) {
             /* in_guest is set under the mm lock, so a sibling holding it sees every
                worker of this process that may enter guest code. */
             atomic_store(&self->in_guest,1);atomic_thread_fence(memory_order_seq_cst);
-            if(!in_vector && hvf_must_stop(task)) { atomic_store(&self->in_guest,0);stopped=1;break; }
+            if(!in_vector && (hvf_must_stop(task) || (schedule_active && __atomic_exchange_n(&hvf_cpu->preempt,0,__ATOMIC_ACQ_REL)))) {
+                atomic_store(&self->in_guest,0);stopped=1;break;  /* (the guest's registers are in the frame or the vCPU) */
+            }
             in_vector=0;
             hvf_sync_memory(address_space);
             mm_unlock(task);

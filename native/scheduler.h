@@ -10,6 +10,7 @@ typedef struct {
     unsigned worker;              /* 1 + the index of the worker running it, or 0 */
     unsigned tid,private_wait,realtime,blocked,input_wait;
     unsigned child_wait;          /* blocked in wait4/waitid: only a child's event or a signal wakes it */
+    unsigned preempted;           /* its last slice ended by preemption or sched_yield, not a wait (schedule_pick) */
     uint32_t bitset;
     uint64_t clear_tid,futex_address,deadline_ns,epoch,wakeups;
     GuestCpuState regs;           /* while it is not running */
@@ -34,6 +35,7 @@ typedef struct {
     ProcShared ps;FsTable fs;FdTable fds;
     unsigned vfork_child,saved,state,terminate_signal,pgid,sid,input_wait,stop_signal,execed,blocked,worker;uint64_t epoch,wakeups;
     unsigned child_wait;  /* blocked in wait4/waitid (single-threaded): woken by a child's event or a signal, not by I/O */
+    unsigned preempted;   /* as Thread's */
     uint64_t signal_mask,signal_ignored,signal_pending,timer_deadline,timer_interval;
     uint64_t signal_flags[64],signal_action_mask[64],signal_restorer[64],signal_handler[64];
     unsigned signal_sender[64];
@@ -479,8 +481,9 @@ static int schedule_waiting_runnable(void) {
     return 0;
 }
 /* A thread of threaded task t to run now, or -1. A pending termination or stop
-   runs on any thread that is not already running. */
-static int task_pick_thread(ScheduledTask *t) {
+   runs on any thread that is not already running. woken: only a thread that
+   waited and may run now, not one whose slice was merely cut short. */
+static int task_pick_thread(ScheduledTask *t,int woken) {
     if(!t->state || t->exit_pending)return -1;
     if(t->vfork_child) {
         const ScheduledTask *child=&schedule_tasks[t->vfork_child-1];
@@ -492,7 +495,7 @@ static int task_pick_thread(ScheduledTask *t) {
     for(unsigned n=1;n<=p->top;n++) {
         unsigned i=(p->cursor+n)%p->top;Thread *th=&p->thread[i];
         if(!th->state || th->worker)continue;
-        if(urgent || thread_runnable(th)) { p->cursor=i;return (int)i; }
+        if(urgent || (thread_runnable(th) && (!woken || !th->preempted))) { p->cursor=i;return (int)i; }
     }
     return -1;
 }
@@ -506,15 +509,18 @@ static int timer_pump(void) {
     return active;
 }
 /* The next runnable task after `after` (round robin) and its thread (-1 for a
-   single-threaded task), else -1. */
+   single-threaded task), else -1. As on Linux, a thread or task whose wait just
+   ended (a timer, a wakeup) goes before those that were preempted, so a sleeper
+   runs within a slice of its deadline however many siblings stay runnable. */
 static int schedule_pick(unsigned after,int *thread) {
-    for(unsigned scanned=0;scanned<=process_count;scanned++) {
-        after=(after+1)%(process_count+1);
-        ScheduledTask *t=&schedule_tasks[after];
-        if(!t->threads) { if(schedule_runnable(t)) { *thread=-1;return (int)after; } continue; }
-        int i=task_pick_thread(t);
-        if(i>=0) { *thread=i;return (int)after; }
-    }
+    for(int woken=1;woken>=0;woken--)
+        for(unsigned scanned=0,at=after;scanned<=process_count;scanned++) {
+            at=(at+1)%(process_count+1);
+            ScheduledTask *t=&schedule_tasks[at];
+            if(!t->threads) { if(schedule_runnable(t) && (!woken || !t->preempted)) { *thread=-1;return (int)at; } continue; }
+            int i=task_pick_thread(t,woken);
+            if(i>=0) { *thread=i;return (int)at; }
+        }
     return -1;
 }
 static void schedule_wait_idle(unsigned ms) {
@@ -582,6 +588,13 @@ static int schedule_finish(int current,int result,unsigned terminating) {
    poll covers every blocked task under the runtime lock, and one poll wakes them all. */
 #define NETWORK_PUMP_INTERVAL_NS 250000
 static uint64_t network_pump_last_ns;
+/* Before each pick: a sleeper whose deadline passed is runnable for it, not one
+   slice later. */
+static void schedule_pump_due(void) {
+    if(schedule_polling)return;
+    uint64_t now=thread_time_ns(0);
+    if(now-network_pump_last_ns>=NETWORK_PUMP_INTERVAL_NS) { network_pump_last_ns=now;timer_pump();network_pump(0);proc_publish_flush(); }
+}
 /* Run tasks until the root exits (worker 0, which returns its status) or another
    worker sees the run end (it returns -1). Holds the lock throughout, except while
    guest code runs or the worker waits. current: the task already loaded, or -1. */
@@ -598,10 +611,7 @@ static int schedule_loop(int current) {
             current=next;schedule_enter(current,thread);
         }
         worker->task=current;
-        if(!schedule_polling) {
-            uint64_t now=thread_time_ns(0);
-            if(now-network_pump_last_ns>=NETWORK_PUMP_INTERVAL_NS) { network_pump_last_ns=now;timer_pump();network_pump(0);proc_publish_flush(); }
-        }
+        schedule_pump_due();
         terminal_pump(0);host_signal_pump();terminal_waiting=0;
         process_pid=(uint64_t)current+1;process_depth=current!=0;schedule_slice=4096;
         ScheduledTask *t=&schedule_tasks[current];
@@ -649,12 +659,12 @@ static int schedule_loop(int current) {
             if(result==-3)th->state=1;
             else if(result==-2)th->state=th->state==2?2:th->wakeups==wakeups_seen?3:1;
             else th->state=1;
-            th->input_wait=terminal_waiting;th->blocked=result==-2 && th->state!=2;
+            th->input_wait=terminal_waiting;th->blocked=result==-2 && th->state!=2;th->preempted=result==-1;
             th->epoch=worker_threads?epoch_seen:io_epoch;
             if(result==-3)t->state=3;
             if(result==-2 && th->network.active)schedule_kick();  /* a sleeping poller adds its sockets */
         } else {
-            t->state=result==-3?3:result==-2 && t->wakeups==wakeups_seen?2:1;t->input_wait=terminal_waiting;t->blocked=(unsigned)blocked;
+            t->state=result==-3?3:result==-2 && t->wakeups==wakeups_seen?2:1;t->input_wait=terminal_waiting;t->blocked=(unsigned)blocked;t->preempted=result==-1;
             t->epoch=worker_threads?epoch_seen:io_epoch;
             if(result==-2 && t->network_wait.active)schedule_kick();
         }
@@ -667,6 +677,7 @@ static int schedule_loop(int current) {
             }
             t->stop_signal=0;io_epoch++;
         }
+        schedule_pump_due();
         int thread=-1,next=schedule_pick((unsigned)current,&thread);
         if(next==current && thread==thread_now)continue;      /* only this one can run: keep it loaded */
         int again=th?thread_runnable(th):schedule_runnable(t);
