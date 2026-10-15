@@ -34,6 +34,11 @@ an experiment.
   - E1: both FEX and Box64 stop at start-up on fixed mappings outside the arena, before any x86 code
     runs. FEX's tools found four small gaps, now fixed.
   - Recommendation: **go with FEX**, not Box64, once the address-space work lands.
+  - E1 re-run after the address-space merge (section 7.1):
+    - **Box64 runs real x86-64 programs** under `dockiva-hvf`: glibc `python3.12` with threads and sqlite,
+      a glibc `bash` pipeline that execs x86 children, static-PIE and musl `busybox echo`.
+    - **FEX still stops at one call:** a fixed mapping inside the unused 8 MiB brk room.
+    - FEXServer still needs abstract AF_UNIX sockets.
 
 ---
 
@@ -456,43 +461,124 @@ small design decision, so it is left for later.
 
 This removes the "pin translated processes to one vCPU" fallback. Plan item 3 (TSO wiring) is done.
 
+### 7.1 E1 re-run after the address-space merge (`rt-mmap`), 2026-10-15
+
+What was re-run:
+- Same root, the same downloads (fetched again, about 86 MB, then deleted) and the same four programs,
+  on `main` at `57446db`.
+- `main` now has MAP_FIXED/NOREPLACE anywhere in [64 KiB, 0xffffffff0000), growable reservations,
+  `mremap`, PIE at 0xaaaaaaaa0000 and ld.so just below 0xfffff8000000.
+- No experimental mapping patch.
+- The harness now passes the guest path as `argv[0]` (`--argv0`), as dockivad does. Without it Box64
+  resolved the host path and crashed in `strlen(NULL)`.
+
+**Box64 0.4.3 now runs x86-64 code.**
+- One more gap blocked it at first: `mmap(NULL, 0x40000, PROT_READ|PROT_WRITE,
+  MAP_PRIVATE|MAP_ANONYMOUS|MAP_GROWSDOWN)` (flags 0x122) returned **EOPNOTSUPP**. Box64 allocates its
+  x86 stack that way; it got -1 and crashed. Linux accepts the flag, so `mapping.h` now does too: it maps
+  the range as asked, with no downward growth. That is a one-line flag change, tested in
+  `tests/native/translator_guest.c`, which fails at check 16 before the change and passes after.
+- Results after it:
+
+| x86-64 program | Box64 | FEX 2610 |
+|---|---|---|
+| static `ET_EXEC` hello at 0x400000 | prints, rc 0. The image went into the arena instead (hint ignored); this worked only because the code is position-independent | stops at start-up (below) |
+| `busybox:musl` (static-PIE) `echo hi` | `hi`, rc 0 | stops at start-up |
+| same, `sh -c 'echo abc \| busybox wc -c'` | rc 139 with no output. Box64 warns "not really compatible with statically linked binaries"; one fixed mapping in the brk room failed on the way (below) | stops at start-up |
+| glibc `python3.12 -c 'print(6*7)'` | `42` | stops at start-up |
+| glibc `python3.12`: 4 threads hashing, sqlite3 with 1000 rows, json | `x86_64 4 499500 {"ok": true}` in 0.04 s | stops at start-up |
+| glibc `bash -c 'echo abc \| wc -c; uname -m'` (x86 children exec'd) | `4`, `x86_64`, `5.2.37(1)-release` | stops at start-up |
+| musl `busybox echo hi` (alpine) | `hi`, plus relocation errors for `ns_*` and `crypt`: Box64 binds musl symbols to the wrapped glibc | stops at start-up |
+
+- **Box64's library wrapping does not hold up across image versions.** It replaces the image's x86
+  OpenSSL with the host root's arm64 OpenSSL 3.0. Python's `_ssl` and `_hashlib` need `OPENSSL_3.3.0` and
+  `OPENSSL_3.4.0` symbols (`X509_STORE_get1_objects`, `EVP_MD_CTX_get_size_ex`), so `import ssl` fails
+  (hashlib falls back to its built-in code). `BOX64_EMULATED_LIBS=libssl.so.3:libcrypto.so.3` did not
+  help. Every image would then need arm64 libraries whose versions match its own.
+- Box64 keeps asking for fixed addresses that it does not get, and copes each time:
+  - `@0x30000000`: its bridges. MAP_FIXED works now.
+  - `@0x100000000`, `@0x7fff00000000`, `@0x7fff01000000`: hints for the PIE program and libraries, which
+    land in the arena.
+  - "could not allocate text video memory".
+
+**FEX 2610 is still blocked, now by a single call.**
+- brk(0) is 0xaaaaab12a000 (right after FEX at the new PIE base). FEX then calls
+  `mmap(0xaaaaab12a000, 0x1000, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE|MAP_FIXED_NOREPLACE)`
+  (flags 0x104022), which returns **ENOMEM**. It prints "Couldn't allocate page after SBRK." and traps
+  (SIGILL at 0xaaaaaad9e67c).
+- Cause: `guest_dynamic_mmap` (`mapping.h`) refuses any fixed mapping inside the heap's 8 MiB room
+  (`/* the heap's room */`), even where brk has not grown.
+- Linux maps it. A later brk that would run into it fails and returns the old break; that is exactly what
+  FEX wants, since it places this page to stop the host's brk from growing into guest memory.
+- Box64's static busybox hits the same refusal: `mmap(0x3759b000, 0x1000, PROT_NONE,
+  MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED)` returns ENOMEM. That address is just after Box64's own brk.
+- **Fix for the address-space owner:**
+  - allow fixed mappings in `[brk_base+brk_pages, brk_base+BRK_CAP)`;
+  - make `guest_brk` refuse to grow over any segment or reservation.
+  - That is a few lines, but they are in the address-space code, so this task did not make them.
+- FEXServer (`FEXServer -f`) still exits 255 with "Failed to create FEXServer socket: error 95". Abstract
+  AF_UNIX sockets are in progress elsewhere. FEX cannot be tried without the server until the SBRK call
+  passes: it stops before connecting.
+- `FEXGetConfig -e` still reports LSE, 16-byte unaligned-atomic granularity and hardware TSO at the new
+  addresses.
+
+Still not blocking: `/sys/devices/system/cpu` is not a directory, so Box64's `popen("lscpu")` prints
+"failed to determine number of CPUs" on every start.
+
 ### Gaps by priority (what remains for an amd64 preview)
 
-1. **P0, the address-space work (another agent): both translators are blocked here.**
-   - `MAP_FIXED` and `MAP_FIXED_NOREPLACE` for anonymous mappings anywhere below 2^47, including
-     PROT_NONE ones (0x30000000 for Box64; brk end for FEX).
-   - Honour mmap hints outside the arena when the range is free (Box64 relies on this).
-   - A high PIE base for translators. Linux's arm64 `ELF_ET_DYN_BASE` is about 0xAAAA_AAAA_B000; today it is
-     0x400000, which collides with x86 `ET_EXEC`.
-   - File-backed `MAP_FIXED` at x86 addresses, and `mremap` (expected next, not yet observed).
-2. **P1, abstract AF_UNIX sockets** (FEXServer): 2–3 days.
+Updated after 7.1. The original P0 list (MAP_FIXED anywhere, high PIE base, mremap) has been merged.
+
+1. **P0, FEX: fixed mappings in the unused brk room** (`mapping.h`, address-space owner). This is the only
+   call between FEX and running x86 code; Box64's static path hits it too. About 1 day.
+2. **P0, abstract AF_UNIX sockets** (FEXServer; in progress elsewhere).
+3. **P1, honour mmap hints outside the arena.**
+   - Box64 asks for x86 `ET_EXEC` images at their link address with a hint and then relocates them. A
+     non-PIE x86 program (most older and distro `ET_EXEC` binaries) needs its exact address.
+   - FEX maps such images with MAP_FIXED, so this is mainly a Box64 need.
+   - Non-fixed mappings that are not PROT_NONE also stay in the 12 GiB arena. That limits x86 address-space
+     layouts that expect 47-bit placements.
 3. **P1, binfmt dispatch and the hidden translator mount** (plan item 2): unchanged.
 4. **P2, sysfs:** `/sys/devices/system/cpu/` as a directory with `possible`, `online` and `cpuN`; `cpufreq`.
    Cosmetic for both translators.
-5. Unknown until E1 can be re-run: whatever FEX hits once it executes x86 code, for example signal frames,
-   `/proc/self/maps` accuracy for its allocator, and its 47-bit reservation of the upper half.
+5. Still unknown: whatever FEX hits once it executes x86 code, for example signal frames, `/proc/self/maps`
+   accuracy for its allocator, and its 47-bit reservation of the upper half. The size of the committed
+   memory outside the arena (`HVF_TABLES` caps it at about 32 GiB in total) may matter for FEX's code cache.
+6. Fixed on this branch: ID-register MRS, SIGBUS `BUS_ADRALN`, `PR_SET/GET_MEM_MODEL`,
+   `lstat /proc/<pid>/exe` and `MAP_GROWSDOWN`.
 
 ### Revised estimate and recommendation
 
 - E2 and plan item 3 are done, and the four small gaps above are fixed: about 1 week less than the plan.
   Abstract sockets add 2–3 days.
-- Item 1 (address space) is unchanged at 2–4 weeks and now has an exact first list of calls.
-- **About 2–3 months to a preview still holds, counted from when the address-space work lands.** The
-  largest uncertainty is still item 5 (compatibility), and only a re-run of E1 can size it.
+- Item 1 (address space) is now merged, apart from the brk-room fix (about 1 day) and hint placement
+  (about 2–3 days).
+- 7.1 shows the runtime already runs real x86-64 glibc programs, threads and x86 exec chains through a
+  guest translator. So the remaining risk is translator compatibility, not runtime architecture.
+- **Revised estimate: about 6–10 weeks to a preview**, down from 2–3 months:
+  - brk room, abstract sockets and hints: about 1 week;
+  - binfmt and the hidden mount: 1 week;
+  - control plane: 3–5 days;
+  - compatibility corpus: 3–6 weeks;
+  - packaging: 1–2 weeks.
+- The corpus is still the uncertain part. Re-run FEX as soon as the brk-room fix lands to size it.
 
 **Go: FEX as the translator. No-go: Box64 as the default.**
 - FEX:
   - It asks the kernel for hardware TSO, which we now provide, and it confirms hardware TSO.
   - It is libc-agnostic: it needs only its own arm64 glibc set, not an x86 one as well.
-  - Its official PPA build already runs under our runtime once its start-up mapping is allowed.
+  - Its official PPA build runs its tools under our runtime. One brk-room call stands between it and x86
+    code (7.1).
   - Its remaining needs are generic Linux behaviour, which arm64 workloads also benefit from.
 - Box64:
   - It does not use hardware TSO, so it is weak-ordered by default.
   - It needs fixed bridge mappings below 4 GiB.
-  - It depends on wrapping a native glibc next to the x86 libraries.
-  - Keep it as a benchmark only.
-- The go is conditional: re-run E1 (this section's recipe, with the same `--trace`) as soon as the
-  address-space branch merges, before plan items 2 and 4.
+  - It depends on wrapping a native glibc next to the x86 libraries. 7.1 shows the cost: the image's
+    OpenSSL 3.3/3.4 symbols fail against the arm64 root's OpenSSL 3.0, and musl binaries get bound to glibc.
+  - It runs real programs today (7.1). It is the right tool for benchmarks and for exercising the runtime
+    while FEX is unblocked, but not the default.
+- The go for FEX is conditional on the brk-room fix and abstract sockets. Then re-run 7.1 with the same
+  `--trace` before plan items 2 and 4.
 
 ---
 
@@ -502,9 +588,10 @@ This removes the "pin translated processes to one vCPU" fallback. Plan item 3 (T
    `HV_SYS_REG_ACTLR_EL1` on macOS 15+.
 2. Whether FEX can be made self-contained (static or RUNPATH plus PT_INTERP override) without forking it.
    E1 ran the stock PPA build inside an Ubuntu root, so this is still open.
-3. How well Box64 handles musl and static x86 binaries. Not reached in E1.
+3. How well Box64 handles musl and static x86 binaries. Answered in 7.1: simple commands work, but symbols
+   resolve against glibc and static shells crash. Box64 itself warns about static binaries.
 4. Any undocumented Rosetta checks beyond the ioctl. This is moot if we follow the recommendation.
-5. What FEX needs once it runs x86 code. E1 has to be re-run after the address-space work.
+5. What FEX needs once it runs x86 code. It is still blocked at the brk-room call (7.1).
 
 ## Sources
 

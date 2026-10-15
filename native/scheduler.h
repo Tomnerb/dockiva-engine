@@ -44,7 +44,9 @@ typedef struct {
     unsigned sigwaiting;uint64_t sigwait_set,sigwait_info; /* rt_sigtimedwait: the signals it takes, its siginfo (mask in suspend_mask) */
     ThreadTable *threads;unsigned running,exit_pending,exit_signal;int exit_result;
     pthread_mutex_t mm;
+    uint64_t futex_epoch; /* the image's identity for futexes waited on in place (hvf_backend.h): new at fork and exec */
 } ScheduledTask;
+static uint64_t schedule_futex_epochs;
 static uint64_t schedule_switches,schedule_cancellations;
 static ScheduledTask schedule_tasks[PROCESS_LIMIT+1];
 /* Workers (--cpus N): N host threads run tasks at once, each on its own CPU
@@ -96,34 +98,59 @@ static void schedule_interrupt(ScheduledTask *t) {
    microseconds: spin briefly before sleeping in the kernel, where a wakeup takes far
    longer than a typical hold (and a barging thread can retake the lock meanwhile). */
 static void mm_lock(ScheduledTask *t) {
-    if(!schedule_active)return;
+    if(!schedule_active || !pthread_mutex_trylock(&t->mm))return;
+    uint64_t since=profiling?profile_now_ns():0;
     for(unsigned spin=0;spin<2000;spin++) {
-        if(!pthread_mutex_trylock(&t->mm))return;
+        if(!pthread_mutex_trylock(&t->mm))goto held;
 #if defined(__aarch64__)
         __asm__ volatile("yield");
 #endif
     }
     pthread_mutex_lock(&t->mm);
+held:
+    if(profiling) { PROFILE_ADD(profile_mm_waits,1);PROFILE_ADD(profile_mm_wait_ns,profile_now_ns()-since); }
 }
 static void mm_unlock(ScheduledTask *t) { if(schedule_active)pthread_mutex_unlock(&t->mm); }
 static void schedule_notify(void);
 static _Thread_local int runtime_held; /* this worker holds runtime_mutex */
+/* Memory of images that ended (exit, exec) under the runtime lock: no task refers
+   to it any more, and releasing it (its backings, guest-physical blocks and host
+   pages) took most of exit's and much of exec's time under the lock. The worker
+   destroys it once it has released the lock. */
+#define IMAGE_DEAD_LIMIT 8u
+static _Thread_local GuestAddressSpace *image_dead[IMAGE_DEAD_LIMIT];
+static _Thread_local unsigned image_dead_count;
+static int image_destroy_later(GuestAddressSpace *space) {
+    if(!schedule_active || !worker_threads || !runtime_held || image_dead_count==IMAGE_DEAD_LIMIT)return 0;
+    GuestAddressSpace *dead=malloc(sizeof(*dead));if(!dead)return 0;
+    *dead=*space;address_space_reset(space);image_dead[image_dead_count++]=dead;
+    return 1;
+}
+static void image_destroy_dead(void) {
+    while(image_dead_count) { GuestAddressSpace *dead=image_dead[--image_dead_count];address_space_destroy(dead);free(dead); }
+}
 /* Around guest execution and host waits; no-ops with a single worker. */
 static void runtime_unlock(void) {
     if(!worker_threads)return;
     runtime_held=0;schedule_notify();pthread_mutex_unlock(&runtime_mutex);
+    image_destroy_dead();
 }
 /* The lock is held for microseconds at a time: spin briefly before sleeping in the kernel. */
 static void runtime_lock(Worker *w) {
     (void)w;
     if(!worker_threads)return;
+    if(!pthread_mutex_trylock(&runtime_mutex)) { runtime_held=1;return; }
+    uint64_t since=profiling?profile_now_ns():0;
     for(unsigned spin=0;spin<2000;spin++) {
-        if(!pthread_mutex_trylock(&runtime_mutex)) { runtime_held=1;return; }
+        if(!pthread_mutex_trylock(&runtime_mutex))goto held;
 #if defined(__aarch64__)
         __asm__ volatile("yield");
 #endif
     }
-    pthread_mutex_lock(&runtime_mutex);runtime_held=1;
+    pthread_mutex_lock(&runtime_mutex);
+held:
+    runtime_held=1;
+    if(profiling) { PROFILE_ADD(profile_lock_waits,1);PROFILE_ADD(profile_lock_wait_ns,profile_now_ns()-since); }
 }
 static int process_slot_free(unsigned slot) {
     if(process_children[slot].pid || process_children[slot].live)return 0;
@@ -282,7 +309,7 @@ static void schedule_cleanup(void) {
 }
 static void schedule_child(uint64_t pid) {
     ScheduledTask *t=&schedule_tasks[pid-1];memset(t,0,sizeof(*t)); /* a reused slot starts clean */
-    pthread_mutex_init(&t->mm,NULL);
+    pthread_mutex_init(&t->mm,NULL);t->futex_epoch=__atomic_add_fetch(&schedule_futex_epochs,1,__ATOMIC_RELAXED);
     task_save(t);t->state=1;t->pgid=schedule_tasks[process_pid-1].pgid;t->sid=schedule_tasks[process_pid-1].sid;
     ScheduledTask *parent=&schedule_tasks[process_pid-1];
     t->signal_mask=*signal_mask_now();t->signal_ignored=parent->signal_ignored; /* the forking thread's mask */
@@ -491,6 +518,7 @@ static int schedule_pick(unsigned after,int *thread) {
     return -1;
 }
 static void schedule_wait_idle(unsigned ms) {
+    if(image_dead_count) { Worker *self=worker;runtime_unlock();runtime_lock(self); }
     struct timespec until;clock_gettime(CLOCK_REALTIME,&until);
     until.tv_nsec+=(long)ms*1000000;if(until.tv_nsec>=1000000000) { until.tv_sec++;until.tv_nsec-=1000000000; }
     schedule_idle++;(void)pthread_cond_timedwait(&schedule_idle_cond,&runtime_mutex,&until);schedule_idle--;
@@ -656,7 +684,7 @@ static void *schedule_worker(void *argument) {
     task_load(&schedule_spare);                              /* this thread's globals start empty */
     (void)schedule_loop(-1);
     schedule_parked++;pthread_cond_broadcast(&schedule_idle_cond);
-    runtime_held=0;pthread_mutex_unlock(&runtime_mutex);
+    runtime_held=0;pthread_mutex_unlock(&runtime_mutex);image_destroy_dead();
     return NULL;
 }
 static int schedule_run(uint64_t steps) {
@@ -685,7 +713,7 @@ static int schedule_run(uint64_t steps) {
             schedule_kick();for(unsigned i=1;i<worker_count;i++)if(worker_interrupt)worker_interrupt(workers[i]);
             schedule_wait_idle(10);
         }
-        worker_threads=0;pthread_mutex_unlock(&runtime_mutex);
+        worker_threads=0;pthread_mutex_unlock(&runtime_mutex);image_destroy_dead();
         close(schedule_poke[0]);close(schedule_poke[1]);schedule_poke[0]=schedule_poke[1]=-1;
     }
     schedule_cleanup();schedule_active=0;process_depth=0;process_pid=1;

@@ -45,6 +45,7 @@ static void image_restore(const ProcessImage *im) {
 static void image_clear(void) {
     shared_image=NULL;address_space=image_home;address_space_reset(address_space);memset(cpu,0,sizeof(*cpu));
 }
+static int image_destroy_later(GuestAddressSpace *space); /* scheduler.h: after the runtime lock is released */
 static void image_free(void) {
     if(shared_image) {
         SharedImage *shared=shared_image;
@@ -52,7 +53,8 @@ static void image_free(void) {
         if(address_space!=image_home)*image_home=shared->state.memory;   /* the last sharer takes the memory */
         shared_image=NULL;free(shared);address_space=image_home;
     }
-    address_space_destroy(address_space);memset(cpu,0,sizeof(*cpu));
+    if(!image_destroy_later(address_space))address_space_destroy(address_space);
+    memset(cpu,0,sizeof(*cpu));
 }
 /* Strings may contain arbitrary bytes; bounded pointers are never host pointers. */
 static int process_vector(uint64_t ptr,char **out,unsigned *count,char *buffer,size_t *used) {
