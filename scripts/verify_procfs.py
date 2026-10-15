@@ -114,7 +114,7 @@ def main():
         main_run = run(root, 'yes >/dev/null & sleep 6; kill $!', '--proc-publish', str(table), background=True)
         try:
             time.sleep(3)
-            out = run(root, 'echo ==ps==; ps -o pid,time,rss,etime,args; echo ==uptime==; cat /proc/uptime; echo ==top==; top -b -n1; echo ==self==; echo $$; cut -d" " -f1 /proc/$$/stat; readlink /proc/$$/exe; readlink /proc/self/exe; echo ==', '--proc-peer', str(table))
+            out = run(root, 'echo ==ps==; ps -o pid,time,rss,etime,args; echo ==uptime==; cat /proc/uptime; echo ==top==; top -b -n2 -d1; echo ==self==; echo $$; cut -d" " -f1 /proc/$$/stat; readlink /proc/$$/exe; readlink /proc/self/exe; echo ==', '--proc-peer', str(table))
         finally:
             main_run.wait(timeout=30)
         ps = [line.split(None, 4) for line in section(out, 'ps').splitlines()[1:]]
@@ -125,8 +125,10 @@ def main():
         own = section(out, 'self').split()
         assert own[0] == own[1] == '1' and own[2] == own[3] == '/bin/busybox', own   # /proc/<getpid()> is the caller (.NET)
         assert float(section(out, 'uptime').split()[0]) >= 2, out  # the container's uptime, not this run's
+        # The main run republishes its usage every 100 ms, so top's 100 ms first frame can
+        # fall inside one interval; its second frame (1 s) must see the usage.
         row = [line for line in section(out, 'top').splitlines() if line.endswith(' yes')]
-        assert row and int(row[0].split()[-2].rstrip('%')) >= 10, out   # top's 100 ms first frame sees the main run's usage
+        assert row and int(row[-1].split()[-2].rstrip('%')) >= 10, out
     print('PASS exec run: the main run\'s processes with their CPU time (ps, top), memory and the container\'s uptime; /proc/<getpid()> is the caller')
     return 0
 
