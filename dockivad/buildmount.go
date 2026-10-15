@@ -286,7 +286,7 @@ func (bd *builder) mountSources(mounts []runMount) (binds []any, env []string, t
 	scratch := func() string {
 		d, e := os.MkdirTemp(bd.work, "mount-")
 		check(e)
-		undo = append(undo, func() { go os.RemoveAll(d) })
+		undo = append(undo, func() { os.RemoveAll(d) }) // at once: secrets are among them
 		return d
 	}
 	bind := func(source, target string, readonly bool) {
