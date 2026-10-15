@@ -48,7 +48,7 @@ def main():
     # Linux's address space beyond the arena (reservations, MAP_FIXED anywhere, mremap),
     # and a static PIE loaded where Linux puts it.
     guests = []
-    for name, expected, pie in (('wide_mmap_guest', 214, False), ('pie_base_guest', 5, True)):
+    for name, expected, pie in (('wide_mmap_guest', 222, False), ('pie_base_guest', 5, True)):
         source_file = ROOT/'tests/native'/(name+'.c')
         obj, elf = folder/(name+'.o'), folder/(name+'.elf')
         subprocess.run(['clang', '--target=aarch64-linux-gnu', '-O0', '-ffreestanding', '-fno-builtin', '-fno-stack-protector',

@@ -38,6 +38,8 @@ an experiment.
     - **Box64 runs real x86-64 programs** under `dockiva-hvf`: glibc `python3.12` with threads and sqlite,
       a glibc `bash` pipeline that execs x86 children, static-PIE and musl `busybox echo`.
     - **FEX still stops at one call:** a fixed mapping inside the unused 8 MiB brk room.
+  - 7.2: the brk room now takes fixed mappings. FEX gets past its start-up mapping and now stops only
+    on its server's abstract AF_UNIX socket.
     - FEXServer still needs abstract AF_UNIX sockets.
 
 ---
@@ -525,13 +527,60 @@ What was re-run:
 Still not blocking: `/sys/devices/system/cpu` is not a directory, so Box64's `popen("lscpu")` prints
 "failed to determine number of CPUs" on every start.
 
+### 7.2 Fixed mappings in the brk room; E1 re-run, 2026-10-15
+
+What changed in the runtime (on `main` `b663f9f`):
+- `guest_dynamic_mmap` (`mapping.h`) now refuses fixed mappings only over the heap in use,
+  `[brk_base, brk_base+brk_pages)`. MAP_FIXED and MAP_FIXED_NOREPLACE at any protection are allowed in
+  the rest of the 8 MiB room.
+- `guest_brk` (`heap.h`) refuses to grow over any mapping or reservation and returns the old break, as
+  Linux does.
+
+Tests (`verify_address_space.py` runs them on both backends, as part of `tests/native/wide_mmap_guest.c`,
+now 222 checks):
+- NOREPLACE guard page right at the break;
+- brk refused at it;
+- MAP_FIXED further up the room;
+- NOREPLACE over the heap in use returns EEXIST;
+- after `munmap` of the guard, brk grows again.
+
+Before the change it failed at check 217, the guard page.
+
+**FEX 2610: it now stops only at the abstract socket.**
+- The brk(0) guard mapping succeeds, and FEX starts FEXServer itself.
+- Every program then ends the same way, with exit 255:
+  ```
+  E Couldn't connect to FEXServer socket 0.FEXServer.Socket 95
+  E Couldn't connect to FEXServer socket /tmp/0.FEXServer.Socket 2
+  E Couldn't connect to FEXServer socket after launching the process
+  E FEXServerClient: Failure to setup client
+  ```
+  The server it launched has already exited ("Failed to create FEXServer socket: error 95").
+- `FEX_SERVERSOCKETPATH=/tmp/fex.sock` does not avoid this: FEX tries that name as an abstract address
+  first, and the server still binds it abstract.
+- FEX cannot run without its server. Once abstract AF_UNIX sockets land (another agent's work), re-run
+  this section. There is no other known runtime blocker before FEX executes x86 code.
+
+**Box64 static `busybox:musl sh -c 'echo abc | busybox wc -c'`: still rc 139**, but no longer because of
+our mapping.
+- Box64 crashes in its handler for the x86 program's SIGCHLD (`sigaction handler for sig 17`). It warns
+  that statically linked binaries are "not really compatible".
+- On the dynamic path the same signal machinery works: glibc `bash` runs a `trap … USR1` handler, a
+  background job with `wait` (SIGCHLD) and a pipeline correctly (`got-usr1`, `4`, `0`).
+- On the way it calls `mmap(0x37599000, 0x1000, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED)` and
+  still gets ENOMEM. This is musl mallocng's guard page, placed with MAP_FIXED **over the heap it has just
+  grown** with brk. Linux replaces the heap page; here the heap in use cannot be partly remapped.
+  - musl ignores the failure; it only loses the guard page, and arm64 Alpine programs already run that way.
+  - Recorded as P2 for the address-space owner: replacing pages of the heap in use would need the heap
+    split into segments.
+
 ### Gaps by priority (what remains for an amd64 preview)
 
 Updated after 7.1. The original P0 list (MAP_FIXED anywhere, high PIE base, mremap) has been merged.
 
-1. **P0, FEX: fixed mappings in the unused brk room** (`mapping.h`, address-space owner). This is the only
-   call between FEX and running x86 code; Box64's static path hits it too. About 1 day.
-2. **P0, abstract AF_UNIX sockets** (FEXServer; in progress elsewhere).
+1. ~~**P0, FEX: fixed mappings in the unused brk room.**~~ Done in 7.2.
+2. **P0, abstract AF_UNIX sockets** (FEXServer; in progress elsewhere). This is now the only known blocker
+   before FEX runs x86 code.
 3. **P1, honour mmap hints outside the arena.**
    - Box64 asks for x86 `ET_EXEC` images at their link address with a hint and then relocates them. A
      non-PIE x86 program (most older and distro `ET_EXEC` binaries) needs its exact address.
@@ -551,12 +600,12 @@ Updated after 7.1. The original P0 list (MAP_FIXED anywhere, high PIE base, mrem
 
 - E2 and plan item 3 are done, and the four small gaps above are fixed: about 1 week less than the plan.
   Abstract sockets add 2–3 days.
-- Item 1 (address space) is now merged, apart from the brk-room fix (about 1 day) and hint placement
+- Item 1 (address space) is now merged, including the brk-room fix (7.2), apart from hint placement
   (about 2–3 days).
 - 7.1 shows the runtime already runs real x86-64 glibc programs, threads and x86 exec chains through a
   guest translator. So the remaining risk is translator compatibility, not runtime architecture.
 - **Revised estimate: about 6–10 weeks to a preview**, down from 2–3 months:
-  - brk room, abstract sockets and hints: about 1 week;
+  - abstract sockets (in progress) and hints: under 1 week (the brk room is done, 7.2);
   - binfmt and the hidden mount: 1 week;
   - control plane: 3–5 days;
   - compatibility corpus: 3–6 weeks;
@@ -567,8 +616,8 @@ Updated after 7.1. The original P0 list (MAP_FIXED anywhere, high PIE base, mrem
 - FEX:
   - It asks the kernel for hardware TSO, which we now provide, and it confirms hardware TSO.
   - It is libc-agnostic: it needs only its own arm64 glibc set, not an x86 one as well.
-  - Its official PPA build runs its tools under our runtime. One brk-room call stands between it and x86
-    code (7.1).
+  - Its official PPA build runs its tools under our runtime. Only abstract AF_UNIX sockets (for
+    FEXServer) stand between it and x86 code (7.2).
   - Its remaining needs are generic Linux behaviour, which arm64 workloads also benefit from.
 - Box64:
   - It does not use hardware TSO, so it is weak-ordered by default.
@@ -577,8 +626,8 @@ Updated after 7.1. The original P0 list (MAP_FIXED anywhere, high PIE base, mrem
     OpenSSL 3.3/3.4 symbols fail against the arm64 root's OpenSSL 3.0, and musl binaries get bound to glibc.
   - It runs real programs today (7.1). It is the right tool for benchmarks and for exercising the runtime
     while FEX is unblocked, but not the default.
-- The go for FEX is conditional on the brk-room fix and abstract sockets. Then re-run 7.1 with the same
-  `--trace` before plan items 2 and 4.
+- The go for FEX is conditional on abstract sockets; the brk room is done (7.2). Then re-run 7.1 with the
+  same `--trace` before plan items 2 and 4.
 
 ---
 
@@ -591,7 +640,8 @@ Updated after 7.1. The original P0 list (MAP_FIXED anywhere, high PIE base, mrem
 3. How well Box64 handles musl and static x86 binaries. Answered in 7.1: simple commands work, but symbols
    resolve against glibc and static shells crash. Box64 itself warns about static binaries.
 4. Any undocumented Rosetta checks beyond the ioctl. This is moot if we follow the recommendation.
-5. What FEX needs once it runs x86 code. It is still blocked at the brk-room call (7.1).
+5. What FEX needs once it runs x86 code. It is now blocked only by abstract AF_UNIX sockets for FEXServer
+   (7.2).
 
 ## Sources
 

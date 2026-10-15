@@ -32,9 +32,12 @@ static unsigned char *heap_lookup(uint64_t addr,uint64_t count,unsigned permissi
     if((permission&2) && !address_space_write(address_space,address_space->map_backing,(size_t)off,(size_t)count))return NULL;
     return backing_data(address_space->map_backing)+(size_t)off;
 }
+static int map_outside_used(uint64_t address,uint64_t bytes);   /* mapping.h */
 static uint64_t guest_brk(uint64_t requested) {
     if(requested<address_space->brk_base || requested-address_space->brk_base>BRK_CAP) return address_space->brk_current;
     uint64_t needed=page_up(requested-address_space->brk_base);
+    /* Growing over a mapping placed in the heap's room fails: the old break, as Linux. */
+    if(needed>address_space->brk_pages && map_outside_used(address_space->brk_base+address_space->brk_pages,needed-address_space->brk_pages))return address_space->brk_current;
     if(needed && !backing_data(address_space->brk_backing)) { address_space->brk_backing=backing_alloc(BRK_CAP,1); if(!backing_data(address_space->brk_backing)) return address_space->brk_current; }
     if(needed>address_space->brk_pages && !address_space_make_private(address_space,address_space->brk_backing,(size_t)address_space->brk_pages,(size_t)(needed-address_space->brk_pages)))return address_space->brk_current;
     if(needed>address_space->brk_pages) memset(backing_data(address_space->brk_backing)+(size_t)address_space->brk_pages,0,(size_t)(needed-address_space->brk_pages));
