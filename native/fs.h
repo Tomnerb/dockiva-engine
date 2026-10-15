@@ -13,14 +13,16 @@
 #define FS_SLOTS 1024u /* open files and directories per process */
 /* Open files and directories of the current process (see the descriptor map in
    net.h); guest: slot -> guest descriptor. */
-/* ro: the file lives where writes are refused (a read-only root or bind mount). */
-typedef struct { int fd[FS_SLOTS];unsigned char cloexec[FS_SLOTS],ro[FS_SLOTS];struct GuestDirectory *dirs[FS_SLOTS];unsigned short guest[FS_SLOTS]; } FsTable;
+/* ro: the file lives where writes are refused (a read-only root or bind mount).
+   dev: it is a character device (fs_device), so reads and writes need no fstat. */
+typedef struct { int fd[FS_SLOTS];unsigned char cloexec[FS_SLOTS],ro[FS_SLOTS],dev[FS_SLOTS];struct GuestDirectory *dirs[FS_SLOTS];unsigned short guest[FS_SLOTS]; } FsTable;
 static FsTable fs_table_first;
 static _Thread_local FsTable *fs_table=&fs_table_first;
 #define fs_fd (fs_table->fd)
 #define fs_cloexec (fs_table->cloexec)
 #define fs_dirs (fs_table->dirs)
 #define fs_ro (fs_table->ro)
+#define fs_dev (fs_table->dev)
 #define fs_guest (fs_table->guest)
 static int fs_slot(uint64_t guest) { return fd_slot(guest,FD_FILE); }
 #define FS_FILE_LIMIT (16u*1024u*1024u)
@@ -429,7 +431,12 @@ static const char *fs_device(const char *canon) {
     if(!strcmp(canon,"/dev/random") || !strcmp(canon,"/dev/urandom"))return "/dev/urandom";
     return NULL;
 }
-static int fs_is_device(int fd) { struct stat st;return !fstat(fd,&st) && S_ISCHR(st.st_mode); }
+/* Whether host descriptor fd is a device: known per slot for the call's own fd (1-byte
+   reads and writes, dd bs=1, paid an fstat each), else asked of the host. */
+static int fs_is_device(int fd) {
+    int slot=fs_slot(cpu->gpr[0]);if(slot>=0 && fs_fd[slot]==fd+1)return fs_dev[slot];
+    struct stat st;return !fstat(fd,&st) && S_ISCHR(st.st_mode);
+}
 static uint64_t fs_fchdir(void) {
     int fd=fs_host(cpu->gpr[0]);if(fd<0)return linux_error(9);
     struct stat st;if(fstat(fd,&st)<0)return fs_error();if(!S_ISDIR(st.st_mode))return linux_error(20);
@@ -502,7 +509,7 @@ static uint64_t fs_memfd(void) {
     if(slot==FS_SLOTS || fd_lowest(0)<0)return linux_error(24);
     char path[]="/tmp/dockiva-memfd-XXXXXX";int fd=mkstemp(path);if(fd<0)return fs_error();
     unlink(path);(void)fcntl(fd,F_SETFD,FD_CLOEXEC);
-    fs_fd[slot]=fd+1;fs_cloexec[slot]=(flags&1)!=0;fs_ro[slot]=0;
+    fs_fd[slot]=fd+1;fs_cloexec[slot]=(flags&1)!=0;fs_ro[slot]=0;fs_dev[slot]=0;
     int guest=fd_lowest(0);fs_guest[slot]=(unsigned short)guest;fd_bind((uint64_t)guest,FD_FILE,slot);return (uint64_t)guest;
 }
 static unsigned guest_cpus(void); /* scheduler.h */
@@ -1035,7 +1042,7 @@ static uint64_t fs_open(void) {
         close(parent);
         if(flags&16384)return linux_error(20);
         int fd=open(device,options|O_CLOEXEC);if(fd<0)return fs_error();
-        fs_fd[slot]=fd+1;fs_cloexec[slot]=(flags&524288)!=0;fs_ro[slot]=0;{ int guest=fd_lowest(0);fs_guest[slot]=(unsigned short)guest;fd_bind((uint64_t)guest,FD_FILE,slot);return (uint64_t)guest; }
+        fs_fd[slot]=fd+1;fs_cloexec[slot]=(flags&524288)!=0;fs_ro[slot]=0;fs_dev[slot]=1;{ int guest=fd_lowest(0);fs_guest[slot]=(unsigned short)guest;fd_bind((uint64_t)guest,FD_FILE,slot);return (uint64_t)guest; }
     }
     int read_only=!fs_path_writable();
     if(read_only && (flags&(3|64|512|1024))) { close(parent);return linux_error(30); }
@@ -1072,7 +1079,7 @@ static uint64_t fs_open(void) {
         fs_dirs[slot]=directory;
     }
     if(flags&64) { fs_count_created(); }
-    fs_fd[slot]=fd+1;fs_cloexec[slot]=(flags&524288)!=0;fs_ro[slot]=(unsigned char)read_only;{ int guest=fd_lowest(0);fs_guest[slot]=(unsigned short)guest;fd_bind((uint64_t)guest,FD_FILE,slot);return (uint64_t)guest; }
+    fs_fd[slot]=fd+1;fs_cloexec[slot]=(flags&524288)!=0;fs_ro[slot]=(unsigned char)read_only;fs_dev[slot]=0;{ int guest=fd_lowest(0);fs_guest[slot]=(unsigned short)guest;fd_bind((uint64_t)guest,FD_FILE,slot);return (uint64_t)guest; }
 }
 static void fs_pack(unsigned char *p,unsigned offset,uint64_t value,unsigned size) {
     for(unsigned i=0;i<size;i++) p[offset+i]=(unsigned char)(value>>(i*8));

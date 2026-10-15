@@ -22,7 +22,7 @@
 #define HVF_SYSTEM_BYTES (16u<<10)                  /* one host page: vectors + flush routine */
 #define HVF_SYSTEM_VA UINT64_C(0xffffffff0000)      /* top of the 48-bit user range; EL1-only */
 #define HVF_FLUSH_OFFSET 0x800u
-#define HVF_FLUSH_VA_OFFSET 0x840u
+#define HVF_FLUSH_ERET_OFFSET 0x840u
 #define HVF_BLOCKS 1024
 #define HVF_VIEWS (PROCESS_LIMIT+2)                 /* indexed by pid; the pid is the ASID */
 static unsigned char *hvf_tables,*hvf_system;
@@ -42,6 +42,8 @@ static pthread_mutex_t hvf_mutex=PTHREAD_MUTEX_INITIALIZER;
    not, as invalid entries are never cached. */
 static _Thread_local int hvf_stale_tlb;
 static _Thread_local int hvf_stale_code; /* and executable pages were mapped: instruction caches too */
+static _Thread_local uint64_t hvf_pending_va;static _Thread_local unsigned hvf_pending_pages; /* to invalidate as the guest resumes */
+static _Thread_local int hvf_resume_el1;     /* hvf_unlocked_exit left the vCPU in an EL1 routine (hvf_fault_resume) */
 /* A process's stage-1 tables and the mapping-relevant layout they were built from.
    The scheduler restores a blocked process's image on every resume, which bumps
    the generation without changing anything; comparing the layout (and its
@@ -203,7 +205,7 @@ static void hvf_map_range(const GuestAddressSpace *space,uint64_t base,uint64_t 
     for(uint64_t p=0;p<size;p+=4096)hvf_map_page_in(v,base+p,ipa+p,hvf_effective_flags(space,backing,flags,offset+(size_t)p),0);
 }
 static void hvf_flush(void);
-static void hvf_flush_va(uint64_t va,unsigned pages);
+static void hvf_resume_el0(uint64_t pc,uint64_t spsr);
 static void hvf_siblings_out(void);
 static int hvf_view_matches(const GuestAddressSpace *space) {
     const HvfView *v=&hvf_views[process_pid];
@@ -242,15 +244,35 @@ static void hvf_map_arena_page(GuestAddressSpace *space,uint64_t ipa,unsigned i)
     if(flags)hvf_map_page(MAP_BASE+(uint64_t)i*4096,ipa+(uint64_t)i*4096,hvf_effective_flags(space,space->map_backing,flags,(size_t)i*4096),0);
     else hvf_unmap_page(MAP_BASE+(uint64_t)i*4096);                       /* PROT_NONE stays unmapped */
 }
-/* Apply mmap/munmap/mprotect/madvise changes to just the arena pages they touched. */
+/* Apply mmap/munmap/mprotect/madvise changes to just the arena pages they touched.
+   Pages to unmap are cleared a leaf table (2 MiB) at a time, eight flag bytes at a
+   time where none of them is mapped or lent to a shared segment: Go reserves and
+   frees gigabytes of PROT_NONE pages, and a dirty range spans every change since the
+   last sync (walking it page by page dominated the start of every Go process). */
 static void hvf_remap_arena(GuestAddressSpace *space) {
     uint64_t ipa=space->map_backing?hvf_block_ipa(space->map_backing):0;
     const unsigned char *flags=space->map_flags;
-    for(unsigned i=space->arena_dirty_lo;i<space->arena_dirty_hi;) {
-        if(flags && (flags[i]&MAP_RESERVED)) { i++;continue; }                 /* a shared segment's page */
-        if(ipa && flags && (flags[i]&7)) { hvf_map_arena_page(space,ipa,i);i++;continue; }
-        unsigned end=i+hvf_unmap_page(MAP_BASE+(uint64_t)i*4096);              /* and the unmapped pages after it */
-        for(i++;i<end && i<space->arena_dirty_hi && !(ipa && flags && (flags[i]&7));i++) {}
+    const uint64_t kept=ipa?UINT64_C(0x2727272727272727):UINT64_C(0x2020202020202020); /* mapped or reserved: not cleared */
+    for(unsigned i=space->arena_dirty_lo,hi=space->arena_dirty_hi;i<hi;) {
+        unsigned char f=flags?flags[i]:0;
+        if(f&MAP_RESERVED) { i++;continue; }                                    /* a shared segment's page */
+        if(ipa && (f&7)) { hvf_map_arena_page(space,ipa,i);i++;continue; }
+        uint64_t va=MAP_BASE+(uint64_t)i*4096;
+        unsigned end=i+512-(unsigned)((va>>12)&511);if(end>hi)end=hi;          /* this leaf table's last page */
+        uint64_t *leaf=hvf_leaf(hvf_view,va,0);
+        while(i<end) {
+            if(!(i&7) && i+8<=end) {
+                uint64_t w=0;if(flags)memcpy(&w,flags+i,8);
+                if(!(w&kept)) {
+                    if(leaf)for(unsigned k=0;k<8;k++) { uint64_t *slot=&leaf[((MAP_BASE>>12)+i+k)&511];if(*slot&1)hvf_stale_tlb=1;*slot=0; }
+                    i+=8;continue;
+                }
+            }
+            f=flags?flags[i]:0;
+            if(ipa && (f&7))break;                                              /* mapped: the outer loop maps it */
+            if(leaf && !(f&MAP_RESERVED)) { uint64_t *slot=&leaf[((MAP_BASE>>12)+i)&511];if(*slot&1)hvf_stale_tlb=1;*slot=0; }
+            i++;
+        }
     }
 }
 static void hvf_activate(HvfView *v) {
@@ -363,21 +385,29 @@ static void hvf_sync_memory(GuestAddressSpace *space) {
     int stale=hvf_sync_tables(space,v);
     if(stale)hvf_flush();
 }
-/* After a write fault made a page private (or charged it), remap the guest pages
-   that share its host page instead of rebuilding every table. */
-static void hvf_remap_host_page(const GuestAddressSpace *space,uint64_t far) {
-    uint64_t va=far&~UINT64_C(4095),low=0,high=0;size_t start=0;unsigned flags=0;MemoryBacking *backing=NULL;
-    if(space->map_flags && va>=MAP_BASE && va-MAP_BASE<space->map_capacity) { backing=space->map_backing;low=MAP_BASE;high=MAP_BASE+space->map_capacity; }
-    else if(va>=space->brk_base && va-space->brk_base<space->brk_pages) { backing=space->brk_backing;low=space->brk_base;high=low+space->brk_pages;flags=6; }
-    else for(unsigned i=0;i<space->nseg;i++)
+/* The mapping holding va: its backing, guest range [*low,*high), the backing offset
+   at *low and (outside the mmap arena, whose pages have their own) its flags. */
+static MemoryBacking *hvf_region(const GuestAddressSpace *space,uint64_t va,uint64_t *low,uint64_t *high,size_t *start,unsigned *flags) {
+    *start=0;*flags=0;
+    if(space->map_flags && va>=MAP_BASE && va-MAP_BASE<space->map_capacity) { *low=MAP_BASE;*high=MAP_BASE+space->map_capacity;return space->map_backing; }
+    if(va>=space->brk_base && va-space->brk_base<space->brk_pages) { *low=space->brk_base;*high=*low+space->brk_pages;*flags=6;return space->brk_backing; }
+    for(unsigned i=0;i<space->nseg;i++)
         if(va>=space->seg[i].base && va-space->seg[i].base<space->seg[i].size) {
-            backing=space->seg[i].backing;low=space->seg[i].base;high=low+space->seg[i].size;start=space->seg[i].offset;flags=space->seg[i].flags;break;
+            *low=space->seg[i].base;*high=*low+space->seg[i].size;*start=space->seg[i].offset;*flags=space->seg[i].flags;return space->seg[i].backing;
         }
+    return NULL;
+}
+/* After a write fault made a page private (or charged it), remap the guest pages
+   that share its host page, and the hosts-1 host pages after it, instead of
+   rebuilding every table. */
+static void hvf_remap_host_page(const GuestAddressSpace *space,uint64_t far,unsigned hosts) {
+    uint64_t va=far&~UINT64_C(4095),low=0,high=0;size_t start=0;unsigned flags=0;
+    MemoryBacking *backing=hvf_region(space,va,&low,&high,&start,&flags);
     if(!backing)return;
     hvf_exhausted=0;hvf_stale_tlb=0;hvf_stale_code=0;
     uint64_t ipa=hvf_block_ipa(backing),first=0,last=0;
     size_t host=(start+(size_t)(va-low))/backing->page_size*backing->page_size;
-    for(size_t offset=host;ipa && offset<host+backing->page_size;offset+=4096) {
+    for(size_t offset=host;ipa && offset<host+hosts*backing->page_size;offset+=4096) {
         if(offset<start)continue;
         uint64_t page=low+(offset-start);if(page>=high)break;
         unsigned f=space->map_flags && low==MAP_BASE?space->map_flags[(page-MAP_BASE)/4096]&7:flags;
@@ -385,7 +415,61 @@ static void hvf_remap_host_page(const GuestAddressSpace *space,uint64_t far) {
     }
     if(hvf_exhausted) { hvf_view->stale=HVF_STALE_NEW;return; } /* the next sync rebuilds (and evicts) */
     if(hvf_stale_tlb && (hvf_stale_code || !first))hvf_flush();
-    else if(hvf_stale_tlb)hvf_flush_va(first,(unsigned)((last-first)/4096+1));
+    else if(hvf_stale_tlb) { hvf_pending_va=first;hvf_pending_pages=(unsigned)((last-first)/4096+1); }
+}
+/* Fault-around: a write fault made host page h private and the page before it is
+   private too (memory being filled in order: a heap, a buffer). Take the next host
+   pages now, up to HVF_FAULT_AROUND of them, while each still needs a write fault
+   (not owned yet, or shared since a fork) and every guest page in it is mapped
+   writable and private to this process (no shared or file-copy segment, no arena
+   page lent to one, no read-only or PROT_NONE page). Each costs a charge it would
+   have taken at its first write; a fault on each is saved. Only when the backing is
+   already this process's alone (no snapshot is taken here). Returns how many. */
+#define HVF_FAULT_AROUND 8u
+static unsigned hvf_fault_around(GuestAddressSpace *space,uint64_t far) {
+    uint64_t low=0,high=0;size_t start=0;unsigned flags=0;
+    MemoryBacking *backing=hvf_region(space,far,&low,&high,&start,&flags);
+    if(!backing || (flags&SEG_SHARED) || backing->frozen || address_space_shared(space,backing))return 0;
+    if(backing->refs!=1 && backing->refs!=address_space_backing_refs(space,backing))return 0;
+    size_t size=backing->page_size,host=(start+(size_t)(far-low))/size;
+    if(!host || !backing->pages[host-1] || backing->pages[host-1]->refs!=1)return 0;
+    int arena=space->map_flags && low==MAP_BASE;unsigned n=0;
+    if(!arena && !(flags&2))return 0;
+    for(size_t h=host+1;n<HVF_FAULT_AROUND && (h+1)*size<=backing->size && h*size>=start;h++,n++) {
+        if(backing->pages[h] && backing->pages[h]->refs==1)break;     /* private already */
+        uint64_t page=low+(h*size-start);
+        if(page>=high || high-page<size)break;
+        for(size_t k=0;arena && k<size/4096;k++)if((space->map_flags[(page-MAP_BASE)/4096+k]&(8|2|MAP_RESERVED))!=(8|2))return n && address_space_make_private(space,backing,(host+1)*size,n*size)?n:0;
+    }
+    return n && address_space_make_private(space,backing,(host+1)*size,n*size)?n:0;
+}
+/* Resume the guest after a write fault (ELR/SPSR_EL1 still hold its state). Pages
+   that became writable are invalidated on the way: the vCPU runs the EL1 routine
+   "1: tlbi vale1is, x0; add x0, x0, #1; sub sp, sp, #1; cmp sp, #0; b.ne 1b; dsb ish;
+   mrs x0, tpidr_el1; eret" first, with the operand in x0, the page count in SP_EL1
+   and the guest's x0 in TPIDR_EL1, instead of a separate run for the invalidation.
+   Returns 1 then: the vCPU is at EL1 until it runs (the caller treats it as in the vector). */
+static int hvf_fault_resume(uint64_t elr,uint64_t spsr) {
+    unsigned pages=hvf_pending_pages;hvf_pending_pages=0;
+    if(!pages) { hvf_resume_el0(elr,spsr);return 0; }
+    uint64_t x0=0,asid=(uint64_t)(hvf_view-hvf_views);
+    hvf_check(hv_vcpu_get_reg(hvf_vcpu,HV_REG_X0,&x0),"get x0");
+    hvf_check(hv_vcpu_set_sys_reg(hvf_vcpu,HV_SYS_REG_TPIDR_EL1,x0),"set tpidr_el1");
+    hvf_check(hv_vcpu_set_sys_reg(hvf_vcpu,HV_SYS_REG_SP_EL1,pages),"set sp_el1");
+    hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_X0,(asid<<48)|((hvf_pending_va>>12)&UINT64_C(0xfffffffffff))),"set x0");
+    hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_PC,HVF_SYSTEM_VA+HVF_FLUSH_ERET_OFFSET),"set pc");
+    hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_CPSR,0x3c5),"set cpsr");           /* EL1h, interrupts masked */
+    return 1;
+}
+/* A write fault on a page this view already maps writable: a TLB still held its
+   read-only entry. Invalidate it on the way back (the caller resumes the guest). */
+static int hvf_spurious_write(uint64_t far) {
+    if(hvf_view!=&hvf_views[process_pid] || !hvf_view->root || hvf_cpu->ttbr!=hvf_view->root)return 0;
+    const uint64_t *leaf=hvf_leaf(hvf_view,far,0);if(!leaf)return 0;
+    uint64_t descriptor=leaf[(far>>12)&511];
+    if(!(descriptor&1) || (descriptor&(UINT64_C(1)<<7)))return 0;
+    PROFILE_ADD(profile_spurious_faults,1);
+    hvf_pending_va=far&~UINT64_C(4095);hvf_pending_pages=1;return 1;
 }
 /* Register transfer. General registers are read at every exit and written back
    only when changed (the shadow mirrors the vCPU). FP/SIMD state stays in the vCPU
@@ -462,26 +546,6 @@ static void hvf_flush(void) {
         fail("Hypervisor TLB/cache maintenance did not complete");
     hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_PC,pc),"set pc");hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_CPSR,cpsr),"set cpsr");
 }
-/* Invalidate the current view's last-level TLB entries for pages [va, va+pages*4 KiB)
-   on every vCPU ("tlbi vale1is" by VA and ASID; dsb ish; isb; hvc #2), instead of
-   every translation of every process: after a write fault made a read-only page
-   writable, Linux too invalidates just that page. x0 and x1 carry the operands. */
-static void hvf_flush_va(uint64_t va,unsigned pages) {
-    uint64_t pc=0,cpsr=0,x0=0,x1=0;
-    hvf_check(hv_vcpu_get_reg(hvf_vcpu,HV_REG_PC,&pc),"get pc");hvf_check(hv_vcpu_get_reg(hvf_vcpu,HV_REG_CPSR,&cpsr),"get cpsr");
-    hvf_check(hv_vcpu_get_reg(hvf_vcpu,HV_REG_X0,&x0),"get x0");hvf_check(hv_vcpu_get_reg(hvf_vcpu,HV_REG_X1,&x1),"get x1");
-    uint64_t asid=(uint64_t)(hvf_view-hvf_views);
-    hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_X0,(asid<<48)|((va>>12)&UINT64_C(0xfffffffffff))),"set x0");
-    hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_X1,pages),"set x1");
-    hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_PC,HVF_SYSTEM_VA+HVF_FLUSH_VA_OFFSET),"set pc");
-    hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_CPSR,0x3c5),"set cpsr");           /* EL1h, interrupts masked */
-    do hvf_check(hv_vcpu_run(hvf_vcpu),"hv_vcpu_run");
-    while(hvf_exit->reason==HV_EXIT_REASON_CANCELED || hvf_exit->reason==HV_EXIT_REASON_VTIMER_ACTIVATED);
-    if(hvf_exit->reason!=HV_EXIT_REASON_EXCEPTION || (hvf_exit->exception.syndrome>>26)!=0x16 || (hvf_exit->exception.syndrome&0xffff)!=2)
-        fail("Hypervisor TLB maintenance did not complete");
-    hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_X0,x0),"set x0");hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_X1,x1),"set x1");
-    hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_PC,pc),"set pc");hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_CPSR,cpsr),"set cpsr");
-}
 static void hvf_resume_el0(uint64_t pc,uint64_t spsr) {
     hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_PC,pc),"set pc");hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_CPSR,spsr),"set cpsr");
 }
@@ -500,6 +564,7 @@ static void *hvf_watchdog(void *unused) {
     return NULL;
 }
 static uint64_t hvf_vtimer_offset;
+static void hvf_futex_init(void);
 /* The calling worker's vCPU: every vCPU shares one virtual counter (the vDSO's clock). */
 static HvfCpu *hvf_cpu_new(int first) {
     HvfCpu *c=calloc(1,sizeof(*c));if(!c)fail("Cannot allocate a vCPU");
@@ -530,6 +595,7 @@ static void hvf_init(void) {
     uint32_t vcpus=0;
     if(hv_vm_get_max_vcpu_count(&vcpus)==HV_SUCCESS && vcpus && worker_count>vcpus)worker_count=vcpus;
     backing_release_hook=hvf_backing_gone;worker_interrupt=hvf_interrupt;workers_supported=1;
+    hvf_futex_init();
     hvf_tables=hvf_host_pages(HVF_TABLE_BYTES);hvf_system=hvf_host_pages(HVF_SYSTEM_BYTES);
     hvf_check(hv_vm_map(hvf_tables,HVF_IPA_BASE,HVF_TABLE_BYTES,HV_MEMORY_READ|HV_MEMORY_WRITE),"hv_vm_map tables");
     hvf_check(hv_vm_map(hvf_system,HVF_IPA_BASE+HVF_TABLE_BYTES,HVF_SYSTEM_BYTES,HV_MEMORY_READ|HV_MEMORY_EXEC),"hv_vm_map system");
@@ -548,10 +614,10 @@ static void hvf_init(void) {
     }
     const uint32_t flush[]={UINT32_C(0xd508711f),UINT32_C(0xd508831f),UINT32_C(0xd5033b9f),UINT32_C(0xd5033fdf),UINT32_C(0xd4000022),UINT32_C(0x17ffffff)};
     memcpy(hvf_system+HVF_FLUSH_OFFSET,flush,sizeof(flush));
-    /* 1: tlbi vale1is, x0; add x0, x0, #1; subs x1, x1, #1; b.ne 1b; dsb ish; isb; hvc #2; b .-4 */
-    const uint32_t flush_va[]={UINT32_C(0xd50883a0),UINT32_C(0x91000400),UINT32_C(0xf1000421),UINT32_C(0x54ffffa1),
-                               UINT32_C(0xd5033b9f),UINT32_C(0xd5033fdf),UINT32_C(0xd4000042),UINT32_C(0x17ffffff)};
-    memcpy(hvf_system+HVF_FLUSH_VA_OFFSET,flush_va,sizeof(flush_va));
+    /* hvf_fault_resume's routine (sp counts; x0 comes back from tpidr_el1; eret to the guest) */
+    const uint32_t flush_eret[]={UINT32_C(0xd50883a0),UINT32_C(0x91000400),UINT32_C(0xd10007ff),UINT32_C(0xf10003ff),UINT32_C(0x54ffff81),
+                                 UINT32_C(0xd5033b9f),UINT32_C(0xd538d080),UINT32_C(0xd69f03e0)};
+    memcpy(hvf_system+HVF_FLUSH_ERET_OFFSET,flush_eret,sizeof(flush_eret));
     worker->backend=hvf_cpu_new(1);
     if(vdso_backing)vdso_start(hvf_vtimer_offset);
     pthread_t watchdog;
@@ -619,11 +685,34 @@ static MemoryBacking *hvf_futex_shared(uint64_t address,size_t *offset) {
     }
     return NULL;
 }
+/* Futex waits served in place: a thread whose futex wait is likely short while
+   workers are idle waits on its own worker, holding no lock, instead of going back
+   to the scheduler (hvf_futex_unlocked). It is queued in a bucket by (process,
+   image, address); wakers take only the bucket's lock. Private futexes only. */
+typedef struct HvfFutexWaiter { struct HvfFutexWaiter *next;uint64_t pid,epoch,address;uint32_t bits;int woken;pthread_cond_t cond; } HvfFutexWaiter;
+#define HVF_FUTEX_BUCKETS 256u
+static struct { pthread_mutex_t lock;HvfFutexWaiter *head; } hvf_futex_buckets[HVF_FUTEX_BUCKETS];
+static void hvf_futex_init(void) { for(unsigned i=0;i<HVF_FUTEX_BUCKETS;i++)pthread_mutex_init(&hvf_futex_buckets[i].lock,NULL); }
+static unsigned hvf_futex_bucket(uint64_t pid,uint64_t address) { return (unsigned)((address>>2)^(address>>12)^(pid*0x9e37u))%HVF_FUTEX_BUCKETS; }
+/* Wake up to count of this process's (this image's) in-place waiters on address. */
+static unsigned hvf_futex_wake_inplace(uint64_t address,unsigned count,uint32_t bits) {
+    if(!count || !schedule_active)return 0;
+    uint64_t pid=process_pid,epoch=hvf_task()->futex_epoch;unsigned woken=0,b=hvf_futex_bucket(pid,address);
+    pthread_mutex_lock(&hvf_futex_buckets[b].lock);
+    for(HvfFutexWaiter **link=&hvf_futex_buckets[b].head;*link && woken<count;) {
+        HvfFutexWaiter *w=*link;
+        if(w->pid!=pid || w->epoch!=epoch || w->address!=address || !(w->bits&bits)) { link=&w->next;continue; }
+        *link=w->next;w->woken=1;pthread_cond_signal(&w->cond);woken++;
+    }
+    pthread_mutex_unlock(&hvf_futex_buckets[b].lock);
+    return woken;
+}
 /* All guest memory is process-private, where Linux gives private and shared futex
    keys the same identity: CLONE_CHILD_CLEARTID's shared wake must reach a joiner's
    FUTEX_PRIVATE wait. A futex in shared memory has waiters in any process. */
 static unsigned hvf_futex_wake(uint64_t address,unsigned count,uint32_t bits) {
     unsigned woken=0;size_t offset=0;MemoryBacking *shared=hvf_futex_shared(address,&offset);
+    if(!shared)woken=hvf_futex_wake_inplace(address,count,bits);
     for(unsigned i=0;i<=PROCESS_LIMIT && woken<count;i++) {
         ScheduledTask *t=&schedule_tasks[i];
         if(!t->threads || (!shared && t!=hvf_task()))continue;
@@ -645,6 +734,7 @@ static unsigned hvf_futex_requeue(uint64_t address,unsigned wake,unsigned move,u
     unsigned woken=hvf_futex_wake(address,wake,UINT32_MAX),moved=0;
     size_t offset=0,target_offset=0;
     MemoryBacking *shared=hvf_futex_shared(address,&offset),*target_shared=hvf_futex_shared(target,&target_offset);
+    if(!shared)moved=hvf_futex_wake_inplace(address,move,UINT32_MAX); /* woken rather than moved: they retry */
     for(unsigned i=0;i<=PROCESS_LIMIT && moved<move;i++) {
         ScheduledTask *t=&schedule_tasks[i];
         if(!t->threads || (!shared && t!=hvf_task()))continue;
@@ -725,6 +815,7 @@ static uint64_t hvf_futex(int *waiting) {
    becomes the main thread. */
 static void hvf_exec_threads(void) {
     ScheduledTask *t=hvf_task();hvf_main_clear_tid[process_pid]=0;hvf_views[process_pid].stale=HVF_STALE_NEW;
+    t->futex_epoch=__atomic_add_fetch(&schedule_futex_epochs,1,__ATOMIC_RELAXED); /* in-place waiters of the old image wake no one */
     if(!t->threads)return;
     for(unsigned i=0;i<t->threads->top;i++)if((int)i!=thread_now)t->threads->thread[i].state=0;
     Thread *th=task_thread(t);th->tid=(unsigned)process_pid;th->clear_tid=0;
@@ -829,6 +920,62 @@ static int hvf_short_sleep(uint64_t call) {
     hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_X0,0),"set x0");hvf_shadow_gpr[0]=0;
     hvf_resume_el0(elr,spsr);return 1;
 }
+/* futex without the runtime lock (the process's mm lock is held), for private
+   futexes of a threaded process: WAKE when no thread of the process is parked in
+   the scheduler on the address (parking takes this mm lock too, so none appears
+   meanwhile), and WAIT in place while workers are idle, for up to
+   HVF_FUTEX_INPLACE_NS (or its own timeout). Returns 0 for the locked path (which
+   rereads the call): anything else, or a wait that did not end in time (it parks
+   then, after reading the word again). A signal for an in-place waiter is taken
+   when that wait ends. */
+#define HVF_FUTEX_INPLACE_NS 200000u
+static int hvf_futex_unlocked(void) {
+    if(!schedule_active || trace)return 0;
+    ScheduledTask *task=hvf_task();ThreadTable *p=task->threads;
+    unsigned op=(unsigned)cpu->gpr[1],command=op&127;uint64_t address=cpu->gpr[0];size_t offset=0;
+    if(!p || (op&~255u) || (command!=0 && command!=1 && command!=9 && command!=10) || (address&3))return 0; /* not FUTEX_CLOCK_REALTIME */
+    uint32_t bits=command>=9?(uint32_t)cpu->gpr[5]:UINT32_MAX;
+    const unsigned char *word=lookup(address,4,4);
+    if(!bits || !word || hvf_futex_shared(address,&offset))return 0;
+    if(command==1 || command==10) {
+        if((int32_t)cpu->gpr[2]<0)return 0;
+        for(unsigned j=0;j<p->top;j++) {
+            const Thread *th=&p->thread[j];
+            if(th->state==2 && !th->futex_backing && th->futex_address==address && (th->bitset&bits))return 0;
+        }
+        cpu->gpr[0]=hvf_futex_wake_inplace(address,(unsigned)cpu->gpr[2],bits);return 1;
+    }
+    uint64_t now=thread_time_ns(0),deadline=0,wait=HVF_FUTEX_INPLACE_NS;
+    if(cpu->gpr[3]) {
+        const unsigned char *ts=lookup(cpu->gpr[3],16,4);if(!ts)return 0;
+        uint64_t sec=le(ts,8),ns=le(ts+8,8);
+        if((int64_t)sec<0 || ns>=1000000000 || sec>=UINT64_C(1)<<32)return 0;
+        deadline=sec*1000000000+ns+(command==0?now:0);
+        if(deadline<=now)return 0;
+        if(deadline-now<wait)wait=deadline-now;
+    }
+    if(!(schedule_idle || schedule_polling) || hvf_must_stop(task))return 0;
+    HvfFutexWaiter w;memset(&w,0,sizeof(w));
+    w.pid=process_pid;w.epoch=task->futex_epoch;w.address=address;w.bits=bits;
+    if(pthread_cond_init(&w.cond,NULL))return 0;
+    unsigned b=hvf_futex_bucket(w.pid,address);
+    pthread_mutex_lock(&hvf_futex_buckets[b].lock);
+    if(__atomic_load_n((const uint32_t *)word,__ATOMIC_SEQ_CST)!=(uint32_t)cpu->gpr[2]) {
+        pthread_mutex_unlock(&hvf_futex_buckets[b].lock);pthread_cond_destroy(&w.cond);
+        cpu->gpr[0]=linux_error(11);return 1;
+    }
+    w.next=hvf_futex_buckets[b].head;hvf_futex_buckets[b].head=&w;
+    mm_unlock(task);
+    struct timespec pause={0,(long)wait};
+    (void)pthread_cond_timedwait_relative_np(&w.cond,&hvf_futex_buckets[b].lock,&pause);
+    if(!w.woken)for(HvfFutexWaiter **link=&hvf_futex_buckets[b].head;*link;link=&(*link)->next)if(*link==&w) { *link=w.next;break; }
+    pthread_mutex_unlock(&hvf_futex_buckets[b].lock);
+    mm_lock(task);pthread_cond_destroy(&w.cond);
+    PROFILE_ADD(profile_futex_inplace,1);
+    if(w.woken) { PROFILE_ADD(profile_futex_inplace_woken,1);cpu->gpr[0]=0;return 1; }
+    if(deadline && thread_time_ns(0)>=deadline) { cpu->gpr[0]=linux_error(110);return 1; }
+    return 0;
+}
 static int hvf_unlocked_exit(void) {
     if(hvf_exit->reason!=HV_EXIT_REASON_EXCEPTION || (hvf_exit->exception.syndrome>>26)!=0x16)return 0;
     uint64_t esr=0,elr=0,spsr=0,call=0,far=0;
@@ -840,24 +987,38 @@ static int hvf_unlocked_exit(void) {
            under the lock. A genuine fault goes to the locked path. */
         hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_FAR_EL1,&far),"get far");
         uint64_t layout=address_space->layout;
-        if(!lookup(far,1,2))return 0;
+        if(!hvf_spurious_write(far)) {
+            if(!lookup(far,1,2))return 0;
+            address_space_touched(address_space);
+            if(address_space->layout==layout && hvf_view==&hvf_views[process_pid] && hvf_view_matches(address_space)) {
+                unsigned around=hvf_fault_around(address_space,far);PROFILE_ADD(profile_fault_around,around);
+                hvf_remap_host_page(address_space,far,1+around);hvf_view->generation=address_space->generation;
+            } else hvf_views[process_pid].stale=HVF_STALE_COW;
+        }
         hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_ELR_EL1,&elr),"get elr");
         hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_SPSR_EL1,&spsr),"get spsr");
-        address_space_touched(address_space);
-        if(address_space->layout==layout && hvf_view==&hvf_views[process_pid] && hvf_view_matches(address_space)) {
-            hvf_remap_host_page(address_space,far);hvf_view->generation=address_space->generation;
-        } else hvf_views[process_pid].stale=HVF_STALE_COW;
-        hvf_resume_el0(elr,spsr);return 1;
+        hvf_resume_el1=hvf_fault_resume(elr,spsr);return 1;
     }
     if(ec!=0x15 || seccomp_active())return 0;                                 /* SVC from EL0; filtered calls take the locked path */
     hvf_check(hv_vcpu_get_reg(hvf_vcpu,HV_REG_X8,&call),"get x8");
     if((call==101 || call==115) && hvf_short_sleep(call))return 1;
+    if(call==98) {
+        hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_ELR_EL1,&elr),"get elr");
+        hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_SPSR_EL1,&spsr),"get spsr");
+        hvf_get_regs(1,elr,spsr);
+        if(!hvf_futex_unlocked())return 0;
+        PROFILE_ADD(profile_unlocked_calls,1);
+        if(profiling)__atomic_fetch_add(&profile_syscalls[98],1,__ATOMIC_RELAXED);
+        hvf_put_regs();return 1;
+    }
     int memory=call==222 || call==215 || call==226 || call==233 || call==214;
-    if(!memory && call!=22 && call!=25 && call!=56 && call!=132 && call!=134 && call!=135 && call!=172 && call!=178 && call!=79 && call!=80 && (call<62 || call>68) && call!=82 && call!=83 && call!=206 && call!=207 && call!=291)return 0;
+    if(!memory && call!=22 && call!=25 && call!=56 && call!=34 && call!=35 && call!=38 && call!=48 && call!=439 && call!=78 && call!=88 && call!=132 && call!=134 && call!=135 && call!=172 && call!=178 && call!=79 && call!=80 && (call<62 || call>68) && call!=82 && call!=83 && call!=206 && call!=207 && call!=291)return 0;
     hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_ELR_EL1,&elr),"get elr");
     hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_SPSR_EL1,&spsr),"get spsr");
     hvf_get_regs(1,elr,spsr);
     if(!(memory?guest_memory_unlocked():guest_syscall_unlocked()))return 0;   /* the locked path rereads the same exit */
+    PROFILE_ADD(profile_unlocked_calls,1);
+    if(profiling && call<512)__atomic_fetch_add(&profile_syscalls[call],1,__ATOMIC_RELAXED);
     hvf_put_regs();return 1;
 }
 /* An unlocked call would block on sockets. While other workers are idle, wait for
@@ -935,7 +1096,9 @@ static int hvf_slice_run(void) {
             atomic_store(&self->in_guest,0);
             mm_lock(task);
             if(!worker_threads || ran!=HV_SUCCESS || hvf_must_stop(task))break;
+            hvf_resume_el1=0;
             if(!hvf_unlocked_exit() && !(hvf_direct_wait(task) && hvf_unlocked_exit()))break;
+            in_vector=hvf_resume_el1;
         }
         /* The runtime lock comes before the mm lock. Waiting for the mm lock with the
            runtime lock held (a sibling thread in a long unlocked call) stalls every
@@ -958,6 +1121,7 @@ static int hvf_slice_run(void) {
             hvf_get_regs(0,0,0);return -1;
         }
         uint64_t syndrome=hvf_exit->exception.syndrome;
+        PROFILE_ADD(profile_locked_exits,1);
         if(hvf_exit->reason==HV_EXIT_REASON_EXCEPTION && ((syndrome>>26)==0x20 || (syndrome>>26)==0x24) && (syndrome&0x3c)==0x4) {
             /* A stage-2 translation fault: the tables still name a backing that was
                just freed (a sibling thread's copy-on-write replaced it, and this vCPU
@@ -991,7 +1155,7 @@ static int hvf_slice_run(void) {
             if(fork)hvf_views[process_pid].stale=HVF_STALE_COW; /* a fork shares this process's private pages */
             int denied=seccomp_check();
             int result=denied?denied:hvf_thread_call(call);
-            if(profiling && result!=HVF_UNHANDLED && call<512)profile_syscalls[call]++;   /* served here, not by the dispatcher */
+            if(profiling && result!=HVF_UNHANDLED && call<512)__atomic_fetch_add(&profile_syscalls[call],1,__ATOMIC_RELAXED);   /* served here, not by the dispatcher */
             if(result==HVF_UNHANDLED) {
                 /* Sibling threads stay out of guest code while their memory is
                    snapshotted or replaced. */
@@ -1017,14 +1181,16 @@ static int hvf_slice_run(void) {
             /* Write to a read-only view: lookup() detaches a copy-on-write page when the
                guest mapping is writable; a genuine read-only page stays a fault. */
             uint64_t layout=address_space->layout;
+            if(hvf_spurious_write(far)) { in_vector=hvf_fault_resume(elr,spsr);fast=1;continue; }
             if(lookup(far,1,2)) {
                 /* The page is private (and charged) now: remap its host page writable.
                    A new backing (a fork snapshot) changes the layout: rebuild then. */
                 address_space_touched(address_space);
                 if(address_space->layout==layout && hvf_view==&hvf_views[process_pid] && hvf_view_matches(address_space)) {
-                    hvf_remap_host_page(address_space,far);hvf_view->generation=address_space->generation;
+                    unsigned around=hvf_fault_around(address_space,far);PROFILE_ADD(profile_fault_around,around);
+                    hvf_remap_host_page(address_space,far,1+around);hvf_view->generation=address_space->generation;
                 } else hvf_views[process_pid].stale=HVF_STALE_COW;
-                hvf_resume_el0(elr,spsr);fast=1;continue;
+                in_vector=hvf_fault_resume(elr,spsr);fast=1;continue;
             }
         }
         /* A read or instruction fetch that the address space allows (lookup: 4 read,

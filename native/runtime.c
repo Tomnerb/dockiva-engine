@@ -1145,7 +1145,8 @@ int main(int argc,char **argv) {
         fail("Hypervisor backend is not compiled into this executable");
 #else
         if(terminal_enabled)fail("Hypervisor backend does not yet support terminal options");
-        /* --profile under the hypervisor counts system calls only (guest code runs natively). */
+        /* --profile under the hypervisor counts system calls, exits, lock waits, fault-around
+           and in-place futex waits (guest code runs natively); the fast paths stay on. */
         schedule_enabled=net_scheduled=1; /* each guest thread is a scheduler entity */
         map_rwx_allowed=1;
 #endif
