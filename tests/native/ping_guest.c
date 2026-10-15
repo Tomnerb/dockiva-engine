@@ -1,8 +1,11 @@
-/* Raw IP and packet sockets fail with EPERM (no CAP_NET_RAW), and ping sockets
-   (SOCK_DGRAM, IPPROTO_ICMP) work as on Linux: echo requests to 127.0.0.1 come back
-   as replies without an IP header, carrying the socket's identifier (the one the
-   first request had, or the bound port), with sendto/recvfrom, sendmsg/recvmsg and
-   getsockname; anything but an echo request is EINVAL. */
+/* Raw IPv4 ICMP sockets for root (Docker gives it CAP_NET_RAW): echo requests the
+   guest checksums itself, replies with a Linux IP header (total length in network
+   order, a valid checksum). Other raw protocols, raw IPv6, AF_PACKET and non-root
+   raw sockets fail with EPERM. Ping sockets (SOCK_DGRAM, IPPROTO_ICMP) work as on
+   Linux: echo requests to 127.0.0.1 come back as replies without an IP header,
+   carrying the socket's identifier (the one the first request had, or the bound
+   port), with sendto/recvfrom, sendmsg/recvmsg and getsockname; anything but an echo
+   request is EINVAL. Needs --process-tree. */
 typedef unsigned long U;
 static long call(U n,U a,U b,U c,U d,U e,U f) {
     register U x8 __asm__("x8")=n,x0 __asm__("x0")=a,x1 __asm__("x1")=b;
@@ -18,9 +21,22 @@ static void request(unsigned char *p,unsigned id,unsigned seq) {    /* type 8, c
     p[0]=8;p[1]=0;p[2]=p[3]=0xee;p[4]=(unsigned char)(id>>8);p[5]=(unsigned char)id;p[6]=(unsigned char)(seq>>8);p[7]=(unsigned char)seq;
 }
 void _start(void) {
-    check(call(198,2,3,1,0,0,0)==-1);                                 /* SOCK_RAW, IPPROTO_ICMP: EPERM */
-    check(call(198,2,3,255,0,0,0)==-1 && call(198,10,3,58,0,0,0)==-1);
+    check(call(198,2,3,255,0,0,0)==-1 && call(198,10,3,58,0,0,0)==-1);  /* EPERM */
     check(call(198,17,3,0x0300,0,0,0)==-1 && call(198,17,2,0x0300,0,0,0)==-1); /* AF_PACKET */
+    long r=call(198,2,3,1,0,0,0);check(r>=0);                          /* root: SOCK_RAW, IPPROTO_ICMP */
+    unsigned char raw[24],rx[64];request(raw,0x4242,7);raw[2]=raw[3]=0;
+    unsigned sum=0;for(unsigned i=0;i<24;i+=2)sum+=raw[i]<<8|raw[i+1];
+    while(sum>>16)sum=(sum&0xffff)+(sum>>16);
+    raw[2]=(unsigned char)(~sum>>8);raw[3]=(unsigned char)~sum;
+    check(call(206,(U)r,(U)raw,24,0,(U)loopback,16)==24);
+    long got=call(207,(U)r,(U)rx,64,0,0,0);
+    check(got==44 && rx[0]==0x45 && rx[2]==0 && rx[3]==44 && rx[9]==1 && rx[12]==127 && rx[15]==1);
+    sum=0;for(unsigned i=0;i<20;i+=2)sum+=rx[i]<<8|rx[i+1];
+    while(sum>>16)sum=(sum&0xffff)+(sum>>16);
+    check(sum==0xffff && rx[20]==0 && rx[24]==0x42 && rx[25]==0x42 && rx[27]==7); /* header checksum, the reply */
+    long pid=call(220,17,0,0,0,0,0);
+    if(!pid) { call(146,1000,0,0,0,0,0);call(94,call(198,2,3,1,0,0,0)==-1?0:1,0,0,0,0,0); }   /* non-root: EPERM */
+    int status=-1;check(call(260,(U)pid,(U)&status,0,0,0,0)==pid && status==0);
     long s=call(198,2,2,1,0,0,0);check(s>=0);
     unsigned char out[24],in[64],from[16];unsigned size=16;
     request(out,0x1234,1);

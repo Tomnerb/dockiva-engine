@@ -181,6 +181,7 @@ static uint32_t cap_held[2]={UINT32_MAX,0x1ffu};
 static void cap_after_setuid(const GuestIds *old,const GuestIds *now) {
     if((!old->ruid || !old->uid || !old->suid) && now->ruid && now->uid && now->suid && !prctl_keepcaps)cap_held[0]=cap_held[1]=0;
 }
+static int net_raw_allowed(void) { return !guest_uid && (cap_held[0]&(1u<<13)); } /* root with CAP_NET_RAW */
 static char prctl_name[16];
 /* PR_SET_MEM_MODEL / PR_GET_MEM_MODEL (the Apple/Asahi kernel ABI; FEX asks for TSO
    with it): model 1 runs the calling thread under the CPU's TSO memory model, kept
