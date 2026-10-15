@@ -79,9 +79,37 @@ archives, plain or gzip; linux/arm64 images only, others are skipped),
 filters), `version`/`info`, and `build` and `compose build` (plain, through
 buildx's `docker` driver, or with `DOCKER_BUILDKIT=0`). Builds run the
 Dockerfile on the engine's classic builder: linux/arm64 only, results go to the
-image store, and BuildKit-only features (`RUN --mount`, heredocs,
-`--build-context`, `--output`, `--call`/`--check`) are refused. Not supported:
-tmpfs mounts.
+image store, and `--build-context`, `--output`, `--call`/`--check` are refused.
+Not supported: tmpfs mounts (`docker run --tmpfs`).
+
+Builds read the Dockerfile 1.x syntax (`# syntax=docker/dockerfile:1...` is
+accepted; other frontends are refused, and `# check=` is ignored):
+
+- `RUN --mount=type=cache,target=DIR[,id=,sharing=,from=,source=,mode=,ro]`: a
+  directory kept across builds, keyed by `id` (the target by default), seeded
+  from `from`/`source` when first made. Each one is a build cache entry of type
+  `exec.cachemount`, so `docker buildx du`, `docker system df -v` and
+  `docker builder prune` count and remove it (entries in use are kept).
+  `sharing=locked` runs one step at a time per cache; `shared` and `private`
+  both share it. `uid`/`gid` are accepted and ignored.
+- `RUN --mount=type=bind[,source=,target=,from=,rw]`: a path of the build
+  context, a stage or an image, read-only unless `rw` (a clone; changes are
+  discarded). A context source's content is part of the step's cache key.
+- `RUN --mount=type=tmpfs,target=DIR`: an empty directory, discarded after the step.
+- `RUN --mount=type=secret,id=ID[,target=,env=,required,mode=]`: a secret from
+  `docker build --secret id=ID,src=FILE` (buildx only; `DOCKER_BUILDKIT=0` has
+  no secrets, so a `required` one fails), as a read-only file
+  (`/run/secrets/ID` by default) and/or an environment variable. Secret values
+  never enter the image or the cache key.
+- `RUN --mount=type=ssh` is refused (no SSH agent forwarding).
+- `RUN --network=default|none|host`; `RUN --security=insecure` is refused.
+- Here-documents: `RUN <<EOF` (the script, run by its `#!` line or the shell),
+  `RUN python3 <<EOF` and several documents in one instruction (the shell does
+  the redirecting), `<<-EOF` (leading tabs dropped), quoted delimiters
+  (`<<'EOF'`: no expansion in `COPY`), and `COPY <<EOF /path` / `ADD` (an inline
+  file, mode 0644 unless `--chmod`).
+
+Mount points made for a step are removed from the stage's files afterwards.
 
 Registries: `docker pull` and `docker push` use `docker login`'s credentials
 (X-Registry-Auth: Basic, or Bearer tokens from the registry's token service,
@@ -101,7 +129,7 @@ docker build --push -t 127.0.0.1:5055/app:1 .
 ```
 
 Port 5000 is taken by macOS's AirPlay receiver; pick another. `FROM` in a build
-pulls over HTTPS only.
+pulls over HTTPS, or plain HTTP from a loopback registry with `--insecure-local`.
 
 Networks: the default bridge and user networks give each container an address
 in 10.89.N.0/24 and private ports (two containers can both listen on 5432, and
