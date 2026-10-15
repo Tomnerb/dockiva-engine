@@ -219,11 +219,14 @@ static void hvf_view_record(HvfView *v,const GuestAddressSpace *space) {
     memcpy(v->seg,space->seg,space->nseg*sizeof(Segment));
     v->layout=space->layout;v->generation=space->generation;v->stale=0;
 }
-static void hvf_unmap_page(uint64_t va) {
-    uint64_t *leaf=hvf_leaf(hvf_view,va,0);if(!leaf)return;
+/* Returns how many pages from va on are now unmapped: 1, or up to the next 2 MiB
+   boundary when no leaf table covers va (Go reserves and frees arenas of PROT_NONE
+   pages that were never mapped; walking each of them from the root dominated syncs). */
+static unsigned hvf_unmap_page(uint64_t va) {
+    uint64_t *leaf=hvf_leaf(hvf_view,va,0);if(!leaf)return 512-(unsigned)((va>>12)&511);
     uint64_t *slot=&leaf[(va>>12)&511];
     if(*slot&1)hvf_stale_tlb=1;
-    *slot=0;
+    *slot=0;return 1;
 }
 /* The view now reflects every mmap-arena change: start a fresh dirty range. */
 static void hvf_arena_synced(GuestAddressSpace *space) {
@@ -238,10 +241,12 @@ static void hvf_map_arena_page(GuestAddressSpace *space,uint64_t ipa,unsigned i)
 /* Apply mmap/munmap/mprotect/madvise changes to just the arena pages they touched. */
 static void hvf_remap_arena(GuestAddressSpace *space) {
     uint64_t ipa=space->map_backing?hvf_block_ipa(space->map_backing):0;
-    for(unsigned i=space->arena_dirty_lo;i<space->arena_dirty_hi;i++) {
-        if(space->map_flags && (space->map_flags[i]&MAP_RESERVED))continue;   /* a shared segment's page */
-        if(ipa && space->map_flags)hvf_map_arena_page(space,ipa,i);
-        else hvf_unmap_page(MAP_BASE+(uint64_t)i*4096);
+    const unsigned char *flags=space->map_flags;
+    for(unsigned i=space->arena_dirty_lo;i<space->arena_dirty_hi;) {
+        if(flags && (flags[i]&MAP_RESERVED)) { i++;continue; }                 /* a shared segment's page */
+        if(ipa && flags && (flags[i]&7)) { hvf_map_arena_page(space,ipa,i);i++;continue; }
+        unsigned end=i+hvf_unmap_page(MAP_BASE+(uint64_t)i*4096);              /* and the unmapped pages after it */
+        for(i++;i<end && i<space->arena_dirty_hi && !(ipa && flags && (flags[i]&7));i++) {}
     }
 }
 static void hvf_activate(HvfView *v) {
@@ -270,7 +275,7 @@ static void hvf_build(GuestAddressSpace *space) {
 static int hvf_same_segment(const Segment *a,const Segment *b) {
     return a->base==b->base && a->size==b->size && a->flags==b->flags && a->backing==b->backing && a->offset==b->offset;
 }
-static void hvf_unmap_range(uint64_t base,uint64_t size) { for(uint64_t p=0;p<size;p+=4096)hvf_unmap_page(base+p); }
+static void hvf_unmap_range(uint64_t base,uint64_t size) { for(uint64_t p=0;p<size;)p+=4096*(uint64_t)hvf_unmap_page(base+p); }
 /* The guest-physical address va maps to in the current view, or 0. */
 static uint64_t hvf_mapped_ipa(uint64_t va) {
     uint64_t *leaf=hvf_leaf(hvf_view,va,0);if(!leaf)return 0;
