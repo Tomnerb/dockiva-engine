@@ -115,6 +115,7 @@ static uint64_t fs_error(void) {
         case ELOOP:return linux_error(40);case ENAMETOOLONG:return linux_error(36);
         case ENOTEMPTY:return linux_error(39);case EROFS:return linux_error(30);
         case EFBIG:return linux_error(27);case ENOSPC:return linux_error(28);
+        case EXDEV:return linux_error(18);                                          /* openat2 RESOLVE_BENEATH, rename across mounts */
         default:return net_error();
     }
 }
@@ -130,8 +131,13 @@ static int fs_string(uint64_t ptr,char path[1025]) {
     errno=ENAMETOOLONG;return -1;
 }
 #define FS_LINK_LIMIT 40 /* Linux MAXSYMLINKS */
+/* openat2's RESOLVE_IN_ROOT / RESOLVE_BENEATH for one call (fs_openat2): the walk treats
+   root (a host directory descriptor, guest path at path) as "/" or refuses to leave it;
+   RESOLVE_NO_SYMLINKS refuses every symlink. */
+static _Thread_local struct { int root;const char *path;unsigned resolve; } fs_scope={-1,"",0};
+#define FS_WALK_ROOT (fs_scope.root>=0?fs_scope.root:fs_root)
 static int fs_is_root(int fd) {
-    struct stat a,b;return !fstat(fd,&a) && !fstat(fs_root,&b) && a.st_dev==b.st_dev && a.st_ino==b.st_ino;
+    struct stat a,b;return !fstat(fd,&a) && !fstat(FS_WALK_ROOT,&b) && a.st_dev==b.st_dev && a.st_ino==b.st_ino;
 }
 /* Bind mounts (--bind HOST GUEST, --bind-ro): a guest path served by a host
    directory, or a single host file. fs_walk switches to the mount's descriptor
@@ -294,8 +300,9 @@ static int fs_walk(int base,const char *base_path,const char *input,int follow,c
     if(rest[0]!='/') {
         struct stat st;if(fstat(base,&st)<0)return -1;
         if(!S_ISDIR(st.st_mode)) { errno=ENOTDIR;return -1; }
-    } else base=fs_root;
-    strcpy(cur,rest[0]=='/'?"/":base_path);
+    } else if(fs_scope.resolve&8) { errno=EXDEV;return -1; }        /* RESOLVE_BENEATH: no absolute path */
+    else base=FS_WALK_ROOT;
+    strcpy(cur,rest[0]=='/'?(fs_scope.root>=0?fs_scope.path:"/"):base_path);
 #ifdef O_NOFOLLOW_ANY
     {   /* The fast path stays in base's host directory tree: not across a mount. */
         char full[1025];int fast=fs_walk_fast(base,cur,rest,follow,leaf,full);
@@ -323,6 +330,7 @@ static int fs_walk(int base,const char *base_path,const char *input,int follow,c
                 int parent=fs_open_dir(cur);int saved=errno;close(fd);fd=parent;errno=saved;if(fd<0)return -1;
                 continue;
             }
+            if(fs_scope.resolve&8 && fs_is_root(fd)) { close(fd);errno=EXDEV;return -1; }
             if(!fs_is_root(fd)) {
                 int next=openat(fd,"..",O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
                 int saved=errno;close(fd);fd=next;errno=saved;if(fd<0)return -1;
@@ -348,7 +356,7 @@ static int fs_walk(int base,const char *base_path,const char *input,int follow,c
         }
         struct stat st;
         if((!last || follow) && fstatat(fd,part,&st,AT_SYMLINK_NOFOLLOW)==0 && S_ISLNK(st.st_mode)) {
-            if(++links>FS_LINK_LIMIT) { close(fd);errno=ELOOP;return -1; }
+            if(++links>FS_LINK_LIMIT || (fs_scope.resolve&4)) { close(fd);errno=ELOOP;return -1; }
             char target[1025];ssize_t n=readlinkat(fd,part,target,1024);
             if(n<=0) { int saved=n<0?errno:ENOENT;close(fd);errno=saved;return -1; }
             target[n]=0;
@@ -357,8 +365,9 @@ static int fs_walk(int base,const char *base_path,const char *input,int follow,c
             if((size_t)n+tail>4096) { close(fd);errno=ENAMETOOLONG;return -1; }
             memmove(rest+n,rest+pos,tail+1);memcpy(rest,target,(size_t)n);pos=0;
             if(target[0]=='/') {
-                close(fd);fd=dup(fs_root);if(fd<0)return -1;
-                strcpy(cur,"/");
+                if(fs_scope.resolve&8) { close(fd);errno=EXDEV;return -1; }
+                close(fd);fd=dup(FS_WALK_ROOT);if(fd<0)return -1;
+                strcpy(cur,fs_scope.root>=0?fs_scope.path:"/");
             }
             continue;
         }
@@ -846,7 +855,7 @@ static int fs_proc_kind(const char *path) {
         if(!strncmp(path,"/proc/",6) && !strcmp(path+6,fs_proc_root_files[i]))return 2;
     uint64_t tid;const char *rest;
     if(proc_split(path,&tid,&rest)) {
-        if(!*rest || (!tid && !strcmp(rest,"task")))return 1;
+        if(!*rest || (!tid && (!strcmp(rest,"task") || !strcmp(rest,"fd"))))return 1;
         for(unsigned i=0;i<sizeof(fs_proc_pid_files)/sizeof(*fs_proc_pid_files);i++)if(!strcmp(rest,fs_proc_pid_files[i]))return 2;
     }
     return !strcmp(path,"/proc/net/if_inet6") || fs_proc_sys_value(path)?2:0;
@@ -998,7 +1007,7 @@ static uint64_t fs_open(void) {
     char path[1025];int named=fs_proc_path(cpu->gpr[0],cpu->gpr[1],path)==0;
     if(syscall_unlocked && syscall_abort)return linux_error(11);     /* relative to a /proc directory: the locked path retries */
     uint64_t tid=0;const char *rest="";uint64_t proc=named?proc_split(path,&tid,&rest):0;
-    if(named && (!strcmp(path,"/proc") || !strcmp(path,"/proc/") || (proc && (!*rest || (!tid && !strcmp(rest,"task")))))) {
+    if(named && (!strcmp(path,"/proc") || !strcmp(path,"/proc/") || (proc && (!*rest || (!tid && (!strcmp(rest,"task") || !strcmp(rest,"fd"))))))) {
         /* /proc, /proc/PID, its task directory and a thread's: the container's processes and our files (ps, pgrep, top, htop). */
         if(flags&(3|64|512|1024))return linux_error(flags&64?17:21);
         static _Thread_local char list[16384];size_t used=0;char name[24];
@@ -1009,6 +1018,8 @@ static uint64_t fs_open(void) {
             proc_peer_load();
             for(unsigned i=0;i<proc_npeers;i++) { snprintf(name,sizeof(name),"%llu",(unsigned long long)proc_peers[i].pid);used=fs_dirent(list,used,sizeof(list),100+proc_peers[i].pid,name,4); }
             for(uint64_t p=1;p<=process_count+1;p++)if(guest_process_exists(p)) { snprintf(name,sizeof(name),"%llu",(unsigned long long)p);used=fs_dirent(list,used,sizeof(list),100+p,name,4); }
+        } else if(!strcmp(rest,"fd")) {          /* fd: this process's descriptors (another's are not at hand: none) */
+            for(unsigned fd=0;proc==process_pid && fd<GUEST_FD_LIMIT;fd++)if(fd_kind[fd]) { snprintf(name,sizeof(name),"%u",fd);used=fs_dirent(list,used,sizeof(list),3000000+fd,name,10); }
         } else if(*rest) {                                                     /* task: the threads */
             static unsigned tids[1024];static char states[1024];static uint64_t times[1024][2];
             int64_t own=proc_resolve(proc);unsigned n=own>0?guest_thread_list((uint64_t)own,tids,states,times,1024):0;
@@ -1018,7 +1029,7 @@ static uint64_t fs_open(void) {
             uint64_t base=1000*(tid?tid:proc);
             for(unsigned i=0;i<sizeof(fs_proc_pid_files)/sizeof(*fs_proc_pid_files);i++)used=fs_dirent(list,used,sizeof(list),base+i,fs_proc_pid_files[i],8);
             used=fs_dirent(list,used,sizeof(list),base+99,"exe",10);
-            if(!tid)used=fs_dirent(list,used,sizeof(list),base+98,"task",4);
+            if(!tid) { used=fs_dirent(list,used,sizeof(list),base+98,"task",4);used=fs_dirent(list,used,sizeof(list),base+97,"fd",4); }
         }
         return io_text_open(list,used,(flags&524288)!=0,1,path);
     }
@@ -1409,6 +1420,27 @@ static uint64_t fs_call(uint64_t call) {
         fs_stat_pack(out,&st);return 0;
     }
     if(call==56) return fs_open();
+    if(call==437) {
+        /* openat2(dirfd, path, how, size): openat with how's flags and mode, and RESOLVE_*
+           scoping the walk (FEX opens its x86 root's files with RESOLVE_IN_ROOT).
+           ponytail: NO_XDEV and NO_MAGICLINKS are accepted unenforced (bind mounts and
+           /proc/self/fd are this runtime's only crossings and magic links). */
+        uint64_t size=cpu->gpr[3];if(size<24 || size>4096)return linux_error(22);
+        const unsigned char *how=lookup(cpu->gpr[2],size,4);if(!how)return linux_error(14);
+        for(uint64_t i=24;i<size;i++)if(how[i])return linux_error(7);           /* E2BIG: fields not known here */
+        uint64_t flags=le(how,8),mode=le(how+8,8),resolve=le(how+16,8);
+        if((resolve&~UINT64_C(0x3f)) || (flags>>32) || mode>07777 || (mode && !(flags&UINT64_C(0x400040))) || (resolve&0x18)==0x18)return linux_error(22);
+        if(resolve&0x20)return linux_error(11);                 /* RESOLVE_CACHED: no cache to answer from; callers retry */
+        if(resolve&0x18) {
+            int dir=(int32_t)cpu->gpr[0]==-100?(fs_cwd?fs_cwd->fd:fs_root):fs_host(cpu->gpr[0]);if(dir<0)return linux_error(9);
+            fs_scope.root=dir;fs_scope.path=(int32_t)cpu->gpr[0]==-100?(fs_cwd?fs_cwd->path:"/"):fs_slot(cpu->gpr[0])>=0 && fs_dirs[fs_slot(cpu->gpr[0])]?fs_dirs[fs_slot(cpu->gpr[0])]->path:"";
+        }
+        fs_scope.resolve=(unsigned)resolve;
+        uint64_t keep2=cpu->gpr[2],keep3=cpu->gpr[3];cpu->gpr[2]=flags;cpu->gpr[3]=mode;
+        uint64_t result=fs_open();
+        cpu->gpr[2]=keep2;cpu->gpr[3]=keep3;fs_scope.root=-1;fs_scope.path="";fs_scope.resolve=0;
+        return result;
+    }
     if(call==34) { /* Linux reports an existing path (including "/" or ".") before EROFS. */
         char leaf[1025];int parent=fs_parent_nofollow(cpu->gpr[0],cpu->gpr[1],leaf);
         if(parent>=0) {

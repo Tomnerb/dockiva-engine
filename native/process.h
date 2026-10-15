@@ -81,20 +81,22 @@ static unsigned process_slot(void) {
     for(unsigned i=0;i<process_count;i++)if(process_slot_free(i))return i;
     return process_count<PROCESS_LIMIT?process_count:PROCESS_LIMIT;
 }
-static uint64_t process_exec(void) {
-    char leaf[1025],exe[1025];int parent=fs_lookup((uint64_t)-100,cpu->gpr[0],leaf,1,exe);if(parent<0)return fs_error();
+/* execve (path, argv, envp in x0..x2), or execveat (dirfd in x0, the rest from x1: r=1),
+   whose path may be relative to dirfd. */
+static uint64_t process_exec_at(uint64_t dir,unsigned r) {
+    char leaf[1025],exe[1025];int parent=fs_lookup(dir,cpu->gpr[r],leaf,1,exe);if(parent<0)return fs_error();
     int fd=openat(parent,leaf,O_RDONLY|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC);
     int saved=errno;close(parent);errno=saved;if(fd<0)return fs_error();
     struct stat st;
     if(fstat(fd,&st)<0 || !S_ISREG(st.st_mode) || !(st.st_mode&0111)) { close(fd);return linux_error(13); }
     static char buffer[EXEC_STRINGS],*args[EXEC_ENTRIES],*env[EXEC_ENTRIES],*rebuilt[EXEC_ENTRIES];unsigned argc,envc;size_t used=0;
-    int error=process_vector(cpu->gpr[1],args,&argc,buffer,&used);
-    if(!error)error=process_vector(cpu->gpr[2],env,&envc,buffer,&used);
+    int error=process_vector(cpu->gpr[r+1],args,&argc,buffer,&used);
+    if(!error)error=process_vector(cpu->gpr[r+2],env,&envc,buffer,&used);
     if(error || !argc) { close(fd);return linux_error(error?error:22); }
     /* "#!INTERPRETER [ONE-ARGUMENT]" runs INTERPRETER [ARG] SCRIPT ARGV[1..], as execve does.
        An interpreter may itself be a script (Oracle Linux's /usr/bin/env is), four
        levels deep at most, as on Linux. */
-    char script[1025];if(fs_string(cpu->gpr[0],script)<0) { close(fd);return linux_error(14); }
+    char script[1025];if(fs_string(cpu->gpr[r],script)<0) { close(fd);return linux_error(14); }
     for(unsigned depth=0;;depth++) {
         char head[256];ssize_t got=pread(fd,head,sizeof(head)-1,0);
         if(got<2 || head[0]!='#' || head[1]!='!')break;

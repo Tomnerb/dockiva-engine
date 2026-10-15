@@ -40,6 +40,12 @@ an experiment.
     - **FEX still stops at one call:** a fixed mapping inside the unused 8 MiB brk room.
   - 7.2: the brk room now takes fixed mappings. FEX gets past its start-up mapping and now stops only
     on its server's abstract AF_UNIX socket.
+  - **7.3: FEX runs x86-64 programs,** directly and under `docker run` / `docker exec`, once abstract
+    sockets are in and five small kernel gaps are closed: `personality`, `/proc/self/fd`, `openat2`,
+    `execveat` and `close_range`.
+    - It runs a static `ET_EXEC` at 0x400000, static-PIE and musl busybox, and glibc `bash` pipelines with
+      x86 child processes and signals.
+    - glibc `python3.12` runs threads, sqlite, the image's own OpenSSL 3.5, subprocess and an HTTP server.
     - FEXServer still needs abstract AF_UNIX sockets.
 
 ---
@@ -574,13 +580,54 @@ our mapping.
   - Recorded as P2 for the address-space owner: replacing pages of the heap in use would need the heap
     split into segments.
 
+### 7.3 FEX with abstract sockets: first x86 code, 2026-10-15
+
+Setup:
+- On `main` `8d3c04b`, which has abstract AF_UNIX sockets (rt-ngaps).
+- Direct runs pass `--abstract-dir`.
+- Same root and downloads as before. FEX's rootfs is `/x86` (python:3.12-slim) or `/x86a` (alpine), and
+  programs are named by their rootfs paths.
+
+With the sockets in, FEXServer starts and FEX connects. Five more kernel gaps then appeared, one after
+another. All are fixed on this branch, with checks in `tests/native/translator_guest.c` (`verify_hvf.py`
+gives it a small `--root`). Without them that test fails at check 19 with openat2 ENOSYS; with them it
+passes.
+
+| Gap | How it showed | Fix |
+|---|---|---|
+| `/proc/<pid>/fd` was not a directory | FEXServer: libstdc++ `directory_iterator("/proc/self/fd/")` throws ENOENT, so `abort()` | Listed as a directory of the caller's descriptors (another process's list is empty), and named in `/proc/<pid>` (`fs.h`) |
+| `personality` (92) returned ENOSYS | FEX queries `personality(0xffffffff)` | Query, and set per process across exec. A fork child starts at PER_LINUX (ponytail) (`syscall.h`) |
+| `openat2` (437) returned ENOSYS | FEX opens every file in its x86 root with `openat2(rootfd, path, {RESOLVE_IN_ROOT}, 24)`. Its fallback opens the host path, so glibc's `ld.so` reported "libpython3.12.so.1.0: cannot open shared object file" | `openat2` implemented: RESOLVE_IN_ROOT (absolute paths, absolute symlinks and `..` stay at dirfd), RESOLVE_BENEATH (EXDEV), RESOLVE_NO_SYMLINKS (ELOOP), RESOLVE_CACHED (EAGAIN), E2BIG for unknown `how` fields. NO_XDEV and NO_MAGICLINKS are accepted but not enforced (ponytail). The walk takes a per-thread root (`fs_scope`). `EXDEV` now maps to 18 instead of EIO, which also fixes `rename` across mounts (`fs.h`, `syscall.h`) |
+| `execveat` (281) returned ENOSYS | FEX runs an x86 `execve` as `execveat(fd, "/proc/self/exe", argv', envp, 0)`, so every x86 child failed with "Function not implemented" | `execveat` reuses `execve` (`process_exec_at`) with dirfd-relative paths; HVF treats it as an exec. AT_EMPTY_PATH (fexecve) returns ENOSYS and AT_SYMLINK_NOFOLLOW is not enforced (ponytail) (`process.h`, `hvf_backend.h`) |
+| `close_range` (436) returned ENOSYS | Python's `subprocess` (it falls back) | Closes the range, or marks it close-on-exec with `CLOSE_RANGE_CLOEXEC`. UNSHARE is a no-op (`syscall.h`) |
+
+Results under FEX 2610, the same both directly and through the throwaway engine's `docker run`:
+
+| x86-64 program | Output |
+|---|---|
+| static `ET_EXEC` hello (0x400000) | `hello from x86-64 ET_EXEC` |
+| `busybox:musl` static-PIE `echo hi`; `sh -c 'echo abc \| busybox wc -c'` | `hi`; `4` (Box64 crashes on the static shell) |
+| glibc `python3.12`: 4 threads hashing, sqlite3, `ssl`, json, `subprocess.run(['/bin/uname','-m'])` | `x86_64 4 499500 OpenSSL 3.5.7 9 Jun 2026 {"ok": true} x86_64 0.32`. The image's own OpenSSL works, unlike under Box64 |
+| glibc `bash -c 'echo abc \| wc -c; uname -m; trap … USR1; kill -USR1 $$; sleep & wait; ls'` | `4`, `x86_64`, `got-usr1`, listing |
+| alpine (musl) `busybox sh -c 'echo abc \| wc -c; apk --version'` | `4`, `apk-tools 3.0.8-r0, compiled for x86_64.` |
+| `docker run -d … FEX python3.12 -m http.server 8000`, then a `docker exec` x86 python client to 127.0.0.1:8000 | `200`; server log `"GET / HTTP/1.1" 200` |
+
+Observations:
+- **No new runtime gap remains open on these programs.** No ENOSYS appears in a `--trace` of the python run.
+- A harness artifact, not a gap: with the arm64 Ubuntu root behind FEX's rootfs, a PATH lookup can find a
+  **host** arm64 binary first. Example: alpine has no `/usr/bin/uname`, so `sh -c uname` ran Ubuntu's arm64
+  `uname` natively and printed `aarch64`. In the product the container root *is* the x86 image, with FEX in
+  a hidden mount (plan item 2), so this cannot happen there.
+- Not measured yet: FEX speed, code caching, and `HVF_TABLES`' roughly 32 GiB cap on memory committed
+  outside the arena.
+
 ### Gaps by priority (what remains for an amd64 preview)
 
 Updated after 7.1. The original P0 list (MAP_FIXED anywhere, high PIE base, mremap) has been merged.
 
 1. ~~**P0, FEX: fixed mappings in the unused brk room.**~~ Done in 7.2.
-2. **P0, abstract AF_UNIX sockets** (FEXServer; in progress elsewhere). This is now the only known blocker
-   before FEX runs x86 code.
+2. ~~**P0, abstract AF_UNIX sockets** (FEXServer).~~ Merged (rt-ngaps). FEX runs x86 code (7.3), once
+   `personality`, `/proc/self/fd`, `openat2`, `execveat` and `close_range` were added.
 3. **P1, honour mmap hints outside the arena.**
    - Box64 asks for x86 `ET_EXEC` images at their link address with a hint and then relocates them. A
      non-PIE x86 program (most older and distro `ET_EXEC` binaries) needs its exact address.
@@ -590,11 +637,16 @@ Updated after 7.1. The original P0 list (MAP_FIXED anywhere, high PIE base, mrem
 3. **P1, binfmt dispatch and the hidden translator mount** (plan item 2): unchanged.
 4. **P2, sysfs:** `/sys/devices/system/cpu/` as a directory with `possible`, `online` and `cpuN`; `cpufreq`.
    Cosmetic for both translators.
-5. Still unknown: whatever FEX hits once it executes x86 code, for example signal frames, `/proc/self/maps`
-   accuracy for its allocator, and its 47-bit reservation of the upper half. The size of the committed
-   memory outside the arena (`HVF_TABLES` caps it at about 32 GiB in total) may matter for FEX's code cache.
-6. Fixed on this branch: ID-register MRS, SIGBUS `BUS_ADRALN`, `PR_SET/GET_MEM_MODEL`,
-   `lstat /proc/<pid>/exe` and `MAP_GROWSDOWN`.
+5. Next unknowns, now that FEX runs (7.3):
+   - the wider image corpus (node, nginx, postgres, Go and Java images; x86-64-v3 images);
+   - FEX's speed and code cache;
+   - memory committed outside the arena, which `HVF_TABLES` caps at about 32 GiB in total;
+   - AT_EMPTY_PATH `execveat` (fexecve).
+6. Fixed on this branch:
+   - ID-register MRS, SIGBUS `BUS_ADRALN` and `PR_SET/GET_MEM_MODEL`;
+   - `lstat /proc/<pid>/exe` and `MAP_GROWSDOWN`;
+   - fixed mappings in the brk room;
+   - `personality`, the `/proc/<pid>/fd` listing, `openat2`, `execveat` and `close_range`.
 
 ### Revised estimate and recommendation
 
@@ -604,20 +656,22 @@ Updated after 7.1. The original P0 list (MAP_FIXED anywhere, high PIE base, mrem
   (about 2–3 days).
 - 7.1 shows the runtime already runs real x86-64 glibc programs, threads and x86 exec chains through a
   guest translator. So the remaining risk is translator compatibility, not runtime architecture.
-- **Revised estimate: about 6–10 weeks to a preview**, down from 2–3 months:
-  - abstract sockets (in progress) and hints: under 1 week (the brk room is done, 7.2);
+- **Revised estimate: about 5–9 weeks to a preview.** 7.3 runs real x86 images' programs under FEX,
+  including `docker run`/`docker exec`:
+  - hints: 2–3 days (the brk room and abstract sockets are done);
   - binfmt and the hidden mount: 1 week;
   - control plane: 3–5 days;
   - compatibility corpus: 3–6 weeks;
   - packaging: 1–2 weeks.
-- The corpus is still the uncertain part. Re-run FEX as soon as the brk-room fix lands to size it.
+- The corpus is still the uncertain part. The next step is the amd64 corpus under FEX, run directly with
+  this harness, before binfmt and the control plane exist.
 
 **Go: FEX as the translator. No-go: Box64 as the default.**
 - FEX:
   - It asks the kernel for hardware TSO, which we now provide, and it confirms hardware TSO.
   - It is libc-agnostic: it needs only its own arm64 glibc set, not an x86 one as well.
-  - Its official PPA build runs its tools under our runtime. Only abstract AF_UNIX sockets (for
-    FEXServer) stand between it and x86 code (7.2).
+  - Its official PPA build runs x86-64 glibc and musl programs under our runtime (7.3). That includes the
+    image's own OpenSSL, which Box64 cannot use.
   - Its remaining needs are generic Linux behaviour, which arm64 workloads also benefit from.
 - Box64:
   - It does not use hardware TSO, so it is weak-ordered by default.
@@ -626,8 +680,9 @@ Updated after 7.1. The original P0 list (MAP_FIXED anywhere, high PIE base, mrem
     OpenSSL 3.3/3.4 symbols fail against the arm64 root's OpenSSL 3.0, and musl binaries get bound to glibc.
   - It runs real programs today (7.1). It is the right tool for benchmarks and for exercising the runtime
     while FEX is unblocked, but not the default.
-- The go for FEX is conditional on abstract sockets; the brk room is done (7.2). Then re-run 7.1 with the
-  same `--trace` before plan items 2 and 4.
+- **The go for FEX is confirmed (7.3).** Next steps:
+  - binfmt dispatch with a hidden FEX mount, and the container root as FEX's rootfs (plan item 2);
+  - then the control plane (item 4) and the corpus (item 5).
 
 ---
 
@@ -640,8 +695,7 @@ Updated after 7.1. The original P0 list (MAP_FIXED anywhere, high PIE base, mrem
 3. How well Box64 handles musl and static x86 binaries. Answered in 7.1: simple commands work, but symbols
    resolve against glibc and static shells crash. Box64 itself warns about static binaries.
 4. Any undocumented Rosetta checks beyond the ioctl. This is moot if we follow the recommendation.
-5. What FEX needs once it runs x86 code. It is now blocked only by abstract AF_UNIX sockets for FEXServer
-   (7.2).
+5. What FEX needs once it runs x86 code. Answered for the first programs (7.3); the corpus remains.
 
 ## Sources
 

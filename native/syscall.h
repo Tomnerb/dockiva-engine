@@ -285,7 +285,7 @@ static int guest_syscall_dispatch(void) {
             uint64_t call=cpu->gpr[8];cpu->exclusive_valid=0;
             if(profiling && call<512)__atomic_fetch_add(&profile_syscalls[call],1,__ATOMIC_RELAXED);
             if(trace) fprintf(stderr,"pid %" PRIu64 " syscall %" PRIu64 ": x0..5=[%" PRIu64 ", %" PRIu64 ", %" PRIu64 ", %" PRIu64 ", %" PRIu64 ", %" PRIu64 "]\n",process_pid,call,cpu->gpr[0],cpu->gpr[1],cpu->gpr[2],cpu->gpr[3],cpu->gpr[4],cpu->gpr[5]);
-            if(trace && (call==56 || call==79 || call==48 || call==35 || call==78 || call==34)) { char path[1025];if(!fs_string(cpu->gpr[1],path))fprintf(stderr,"  path %s\n",path); }
+            if(trace && (call==56 || call==437 || call==281 || call==79 || call==48 || call==35 || call==78 || call==34)) { char path[1025];if(!fs_string(cpu->gpr[1],path))fprintf(stderr,"  path %s\n",path); }
             if(call==139 && job_control_enabled) { signal_return();if(schedule_tasks[process_pid-1].terminate_signal || schedule_tasks[process_pid-1].stop_signal)return -1;return -3; }
             if(call==137) { uint64_t r=signal_timedwait();if(r==IO_BLOCK) { cpu->pc-=4;return -2; }cpu->gpr[0]=r;return -3; }
             if(call==133) { uint64_t r=signal_suspend();if(r==IO_BLOCK) { cpu->pc-=4;return -2; }cpu->gpr[0]=r;return -3; }
@@ -296,6 +296,28 @@ static int guest_syscall_dispatch(void) {
                splice if a program needs one without the fallback. */
             if(call==76 || call==77) { cpu->gpr[0]=linux_error(22);return -3; }
             if(call==71) { uint64_t r=guest_sendfile();if(r==IO_BLOCK) { cpu->pc-=4;return -2; }cpu->gpr[0]=r;return -3; }
+            if(call==436) {         /* close_range(first, last, flags): CLOSE_RANGE_CLOEXEC (4) marks instead of closing */
+                uint64_t first=(uint32_t)cpu->gpr[0],last=(uint32_t)cpu->gpr[1],flags=cpu->gpr[2];
+                if(first>last || (flags&~UINT64_C(6))) { cpu->gpr[0]=linux_error(22);return -3; }
+                /* ponytail: CLOSE_RANGE_UNSHARE (2) is a no-op; threads keep one table */
+                for(uint64_t fd=first;fd<=last && fd<GUEST_FD_LIMIT;fd++) {
+                    if(!fd_kind[fd])continue;
+                    unsigned slot=fd_index[fd];
+                    if(flags&4) {
+                        if(fd_kind[fd]==FD_FILE)fs_cloexec[slot]=1;else if(fd_kind[fd]==FD_NET)net_flags[slot]|=524288;else io_fds[slot].cloexec=1;
+                        continue;
+                    }
+                    struct stat closing;
+                    if(fd_kind[fd]==FD_FILE && !fstat(fs_fd[slot]-1,&closing)) { fs_locks_release(closing.st_dev,closing.st_ino,process_pid_now());fs_locks_release(closing.st_dev,closing.st_ino,FS_FLOCK_OWNER|fd); }
+                    (void)guest_close(fd);
+                }
+                cpu->gpr[0]=0;return -3;
+            }
+            if(call==92) {          /* personality: 0xffffffff queries; kept per process across exec */
+                static uint32_t persona[PROCESS_LIMIT+2];uint32_t old=process_pid<=PROCESS_LIMIT+1?persona[process_pid]:0; /* ponytail: a fork child starts at PER_LINUX */
+                if((uint32_t)cpu->gpr[0]!=UINT32_MAX && process_pid<=PROCESS_LIMIT+1)persona[process_pid]=(uint32_t)cpu->gpr[0];
+                cpu->gpr[0]=old;return -3;
+            }
             if(call==160) {
                 unsigned char *out=lookup(cpu->gpr[0],390,2);
                 if(!out)cpu->gpr[0]=linux_error(14);
@@ -407,7 +429,14 @@ static int guest_syscall_dispatch(void) {
             }
             if(io_managed(cpu->gpr[0]) && (call==57 || call==63 || call==64 || call==25 || call==29 || call==80 || call==62 || call==67 || call==61)) { uint64_t result=io_call(call);if(result==IO_BLOCK) { cpu->pc-=4;return -2; }cpu->gpr[0]=result;return -3; }
             if(call==220) { cpu->gpr[0]=process_clone();return -3; }
-            if(call==221) { uint64_t result=process_exec();if(result)cpu->gpr[0]=result;return -3; }
+            if(call==221) { uint64_t result=process_exec_at((uint64_t)-100,0);if(result)cpu->gpr[0]=result;return -3; }
+            /* execveat (FEX re-runs itself through it). ponytail: AT_EMPTY_PATH (fexecve) is
+               ENOSYS, AT_SYMLINK_NOFOLLOW is not enforced. */
+            if(call==281) {
+                uint64_t flags=cpu->gpr[4];
+                uint64_t result=(flags&~UINT64_C(0x1100))?linux_error(22):(flags&0x1000)?linux_error(38):process_exec_at(cpu->gpr[0],1);
+                if(result)cpu->gpr[0]=result;return -3;
+            }
             if(call==260 || call==95) {
                 uint64_t result=call==95?process_waitid():process_wait();
                 if(result==IO_BLOCK) {                          /* only a child's event (or a signal) can change the answer */
@@ -537,7 +566,7 @@ static int guest_syscall_dispatch(void) {
                 fs_pack(out,48,host.f_ffree,8);fs_pack(out,64,255,8);fs_pack(out,72,host.f_bsize,8);
                 cpu->gpr[0]=0;return -3;
             }
-            if(call==166 || call==52 || call==53 || call==78 || call==88 || call==36 || call==37 || call==48 || call==439 || call==45 || call==82 || call==83 || call==61 || (call==25 && fs_host(cpu->gpr[0])>=0) || call==79 || call==56 || call==33 || call==34 || call==35 || call==38 || call==46 || call==62 || call==80 || ((call==57 || call==63 || call==64 || call==67 || call==68 || call==69 || call==70 || call==286 || call==287 || call==47 || call==84 || call==32) && fs_host(cpu->gpr[0])>=0)) {
+            if(call==166 || call==52 || call==53 || call==78 || call==88 || call==36 || call==37 || call==48 || call==439 || call==45 || call==82 || call==83 || call==61 || (call==25 && fs_host(cpu->gpr[0])>=0) || call==79 || call==56 || call==437 || call==33 || call==34 || call==35 || call==38 || call==46 || call==62 || call==80 || ((call==57 || call==63 || call==64 || call==67 || call==68 || call==69 || call==70 || call==286 || call==287 || call==47 || call==84 || call==32) && fs_host(cpu->gpr[0])>=0)) {
                 uint64_t result=fs_call(call);
                 if(result==IO_BLOCK) { cpu->pc-=4;return -2; }  /* F_SETLKW waits for the lock */
                 cpu->gpr[0]=result;return -3;
