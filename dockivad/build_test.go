@@ -145,8 +145,8 @@ ENV ONLY=final
 
 	// Errors arrive as a JSON message after the progress so far.
 	for dockerfile, want := range map[string]string{
-		"FROM dockiva/shell:demo\nRUN --mount=type=cache,target=/x true\n": "needs BuildKit",
-		"FROM dockiva/shell:demo\nCOPY missing.txt /\n":                    "missing.txt not found",
+		"FROM dockiva/shell:demo\nRUN --mount=type=ssh true\n": "type=ssh needs SSH agent forwarding",
+		"FROM dockiva/shell:demo\nCOPY missing.txt /\n":        "missing.txt not found",
 		"ENV A=1\n":                        "comes before FROM",
 		"FROM dockiva/shell:demo\nBOGUS\n": "Unknown instruction: BOGUS",
 	} {

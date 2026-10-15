@@ -13,14 +13,52 @@ type instruction struct {
 	rest     string            // the arguments after the flags, as written (continuations joined)
 	json     []string          // the JSON (exec) form of the arguments when rest is a valid JSON array of strings; nil otherwise
 	original string            // the whole instruction as written, continuations joined, for "Step 1/5 : ..." output
+	mounts   []string          // RUN's --mount values, in order (the flag repeats)
+	heredocs []heredoc         // RUN, COPY and ADD here-documents (<<EOF), in order
+}
+
+// heredoc is a here-document (Dockerfile 1.4 syntax): the lines after the
+// instruction up to the delimiter.
+type heredoc struct {
+	name   string // the delimiter, quotes removed
+	body   string // the lines, each with its newline, as written
+	expand bool   // an unquoted delimiter: COPY and ADD expand variables in the body
+	chomp  bool   // <<-: leading tabs are dropped, from the delimiter line too
+}
+
+// heredocFor is the here-document a COPY or ADD source (<<EOF) names, or nil.
+func (in instruction) heredocFor(src string) *heredoc {
+	if m := heredocWord.FindStringSubmatch(src); m != nil {
+		for i := range in.heredocs {
+			if in.heredocs[i].name == m[2] {
+				return &in.heredocs[i]
+			}
+		}
+	}
+	return nil
+}
+
+// content is the file a COPY or ADD here-document makes, or a RUN's script.
+func (h heredoc) content() string {
+	if !h.chomp {
+		return h.body
+	}
+	lines := strings.SplitAfter(h.body, "\n")
+	for i, l := range lines {
+		lines[i] = strings.TrimLeft(l, "\t")
+	}
+	return strings.Join(lines, "")
 }
 
 var directivePattern = regexp.MustCompile(`^#\s*([a-zA-Z][a-zA-Z0-9]*)\s*=\s*(.+?)\s*$`)
 
-// A heredoc is a word starting <<WORD or <<-WORD (not <<<) once quoted text and
-// escaped characters are blanked out, as BuildKit's lexer sees it.
-var heredocWord = regexp.MustCompile(`^\d*<<[^<]`)
-var quotedText = regexp.MustCompile(`'[^']*'|"(?:\\.|[^"\\])*"|\\.`)
+// A heredoc is a word <<WORD or <<-WORD (not <<<), quotes and escapes left in, as
+// BuildKit's parser sees it. A quoted WORD keeps the body from expansion.
+var heredocWord = regexp.MustCompile(`^\d*<<(-?)([^<]*)$`)
+
+// The docker/dockerfile frontends (# syntax=docker/dockerfile:1.7 and the like):
+// their dialect is the builder's own.
+var dockerfileSyntax = regexp.MustCompile(`^(docker\.io/)?docker/dockerfile(-upstream)?(:[A-Za-z0-9._-]+)?(@sha256:[0-9a-f]{64})?$`)
 
 var varName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*`)
 
@@ -42,7 +80,9 @@ func parseDockerfile(text string) ([]instruction, byte) {
 			case "escape":
 				reject(m[2] == `\` || m[2] == "`", "Invalid escape directive: "+m[2])
 				escape = m[2][0]
-			case "syntax", "check":
+			case "syntax":
+				reject(dockerfileSyntax.MatchString(m[2]), "# syntax="+m[2]+": Dockiva Engine builds with its own Dockerfile frontend, which reads the docker/dockerfile syntax only")
+			case "check":
 			default:
 				directives = false
 			}
@@ -62,9 +102,26 @@ func parseDockerfile(text string) ([]instruction, byte) {
 			next, more = continued(next, escape)
 			joined += next
 		}
-		if strings.TrimSpace(joined) != "" {
-			out = append(out, newInstruction(joined))
+		if strings.TrimSpace(joined) == "" {
+			continue
 		}
+		in := newInstruction(joined)
+		for k := range in.heredocs { // each body follows the instruction, in order
+			h := &in.heredocs[k]
+			for {
+				i++
+				reject(i < len(lines), "Unterminated heredoc <<"+h.name+" in: "+in.original)
+				end := strings.TrimRight(lines[i], "\r")
+				if h.chomp {
+					end = strings.TrimLeft(end, "\t")
+				}
+				if end == h.name {
+					break
+				}
+				h.body += lines[i] + "\n"
+			}
+		}
+		out = append(out, in)
 	}
 	return out, escape
 }
@@ -99,13 +156,21 @@ func newInstruction(line string) instruction {
 				break
 			}
 			name, value, _ := strings.Cut(word[2:], "=")
+			if in.cmd == "RUN" && name == "mount" {
+				in.mounts = append(in.mounts, value)
+				continue
+			}
 			in.flags[name] = value
 		}
 	}
 	in.rest = strings.TrimSpace(rest)
 	if in.cmd == "RUN" || in.cmd == "COPY" || in.cmd == "ADD" {
-		for _, w := range strings.Fields(quotedText.ReplaceAllString(in.rest, "q")) {
-			reject(!heredocWord.MatchString(w), "Heredocs (<<EOF) need BuildKit; Dockiva Engine's builder does not support them yet")
+		for _, w := range rawWords(in.rest) {
+			if m := heredocWord.FindStringSubmatch(w); m != nil && m[2] != "" {
+				name, _ := flagWord(m[2])
+				reject(name != "", "Invalid heredoc: "+w)
+				in.heredocs = append(in.heredocs, heredoc{name: name, expand: name == m[2], chomp: m[1] == "-"})
+			}
 		}
 	}
 	var array []any
@@ -149,6 +214,60 @@ func flagWord(s string) (string, string) {
 		}
 	}
 	return b.String(), ""
+}
+
+// rawWords splits s on unquoted blanks, keeping quotes and escapes.
+func rawWords(s string) []string {
+	out := []string{}
+	var b strings.Builder
+	var quote byte
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case quote == 0 && (c == ' ' || c == '\t'):
+			if b.Len() > 0 {
+				out = append(out, b.String())
+				b.Reset()
+			}
+			continue
+		case quote != '\'' && c == '\\' && i+1 < len(s):
+			b.WriteByte(c)
+			i++
+			c = s[i]
+		case quote == 0 && (c == '\'' || c == '"'):
+			quote = c
+		case c == quote:
+			quote = 0
+		}
+		b.WriteByte(c)
+	}
+	if b.Len() > 0 {
+		out = append(out, b.String())
+	}
+	return out
+}
+
+// expandHeredoc expands variables in a here-document as a shell does: quotes are
+// text, and \ escapes only $, \ and a newline.
+func expandHeredoc(s string, env map[string]string) string {
+	l := lexer{s: s, env: env, escape: '\\'}
+	var b strings.Builder
+	for l.i < len(l.s) {
+		c := l.s[l.i]
+		l.i++
+		switch {
+		case c == '$':
+			b.WriteString(l.dollar())
+		case c == '\\' && l.i < len(l.s) && strings.IndexByte("$\\\n", l.s[l.i]) >= 0:
+			if l.s[l.i] != '\n' {
+				b.WriteByte(l.s[l.i])
+			}
+			l.i++
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
 }
 
 // processWords expands variables and removes quotes like Docker's builder does for

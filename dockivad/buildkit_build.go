@@ -46,6 +46,12 @@ func (b *engine) bkBuild(ctx context.Context, st *bkSolve, opts map[string]strin
 	for k, v := range platformArgs {
 		bd.global[k] = v
 	}
+	bd.secret = func(id string) (value []byte, e error) { // RUN --mount=type=secret: the session's Secrets service
+		e = safeRun(func() {
+			value = grpcUnary(ctx, bkSessionFor(ctx, st.session).rt, "/moby.buildkit.secrets.v1.Secrets/GetSecret", nil, pbuf{}.str(1, id)).last(1).b
+		})
+		return value, e
+	}
 	labels := obj{}
 	for k, v := range opts {
 		if name, ok := strings.CutPrefix(k, "build-arg:"); ok {
