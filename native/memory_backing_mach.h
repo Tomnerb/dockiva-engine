@@ -183,6 +183,21 @@ static MemoryBacking *backing_clone(const MemoryBacking *source,size_t owned) {
     }
     return copy;
 }
+/* Read-only program text mapped from its file (offset a host page multiple) instead
+   of copied: pages come in from the host's page cache as the guest uses them. A
+   first exec of a 100 MB program (node) from a fresh container root otherwise read
+   and copied all of it. Owned and uncharged, as backing_alloc_text; copy-on-write
+   with the file (MAP_PRIVATE), so never recycled. NULL when it cannot be mapped. */
+static MemoryBacking *backing_map_file(int fd,off_t offset,size_t size) {
+    MemoryBacking *backing=backing_descriptor(size);if(!backing)return NULL;
+    size_t count=backing->mapped_size/backing->page_size;
+    BackingPageGroup *group=backing_page_group(count,backing->page_size,0);
+    if(!group) { free(backing);return NULL; }
+    void *bytes=mmap(NULL,backing->mapped_size,PROT_READ|PROT_WRITE,MAP_PRIVATE,fd,offset);
+    if(bytes==MAP_FAILED) { free(group);free(backing);return NULL; }
+    for(size_t i=0;i<count;i++)backing->pages[i]=&group->pages[i];
+    backing->used=count;backing->bytes=bytes;backing->cow_copy=1;return backing;
+}
 /* Stage the entire charge before changing metadata. A failed multi-page range
    leaves pointers, ownership and all guest bytes untouched. */
 static int backing_prepare(MemoryBacking *backing,size_t offset,size_t size,int *changed) {

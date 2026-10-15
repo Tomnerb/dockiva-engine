@@ -166,6 +166,9 @@ static uint64_t load_stream_inner(FILE *f,int interpreter) {
     /* Mapped, not read: pages load lazily and are not charged to the guest's memory
        limit (an executable is page cache on Linux). Segments are copied out below. */
     void *mapped=size?elf_map(fileno(f),&input_stat):MAP_FAILED;
+    static int text_fd=-1;                              /* text segments map from it (left open by a failed load) */
+    if(text_fd>=0)close(text_fd);
+    text_fd=dup(fileno(f));
     fclose(f);
     if(mapped==MAP_FAILED)fail("ELF input could not be read");
     address_space->file_data=mapped;address_space->file_size=size;
@@ -246,6 +249,12 @@ static uint64_t load_stream_inner(FILE *f,int interpreter) {
         /* Read-only segments (text) are not charged to the memory limit: Linux keeps
            them in its reclaimable page cache (grafana's binary is 485 MB). */
         MemoryBacking *buffer=(flags&2)?NULL:text_cache_find(&input_stat,off,bytes,mem);
+#ifdef __APPLE__
+        if(!buffer && !(flags&2) && text_fd>=0 && !(off%(uint64_t)vm_page_size) && page_up(bytes)==mem) {
+            buffer=backing_map_file(text_fd,(off_t)off,(size_t)mem);
+            if(buffer)text_cache_add(&input_stat,off,bytes,mem,buffer);
+        }
+#endif
         if(!buffer) {
             buffer=(flags&2)?backing_alloc((size_t)mem,1):backing_alloc_text((size_t)mem);
             if(!buffer) fail("Allocation failed");
@@ -257,6 +266,7 @@ static uint64_t load_stream_inner(FILE *f,int interpreter) {
         address_space_changed(address_space);
 
     }
+    if(text_fd>=0) { close(text_fd);text_fd=-1; }
     if(!lookup(cpu->pc,4,1)) fail("Entry point is not executable");
     if(interpreter_path[0]) {
         int fd=fs_open_root_file(interpreter_path);if(fd<0)fail("Cannot open guest interpreter");
