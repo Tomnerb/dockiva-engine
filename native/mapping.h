@@ -460,8 +460,10 @@ static uint64_t guest_dynamic_mmap(void) {
     if(!length || offset%4096 || offset>INT64_MAX-length || prot>7 || ((prot&6)==6 && !map_rwx_allowed))return linux_error(22);
     if(!address_space_map_flags(address_space))return linux_error(12);
     /* Linux ignores MAP_DENYWRITE, MAP_EXECUTABLE and MAP_STACK. Stack guards
-       still use ordinary PROT_NONE/mprotect; this does not create a thread. */
-    flags&=~UINT64_C(0x2d800);                       /* also MAP_NORESERVE and MAP_POPULATE: hints */
+       still use ordinary PROT_NONE/mprotect; this does not create a thread.
+       MAP_GROWSDOWN (Box64's x86 stack) maps the range as asked; ponytail: it never
+       grows below it, which callers sized up front do not need. */
+    flags&=~UINT64_C(0x2d900);                       /* also MAP_NORESERVE and MAP_POPULATE: hints */
     int noreplace=(flags&0x100000)!=0;               /* MAP_FIXED_NOREPLACE: fixed, but never over a mapping */
     uint64_t bytes=page_up(length);
     if(outside) {

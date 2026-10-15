@@ -2,12 +2,14 @@
    EL0 reads of the ID registers, emulated as Linux does (HWCAP_CPUID; FEX reads
    MIDR_EL1 and ID_AA64* with MRS to choose its code generation, glibc reads MIDR_EL1),
    with fields agreeing with AT_HWCAP; and SIGBUS/BUS_ADRALN at the address of an
-   unaligned atomic (FEX backpatches x86 lock-prefixed accesses on it). Run with
+   unaligned atomic (FEX backpatches x86 lock-prefixed accesses on it); and
+   MAP_GROWSDOWN mappings (Box64 allocates its x86 stack so). Run with
    --signals (handlers). */
 typedef unsigned long U;
 static long call(U n,U a,U b,U c,U d) {
     register U x8 __asm__("x8")=n,x0 __asm__("x0")=a,x1 __asm__("x1")=b,x2 __asm__("x2")=c,x3 __asm__("x3")=d;
-    __asm__ volatile("svc #0":"+r"(x0):"r"(x8),"r"(x1),"r"(x2),"r"(x3):"memory","cc");
+    register U x4 __asm__("x4")=(U)-1,x5 __asm__("x5")=0;    /* mmap: no descriptor, offset 0 */
+    __asm__ volatile("svc #0":"+r"(x0):"r"(x8),"r"(x1),"r"(x2),"r"(x3),"r"(x4),"r"(x5):"memory","cc");
     return (long)x0;
 }
 static unsigned checks;
@@ -44,5 +46,8 @@ void start_c(U *sp) {
     check(bus_signal==7 && bus_code==1 && bus_addr==(U)odd);    /* BUS_ADRALN at the address */
     bus_signal=0;__asm__ volatile("stlr %0,[%1]"::"r"(value),"r"(odd):"memory");
     check(bus_signal==7 && bus_addr==(U)odd);                   /* a store too, without looping on it */
+    long stack=call(222,0,0x40000,3,0x122);                /* MAP_GROWSDOWN: Box64's x86 stack */
+    check(stack>0 && !(stack&4095));
+    if(stack>0) { *(volatile U *)(stack+0x40000-8)=9;check(*(volatile U *)(stack+0x40000-8)==9); }
     call(64,1,(U)"translator PASS\n",16,0);call(94,0,0,0,0);for(;;){}
 }
