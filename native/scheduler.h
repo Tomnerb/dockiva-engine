@@ -91,7 +91,19 @@ static void schedule_interrupt(ScheduledTask *t) {
     atomic_thread_fence(memory_order_seq_cst);     /* the request is visible before in_guest is read */
     for(unsigned i=0;worker_interrupt && i<worker_count;i++)if(workers[i]!=worker && workers[i]->task==index)worker_interrupt(workers[i]);
 }
-static void mm_lock(ScheduledTask *t) { if(schedule_active)pthread_mutex_lock(&t->mm); }
+/* Threads of a process take its mm lock around every exit and hold it for
+   microseconds: spin briefly before sleeping in the kernel, where a wakeup takes far
+   longer than a typical hold (and a barging thread can retake the lock meanwhile). */
+static void mm_lock(ScheduledTask *t) {
+    if(!schedule_active)return;
+    for(unsigned spin=0;spin<2000;spin++) {
+        if(!pthread_mutex_trylock(&t->mm))return;
+#if defined(__aarch64__)
+        __asm__ volatile("yield");
+#endif
+    }
+    pthread_mutex_lock(&t->mm);
+}
 static void mm_unlock(ScheduledTask *t) { if(schedule_active)pthread_mutex_unlock(&t->mm); }
 static void schedule_notify(void);
 static _Thread_local int runtime_held; /* this worker holds runtime_mutex */
@@ -568,7 +580,11 @@ static int schedule_loop(int current) {
         if(th) { th->worker=worker->index+1;t->running++; } else t->worker=worker->index+1;
         if(th && th->state==2)cpu->gpr[0]=linux_error(110);       /* picked because its futex wait timed out */
         unsigned *blocked_call=th?&th->blocked:&t->blocked;
-        if(job_control_enabled && !t->terminate_signal && !t->stop_signal && !t->exit_pending) { mm_lock(t);signal_deliver((int)*blocked_call);mm_unlock(t); }
+        /* signal_deliver acts only on a pending signal the thread does not block: test
+           that first, as waiting here for the mm lock (a sibling thread in a long
+           unlocked call) holds up every worker. */
+        if(job_control_enabled && !t->terminate_signal && !t->stop_signal && !t->exit_pending &&
+           ((t->signal_pending|(th?th->signal_pending:0))&~*signal_mask_now()&~t->signal_ignored)) { mm_lock(t);signal_deliver((int)*blocked_call);mm_unlock(t); }
         if(th)th->state=1;else t->state=1;
         *blocked_call=0;
         if(th)th->child_wait=0;else t->child_wait=0;              /* set again if it blocks in wait4 once more */

@@ -22,6 +22,7 @@
 #define HVF_SYSTEM_BYTES (16u<<10)                  /* one host page: vectors + flush routine */
 #define HVF_SYSTEM_VA UINT64_C(0xffffffff0000)      /* top of the 48-bit user range; EL1-only */
 #define HVF_FLUSH_OFFSET 0x800u
+#define HVF_FLUSH_VA_OFFSET 0x840u
 #define HVF_BLOCKS 1024
 #define HVF_VIEWS (PROCESS_LIMIT+2)                 /* indexed by pid; the pid is the ASID */
 static unsigned char *hvf_tables,*hvf_system;
@@ -40,6 +41,7 @@ static pthread_mutex_t hvf_mutex=PTHREAD_MUTEX_INITIALIZER;
    instruction caches) need maintenance. New mappings of unmapped addresses do
    not, as invalid entries are never cached. */
 static _Thread_local int hvf_stale_tlb;
+static _Thread_local int hvf_stale_code; /* and executable pages were mapped: instruction caches too */
 /* A process's stage-1 tables and the mapping-relevant layout they were built from.
    The scheduler restores a blocked process's image on every resume, which bumps
    the generation without changing anything; comparing the layout (and its
@@ -178,6 +180,7 @@ static void hvf_map_page_in(HvfView *v,uint64_t va,uint64_t ipa,unsigned flags,i
     }
     uint64_t *slot=&leaf[(va>>12)&511];
     if(((*slot&1) && *slot!=descriptor) || (flags&1))hvf_stale_tlb=1;
+    if(flags&1)hvf_stale_code=1;
     *slot=descriptor;
 }
 static void hvf_map_page(uint64_t va,uint64_t ipa,unsigned flags,int system) { hvf_map_page_in(hvf_view,va,ipa,flags,system); }
@@ -200,6 +203,7 @@ static void hvf_map_range(const GuestAddressSpace *space,uint64_t base,uint64_t 
     for(uint64_t p=0;p<size;p+=4096)hvf_map_page_in(v,base+p,ipa+p,hvf_effective_flags(space,backing,flags,offset+(size_t)p),0);
 }
 static void hvf_flush(void);
+static void hvf_flush_va(uint64_t va,unsigned pages);
 static void hvf_siblings_out(void);
 static int hvf_view_matches(const GuestAddressSpace *space) {
     const HvfView *v=&hvf_views[process_pid];
@@ -370,17 +374,18 @@ static void hvf_remap_host_page(const GuestAddressSpace *space,uint64_t far) {
             backing=space->seg[i].backing;low=space->seg[i].base;high=low+space->seg[i].size;start=space->seg[i].offset;flags=space->seg[i].flags;break;
         }
     if(!backing)return;
-    hvf_exhausted=0;hvf_stale_tlb=0;
-    uint64_t ipa=hvf_block_ipa(backing);
+    hvf_exhausted=0;hvf_stale_tlb=0;hvf_stale_code=0;
+    uint64_t ipa=hvf_block_ipa(backing),first=0,last=0;
     size_t host=(start+(size_t)(va-low))/backing->page_size*backing->page_size;
     for(size_t offset=host;ipa && offset<host+backing->page_size;offset+=4096) {
         if(offset<start)continue;
         uint64_t page=low+(offset-start);if(page>=high)break;
         unsigned f=space->map_flags && low==MAP_BASE?space->map_flags[(page-MAP_BASE)/4096]&7:flags;
-        if(f)hvf_map_page(page,ipa+offset,hvf_effective_flags(space,backing,f,offset),0);
+        if(f) { hvf_map_page(page,ipa+offset,hvf_effective_flags(space,backing,f,offset),0);if(!first)first=page;last=page; }
     }
     if(hvf_exhausted) { hvf_view->stale=HVF_STALE_NEW;return; } /* the next sync rebuilds (and evicts) */
-    if(hvf_stale_tlb)hvf_flush();
+    if(hvf_stale_tlb && (hvf_stale_code || !first))hvf_flush();
+    else if(hvf_stale_tlb)hvf_flush_va(first,(unsigned)((last-first)/4096+1));
 }
 /* Register transfer. General registers are read at every exit and written back
    only when changed (the shadow mirrors the vCPU). FP/SIMD state stays in the vCPU
@@ -457,6 +462,26 @@ static void hvf_flush(void) {
         fail("Hypervisor TLB/cache maintenance did not complete");
     hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_PC,pc),"set pc");hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_CPSR,cpsr),"set cpsr");
 }
+/* Invalidate the current view's last-level TLB entries for pages [va, va+pages*4 KiB)
+   on every vCPU ("tlbi vale1is" by VA and ASID; dsb ish; isb; hvc #2), instead of
+   every translation of every process: after a write fault made a read-only page
+   writable, Linux too invalidates just that page. x0 and x1 carry the operands. */
+static void hvf_flush_va(uint64_t va,unsigned pages) {
+    uint64_t pc=0,cpsr=0,x0=0,x1=0;
+    hvf_check(hv_vcpu_get_reg(hvf_vcpu,HV_REG_PC,&pc),"get pc");hvf_check(hv_vcpu_get_reg(hvf_vcpu,HV_REG_CPSR,&cpsr),"get cpsr");
+    hvf_check(hv_vcpu_get_reg(hvf_vcpu,HV_REG_X0,&x0),"get x0");hvf_check(hv_vcpu_get_reg(hvf_vcpu,HV_REG_X1,&x1),"get x1");
+    uint64_t asid=(uint64_t)(hvf_view-hvf_views);
+    hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_X0,(asid<<48)|((va>>12)&UINT64_C(0xfffffffffff))),"set x0");
+    hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_X1,pages),"set x1");
+    hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_PC,HVF_SYSTEM_VA+HVF_FLUSH_VA_OFFSET),"set pc");
+    hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_CPSR,0x3c5),"set cpsr");           /* EL1h, interrupts masked */
+    do hvf_check(hv_vcpu_run(hvf_vcpu),"hv_vcpu_run");
+    while(hvf_exit->reason==HV_EXIT_REASON_CANCELED || hvf_exit->reason==HV_EXIT_REASON_VTIMER_ACTIVATED);
+    if(hvf_exit->reason!=HV_EXIT_REASON_EXCEPTION || (hvf_exit->exception.syndrome>>26)!=0x16 || (hvf_exit->exception.syndrome&0xffff)!=2)
+        fail("Hypervisor TLB maintenance did not complete");
+    hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_X0,x0),"set x0");hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_X1,x1),"set x1");
+    hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_PC,pc),"set pc");hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_CPSR,cpsr),"set cpsr");
+}
 static void hvf_resume_el0(uint64_t pc,uint64_t spsr) {
     hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_PC,pc),"set pc");hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_CPSR,spsr),"set cpsr");
 }
@@ -518,6 +543,10 @@ static void hvf_init(void) {
     }
     const uint32_t flush[]={UINT32_C(0xd508711f),UINT32_C(0xd508831f),UINT32_C(0xd5033b9f),UINT32_C(0xd5033fdf),UINT32_C(0xd4000022),UINT32_C(0x17ffffff)};
     memcpy(hvf_system+HVF_FLUSH_OFFSET,flush,sizeof(flush));
+    /* 1: tlbi vale1is, x0; add x0, x0, #1; subs x1, x1, #1; b.ne 1b; dsb ish; isb; hvc #2; b .-4 */
+    const uint32_t flush_va[]={UINT32_C(0xd50883a0),UINT32_C(0x91000400),UINT32_C(0xf1000421),UINT32_C(0x54ffffa1),
+                               UINT32_C(0xd5033b9f),UINT32_C(0xd5033fdf),UINT32_C(0xd4000042),UINT32_C(0x17ffffff)};
+    memcpy(hvf_system+HVF_FLUSH_VA_OFFSET,flush_va,sizeof(flush_va));
     worker->backend=hvf_cpu_new(1);
     if(vdso_backing)vdso_start(hvf_vtimer_offset);
     pthread_t watchdog;
@@ -768,6 +797,33 @@ static int signal_deliverable(void) {
     ScheduledTask *task=&schedule_tasks[process_pid-1];Thread *th=thread_current();
     return ((task->signal_pending|(th?th->signal_pending:0)) & ~*signal_mask_now() & ~task->signal_ignored)!=0;
 }
+/* nanosleep and relative clock_nanosleep shorter than a millisecond: sleep on the
+   host, holding no lock. Through the scheduler a sleep lasts at least its poll
+   granularity (1 ms), and Go sleeps microseconds at a time (usleep(3) while
+   stealing work, usleep(20) in sysmon). A signal for the thread waits for the end
+   of the sleep (under a millisecond); Linux would end the sleep with EINTR. */
+#define HVF_SHORT_SLEEP_NS 1000000u
+static int hvf_must_stop(ScheduledTask *t);
+static int hvf_short_sleep(uint64_t call) {
+    uint64_t x0=0,x1=0,x2=0;
+    hvf_check(hv_vcpu_get_reg(hvf_vcpu,HV_REG_X0,&x0),"get x0");
+    if(call==115) {
+        hvf_check(hv_vcpu_get_reg(hvf_vcpu,HV_REG_X1,&x1),"get x1");hvf_check(hv_vcpu_get_reg(hvf_vcpu,HV_REG_X2,&x2),"get x2");
+        if(x0>1 || x1)return 0;                                     /* REALTIME or MONOTONIC, relative */
+        x0=x2;
+    }
+    const unsigned char *ts=lookup(x0,16,4);if(!ts)return 0;
+    uint64_t sec=le(ts,8),ns=le(ts+8,8);
+    if(sec || ns>=HVF_SHORT_SLEEP_NS || hvf_must_stop(schedule_active?hvf_task():NULL))return 0;
+    uint64_t elr=0,spsr=0;
+    hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_ELR_EL1,&elr),"get elr");
+    hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_SPSR_EL1,&spsr),"get spsr");
+    ScheduledTask *task=schedule_active?hvf_task():NULL;
+    struct timespec pause={0,(long)ns};
+    mm_unlock(task);(void)nanosleep(&pause,NULL);mm_lock(task);
+    hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_X0,0),"set x0");hvf_shadow_gpr[0]=0;
+    hvf_resume_el0(elr,spsr);return 1;
+}
 static int hvf_unlocked_exit(void) {
     if(hvf_exit->reason!=HV_EXIT_REASON_EXCEPTION || (hvf_exit->exception.syndrome>>26)!=0x16)return 0;
     uint64_t esr=0,elr=0,spsr=0,call=0,far=0;
@@ -790,8 +846,9 @@ static int hvf_unlocked_exit(void) {
     }
     if(ec!=0x15 || seccomp_active())return 0;                                 /* SVC from EL0; filtered calls take the locked path */
     hvf_check(hv_vcpu_get_reg(hvf_vcpu,HV_REG_X8,&call),"get x8");
+    if((call==101 || call==115) && hvf_short_sleep(call))return 1;
     int memory=call==222 || call==215 || call==226 || call==233 || call==214;
-    if(!memory && call!=22 && call!=25 && call!=56 && call!=79 && call!=80 && (call<62 || call>68) && call!=82 && call!=83 && call!=206 && call!=207 && call!=291)return 0;
+    if(!memory && call!=22 && call!=25 && call!=56 && call!=132 && call!=134 && call!=135 && call!=172 && call!=178 && call!=79 && call!=80 && (call<62 || call>68) && call!=82 && call!=83 && call!=206 && call!=207 && call!=291)return 0;
     hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_ELR_EL1,&elr),"get elr");
     hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_SPSR_EL1,&spsr),"get spsr");
     hvf_get_regs(1,elr,spsr);
@@ -826,9 +883,16 @@ static int hvf_must_stop(ScheduledTask *t) {
     uint64_t mask=th?th->signal_mask:t->signal_mask;
     return ((t->signal_pending|(th?th->signal_pending:0))&~mask&~t->signal_ignored)!=0;
 }
+/* Take the runtime lock if it is free now (never blocks, so it may be tried with an mm lock held). */
+static int runtime_trylock(void) {
+    if(!worker_threads)return 1;
+    if(pthread_mutex_trylock(&runtime_mutex))return 0;
+    runtime_held=1;return 1;
+}
 /* One CPU slice for the current thread, with run()'s contract: a syscall result
-   other than "continue" (-3) is returned; preemption yields (-1). Called and
-   returns with the runtime lock and the process's mm lock held. Guest code runs
+   other than "continue" (-3) is returned; preemption yields (-1). Called with the
+   runtime lock held (the mm lock is taken only when needed: not while the runtime
+   lock waits on it), returns with both held. Guest code runs
    with neither; system calls served without the runtime lock hold the mm lock. */
 static int hvf_slice_run(void) {
     if(!worker->backend)worker->backend=hvf_cpu_new(0); /* a worker's first slice, on its own thread */
@@ -838,9 +902,10 @@ static int hvf_slice_run(void) {
     /* fast: the vCPU was resumed in place (write fault, EL1 preemption); cpu is not
        current, so signal delivery waits for the next full exit. in_vector: it must
        first run on into its HVC exit. */
-    int fast=0,in_vector=0;
+    int fast=0,in_vector=0,mm_held=0;
     for(;;) {
         if(job_control_enabled && schedule_active && !fast && signal_deliverable()) {
+            if(!mm_held) { mm_lock(task);mm_held=1; }
             hvf_fp_pull(); /* a signal frame saves and restores the whole CPU state */
             signal_deliver(0);
             if(task->terminate_signal || task->stop_signal)return -1;
@@ -849,8 +914,9 @@ static int hvf_slice_run(void) {
         fast=0;
         Worker *self=worker;hv_vcpu_t vcpu=hvf_vcpu;
         hv_return_t ran=HV_SUCCESS;int stopped=0;
-        mm_unlock(task);runtime_unlock();              /* guest code runs in parallel with other workers */
-        mm_lock(task);
+        if(mm_held)mm_unlock(task);
+        runtime_unlock();                              /* guest code runs in parallel with other workers */
+        mm_lock(task);mm_held=1;
         for(;;) {
             /* in_guest is set under the mm lock, so a sibling holding it sees every
                worker of this process that may enter guest code. */
@@ -866,8 +932,15 @@ static int hvf_slice_run(void) {
             if(!worker_threads || ran!=HV_SUCCESS || hvf_must_stop(task))break;
             if(!hvf_unlocked_exit() && !(hvf_direct_wait(task) && hvf_unlocked_exit()))break;
         }
-        mm_unlock(task);
-        runtime_lock(self);mm_lock(task);
+        /* The runtime lock comes before the mm lock. Waiting for the mm lock with the
+           runtime lock held (a sibling thread in a long unlocked call) stalls every
+           worker, so take the runtime lock while still holding mm when it is free,
+           and otherwise wait for each lock while holding neither. */
+        for(unsigned tries=0;!runtime_trylock();tries++) {
+            mm_unlock(task);runtime_lock(self);
+            if(tries>=2 || !schedule_active || !pthread_mutex_trylock(&task->mm)) { if(tries>=2)mm_lock(task);break; }
+            runtime_unlock();mm_lock(task);
+        }
         if(stopped) { hvf_get_regs(0,0,0);return -1; }
         hvf_check(ran,"hv_vcpu_run");
         if(task && (task->exit_pending || (task_thread(task) && !task_thread(task)->state)))return -1; /* ended meanwhile */
@@ -968,7 +1041,6 @@ static int hvf_slice_run(void) {
 /* The scheduler's CPU slice: whatever happens, hand back a complete CPU state. */
 static int hvf_slice(void) {
     ScheduledTask *task=schedule_active?hvf_task():NULL;
-    mm_lock(task);
     int result=hvf_slice_run();
     hvf_fp_pull();mm_unlock(task);
     return result;
