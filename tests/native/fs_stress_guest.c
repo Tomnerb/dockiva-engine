@@ -48,7 +48,8 @@ static void nap(U ns) { U t[2]={0,ns};call(101,(U)t,0,0,0,0,0); }
 static U iterations=120,threaded;
 static unsigned char stacks[WORKERS+5][65536] __attribute__((aligned(16)));
 static int done_word[WORKERS+5];
-static volatile int stop_chaos,stop_spin;
+static volatile int stop_chaos;
+static U spun;                           /* spinner iterations */
 static unsigned char *region;            /* unmapped and remapped by chaos; workers only pass it to read */
 static int dirfd_copy[WORKERS];
 
@@ -110,16 +111,20 @@ static void worker(void *arg) {
     }
     CHECK(call(57,(U)dir,0,0,0,0,0)==0);
 }
-/* I/O until stop_spin (or forever): what exec and exit_group interrupt. */
+/* File calls, then a wait that never ends: what exec and exit_group interrupt. Bounded,
+   so the thread that execs or exits gets a CPU however the scheduler shares one. */
 static void spinner(void *arg) {
     U id=(U)arg;char abs[64];char *p=join(abs,"/s/spin");number(p,id);
     static unsigned char buffers[WORKERS+5][64];unsigned char *b=buffers[id];
-    for(U i=0;!stop_spin;i++) {
+    for(U i=0;i<400;i++) {
         long fd=call(56,AT,(U)abs,0102|01000,0644,0,0);if(fd<0)continue;
         call(64,(U)fd,(U)"spin spin spin",14,0,0,0);call(67,(U)fd,(U)b,14,0,0,0);call(79,AT,(U)abs,(U)b,0,0,0);
-        call(57,(U)fd,0,0,0,0,0);
+        call(57,(U)fd,0,0,0,0,0);__atomic_add_fetch(&spun,1,__ATOMIC_RELAXED);
     }
+    int never=0;for(;;)call(98,(U)&never,128,0,0,0,0);
 }
+/* Until the spinners are well into their loops (yielding, not sleeping: no timer needed). */
+static void spinning(void) { U start=__atomic_load_n(&spun,__ATOMIC_RELAXED);while(__atomic_load_n(&spun,__ATOMIC_RELAXED)-start<40)call(124,0,0,0,0,0,0); }
 static void chaos_round(U round,U *seed) {
     static unsigned char *canary;
     long a=call(56,AT,(U)"/v",0,0,0,0),b=call(56,AT,(U)"/vb",0,0,0,0);CHECK(a>=0 && b>=0);
@@ -142,10 +147,10 @@ static void chaos_round(U round,U *seed) {
     CHECK(call(215,(U)region,REGION,0,0,0,0)==0);
     nap(20000);
     CHECK(call(222,(U)region,REGION,3,0x32,(U)-1,0)==(long)region);      /* MAP_FIXED|PRIVATE|ANONYMOUS */
-    if(round%4==1) {                                                      /* a child does file I/O, or execs */
+    if(round%2==1) {                                                      /* a child does file I/O, or execs */
         long pid=call(220,17,0,0,0,0,0);
         if(!pid) {
-            if(round%8==1) {
+            if(round%4==1) {
                 const char *argv[]={"/fs_stress","leaf",0};call(221,(U)"/fs_stress",(U)argv,0,0,0,0);call(94,9,0,0,0,0,0);
             }
             char abs[64];char *p=join(abs,"/s/child");number(p,round);
@@ -161,7 +166,7 @@ static void chaos_round(U round,U *seed) {
         long pid=call(220,17,0,0,0,0,0);
         if(!pid) {
             for(U s=0;s<3;s++)spawn(FLAGS,stacks[WORKERS+1+s]+sizeof(stacks[0]),&done_word[WORKERS+1+s],0,&done_word[WORKERS+1+s],spinner,(void *)(WORKERS+1+s));
-            nap(3000000);call(94,0,0,0,0,0,0);
+            spinning();call(94,0,0,0,0,0,0);
         }
         CHECK(pid>0);int status=-1;CHECK(call(260,(U)pid,(U)&status,0,0,0,0)==pid && status==0);
     }
@@ -194,7 +199,7 @@ void start(U *sp) {
         stop_chaos=1;join_thread(&done_word[WORKERS]);
         /* exec while siblings are in file calls: their results are dropped, the image replaced */
         for(U s=0;s<3;s++)CHECK(spawn(FLAGS,stacks[WORKERS+1+s]+sizeof(stacks[0]),&done_word[WORKERS+1+s],0,&done_word[WORKERS+1+s],spinner,(void *)(WORKERS+1+s))>0);
-        nap(3000000);
+        spinning();
     } else {                                                              /* no threads: the same work in turn */
         iterations=8;
         for(U w=0;w<WORKERS;w++) { worker((void *)w);U seed=1;chaos_round(w+1,&seed); }
