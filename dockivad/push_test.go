@@ -238,3 +238,11 @@ func TestRegistryCredentials(t *testing.T) {
 		t.Fatal("loopback")
 	}
 }
+
+func TestInspectRegistryNameIsNoSuchContainer(t *testing.T) {
+	b := testEngine(t)
+	r := request(t, b.socketHandler(), "GET", "/v1.45/containers/127.0.0.1:5055/x:1/json", "", "")
+	if r.Code != 404 || !strings.Contains(r.Body.String(), "No such container") {
+		t.Fatalf("docker inspect of a host:port image name: %d %s", r.Code, r.Body.String())
+	}
+}

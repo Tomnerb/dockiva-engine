@@ -1096,6 +1096,10 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 				return
 			}
 		}
+		if method == "GET" && strings.HasPrefix(path, "/containers/") && strings.HasSuffix(path, "/json") {
+			// A name no container has, such as host:port/repo:tag: docker inspect tries images on a 404.
+			panic(apiError{404, "No such container: " + strings.TrimSuffix(strings.TrimPrefix(path, "/containers/"), "/json")})
+		}
 		panic(apiError{501, "Unsupported endpoint: " + method + " " + path})
 	})
 }
