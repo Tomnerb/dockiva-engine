@@ -347,10 +347,10 @@ static int guest_syscall_dispatch(void) {
                 if(call==55) { fd=fs_host(cpu->gpr[0]);if(fd<0) { cpu->gpr[0]=linux_error(9);return -3; }writable=!fs_ro[fs_slot(cpu->gpr[0])]; }
                 else {
                     if(cpu->gpr[4]&~UINT64_C(256|4096)) { cpu->gpr[0]=linux_error(22);return -3; }
-                    char leaf[1025];int parent=fs_lookup(cpu->gpr[0],cpu->gpr[1],leaf,!(cpu->gpr[4]&256),NULL);
+                    char leaf[1025];int parent=fs_lookup(cpu->gpr[0],cpu->gpr[1],leaf,!(cpu->gpr[4]&256)|FS_DIRECT,NULL);
                     if(parent<0) { cpu->gpr[0]=fs_error();return -3; }
                     writable=fs_path_writable();
-                    int r=fstatat(parent,leaf,&st,AT_SYMLINK_NOFOLLOW);int saved=errno;close(parent);errno=saved;
+                    int r=fs_leaf_stat(parent,leaf,&st);int saved=errno;close(parent);errno=saved;
                     if(r<0) { cpu->gpr[0]=fs_error();return -3; }
                 }
                 if(fd>=0 && fstat(fd,&st)<0) { cpu->gpr[0]=fs_error();return -3; }
