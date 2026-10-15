@@ -147,6 +147,13 @@ containers find each other by name and alias; `host.docker.internal` is the
 Mac; `--network host` shares the Mac's network as before. One network per
 container.
 
+Durability: a container's `fsync`/`fdatasync` is an I/O barrier
+(`F_BARRIERFSYNC`) by default, so writes reach the disk in order and a database
+comes back consistent after power loss, losing at most its last commits (OrbStack
+behaves the same). `dockiva-engine --fsync full` drains the drive's cache on every
+fsync (strictly durable, about 5x slower for databases); `--fsync fast` is plain
+macOS fsync (fastest; writes may reach the disk out of order).
+
 Published ports: `-p 8080:80` listens on 127.0.0.1 only, so nothing is reachable
 from the network by default; with `--default-bind-ip 0.0.0.0` it listens on every
 address of the Mac (0.0.0.0 and ::, as Docker does). `-p 127.0.0.1:8080:80`, `-p 192.168.1.5:8080:80` and

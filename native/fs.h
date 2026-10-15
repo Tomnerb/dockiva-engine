@@ -14,7 +14,13 @@
 /* Open files and directories of the current process (see the descriptor map in
    net.h); guest: slot -> guest descriptor. */
 /* ro: the file lives where writes are refused (a read-only root or bind mount).
-   dev: it is a character device (fs_device), so reads and writes need no fstat. */
+   dev: it is a character device (fs_device), so reads and writes need no fstat:
+   FS_DEV_NULL or FS_DEV_ZERO, plus FS_DEV_READ/FS_DEV_WRITE for its access mode
+   (those two are served without the host), or 1 for another one. */
+#define FS_DEV_NULL 2u
+#define FS_DEV_ZERO 3u
+#define FS_DEV_READ 4u
+#define FS_DEV_WRITE 8u
 typedef struct { int fd[FS_SLOTS];unsigned char cloexec[FS_SLOTS],ro[FS_SLOTS],dev[FS_SLOTS];struct GuestDirectory *dirs[FS_SLOTS];unsigned short guest[FS_SLOTS]; } FsTable;
 static FsTable fs_table_first;
 static _Thread_local FsTable *fs_table=&fs_table_first;
@@ -63,6 +69,16 @@ static uint64_t fs_storage_bytes;
 static uint64_t fs_file_limit=FS_FILE_LIMIT,fs_storage_limit=FS_STORAGE_LIMIT,fs_write_limit=64u*1024u*1024u; /* 0: unlimited */
 /* With --storage-limit-mib, a run may also create at most 4096 files (8192 entries in all);
    without one (Docker's behaviour), only the host's disk bounds them. */
+/* fsync and friends: by default an I/O barrier (F_BARRIERFSYNC), so writes reach the
+   disk in order and a database survives power loss consistent, losing at most its
+   last commits; --fsync full drains the drive's cache (F_FULLFSYNC, strictly durable,
+   ~5x slower), --fsync fast is macOS's plain fsync (fastest, may reorder). A file
+   system without the fcntl gets fsync. */
+static int fs_fsync_mode;                                                    /* 0 barrier, 1 full, 2 fast */
+static int fs_sync(int fd) {
+    if(fs_fsync_mode!=2 && !fcntl(fd,fs_fsync_mode?F_FULLFSYNC:F_BARRIERFSYNC))return 0;
+    return fsync(fd);
+}
 static int fs_count_full(void) { return fs_storage_limit && (fs_created>=4096 || fs_entries>=8192); }
 /* Hardlinked files (BusyBox applets) share one inode; count their bytes once.
    Open addressing; capacity exceeds the 8192-entry scan budget. */
@@ -1095,7 +1111,9 @@ static uint64_t fs_open(void) {
         close(parent);
         if(flags&16384)return linux_error(20);
         int fd=open(device,options|O_CLOEXEC);if(fd<0)return fs_error();
-        return fs_install(fd,flags,0,1,NULL);
+        unsigned dev=!strcmp(canon,"/dev/null")?FS_DEV_NULL:!strcmp(canon,"/dev/zero")?FS_DEV_ZERO:1;
+        if(dev>1)dev|=(options!=O_WRONLY?FS_DEV_READ:0)|(options!=O_RDONLY?FS_DEV_WRITE:0);
+        return fs_install(fd,flags,0,(int)dev,NULL);
     }
     int read_only=!fs_path_writable();
     if(read_only && (flags&(3|64|512|1024))) { close(parent);return linux_error(30); }
@@ -1156,7 +1174,14 @@ static uint64_t fs_transfer_chunk(int fd,uint64_t call,int64_t offset) {
         uint64_t count=cpu->gpr[2]>1024*1024?1024*1024:cpu->gpr[2];
         unsigned char *buffer=count?fs_memory(cpu->gpr[1],count,call==63?2:4):(unsigned char *)"";
         if(!buffer) return linux_error(14);
-        if(fs_is_device(fd)) { /* No file size, storage or write budget to account. */
+        unsigned dev=(unsigned)fs_is_device(fd);
+        if(dev>1) { /* /dev/null and /dev/zero: their whole behaviour, without a host call */
+            if(!(dev&(call==63?FS_DEV_READ:FS_DEV_WRITE)))return linux_error(9);
+            if(call==64)return count;
+            if((dev&3)==FS_DEV_ZERO)memset(buffer,0,(size_t)count);
+            return (dev&3)==FS_DEV_ZERO?count:0;
+        }
+        if(dev) { /* No file size, storage or write budget to account. */
             ssize_t result=offset>=0?(call==63?pread(fd,buffer,(size_t)count,offset):pwrite(fd,buffer,(size_t)count,offset))
                                     :(call==63?read(fd,buffer,(size_t)count):write(fd,buffer,(size_t)count));
             return result<0?fs_error():(uint64_t)result;
@@ -1165,9 +1190,11 @@ static uint64_t fs_transfer_chunk(int fd,uint64_t call,int64_t offset) {
         if(call==64) {
             int slot=fs_detached.on?-1:fs_slot(cpu->gpr[0]); /* a file slot knows its location; stdio files follow the root */
             if(fs_detached.on?fs_detached.read_only:slot>=0?fs_ro[slot]:!fs_writable) return linux_error(30);
-            struct stat st;if(fstat(fd,&st)<0) return fs_error();
-            off_t position=offset>=0?(off_t)offset:lseek(fd,0,SEEK_CUR);if(position<0) return fs_error();
-            if(offset<0 && (fcntl(fd,F_GETFL)&O_APPEND)) position=st.st_size;
+            /* The size only for an append or the storage budget (fstat was a third of a
+               small write's host time); the engine sets no storage budget. */
+            int append=offset<0 && (fcntl(fd,F_GETFL)&O_APPEND);
+            struct stat st;st.st_size=0;if((append || fs_storage_limit) && fstat(fd,&st)<0) return fs_error();
+            off_t position=offset>=0?(off_t)offset:append?st.st_size:lseek(fd,0,SEEK_CUR);if(position<0) return fs_error();
             if((uint64_t)position>fs_file_limit || count>fs_file_limit-(uint64_t)position || (fs_write_limit && count>fs_write_limit-fs_written)) return linux_error(27);
             previous_size=(uint64_t)st.st_size;write_position=(uint64_t)position;
             uint64_t end=write_position+count;
@@ -1179,7 +1206,7 @@ static uint64_t fs_transfer_chunk(int fd,uint64_t call,int64_t offset) {
         if(call==64) { /* atomic: file writes also run without the runtime lock */
             if(__atomic_load_n(&file_shares_live,__ATOMIC_RELAXED))file_share_written(fd,write_position,buffer,(size_t)result);
             __atomic_fetch_add(&fs_written,(uint64_t)result,__ATOMIC_RELAXED);uint64_t end=write_position+(uint64_t)result;
-            if(end>previous_size)__atomic_fetch_add(&fs_storage_bytes,end-previous_size,__ATOMIC_RELAXED);
+            if(fs_storage_limit && end>previous_size)__atomic_fetch_add(&fs_storage_bytes,end-previous_size,__ATOMIC_RELAXED);
         }
         return (uint64_t)result;
 }
@@ -1243,7 +1270,11 @@ static int fs_lock_conflict(dev_t dev,ino_t ino,uint64_t owner,int64_t start,int
     }
     return -1;
 }
+/* Set by the first lock: until then a close has no lock to release (it runs without the
+   runtime lock). ponytail: never cleared; count live locks if lock users close often. */
+static int fs_locks_taken;
 static int fs_lock_add(dev_t dev,ino_t ino,uint64_t owner,int64_t start,int64_t end,unsigned type) {
+    __atomic_store_n(&fs_locks_taken,1,__ATOMIC_RELEASE);
     for(int i=0;i<FS_LOCKS;i++)if(!fs_locks[i].used) { fs_locks[i]=(struct FsLock){dev,ino,owner,start,end,type,1};return 0; }
     return -1;
 }
@@ -1416,9 +1447,7 @@ static uint64_t fs_call(uint64_t call) {
     if(call==32) { int fd=fs_host(cpu->gpr[0]);if(fd<0)return linux_error(9);return fs_flock(fd); }
     if(call==82 || call==83) {
         int fd=fs_host(cpu->gpr[0]);if(fd<0)return linux_error(9);
-        /* fsync is a valid stronger implementation of fdatasync. It is not a
-           promise of durability across host power loss. */
-        return fsync(fd)<0?fs_error():0;
+        return fs_sync(fd)<0?fs_error():0;                                 /* fdatasync as fsync */
     }
     if(call==79) {
         if(cpu->gpr[3]&~UINT64_C(256|2048|4096)) return linux_error(95);
@@ -1615,7 +1644,7 @@ static uint64_t fs_call(uint64_t call) {
     }
     if(call==84) { /* sync_file_range: SYNC_FILE_RANGE_WAIT_AFTER (4) syncs; the write-back hint alone is a no-op */
         if(cpu->gpr[3]&~UINT64_C(7))return linux_error(22);
-        return (cpu->gpr[3]&4) && fsync(fd)<0?fs_error():0;
+        return (cpu->gpr[3]&4) && fs_sync(fd)<0?fs_error():0;
     }
     if(call==47) { /* fallocate: mode 0 grows the file (zero-filled); other modes are unsupported */
         if(fs_ro[slot])return linux_error(30);

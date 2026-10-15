@@ -691,7 +691,7 @@ static int fs_call_detached(uint64_t call,const char *path,uint64_t *result,int 
     }
     fs_detached.fd=-1;fs_detached.on=1;
     mm_unlock(task);
-    uint64_t r=!transfer?fs_call(call):sync?(fsync(fd)<0?fs_error():0):call==63 || call==64?fs_transfer(fd,call):fs_transfer_at(fd,call==67?63:64,(int64_t)cpu->gpr[3]);
+    uint64_t r=!transfer?fs_call(call):sync?(fs_sync(fd)<0?fs_error():0):call==63 || call==64?fs_transfer(fd,call):fs_transfer_at(fd,call==67?63:64,(int64_t)cpu->gpr[3]);
     if(!transfer && call==79 && statx && (int64_t)r>=0) { statx_from_stat(buffer);r=0; }
     mm_lock(task);
     fs_detached.on=0;
@@ -763,6 +763,13 @@ static int guest_syscall_unlocked(void) {
         syscall_unlocked=0;
         if(locked || syscall_abort)return 0;
         cpu->gpr[0]=result;return 1;
+    }
+    /* close of a file (not a directory) while no record lock exists to release: only
+       this process's tables, which its threads change under its mm lock. */
+    if(call==57 && file && !__atomic_load_n(&fs_locks_taken,__ATOMIC_ACQUIRE)) {
+        int slot=fs_slot(fd),host=fs_fd[slot]-1;
+        fs_fd[slot]=0;fs_cloexec[slot]=0;fd_unbind(fd);
+        cpu->gpr[0]=close(host)<0?fs_error():0;return 1;
     }
     /* fcntl's descriptor flags on a file: this process's own (record locks take the lock). */
     if(call==25 && file && cpu->gpr[1]>=1 && cpu->gpr[1]<=4) {
