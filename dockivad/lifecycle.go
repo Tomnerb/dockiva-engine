@@ -607,6 +607,9 @@ func runtimeCommand(p, native string, c obj, command []string, argv0 string, env
 	// Like Docker, disk use is left to the host: no storage budget, and files of up to
 	// 1 TiB (the runtime's largest per-file limit).
 	args = append(args, "--file-limit-mib", "1048576", "--storage-limit-mib", "0")
+	if mode := os.Getenv("DOCKIVA_FSYNC"); mode != "" { // dockiva-engine --fsync
+		args = append(args, "--fsync", mode)
+	}
 	reject(c["network"] == nil || c["network"] == "none" || c["network"] == "outbound", "Invalid network mode")
 	// Docker gives every container /dev/shm (POSIX shared memory and semaphores) and
 	// /proc; these directories stand in (the runtime serves /proc/self/fd/N itself).

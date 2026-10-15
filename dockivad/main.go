@@ -57,8 +57,11 @@ func run() {
 	tokenEnv := flags.String("token-env", "", "registry token environment variable")
 	maxContainers := flags.Int("max-containers", 64, "running containers at once")
 	bindIP := flags.String("default-bind-ip", "127.0.0.1", "host address of -p HOST:CONTAINER ports without one (Docker's --ip; 0.0.0.0 publishes on every address, as Docker does)")
+	fsync := flags.String("fsync", "barrier", "containers' fsync: barrier (ordered writes, OrbStack-like), full (drains the drive cache; strictly durable, slower) or fast (plain macOS fsync)")
 	check(flags.Parse(os.Args[1:]))
 	reject(flags.NArg() == 0, "Unexpected arguments")
+	reject(*fsync == "barrier" || *fsync == "full" || *fsync == "fast", "--fsync must be barrier, full or fast")
+	check(os.Setenv("DOCKIVA_FSYNC", *fsync)) // read by runtimeCommand here and in supervisors, which inherit it
 	reject(*maxContainers >= 1 && *maxContainers <= 1024, "--max-containers must be 1..1024")
 	reject(net.ParseIP(*bindIP) != nil, "--default-bind-ip must be an IP address")
 	b := &engine{Home: private(*home), Self: self, Assets: *assetRoot, MaxContainers: *maxContainers, Insecure: *insecure, BindIP: *bindIP, quit: make(chan struct{}, 1)}

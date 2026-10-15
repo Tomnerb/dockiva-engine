@@ -63,6 +63,16 @@ static uint64_t fs_storage_bytes;
 static uint64_t fs_file_limit=FS_FILE_LIMIT,fs_storage_limit=FS_STORAGE_LIMIT,fs_write_limit=64u*1024u*1024u; /* 0: unlimited */
 /* With --storage-limit-mib, a run may also create at most 4096 files (8192 entries in all);
    without one (Docker's behaviour), only the host's disk bounds them. */
+/* fsync and friends: by default an I/O barrier (F_BARRIERFSYNC), so writes reach the
+   disk in order and a database survives power loss consistent, losing at most its
+   last commits; --fsync full drains the drive's cache (F_FULLFSYNC, strictly durable,
+   ~5x slower), --fsync fast is macOS's plain fsync (fastest, may reorder). A file
+   system without the fcntl gets fsync. */
+static int fs_fsync_mode;                                                    /* 0 barrier, 1 full, 2 fast */
+static int fs_sync(int fd) {
+    if(fs_fsync_mode!=2 && !fcntl(fd,fs_fsync_mode?F_FULLFSYNC:F_BARRIERFSYNC))return 0;
+    return fsync(fd);
+}
 static int fs_count_full(void) { return fs_storage_limit && (fs_created>=4096 || fs_entries>=8192); }
 /* Hardlinked files (BusyBox applets) share one inode; count their bytes once.
    Open addressing; capacity exceeds the 8192-entry scan budget. */
@@ -1378,9 +1388,7 @@ static uint64_t fs_call(uint64_t call) {
     if(call==32) { int fd=fs_host(cpu->gpr[0]);if(fd<0)return linux_error(9);return fs_flock(fd); }
     if(call==82 || call==83) {
         int fd=fs_host(cpu->gpr[0]);if(fd<0)return linux_error(9);
-        /* fsync is a valid stronger implementation of fdatasync. It is not a
-           promise of durability across host power loss. */
-        return fsync(fd)<0?fs_error():0;
+        return fs_sync(fd)<0?fs_error():0;                                 /* fdatasync as fsync */
     }
     if(call==79) {
         if(cpu->gpr[3]&~UINT64_C(256|2048|4096)) return linux_error(95);
@@ -1577,7 +1585,7 @@ static uint64_t fs_call(uint64_t call) {
     }
     if(call==84) { /* sync_file_range: SYNC_FILE_RANGE_WAIT_AFTER (4) syncs; the write-back hint alone is a no-op */
         if(cpu->gpr[3]&~UINT64_C(7))return linux_error(22);
-        return (cpu->gpr[3]&4) && fsync(fd)<0?fs_error():0;
+        return (cpu->gpr[3]&4) && fs_sync(fd)<0?fs_error():0;
     }
     if(call==47) { /* fallocate: mode 0 grows the file (zero-filled); other modes are unsupported */
         if(fs_ro[slot])return linux_error(30);

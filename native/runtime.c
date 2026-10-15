@@ -1095,6 +1095,10 @@ int main(int argc,char **argv) {
         else if(!strcmp(argv[i],"--interactive")) { terminal_enabled=1;schedule_enabled=1; }
         else if(!strcmp(argv[i],"--stdin")) stdin_host=1;
         else if(!strcmp(argv[i],"--trace")) trace=1;
+        else if(!strcmp(argv[i],"--fsync") && i+1<argc) {                  /* barrier (default), full or fast */
+            const char *m=argv[++i];fs_fsync_mode=!strcmp(m,"full")?1:!strcmp(m,"fast")?2:!strcmp(m,"barrier")?0:-1;
+            if(fs_fsync_mode<0)fail("--fsync is barrier, full or fast");
+        }
         else if(!strcmp(argv[i],"--outbound")) net_outbound=1;
         else if(!strcmp(argv[i],"--proc-publish") && i+1<argc) proc_publish_path=argv[++i]; /* this run's process table, for exec runs and docker top */
         else if(!strcmp(argv[i],"--abstract-dir") && i+1<argc) {      /* the container's abstract Unix socket names */
