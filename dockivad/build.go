@@ -214,7 +214,7 @@ func extractContext(dir string, r io.Reader) {
 		}
 		parent, last := path.Split(rel)
 		dest := filepath.Join(makeParents(dir, parent), last)
-		mode := os.FileMode(h.Mode) & os.ModePerm
+		mode := tarMode(h)
 		old, e := os.Lstat(dest)
 		if e == nil && !(old.IsDir() && h.Typeflag == tar.TypeDir) {
 			check(os.RemoveAll(dest))
@@ -222,15 +222,15 @@ func extractContext(dir string, r io.Reader) {
 		switch h.Typeflag {
 		case tar.TypeDir:
 			if e != nil || !old.IsDir() {
-				check(os.Mkdir(dest, mode|0o700))
+				check(os.Mkdir(dest, 0o700))
 			}
-			check(os.Chmod(dest, mode|0o700))
+			check(setMode(dest, mode|0o700))
 		case tar.TypeReg, tar.TypeRegA:
-			f, e := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, mode|0o600)
+			f, e := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, mode&os.ModePerm|0o600)
 			check(e)
 			_, e = io.Copy(f, t)
 			check(errors.Join(e, f.Close()))
-			check(os.Chmod(dest, mode|0o400))
+			check(setMode(dest, mode|0o400))
 			check(os.Chtimes(dest, h.ModTime, h.ModTime))
 		case tar.TypeSymlink:
 			check(os.Symlink(h.Linkname, dest))
@@ -851,7 +851,7 @@ func copyIntoGuest(src, root, dest string, mode os.FileMode, chmod bool) {
 		if created {
 			info, e := d.Info()
 			check(e)
-			check(os.Chmod(h, info.Mode().Perm()|0o700))
+			check(setMode(h, info.Mode()&permBits|0o700))
 		}
 		return nil
 	}))
@@ -868,11 +868,11 @@ func copyFileTo(src, root, guest string, mode os.FileMode, chmod bool) {
 	}
 	cloneTree(src, dst)
 	if st, e := os.Lstat(dst); e == nil && st.Mode().IsRegular() {
-		m := st.Mode().Perm()
+		m := st.Mode() & permBits
 		if chmod {
 			m = mode
 		}
-		check(os.Chmod(dst, m|0o400))
+		check(setMode(dst, m|0o400))
 	}
 }
 

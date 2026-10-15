@@ -61,7 +61,10 @@ Supported docker commands: `run` (foreground or `-d`, `-i`, `-t`, `--rm`,
 `--health-*`, `--stop-timeout`, `--init`), `exec` (`-i`, `-t`, `-u`, `-w`, `-e`, `-d`), `create`, `start`,
 `stop`, `restart`, `kill` (TERM, INT, QUIT, HUP, USR1, USR2 reach the
 container's first process; KILL ends it), `wait`, `rm` (with `-v`), `ps`,
-`inspect`, `logs` (with `-f` and `--tail`), `attach`, `events`
+`inspect`, `logs` (with `-f`, `--tail`, `-t`, `--since` and `--until`; logs
+written before this engine version carry their file's last write time), `pause`
+and `unpause` (SIGSTOP and SIGCONT to the run's and its execs' processes;
+healthchecks wait), `attach`, `events`
 (create, start, die, destroy), `pull`, `images`, `tag`, `rmi`, `cp` (both
 ways, including into volumes and bind mounts; read-only paths are refused),
 `stats` (host CPU time and resident memory of the container's processes),

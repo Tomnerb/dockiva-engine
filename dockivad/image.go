@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path"
@@ -313,21 +314,23 @@ func applyLayer(root string, r io.Reader, members *int) int64 {
 		if e == nil && !(old.IsDir() && h.Typeflag == tar.TypeDir) {
 			check(os.RemoveAll(p))
 		}
-		mode := os.FileMode(h.Mode) & os.ModePerm
+		mode := tarMode(h)
 		switch h.Typeflag {
 		case tar.TypeDir:
 			if e != nil || !old.IsDir() {
-				check(os.Mkdir(p, mode|0o700))
-			} else {
-				check(os.Chmod(p, mode|0o700))
+				check(os.Mkdir(p, 0o700))
 			}
+			check(setMode(p, mode|0o700))
 		case tar.TypeReg, tar.TypeRegA:
-			f, e := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, mode|0o600)
+			f, e := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, mode&os.ModePerm|0o600)
 			check(e)
 			n, e := io.Copy(f, t)
 			check(errors.Join(e, f.Close()))
 			reject(n == h.Size, "Truncated layer file")
 			size += n
+			if mode&^os.ModePerm != 0 { // after the write, which clears setuid and setgid
+				check(setMode(p, mode|0o600))
+			}
 			_ = os.Chtimes(p, h.ModTime, h.ModTime)
 		case tar.TypeSymlink:
 			check(os.Symlink(linkTarget(h.Linkname), p))
@@ -344,6 +347,25 @@ func applyLayer(root string, r io.Reader, members *int) int64 {
 		}
 	}
 	return size
+}
+
+// permBits are the mode bits unpacking and copying keep: rwx plus setuid, setgid
+// and sticky (/tmp 1777, sudo 4755). The runtime reports them in the guest's stat.
+const permBits = os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky
+
+// tarMode is a tar entry's permission bits, setuid, setgid and sticky included.
+func tarMode(h *tar.Header) os.FileMode { return h.FileInfo().Mode() & permBits }
+
+// setMode is os.Chmod for permBits. macOS refuses setgid (EPERM) on a file whose
+// group the user is not in (a home under /tmp is group wheel), so such a file
+// takes the user's own group first; the host group means nothing to the guest.
+func setMode(p string, mode os.FileMode) error {
+	if mode&os.ModeSetgid != 0 {
+		if e := os.Lchown(p, -1, os.Getegid()); e != nil {
+			return e
+		}
+	}
+	return os.Chmod(p, mode)
 }
 
 // layerDir is a directory of an unpacked root, made when missing (create). A file
@@ -374,7 +396,8 @@ func layerDir(root, dir string, create bool) (string, bool) {
 }
 
 // cloneTree copies an unpacked root for a container: one APFS clone of the whole
-// tree (clonefileat), sharing blocks until written; a plain copy elsewhere.
+// tree (clonefileat), sharing blocks until written; a plain copy elsewhere. A clone
+// turns setuid and setgid off on regular files, so they are set again.
 func cloneTree(src, dst string) {
 	s, e := syscall.BytePtrFromString(src)
 	check(e)
@@ -383,6 +406,22 @@ func cloneTree(src, dst string) {
 	cwd := -2 // AT_FDCWD
 	const sysClonefileat, cloneNofollow = 462, 1
 	if _, _, errno := syscall.Syscall6(sysClonefileat, uintptr(cwd), uintptr(unsafe.Pointer(s)), uintptr(cwd), uintptr(unsafe.Pointer(d)), cloneNofollow, 0); errno == 0 {
+		// ponytail: one lstat per entry (~100 ms for 25k files); a list of an image's
+		// setuid files, kept at unpack, would spare it.
+		check(filepath.WalkDir(src, func(p string, entry fs.DirEntry, err error) error {
+			check(err)
+			if !entry.Type().IsRegular() {
+				return nil
+			}
+			info, e := entry.Info()
+			check(e)
+			if info.Mode()&(os.ModeSetuid|os.ModeSetgid) != 0 {
+				rel, e := filepath.Rel(src, p)
+				check(e)
+				check(setMode(filepath.Join(dst, rel), info.Mode()&permBits))
+			}
+			return nil
+		}))
 		return
 	}
 	out, e := exec.Command("/bin/cp", "-R", "-p", src, dst).CombinedOutput()

@@ -3,6 +3,7 @@ package main
 import (
 	"archive/tar"
 	"bytes"
+	"encoding/binary"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func mustReject(t *testing.T, f func()) {
@@ -533,5 +535,66 @@ func TestContainerCommandScripts(t *testing.T) {
 	cmd, argv0 = containerCommand(p, "/", []string{"PATH=/bin"}, []string{"sh", "-c", "true"})
 	if strings.Join(cmd, " ") != "/bin/sh -c true" || argv0 != "sh" {
 		t.Fatalf("binary: %v %q", cmd, argv0)
+	}
+}
+
+// docker logs -t, --since and --until read each line's time from the index the
+// supervisor's stampedLog writes; a log without one takes its file's mtime.
+func TestTimestampedLogs(t *testing.T) {
+	b := testEngine(t)
+	h := b.handler("secret")
+	if r := request(t, h, "POST", "/containers/create?name=logs", `{"Image":"dockiva/shell:demo"}`, "secret"); r.Code != 201 {
+		t.Fatalf("create: %d %s", r.Code, r.Body.String())
+	}
+	p := b.container("logs")
+	// The writer: an entry for each line start, partial lines across writes included.
+	l := openStampedLog(p, "stdout")
+	for _, s := range []string{"one\ntw", "o\n", "three\n"} {
+		_, e := l.Write([]byte(s))
+		check(e)
+	}
+	check(l.Close())
+	idx, e := os.ReadFile(filepath.Join(p, "stdout.idx"))
+	check(e)
+	if len(idx) != 3*16 || binary.LittleEndian.Uint64(idx[16:]) != 4 || binary.LittleEndian.Uint64(idx[32:]) != 8 {
+		t.Fatalf("index: %v", idx)
+	}
+	// Known times: lines at 1000 s, 2000 s and 3000 s.
+	for i, at := range []uint64{1000, 2000, 3000} {
+		binary.LittleEndian.PutUint64(idx[i*16+8:], at*1e9+5)
+	}
+	check(os.WriteFile(filepath.Join(p, "stdout.idx"), idx, 0600))
+	logs := func(query string) string {
+		r := request(t, h, "GET", "/containers/logs/logs?stdout=1&"+query, "", "secret")
+		if r.Code != 200 {
+			t.Fatalf("%s: %d %s", query, r.Code, r.Body.String())
+		}
+		out := ""
+		for raw := r.Body.Bytes(); len(raw) >= 8; raw = raw[8+binary.BigEndian.Uint32(raw[4:]):] {
+			out += string(raw[8 : 8+binary.BigEndian.Uint32(raw[4:])])
+		}
+		return out
+	}
+	for query, want := range map[string]string{
+		"timestamps=1":                      "1970-01-01T00:16:40.000000005Z one\n1970-01-01T00:33:20.000000005Z two\n1970-01-01T00:50:00.000000005Z three\n",
+		"since=1500":                        "two\nthree\n",
+		"since=2000.000000005&until=2000.5": "two\n",
+		"until=1970-01-01T00:20:00Z":        "one\n",
+		"timestamps=1&tail=1":               "1970-01-01T00:50:00.000000005Z three\n",
+		"since=0&until=0":                   "one\ntwo\nthree\n",
+	} {
+		if got := logs(query); got != want {
+			t.Errorf("%s: %q, want %q", query, got, want)
+		}
+	}
+	// A log from before indexes: its lines take the log's last write.
+	check(os.Remove(filepath.Join(p, "stdout.idx")))
+	when := time.Unix(4000, 0)
+	check(os.Chtimes(filepath.Join(p, "stdout.log"), when, when))
+	if got := logs("timestamps=1&tail=1"); got != "1970-01-01T01:06:40.000000000Z three\n" {
+		t.Errorf("unindexed: %q", got)
+	}
+	if r := request(t, h, "GET", "/containers/logs/logs?stdout=1&since=yesterday", "", "secret"); r.Code != 400 {
+		t.Errorf("bad since: %d", r.Code)
 	}
 }

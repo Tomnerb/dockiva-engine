@@ -832,7 +832,7 @@ static void fs_pack(unsigned char *p,unsigned offset,uint64_t value,unsigned siz
 }
 static void fs_stat_pack(unsigned char *out,const struct stat *st) {
     memset(out,0,128);fs_pack(out,8,st->st_ino,8);
-    fs_pack(out,16,(S_ISDIR(st->st_mode)?0040000:S_ISLNK(st->st_mode)?0120000:S_ISCHR(st->st_mode)?0020000:S_ISSOCK(st->st_mode)?0140000:S_ISFIFO(st->st_mode)?0010000:0100000)|(st->st_mode&0777),4);
+    fs_pack(out,16,(S_ISDIR(st->st_mode)?0040000:S_ISLNK(st->st_mode)?0120000:S_ISCHR(st->st_mode)?0020000:S_ISSOCK(st->st_mode)?0140000:S_ISFIFO(st->st_mode)?0010000:0100000)|(st->st_mode&07777),4); /* with setuid, setgid and sticky */
     fs_pack(out,24,guest_uid,4);fs_pack(out,28,guest_gid,4);
     fs_pack(out,20,st->st_nlink?st->st_nlink:1,4);fs_pack(out,48,(uint64_t)st->st_size,8);
     fs_pack(out,56,4096,4);fs_pack(out,64,((uint64_t)st->st_size+511)/512,8);
