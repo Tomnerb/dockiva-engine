@@ -84,7 +84,8 @@ def check_own(out):
     assert second > first, (stat[0], section(out, 'stat2'))  # top and vmstat read deltas: totals grow
     assert section(out, 'relative').startswith('cpu '), out # busybox top chdirs to /proc and opens "stat"
     assert section(out, 'task').split() == ['1'], out
-    print('PASS own run: top, ps, free, uptime, /proc/stat, relative paths, task')
+    assert section(out, 'exe').strip() == 'symbolic link', out  # lstat: libstdc++'s read_symlink (FEXServer) checks
+    print('PASS own run: top, ps, free, uptime, /proc/stat, relative paths, task, lstat of /proc/self/exe')
 
 
 def main():
@@ -95,7 +96,8 @@ def main():
     script = ('yes >/dev/null & sleep 2; echo ==top==; top -b -n1; echo ==ps==; ps -o pid,time,rss,etime,args; '
               'echo ==free==; free; echo ==meminfo==; cat /proc/meminfo; echo ==uptime==; uptime; '
               'echo ==stat==; cat /proc/stat; sleep 0.3; echo ==stat2==; cat /proc/stat; '
-              'echo ==relative==; cd /proc && head -1 stat; cd /; echo ==task==; ls /proc/1/task; echo ==; kill $!')
+              'echo ==relative==; cd /proc && head -1 stat; cd /; echo ==task==; ls /proc/1/task; '
+              'echo ==exe==; stat -c %F /proc/self/exe; echo ==; kill $!')
     out = run(root, script)
     check_own(out)
     with tempfile.TemporaryDirectory() as temp:

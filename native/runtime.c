@@ -246,7 +246,8 @@ static uint64_t read_mem(uint64_t addr, unsigned bytes) {
     return le(p,bytes);
 }
 /* AT_HWCAP and AT_HWCAP2: when guest code runs natively, the host CPU's features
-   (macOS hw.optional.arm.FEAT_*) as Linux reports them; the interpreter reports none.
+   (macOS hw.optional.arm.FEAT_*) as Linux reports them, and HWCAP_CPUID (EL0 reads of the
+   ID registers are emulated); the interpreter reports none.
    Pointer authentication and BTI are left out: they need kernel support. */
 static int native_cpu;
 static uint64_t hwcap_bits(int second) {
@@ -259,7 +260,7 @@ static uint64_t hwcap_bits(int second) {
         {"FEAT_DPB",16,0},{"FEAT_SHA3",17,0},{"FEAT_DotProd",20,0},{"FEAT_SHA512",21,0},{"FEAT_FHM",23,0},{"FEAT_DIT",24,0},
         {"FEAT_LSE2",25,0},{"FEAT_LRCPC2",26,0},{"FEAT_FlagM",27,0},{"FEAT_SSBS",28,0},{"FEAT_SB",29,0},
         {"FEAT_DPB2",0,1},{"FEAT_FlagM2",7,1},{"FEAT_FRINTTS",8,1},{"FEAT_I8MM",13,1},{"FEAT_BF16",14,1}};
-    uint64_t bits=second?0:3;                                                          /* FP and ASIMD */
+    uint64_t bits=second?0:3|UINT64_C(1)<<11;                                          /* FP, ASIMD; CPUID: hvf_id_register */
 #ifdef __APPLE__
     for(unsigned i=0;i<sizeof(features)/sizeof(*features);i++) {
         if(features[i].second!=(unsigned)second)continue;

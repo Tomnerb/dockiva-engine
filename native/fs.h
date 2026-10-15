@@ -1374,6 +1374,12 @@ static uint64_t fs_call(uint64_t call) {
         {   /* /proc paths of ours: directories and empty read-only files, as procfs shows them */
             char proc_path[1025];int kind=fs_proc_path(cpu->gpr[0],cpu->gpr[1],proc_path)==0?fs_proc_kind(proc_path):0;
             if(syscall_unlocked && syscall_abort)return linux_error(11);   /* relative to a /proc directory: the locked path retries */
+            char exe[1025];
+            if(!kind && (cpu->gpr[3]&256) && fs_proc_path(cpu->gpr[0],cpu->gpr[1],proc_path)==0 && fs_proc_exe(proc_path,exe)) {
+                /* lstat /proc/<pid>/exe: the link itself (libstdc++'s read_symlink, which FEXServer uses, checks) */
+                struct stat st;memset(&st,0,sizeof(st));st.st_mode=S_IFLNK|0777;st.st_nlink=1;st.st_size=(off_t)strlen(exe);
+                fs_stat_pack(out,&st);return 0;
+            }
             if(kind) {
                 struct stat st;memset(&st,0,sizeof(st));st.st_mode=kind==1?S_IFDIR|0555:S_IFREG|0444;st.st_nlink=kind==1?2:1;st.st_blksize=4096;
                 fs_stat_pack(out,&st);

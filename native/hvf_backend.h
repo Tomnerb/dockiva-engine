@@ -68,6 +68,7 @@ static int hvf_active;                       /* run() executes natively */
 typedef struct {
     hv_vcpu_t vcpu;hv_vcpu_exit_t *exit;HvfView *view;uint64_t ttbr;
     uint64_t shadow_gpr[31],shadow_sp,shadow_tls;int shadow_valid,fp_in_cpu,fp_dirty;
+    unsigned tso;                            /* ACTLR_EL1.EnTSO as last set: the running thread's mem_model */
 } HvfCpu;
 #define hvf_cpu ((HvfCpu *)worker->backend)
 #define hvf_vcpu (hvf_cpu->vcpu)
@@ -416,6 +417,10 @@ static void hvf_put_regs(void) {
     hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_CPSR,nzcv),"set cpsr");             /* EL0t */
     if(!hvf_shadow_valid || hvf_shadow_sp!=cpu->sp) { hvf_check(hv_vcpu_set_sys_reg(hvf_vcpu,HV_SYS_REG_SP_EL0,cpu->sp),"set sp");hvf_shadow_sp=cpu->sp; }
     if(!hvf_shadow_valid || hvf_shadow_tls!=cpu->tls) { hvf_check(hv_vcpu_set_sys_reg(hvf_vcpu,HV_SYS_REG_TPIDR_EL0,cpu->tls),"set tpidr");hvf_shadow_tls=cpu->tls; }
+    if(cpu->mem_model!=hvf_cpu->tso) {                                         /* only set where guest_tso said it works */
+        if(__builtin_available(macOS 15.0,*))hvf_check(hv_vcpu_set_sys_reg(hvf_vcpu,HV_SYS_REG_ACTLR_EL1,cpu->mem_model?2:0),"set actlr");
+        hvf_cpu->tso=cpu->mem_model;
+    }
     if(hvf_fp_dirty) {
         if(!hvf_fp_in_cpu)fail("Hypervisor FP state lost");
         hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_FPCR,cpu->fpcr),"set fpcr");
@@ -516,6 +521,14 @@ static HvfCpu *hvf_cpu_new(int first) {
     /* MMU, caches, SP alignment; EL0 may use CTR_EL0, DC ZVA, cache maintenance and WFI/WFE. */
     uint64_t sctlr=UINT64_C(0x30d00800)|1|(1u<<2)|(1u<<3)|(1u<<4)|(1u<<12)|(1u<<14)|(1u<<15)|(1u<<16)|(1u<<18)|(1u<<26);
     hvf_check(hv_vcpu_set_sys_reg(c->vcpu,HV_SYS_REG_SCTLR_EL1,sctlr),"set sctlr");
+    /* TSO (compat.h's PR_SET_MEM_MODEL): public from macOS 15, which lets a vCPU set
+       only ACTLR_EL1.EnTSO (bit 1). The first vCPU checks the bit sticks. */
+    if(__builtin_available(macOS 15.0,*)) {
+        uint64_t actlr=0;
+        int sticks=hv_vcpu_set_sys_reg(c->vcpu,HV_SYS_REG_ACTLR_EL1,2)==HV_SUCCESS && hv_vcpu_get_sys_reg(c->vcpu,HV_SYS_REG_ACTLR_EL1,&actlr)==HV_SUCCESS && (actlr&2);
+        if(first)guest_tso=sticks;
+        if(sticks)hvf_check(hv_vcpu_set_sys_reg(c->vcpu,HV_SYS_REG_ACTLR_EL1,0),"set actlr");
+    }
     return c;
 }
 static void hvf_init(void) {
@@ -768,7 +781,34 @@ static int hvf_thread_call(uint64_t call) {
     if(call==283 && th && cpu->gpr[0])hvf_siblings_out();
     return HVF_UNHANDLED;
 }
-/* Under the scheduler a guest fault is a SIGSEGV or SIGILL for that process: its
+/* An EL0 MRS of the ID register space sys_reg(3,0,0,CRm,op2) traps (ESR class 0x18);
+   as Linux does (it sets HWCAP_CPUID), answer it: MIDR_EL1, MPIDR_EL1 with only its
+   RES1 bit, and the AArch64 feature registers with only the fields Linux shows user
+   space (no pointer authentication or BTI: the runtime does not enable them).
+   ponytail: other fields, and registers this SDK cannot read (ISAR2, MMFR3), read 0
+   where Linux shows their safe values. FEX picks its code generation from these. */
+static int hvf_id_register(uint64_t esr,uint64_t *value) {
+    unsigned op0=(unsigned)(esr>>20)&3,op2=(unsigned)(esr>>17)&7,op1=(unsigned)(esr>>14)&7,crn=(unsigned)(esr>>10)&15,crm=(unsigned)(esr>>1)&15;
+    if(!(esr&1) || op0!=3 || op1 || crn)return 0;
+    static const struct { unsigned crm,op2;hv_sys_reg_t reg;uint64_t visible; } ids[]={
+        {0,0,HV_SYS_REG_MIDR_EL1,~UINT64_C(0)},
+        {4,0,HV_SYS_REG_ID_AA64PFR0_EL1,UINT64_C(0x000F000F00FFFFFF)},   /* DIT, SVE, AdvSIMD, FP, EL3..EL0 */
+        {4,1,HV_SYS_REG_ID_AA64PFR1_EL1,UINT64_C(0xF0)},                 /* SSBS */
+        {6,0,HV_SYS_REG_ID_AA64ISAR0_EL1,UINT64_C(0xF0FFFFFFF0FFFFF0)},  /* all but TLB */
+        {6,1,HV_SYS_REG_ID_AA64ISAR1_EL1,UINT64_C(0xF0FFF0FF00FFF00F)},  /* all but XS, SPECRES and pointer authentication */
+        {7,0,HV_SYS_REG_ID_AA64MMFR0_EL1,UINT64_C(0xF000000000000000)},  /* ECV */
+        {7,1,HV_SYS_REG_ID_AA64MMFR1_EL1,UINT64_C(0x0000F00000000000)},  /* AFP */
+        {7,2,HV_SYS_REG_ID_AA64MMFR2_EL1,UINT64_C(0x0000000F00000000)}}; /* AT (LSE2) */
+    *value=!crm && op2==5?UINT64_C(0x80000000):0;
+    for(unsigned i=0;i<sizeof(ids)/sizeof(*ids);i++)if(ids[i].crm==crm && ids[i].op2==op2) {
+        hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,ids[i].reg,value),"get id register");*value&=ids[i].visible;
+    }
+    return 1;
+}
+/* A data abort for an unaligned access (an LDAXR, or an LSE2 atomic crossing 16
+   bytes): SIGBUS, BUS_ADRALN, as Linux sends; FEX backpatches x86 atomics on it. */
+#define HVF_ALIGNMENT(esr) (((esr)>>26)==0x24 && ((esr)&0x3f)==0x21)
+/* Under the scheduler a guest fault is a SIGSEGV, SIGBUS or SIGILL for that process: its
    handler runs if it has one and has not blocked the signal (OpenSSL probes CPU
    features this way, JVMs and V8 catch faults on purpose); else the process ends. */
 static int hvf_fault(unsigned signal,uint64_t pc,uint64_t address,unsigned ec) {
@@ -776,10 +816,10 @@ static int hvf_fault(unsigned signal,uint64_t pc,uint64_t address,unsigned ec) {
     if(schedule_active) {
         ScheduledTask *task=&schedule_tasks[process_pid-1];unsigned index=signal-1;uint64_t bit=UINT64_C(1)<<index;
         if(job_control_enabled && task->signal_handler[index] && !(*signal_mask_now()&bit) && !(task->signal_ignored&bit)) {
-            /* ILL_ILLOPC at the instruction; SEGV_ACCERR on a mapped page, else SEGV_MAPERR. */
+            /* ILL_ILLOPC at the instruction; BUS_ADRALN, and SEGV_ACCERR on a mapped page, else SEGV_MAPERR, at the address. */
             /* Per thread: JVM safepoints fault many threads at once, and each handler
                needs its own si_code and si_addr. */
-            unsigned code=signal==4?1u:(lookup(address,1,4) || lookup(address,1,1))?2u:1u;uint64_t where=signal==4?pc:address;
+            unsigned code=signal!=11?1u:(lookup(address,1,4) || lookup(address,1,1))?2u:1u;uint64_t where=signal==4?pc:address; /* ILL_ILLOPC, BUS_ADRALN */
             Thread *th=thread_current();
             if(th) { th->fault_signal=signal;th->fault_code=code;th->fault_addr=where; }
             else { task->signal_fault_code[index]=code;task->signal_fault_addr[index]=where; }
@@ -834,7 +874,7 @@ static int hvf_unlocked_exit(void) {
     uint64_t esr=0,elr=0,spsr=0,call=0,far=0;
     hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_ESR_EL1,&esr),"get esr");
     unsigned ec=(unsigned)(esr>>26);
-    if(ec==0x24 && (esr&(UINT64_C(1)<<6))) {
+    if(ec==0x24 && (esr&(UINT64_C(1)<<6)) && !HVF_ALIGNMENT(esr)) {
         if(profiling)__atomic_fetch_add(&profile_write_faults,1,__ATOMIC_RELAXED);
         /* A write to a copy-on-write or not yet charged page: the same handling as
            under the lock. A genuine fault goes to the locked path. */
@@ -1012,7 +1052,7 @@ static int hvf_slice_run(void) {
             hvf_put_regs();
             continue;
         }
-        if(ec==0x24 && (esr&(UINT64_C(1)<<6))) {
+        if(ec==0x24 && (esr&(UINT64_C(1)<<6)) && !HVF_ALIGNMENT(esr)) {
         if(profiling)__atomic_fetch_add(&profile_write_faults,1,__ATOMIC_RELAXED);
             /* Write to a read-only view: lookup() detaches a copy-on-write page when the
                guest mapping is writable; a genuine read-only page stays a fault. */
@@ -1030,7 +1070,7 @@ static int hvf_slice_run(void) {
         /* A read or instruction fetch that the address space allows (lookup: 4 read,
            1 execute) faulted: the tables are stale, which is the runtime's fault, not
            the guest's. Rebuild them and retry once; report it, so it can be found. */
-        if((ec==0x24 && !(esr&(UINT64_C(1)<<6)) && lookup(far,1,4)) || (ec==0x20 && lookup(far,1,1))) {
+        if((ec==0x24 && !(esr&(UINT64_C(1)<<6)) && !HVF_ALIGNMENT(esr) && lookup(far,1,4)) || (ec==0x20 && lookup(far,1,1))) {
             static _Thread_local uint64_t stale_pc,stale_far,stale_generation;static int reported;
             if(elr!=stale_pc || far!=stale_far || address_space->generation!=stale_generation) {
                 stale_pc=elr;stale_far=far;stale_generation=address_space->generation;
@@ -1040,7 +1080,13 @@ static int hvf_slice_run(void) {
             }
         }
         hvf_get_regs(1,elr,spsr);
-        return hvf_fault(ec==0x24 || ec==0x20?11:4,elr,far,ec);
+        uint64_t id;
+        if(ec==0x18 && hvf_id_register(esr,&id)) {                              /* MRS of an ID register: emulated */
+            unsigned rt=(unsigned)(esr>>5)&31;if(rt<31)cpu->gpr[rt]=id;
+            cpu->pc+=4;hvf_put_regs();continue;
+        }
+        if(ec==0x22 || ec==0x26)far=elr;                                       /* PC or SP alignment */
+        return hvf_fault(HVF_ALIGNMENT(esr) || ec==0x22 || ec==0x26?7:ec==0x24 || ec==0x20?11:4,elr,far,ec);
     }
 }
 /* The scheduler's CPU slice: whatever happens, hand back a complete CPU state. */
