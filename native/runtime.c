@@ -23,8 +23,9 @@
 #include <pthread.h>
 #include <stdatomic.h>
 #include "resources.h"
-static jmp_buf exec_recovery;
-static int exec_loading;
+static _Thread_local jmp_buf exec_recovery;   /* fail() while this worker loads an exec */
+static _Thread_local int exec_loading;
+static _Thread_local int exec_staging;         /* an exec builds its image apart (process.h): startup leaves /proc to the swap */
 
 #define LIMIT (16u * 1024u * 1024u)
 static unsigned elf_input_limit=LIMIT;
@@ -322,7 +323,7 @@ static uint64_t hwcap_bits(int second) {
     return bits;
 }
 static void startup(int argc, const char **argv, unsigned envc, const char **env) {
-    proc_set_cmdline(process_pid?process_pid:1,argc,argv);proc_publish(0);
+    if(!exec_staging) { proc_set_cmdline(process_pid?process_pid:1,argc,argv);proc_publish(0); }
     if(!runtime_started_ns) { struct timespec now;clock_gettime(CLOCK_REALTIME,&now);runtime_started_ns=(uint64_t)now.tv_sec*1000000000u+(uint64_t)now.tv_nsec; }
     const uint64_t base=STACK_TOP-STACK_SIZE, size=STACK_SIZE;
     if((unsigned)argc>EXEC_ENTRIES || envc>EXEC_ENTRIES) fail("Too many arguments or environment entries");

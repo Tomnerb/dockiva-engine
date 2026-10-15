@@ -644,6 +644,11 @@ static int guest_syscall_unlocked(void) {
        utimensat. They use the process's descriptors, working directory and umask,
        which its threads change only under its mm lock, and the atomic entry count. */
     char path[1025];
+    /* execve of a single-threaded process: its new image is built here, and the call
+       redone under the lock only swaps it in (process_exec_at). */
+    if(call==221 && schedule_active && !schedule_tasks[process_pid-1].threads && fs_unlocked_path(cpu->gpr[0],path)) {
+        (void)exec_build((uint64_t)-100,0);return 0;
+    }
     int named=(call==56 || call==79 || call==291 || call==48 || call==439 || call==78 || call==34 || call==35 || call==38 || (call==88 && cpu->gpr[1])) && fs_unlocked_path(cpu->gpr[1],path);
     if(named && call==38)named=fs_unlocked_path(cpu->gpr[3],path);
     if(call==291) {
