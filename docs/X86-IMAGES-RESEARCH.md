@@ -18,9 +18,8 @@ an experiment.
   the slow fallback for correctness. All three are arm64 Linux ELF programs that our
   runtime can already almost run.
 - **The real work is in our runtime, not in a translator.** Every translator needs:
-  - a general 47/48-bit address space (today's runtime refuses `MAP_FIXED` outside its
-    12 GiB arena and returns ENOSYS for `mremap`);
-  - the translator loaded high, out of the x86 program's way (today PIE programs load at 4 MiB);
+  - a general 47/48-bit address space (done 2026-10-15: `MAP_FIXED` anywhere, `mremap`);
+  - the translator loaded high, out of the x86 program's way (done 2026-10-15: PIE at `0xaaaaaaaa0000`);
   - binfmt-style dispatch in `execve`;
   - a way to turn on Apple's hardware TSO per thread (`ACTLR_EL1` bit 1, which Hypervisor.framework exposes from
     macOS 15).
@@ -29,6 +28,12 @@ an experiment.
   (`-DSTATICBUILD`), each started directly with no binfmt, and log the first failing
   syscall or mmap. I expect it to fail on `MAP_FIXED` at 0x400000. That result alone
   confirms the plan below.
+- **Experiment results (section 7):**
+  - E2 is answered. Hardware TSO works through the public `HV_SYS_REG_ACTLR_EL1`; `PR_SET_MEM_MODEL` is
+    now offered, and a litmus test shows millions of reorderings without TSO and none with it.
+  - E1: both FEX and Box64 stop at start-up on fixed mappings outside the arena, before any x86 code
+    runs. FEX's tools found four small gaps, now fixed.
+  - Recommendation: **go with FEX**, not Box64, once the address-space work lands.
 
 ---
 
@@ -39,11 +44,11 @@ All of the following is **[known]** from the engine source:
 | Area | Current behaviour | Source |
 |---|---|---|
 | amd64 rejection | `Only linux/arm64 supported` in pull/load/run/build paths | `dockivad/image.go:164,171`, `dockivad/api.go:751`, `dockivad/build.go:73,498`, `oci.py:97`, `daemon.py:131` |
-| ELF loader | Accepts only `e_machine == 183` (AArch64); PIE main programs load at `0x400000`, PT_INTERP at 60 GiB | `native/runtime.c:150-152`, `native/address_space.h:20-25` |
+| ELF loader | Accepts only `e_machine == 183` (AArch64); since 2026-10-15 PIE main programs load at `0xaaaaaaaa0000` and PT_INTERP / static PIE just below `0xfffff8000000`, as Linux arm64 without ASLR (was `0x400000` and 60 GiB) | `native/runtime.c` (`load_stream_inner`), `native/address_space.h` |
 | exec | `#!` scripts handled in `process_exec`, up to 4 levels deep. That loop is the natural binfmt hook | `native/process.h:92-121` |
 | Page tables | Stage 1 uses a 4 KiB granule, 48-bit VA (T0SZ=16), 40-bit IPA. Guest pages are 4 KiB | `native/hvf_backend.h:152,481` |
-| mmap | One arena at `0x300000000` of at most 12 GiB. `MAP_FIXED` / `MAP_FIXED_NOREPLACE` **outside the arena return EINVAL/ENOMEM**. PROT_NONE reservations: up to 8, anonymous commits only, placed in [16 TiB, 112 TiB) | `native/mapping.h:203-216,340-405` |
-| mremap | Returns ENOSYS | `native/syscall.h:495-497` |
+| mmap | One arena at `0x300000000` of at most 12 GiB for non-fixed mappings. Since 2026-10-15: `MAP_FIXED` / `MAP_FIXED_NOREPLACE` anywhere in [64 KiB, `0xffffffff0000`) outside the arena (anonymous, private file, shared), replacing what was there; up to 65536 reservations, split by munmap holes; fresh PROT_NONE reservations in [16 TiB, 112 TiB). A fixed range across the arena's edge is still EINVAL, and hints outside the arena are ignored | `native/mapping.h` (`guest_dynamic_mmap`, `reserve_*`) |
+| mremap | Implemented 2026-10-15: in-place grow/shrink, `MREMAP_MAYMOVE`, `MREMAP_FIXED`, `MREMAP_DONTUNMAP`, old size 0 on shared memory; private file mappings do not grow | `native/mapping.h` (`guest_mremap`) |
 | JIT support | RWX mappings allowed under HVF; memfd double-mapping supported; membarrier supported | `native/runtime.c:1151`, `native/fs.h:492`, `native/hvf_backend.h:728` |
 | Signals | SIGSEGV/SIGILL delivered to handlers with si_code/si_addr; arm64 sigcontext with FPSIMD record (`0x46508001`); sigaltstack | `native/hvf_backend.h:732-756`, `native/signals.h:179` |
 | Threads/processes | 1024 threads per process, 63 processes | `native/scheduler.h:7`, `native/resources.h:7` |
@@ -346,12 +351,160 @@ list sizes items 1–3 precisely.
 
 ---
 
+## 7. Experiments (E1, E2), 2026-10-15
+
+Host: M2 Max, macOS 26.5.1, `build/dockiva-hvf` from `rt-x86` (base `07bb976`), run directly with the
+flags dockivad passes (`--dynamic --process-tree --signals --scheduled-network --outbound --cpus 4
+--elf-limit-mib 1024 --mmap-limit-mib 12288 --storage-limit-mib 0 --writable`) and `--trace` for the
+syscall log. Guest root: `ubuntu:24.04` arm64 with the translators added, and the x86 test files under
+it (no dockivad change, no binfmt). Downloads, about 86 MB in all, deleted afterwards: `ubuntu:24.04`
+arm64 (28.9 MB), `alpine` / `busybox` / `busybox:musl` / `python:3.12-slim` amd64 (3.8 + 2.2 + 0.9 +
+43.3 MB), `fex-emu-armv8.4_2610-1~n_arm64.deb` from the official PPA (`ppa:fex-emu/fex`, 3.4 MB),
+`box64_0.4.3-3+dfsg-1_arm64.deb` from Debian sid (3.6 MB). node was not fetched: nothing got far
+enough for it to add information.
+
+Test programs: a hand-made 216-byte static x86-64 `ET_EXEC` at 0x400000 (write + exit), static-PIE
+`busybox:musl`, glibc-dynamic `python3.12` (`python:3.12-slim`), musl-dynamic `busybox` (alpine).
+
+### E1 result: both translators stop in their own start-up, before any x86 instruction runs
+
+Both stop on the general-address-space gap (plan item 1). The other work on that gap must cover
+exactly these calls, which the runtime refused **[known, traced]**:
+
+| Translator | Call (from `--trace`) | Result | Effect |
+|---|---|---|---|
+| Box64 0.4.3 (Debian, `ET_EXEC` linked at 0x34800000, which loads fine) | `mmap(0x30000000, 0x1000, PROT_RWX, MAP_PRIVATE\|MAP_ANONYMOUS)`: a hint outside the arena | ignored, returns 0x300002000 in the arena | Box64 unmaps it and asks again with `MAP_FIXED` |
+| | `mmap(0x30000000, 0x1000, PROT_RWX, MAP_PRIVATE\|MAP_ANONYMOUS\|MAP_FIXED)` (flags 0x32) | **EINVAL** | "cannot allocate 0x1000 aligned bytes for bridge" (BOX64, then BOX32), then SIGSEGV at pc 0x34c41f48, address -1 |
+| FEX 2610 (`FEX`, PIE) | `mmap(0xF00011000, 0x1000, PROT_NONE, MAP_PRIVATE\|MAP_ANONYMOUS\|MAP_NORESERVE\|MAP_FIXED_NOREPLACE)` (flags 0x104022): a guard page at the end of brk, which this runtime places after the interpreter at 60 GiB | **ENOMEM** | "Couldn't allocate page after SBRK.", then FEX's deliberate trap (SIGILL at 0x6fe67c) |
+| FEX | (not reached) PIE main programs load at 0x400000 here, which is where every x86 `ET_EXEC` must go | - | high PIE base needed (plan item 1) **[inferred from the loader]** |
+
+The same stop happens for every test program, because neither translator gets as far as opening it.
+Those calls are the whole list: nothing past them could be observed. Getting further needs the
+address-space work. A local experiment-only patch (fixed mappings anywhere, high PIE base) was not
+allowed in this task, so **E1 must be re-run once that work lands**. Other things seen on the way, none
+of them blocking:
+
+- `set_robust_list`, `rseq`, `clone3`: ENOSYS. glibc copes.
+- `prctl(PR_SET_VMA)`: EINVAL, as a kernel without `CONFIG_ANON_VMA_NAME` returns.
+- `madvise(MADV_FREE)`: EINVAL, which is deliberate here.
+- Missing sysfs files: `/sys/devices/system/cpu` (the directory), `.../cpu0/cpufreq/cpuinfo_max_freq`
+  and `/sys/kernel/mm/transparent_hugepage/enabled`. Box64's `popen("lscpu")` reports "failed to
+  determine number of CPUs" and falls back.
+
+FEX's helper programs run further, and found four runtime gaps. All four are **fixed on this branch**:
+
+| Gap | How it showed | Fix (files) | Test |
+|---|---|---|---|
+| EL0 `MRS` of the ID registers (`MIDR_EL1`, `ID_AA64ISAR0/1`, `PFR0`, `MMFR2`…). Linux emulates these reads; FEX and FEXGetConfig read them unconditionally | SIGILL, ESR class 0x18, at `mrs x20, ID_AA64ISAR0_EL1` | `hvf_id_register` emulates them as Linux does: only the user-visible fields (no PAuth/BTI); MPIDR = 0x80000000; the rest of the ID space reads 0. `HWCAP_CPUID` is now set (`hvf_backend.h`, `runtime.c`) | `tests/native/translator_guest.c`: fails at check 1 before, passes after |
+| Unaligned atomics: a data abort with DFSC 0x21 | taken as "stale page tables", then SIGSEGV. A write would have looped on the copy-on-write path | SIGBUS `BUS_ADRALN` at the address, as Linux. FEX backpatches on it (`hvf_backend.h`) | `translator_guest.c` (`ldar`/`stlr` across 16 bytes) |
+| `prctl(PR_GET_MEM_MODEL / PR_SET_MEM_MODEL)` | EINVAL, so FEX would fall back to software TSO | per-thread TSO: see E2 (`compat.h`, `cpu_state.h`, `hvf_backend.h`) | `tests/native/tso_guest.c` |
+| `lstat("/proc/self/exe")` reported a regular file | FEXServer: libstdc++ `read_symlink` throws EINVAL, so `abort()` | `/proc/<pid>/exe` lstat reports a symlink (`fs.h`) | `verify_procfs.py`: `stat -c %F` said "regular file" before, "symbolic link" after |
+
+After these fixes, `FEXGetConfig -e` runs to completion under the runtime and reports, among other things:
+- `Memory atomics emulation method: LSE`
+- `Unaligned atomic memory granularity: 16-byte`
+- `GPR memory model emulation: Hardware TSO` (and the same for memcpy and vector)
+- `Fault Granularity: Split every 16 bytes`
+- `midr=0x610f0000`, `isar0=0x21100110212120`
+
+So FEX finds hardware TSO, LSE2 and correct SIGBUS behaviour, as it would on Asahi.
+
+**A FEX gap still open:** FEXServer `bind`s an **abstract** AF_UNIX socket (`"\0" "0.FEXServer.Socket"`).
+The runtime returns EOPNOTSUPP for abstract names, so FEXServer exits with "Failed to create FEXServer
+socket: error 95". Clients try the abstract name first and then `/tmp/0.FEXServer.Socket`. Abstract names
+need a per-container namespace that both the main run and `docker exec` runs can see, for example host
+socket files named by a hash of the abstract name, in a directory keyed by the container. That is a
+small design decision, so it is left for later.
+
+**Box64 observations:**
+- It is linked as glibc-dynamic (`ld-linux-aarch64.so.1`, libc, libm, libstdc++).
+- It needs **x86** `libgcc_s` and `libstdc++` (Debian `Depends:`).
+- It wraps the **arm64** libc. An amd64 image therefore needs both an arm64 glibc set and an x86 one;
+  how that works for musl/Alpine images is **[unknown]**.
+- Its dynarec reports ASIMD, AES, CRC32, PMULL, ATOMICS, SHA1, SHA2, USCAT, FLAGM, FLAGM2 and FRINT
+  from our auxv.
+- It never calls `PR_SET_MEM_MODEL`; the binary contains no such prctl. It orders memory with its
+  `BOX64_DYNAREC_STRONGMEM` heuristics, which are off by default and switched on for JVM, TBB and Mono.
+  Without them, multithreaded x86 code runs on the weak model.
+- It needs fixed low mappings at 0x30000000 (below the arena, under 4 GiB) for its bridges.
+
+### E2 result: hardware TSO works through the public Hypervisor.framework API
+
+- `HV_SYS_REG_ACTLR_EL1` (0xc081) has been public since **macOS 15.0**. The SDK header says it "only allows
+  getting / setting of the ACTLR_EL1.EnTSO bit (index 1)". No private API is used. Setting the bit through
+  `MSR` from our EL1 stub was not needed and was not tried.
+- The probe is in `hvf_cpu_new`: set bit 1, read it back, clear it. It works on this machine and sets
+  `guest_tso`.
+- Wiring:
+  - `GuestCpuState.mem_model` holds the model per thread. `fork` and `clone` copy it, and exec clears it.
+  - `hvf_put_regs` writes `ACTLR_EL1` only when the incoming thread's model differs from what that vCPU
+    last had. The fast path pays one compare; switching between a TSO thread and a weak thread costs one
+    `hv_vcpu_set_sys_reg`.
+  - `prctl(PR_SET_MEM_MODEL=0x4d4d444c, 0|1)` and `PR_GET_MEM_MODEL=0x6d4d444c` follow the Apple/Asahi
+    ABI that FEX uses. They return EINVAL where TSO is unavailable: the interpreter backend, macOS < 15,
+    or other values.
+- **Litmus test** (`tests/native/tso_guest.c`, run by `verify_hvf.py`): message passing between two
+  processes on two of 4 vCPUs. The writer does `str x; str y` (2,000,000 rounds, separate cache lines);
+  the reader does `ldr y; ldr x` and counts `x < y`.
+
+  | Model | Reorderings counted per run (11 runs) |
+  |---|---|
+  | default (weak) | 4.5 M – 8.9 M |
+  | TSO (`PR_SET_MEM_MODEL`, 1) | **0** in every run |
+
+  The probe's verifier requires weak > 0, which shows the probe can see reordering, and TSO == 0.
+
+This removes the "pin translated processes to one vCPU" fallback. Plan item 3 (TSO wiring) is done.
+
+### Gaps by priority (what remains for an amd64 preview)
+
+1. **P0, the address-space work (another agent): both translators are blocked here.**
+   - `MAP_FIXED` and `MAP_FIXED_NOREPLACE` for anonymous mappings anywhere below 2^47, including
+     PROT_NONE ones (0x30000000 for Box64; brk end for FEX).
+   - Honour mmap hints outside the arena when the range is free (Box64 relies on this).
+   - A high PIE base for translators. Linux's arm64 `ELF_ET_DYN_BASE` is about 0xAAAA_AAAA_B000; today it is
+     0x400000, which collides with x86 `ET_EXEC`.
+   - File-backed `MAP_FIXED` at x86 addresses, and `mremap` (expected next, not yet observed).
+2. **P1, abstract AF_UNIX sockets** (FEXServer): 2–3 days.
+3. **P1, binfmt dispatch and the hidden translator mount** (plan item 2): unchanged.
+4. **P2, sysfs:** `/sys/devices/system/cpu/` as a directory with `possible`, `online` and `cpuN`; `cpufreq`.
+   Cosmetic for both translators.
+5. Unknown until E1 can be re-run: whatever FEX hits once it executes x86 code, for example signal frames,
+   `/proc/self/maps` accuracy for its allocator, and its 47-bit reservation of the upper half.
+
+### Revised estimate and recommendation
+
+- E2 and plan item 3 are done, and the four small gaps above are fixed: about 1 week less than the plan.
+  Abstract sockets add 2–3 days.
+- Item 1 (address space) is unchanged at 2–4 weeks and now has an exact first list of calls.
+- **About 2–3 months to a preview still holds, counted from when the address-space work lands.** The
+  largest uncertainty is still item 5 (compatibility), and only a re-run of E1 can size it.
+
+**Go: FEX as the translator. No-go: Box64 as the default.**
+- FEX:
+  - It asks the kernel for hardware TSO, which we now provide, and it confirms hardware TSO.
+  - It is libc-agnostic: it needs only its own arm64 glibc set, not an x86 one as well.
+  - Its official PPA build already runs under our runtime once its start-up mapping is allowed.
+  - Its remaining needs are generic Linux behaviour, which arm64 workloads also benefit from.
+- Box64:
+  - It does not use hardware TSO, so it is weak-ordered by default.
+  - It needs fixed bridge mappings below 4 GiB.
+  - It depends on wrapping a native glibc next to the x86 libraries.
+  - Keep it as a benchmark only.
+- The go is conditional: re-run E1 (this section's recipe, with the same `--trace`) as soon as the
+  address-space branch merges, before plan items 2 and 4.
+
+---
+
 ## Key uncertainties
 
-1. Whether HVF lets us set `ACTLR_EL1.TSO` for our vCPUs (E2). This decides TSO performance.
+1. ~~Whether HVF lets us set `ACTLR_EL1.TSO` for our vCPUs (E2).~~ Answered (section 7): yes, through the public
+   `HV_SYS_REG_ACTLR_EL1` on macOS 15+.
 2. Whether FEX can be made self-contained (static or RUNPATH plus PT_INTERP override) without forking it.
-3. How well Box64's static build handles musl and static x86 binaries.
+   E1 ran the stock PPA build inside an Ubuntu root, so this is still open.
+3. How well Box64 handles musl and static x86 binaries. Not reached in E1.
 4. Any undocumented Rosetta checks beyond the ioctl. This is moot if we follow the recommendation.
+5. What FEX needs once it runs x86 code. E1 has to be re-run after the address-space work.
 
 ## Sources
 

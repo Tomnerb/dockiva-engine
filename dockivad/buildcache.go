@@ -5,7 +5,8 @@ package main
 // <home>/build-cache/<key>/ (rootfs, the stage config, and entry.json: the
 // /system/df BuildCache row). The key is the stage's state before the step (the
 // base image digest, chained through every step), the instruction, the ARGs and
-// settings it sees, and for COPY and ADD a hash of the sources.
+// settings it sees, for COPY and ADD a hash of the sources, and for RUN a hash of
+// its bind mounts' sources (cache mounts and secret values are not part of it).
 // ponytail: ADD of a URL is never cached and leaves the rest of its stage uncached
 // (Docker downloads it to hash it); download first and key on the bytes if that hurts.
 
@@ -32,9 +33,14 @@ var buildCacheMax int64 = 10 << 30
 
 func (b *engine) buildCacheDir() string { return private(filepath.Join(b.Home, "build-cache")) }
 
-// stepKey is a step's cache key: the stage's state, the instruction, and what it sees.
+// stepKey is a step's cache key: the stage's state, the instruction (with its
+// here-documents), and what it sees.
 func stepKey(st *buildStage, in instruction, extra string) string {
-	raw, e := json.Marshal([]any{st.cacheID, in.original, st.args, st.config, extra})
+	parts := []any{st.cacheID, in.original, st.args, st.config, extra}
+	for _, h := range in.heredocs {
+		parts = append(parts, h.body)
+	}
+	raw, e := json.Marshal(parts)
 	check(e)
 	return digest(raw)[7:]
 }
@@ -150,6 +156,9 @@ func (bd *builder) sourceHash(st *buildStage, in instruction, env map[string]str
 	args, root := bd.copyArgs(st, in, env)
 	h := sha256.New()
 	for _, src := range args[:len(args)-1] {
+		if in.heredocFor(src) != nil {
+			continue // in the key with the instruction
+		}
 		matches := []globMatch{}
 		if in.cmd != "ADD" || !isURL(src) {
 			matches = globWithin(root, src)
@@ -159,31 +168,43 @@ func (bd *builder) sourceHash(st *buildStage, in instruction, env map[string]str
 		}
 		for _, m := range matches {
 			fmt.Fprintf(h, "%q\n", m.name)
-			check(filepath.WalkDir(m.host, func(p string, d fs.DirEntry, err error) error {
-				check(err)
-				rel, e := filepath.Rel(m.host, p)
-				check(e)
-				info, e := d.Info()
-				check(e)
-				fmt.Fprintf(h, "%q %x %d ", rel, uint32(info.Mode()), info.Size())
-				switch {
-				case info.Mode()&fs.ModeSymlink != 0:
-					target, e := os.Readlink(p)
-					check(e)
-					fmt.Fprintf(h, "%q", target)
-				case info.Mode().IsRegular():
-					f, e := os.OpenFile(p, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
-					check(e)
-					defer f.Close()
-					_, e = io.CopyN(h, f, info.Size())
-					check(e)
-				}
-				fmt.Fprintln(h)
-				return nil
-			}))
+			hashTree(h, m.host)
 		}
 	}
 	return hex.EncodeToString(h.Sum(nil)), true
+}
+
+// treeHash is a hash of a file or directory tree (hashTree).
+func treeHash(root string) string {
+	h := sha256.New()
+	hashTree(h, root)
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// hashTree writes each entry's name, mode, size and content or symlink target.
+func hashTree(h io.Writer, root string) {
+	check(filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		check(err)
+		rel, e := filepath.Rel(root, p)
+		check(e)
+		info, e := d.Info()
+		check(e)
+		fmt.Fprintf(h, "%q %x %d ", rel, uint32(info.Mode()), info.Size())
+		switch {
+		case info.Mode()&fs.ModeSymlink != 0:
+			target, e := os.Readlink(p)
+			check(e)
+			fmt.Fprintf(h, "%q", target)
+		case info.Mode().IsRegular():
+			f, e := os.OpenFile(p, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+			check(e)
+			defer f.Close()
+			_, e = io.CopyN(h, f, info.Size())
+			check(e)
+		}
+		fmt.Fprintln(h)
+		return nil
+	}))
 }
 
 // buildCacheEntries are the cache's entry.json rows, as /system/df lists them.
@@ -203,7 +224,7 @@ func (b *engine) buildCacheEntries() []any {
 }
 
 // pruneBuildCache removes the least recently used entries that match until the
-// cache holds at most keep bytes. The caller holds buildCacheMu.
+// cache holds at most keep bytes; cache mounts in use stay. The caller holds buildCacheMu.
 func (b *engine) pruneBuildCache(keep int64, match func(lastUsed time.Time) bool) (deleted []string, reclaimed int64) {
 	entries := b.buildCacheEntries()
 	used := func(i int) time.Time {
@@ -220,7 +241,7 @@ func (b *engine) pruneBuildCache(keep int64, match func(lastUsed time.Time) bool
 		if total <= keep {
 			break
 		}
-		if size := integer(object(e)["Size"]); match(used(i)) {
+		if size := integer(object(e)["Size"]); match(used(i)) && buildCacheInUse[str(object(e)["ID"])] == 0 {
 			b.discard(filepath.Join(b.buildCacheDir(), str(object(e)["ID"])))
 			deleted, reclaimed, total = append(deleted, str(object(e)["ID"])), reclaimed+size, total-size
 		}

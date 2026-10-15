@@ -5,7 +5,7 @@ package main
 // container on a clone of the stage's files, COPY and ADD straight into them. The
 // image is the base image's layers plus one layer with the stage's changes. RUN,
 // COPY and ADD reuse the build cache's result of the same step (buildcache.go).
-// ponytail: no BuildKit features (RUN --mount, heredocs, secrets).
+// RUN --mount, --network and here-documents follow BuildKit (buildmount.go).
 
 import (
 	"archive/tar"
@@ -59,7 +59,8 @@ type builder struct {
 	used    map[string]bool
 	global  map[string]string // ARGs declared before the first FROM
 	stages  []*buildStage
-	nocache bool // run every step (--no-cache); results are still cached
+	nocache bool                            // run every step (--no-cache); results are still cached
+	secret  func(id string) ([]byte, error) // the client's secrets (buildx --secret); nil in the classic API
 }
 
 // Builders predefine these, as BuildKit does; a Dockerfile still declares them with ARG.
@@ -303,7 +304,8 @@ func (bd *builder) exec(in instruction) {
 	word := func() string { return processWords(in.rest, env, bd.escape, false)[0] }
 	switch in.cmd {
 	case "RUN":
-		bd.cached(st, in, "", true, func() { bd.runStep(st, in) })
+		o := bd.runOptions(st, in, env)
+		bd.cached(st, in, o.extra, o.cacheable, func() { bd.runStep(st, o) })
 		return
 	case "COPY", "ADD":
 		sources, ok := bd.sourceHash(st, in, env)
@@ -434,11 +436,14 @@ func (bd *builder) command(st *buildStage, in instruction) []any {
 		return anyStrings(in.json)
 	}
 	reject(strings.TrimSpace(in.rest) != "", in.cmd+" needs a command")
-	shell := stringsOfAny(st.config["Shell"])
-	if len(shell) == 0 {
-		shell = []string{"/bin/sh", "-c"}
+	return anyStrings(append(stageShell(st), in.rest))
+}
+
+func stageShell(st *buildStage) []string {
+	if shell := stringsOfAny(st.config["Shell"]); len(shell) > 0 {
+		return shell
 	}
-	return anyStrings(append(shell, in.rest))
+	return []string{"/bin/sh", "-c"}
 }
 
 func healthcheckConfig(in instruction) obj {
@@ -526,7 +531,7 @@ func (bd *builder) from(in instruction) {
 		st.digest, st.baseRoot, st.baseLayout = parent.digest, parent.baseRoot, parent.baseLayout
 		st.baseLayers, st.baseDiffs, st.baseHistory = parent.baseLayers, parent.baseDiffs, parent.baseHistory
 	case strings.EqualFold(ref, "scratch"):
-		check(os.Mkdir(st.root, 0o755))
+		check(mkdirGuest(st.root))
 		st.digest = "sha256:" + strings.Repeat("0", 64)
 		st.cacheID = st.digest
 	default:
@@ -554,17 +559,14 @@ func (bd *builder) pull(ref string) *image {
 		return im
 	}
 	bd.say("Pulling " + ref + "\n")
-	pullImage(ref, bd.b.Cache, false, "")
+	pullImage(ref, bd.b.Cache, bd.b.Insecure, "") // -insecure-local: FROM a localhost registry
 	return bd.b.image(ref)
 }
 
 // runStep is RUN: the command in a container on a clone of the stage's files,
 // whose files become the stage's when it succeeds.
-func (bd *builder) runStep(st *buildStage, in instruction) {
-	for name := range in.flags {
-		panic(apiError{400, "RUN --" + name + " needs BuildKit; Dockiva Engine's builder does not support it yet"})
-	}
-	command := bd.command(st, in)
+func (bd *builder) runStep(st *buildStage, o runOptions) {
+	command := o.command
 	envNames := map[string]bool{}
 	for _, kv := range stringsOfAny(st.config["Env"]) {
 		k, _, _ := strings.Cut(kv, "=")
@@ -577,12 +579,18 @@ func (bd *builder) runStep(st *buildStage, in instruction) {
 		}
 	}
 	sort.Strings(argEnv)
+	binds, secretEnv, targets, release := bd.mountSources(o.mounts)
+	defer release()
+	stubs := mountStubs(st.root, targets)
 	im := &image{Root: st.root, Env: stringsOfAny(st.config["Env"]), WorkingDir: stageWorkdir(st), User: validUser(text(st.config["User"])), StopSignal: "SIGTERM", Digest: st.digest}
 	host := obj{}
-	if bd.network == "host" || bd.network == "none" {
-		host["NetworkMode"] = bd.network
+	if o.network == "host" || o.network == "none" {
+		host["NetworkMode"] = o.network
 	}
-	body := obj{"Image": "dockiva-build", "Cmd": command, "Env": anyStrings(argEnv), "HostConfig": host}
+	if len(binds) > 0 {
+		host["Mounts"] = binds
+	}
+	body := obj{"Image": "dockiva-build", "Cmd": command, "Env": anyStrings(append(argEnv, secretEnv...)), "HostConfig": host}
 	saved := bd.saveNetworkFiles(st.root)
 	name := "dockiva-build-" + token()[:12]
 	p := bd.b.container(name)
@@ -633,6 +641,7 @@ func (bd *builder) runStep(st *buildStage, in instruction) {
 	bd.discardRoot(st)
 	check(os.Rename(filepath.Join(p, "rootfs"), st.root))
 	bd.restoreNetworkFiles(st.root, saved)
+	removeStubs(st.root, stubs)
 }
 
 // discardRoot moves the stage's files aside, removed in the background.
@@ -713,6 +722,22 @@ func (bd *builder) copy(st *buildStage, in instruction, env map[string]string) {
 		mode = os.FileMode(n)
 	}
 	for _, src := range args[:len(args)-1] {
+		if h := in.heredocFor(src); h != nil { // COPY <<EOF /path: the document is the file
+			content := h.content()
+			if h.expand {
+				content = expandHeredoc(content, env)
+			}
+			f := filepath.Join(bd.work, "heredoc-"+token()[:12])
+			check(os.WriteFile(f, []byte(content), 0o600))
+			check(os.Chmod(f, 0o644)) // past the engine's umask
+			target := dest
+			if toDir || isGuestDir(st.root, dest) {
+				target = path.Join(dest, h.name)
+			}
+			copyFileTo(f, st.root, target, mode, chmod)
+			check(os.Remove(f))
+			continue
+		}
 		if add && isURL(src) {
 			bd.download(st, src, dest, toDir, mode, chmod)
 			continue

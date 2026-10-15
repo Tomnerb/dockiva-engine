@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,12 +29,15 @@ var namePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,199}$`)
 type engine struct {
 	Home, State, Cache, Native, Worker, Assets, Self string
 	MaxContainers                                    int
+	Insecure                                         bool   // --insecure-local: plain HTTP to loopback registries
+	BindIP                                           string // -default-bind-ip: where -p HOST:GUEST publishes ("": 127.0.0.1)
 	Mu                                               sync.Mutex
 	events                                           events
 	exits                                            sync.Map      // exit status of auto-removed containers, by name, for a minute
 	execs                                            sync.Map      // *execJob by ID
 	pausing                                          sync.Mutex    // pause and unpause, and an exec starting meanwhile
 	quit                                             chan struct{} // POST /dockiva/shutdown asks main to exit
+	watched                                          watcher       // what engine.watch last saw
 }
 
 // memoryMiB is a container's guest memory limit: docker run -m, else its profile's.
@@ -112,7 +116,7 @@ func (b *engine) resolve(id string) string {
 	out := []string{}
 	if len(id) >= 12 {
 		for _, n := range b.names() {
-			if strings.HasPrefix(key(n), id) {
+			if strings.HasPrefix(b.idOf(n), id) {
 				out = append(out, n)
 			}
 		}
@@ -122,6 +126,16 @@ func (b *engine) resolve(id string) string {
 	}
 	return out[0]
 }
+
+// idOf is a container's ID: a hash of its name, or, once renamed, the ID it had
+// (kept in its "id" file), as Docker's IDs outlive renames.
+func (b *engine) idOf(name string) string {
+	if id, e := os.ReadFile(filepath.Join(b.State, name, "id")); e == nil && len(id) == 64 {
+		return string(id)
+	}
+	return key(name)
+}
+
 func settledContainerLock(p string) (*os.File, error) {
 	deadline := time.Now().Add(time.Second)
 	for {
@@ -186,6 +200,7 @@ func (b *engine) start(name string) {
 	cmd.Stdout = log
 	cmd.Stderr = log
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	cmd.Env = append(os.Environ(), "DOCKIVA_DEFAULT_BIND_IP="+b.BindIP)
 	check(cmd.Start())
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
@@ -393,6 +408,94 @@ func (b *engine) feedStdin(ctx context.Context, p string, initial obj, in io.Rea
 	return e
 }
 
+// rename is docker rename: a stopped or created container takes a new name and keeps
+// its ID and host name. ponytail: a running container's runtime and supervisor work
+// in its directory, which is named after it, so it must be stopped first.
+func (b *engine) rename(name, to string) {
+	to = strings.TrimPrefix(to, "/")
+	reject(namePattern.MatchString(to), "Invalid container name: "+to)
+	if to == name {
+		panic(apiError{409, "Renaming a container with the same name as its current name"})
+	}
+	p, q := b.container(name), b.container(to)
+	if exists(q) {
+		panic(apiError{409, "Conflict. The container name \"/" + to + "\" is already in use"})
+	}
+	f, e := settledContainerLock(p)
+	if e != nil || workerAlive(readObject(filepath.Join(p, "status.json"))) {
+		panic(apiError{409, "Container " + name + " is running: Dockiva Engine renames stopped containers (docker stop it first)"})
+	}
+	defer f.Close()
+	id, c := b.idOf(name), readObject(filepath.Join(p, "config.json"))
+	if c["hostname"] == nil {
+		c["hostname"] = hostname(name, c)
+		save(filepath.Join(p, "config.json"), c)
+	}
+	check(os.WriteFile(filepath.Join(p, "id"), []byte(id), 0600))
+	_ = os.RemoveAll(filepath.Join(p, "process")) // the process name link (processName) is named after it
+	check(os.Rename(p, q))
+	b.refreshHosts(text(c["net_name"]))
+	b.emit("rename", to, obj{"oldName": "/" + name})
+}
+
+// update is docker update: memory (-m), CPUs (--cpus) and the restart policy. A new
+// policy holds from the run's next end; limits from the container's next start.
+func (b *engine) update(name string, body obj) obj {
+	p := b.container(name)
+	c := readObject(filepath.Join(p, "config.json"))
+	limits := false
+	for k, v := range body {
+		switch {
+		case k == "RestartPolicy" && !idle(object(v)["Name"]): // the CLI always sends one, empty without --restart
+			reject(restartPolicyOK(object(v)), "Invalid restart policy")
+			setRestart(c, object(v))
+		case k == "Memory" || k == "NanoCpus":
+			limits = limits || !idle(v)
+		case k == "MemorySwap":
+			reject(idle(v) || integer(v) >= -1, "Invalid MemorySwap")
+		case k != "RestartPolicy" && !idle(v):
+			panic(apiError{501, "Unsupported update option: " + k})
+		}
+	}
+	setLimits(c, body)
+	save(filepath.Join(p, "config.json"), c)
+	warnings := []string{}
+	if limits && live(b.status(p)) {
+		warnings = append(warnings, "Dockiva Engine applies memory and CPU limits when the container next starts")
+	}
+	b.emit("update", name, obj{})
+	return obj{"Warnings": warnings}
+}
+
+// restartPolicyOK: --restart no, always, unless-stopped or on-failure[:N].
+func restartPolicyOK(m obj) bool {
+	name := text(m["Name"])
+	return onlyKeys(m, "Name", "MaximumRetryCount") && slices.Contains([]string{"", "no", "always", "unless-stopped", "on-failure"}, name) &&
+		(idle(m["MaximumRetryCount"]) || name == "on-failure" && integer(m["MaximumRetryCount"]) > 0)
+}
+func setRestart(c, policy obj) {
+	if idle(policy["Name"]) || policy["Name"] == "no" {
+		delete(c, "restart")
+		return
+	}
+	c["restart"] = obj{"name": policy["Name"], "max": policy["MaximumRetryCount"]}
+}
+
+// setLimits applies HostConfig's Memory (docker run -m) and NanoCpus (--cpus).
+func setLimits(c, host obj) {
+	if !idle(host["Memory"]) {
+		mib := (integer(host["Memory"]) + 1<<20 - 1) >> 20
+		reject(mib >= 6 && mib <= 65536, "Memory limit must be 6 MiB to 64 GiB")
+		c["memory_mib"] = json.Number(strconv.FormatInt(mib, 10))
+	}
+	if !idle(host["NanoCpus"]) {
+		// ponytail: --cpus sets the vCPU count, rounded up, not a CFS quota.
+		cpus := (integer(host["NanoCpus"]) + 1e9 - 1) / 1e9
+		reject(cpus >= 1 && cpus <= 64, "CPUs must be 0.01 to 64")
+		c["cpus"] = json.Number(strconv.FormatInt(cpus, 10))
+	}
+}
+
 func (b *engine) remove(name string) {
 	p := b.container(name)
 	f, e := settledContainerLock(p)
@@ -441,7 +544,8 @@ func sandboxArgs(native string, args []string, root string, writable bool) []str
 
 // runtimeCommand is the worker's argument list that runs command (its first element
 // an absolute guest path, run as argv0) in container p with config c. A container's
-// own run publishes its ports; an exec beside it does not.
+// own run publishes its process table; an exec beside it reads it. The supervisor
+// adds the run's --publish options (publishPorts) to extra.
 func runtimeCommand(p, native string, c obj, command []string, argv0 string, env []string, publish bool, extra ...string) []string {
 	validateLaunchProfile(c, native)
 	reject(len(command) > 0 && strings.HasPrefix(command[0], "/"), "Invalid guest command")
@@ -518,11 +622,6 @@ func runtimeCommand(p, native string, c obj, command []string, argv0 string, env
 	args = append(args, "--hostname", hostname(filepath.Base(p), c))
 	if ip, ok := c["ip"].(string); ok && c["network"] != "none" {
 		args = append(args, "--network", networkPorts(home, str(c["net_name"])), "--ip", ip)
-	}
-	for _, p := range publishedPorts(c) {
-		if publish {
-			args = append(args, "--publish", strconv.FormatInt(p[0], 10)+":"+strconv.FormatInt(p[1], 10))
-		}
 	}
 	// <home>/containers/<name>: volumes are in <home>/volumes.
 	args = append(args, prepareMounts(filepath.Dir(filepath.Dir(p)), root, c)...)
@@ -613,12 +712,12 @@ func supervise(p, native, worker, generation string) (result error) {
 	if c["tty"] == true || c["open_stdin"] == true {
 		extra = append(extra, "--stdin")
 	}
+	published, closePorts := publishPorts(p, c, os.Getenv("DOCKIVA_DEFAULT_BIND_IP")) // held across restarts
+	defer closePorts()
+	extra = append(extra, published...)
 	invocation := runtimeCommand(p, native, c, command, command[0], env, true, extra...)
 	invocation[0] = processName(p, invocation[0])
-	stop := syscall.SIGTERM
-	if name, ok := c["stop_signal"].(string); ok && name != "" {
-		stop = stopSignals[stopSignal(name)]
-	}
+	stop := stopSignalNumber(c)
 	listenerErr := error(nil)
 	listener, listenerErr = net.Listen("tcp", "127.0.0.1:0")
 	check(listenerErr)
@@ -758,6 +857,7 @@ func supervise(p, native, worker, generation string) (result error) {
 		select {
 		case <-done:
 			code := finish()
+			_ = safeRun(func() { c["restart"] = readObject(filepath.Join(p, "config.json"))["restart"] }) // docker update --restart
 			var again bool
 			if delay, again = restartDelay(c, code, restarts, time.Since(started), delay); !again {
 				return nil
@@ -877,9 +977,7 @@ func resolvConf(host []byte) string {
 // container root whose parent directories contain no symlinks.
 func writeGuestFile(root, relative, content string) {
 	dir := filepath.Dir(relative)
-	if _, e := os.Lstat(filepath.Join(root, dir)); os.IsNotExist(e) {
-		check(os.MkdirAll(filepath.Join(root, dir), 0o755))
-	}
+	layerDir(root, dir, true)
 	p := filepath.Join(noLinks(root, dir), filepath.Base(relative))
 	if s, e := os.Lstat(p); e == nil {
 		reject(s.Mode().IsRegular() || s.Mode()&os.ModeSymlink != 0, "Cannot replace "+relative)

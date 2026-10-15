@@ -14,6 +14,7 @@ typedef struct {
     uint64_t exclusive_addr;
     unsigned exclusive_size,exclusive_valid;
     uint64_t altstack_sp,altstack_size; /* sigaltstack, per thread; size 0: disabled */
+    unsigned mem_model;                 /* prctl PR_SET_MEM_MODEL, per thread: 1 TSO (compat.h) */
 } GuestCpuState;
 
 #endif

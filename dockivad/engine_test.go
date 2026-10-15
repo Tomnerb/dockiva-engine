@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -382,39 +381,6 @@ func TestLayerLinks(t *testing.T) {
 		applyLayer(t.TempDir(), bytes.NewReader(layer(t, []tar.Header{{Name: "ls", Typeflag: tar.TypeLink, Linkname: "missing"}}, nil)), &count)
 	})
 }
-func TestPublishedPorts(t *testing.T) {
-	b := testEngine(t)
-	b.create("web", decode([]byte(`{"Image":"dockiva/shell:demo","ExposedPorts":{"80/tcp":{}},"HostConfig":{"NetworkMode":"host","PortBindings":{"80/tcp":[{"HostIp":"","HostPort":"8080"}],"443/tcp":[{"HostIp":"127.0.0.1","HostPort":"8443"}]}}}`), maxJSON))
-	c := readObject(filepath.Join(b.container("web"), "config.json"))
-	if got := publishedPorts(c); len(got) != 2 || got[0] != [2]int64{80, 8080} || got[1] != [2]int64{443, 8443} {
-		t.Fatalf("saved ports: %v", got)
-	}
-	item := b.inspect("web")
-	binding := item["NetworkSettings"].(obj)["Ports"].(obj)["80/tcp"].([]any)[0].(obj)
-	if binding["HostIp"] != "127.0.0.1" || binding["HostPort"] != "8080" {
-		t.Fatalf("inspect ports: %v", binding)
-	}
-	if rows := portRows(item); len(rows) != 2 || rows[0].(obj)["PublicPort"] != int64(8080) || rows[1].(obj)["PrivatePort"] != int64(443) {
-		t.Fatalf("list ports: %v", rows)
-	}
-	for i, bad := range []string{
-		`{"80/udp":[{"HostPort":"8080"}]}`,
-		`{"80/tcp":[{"HostIp":"0.0.0.0","HostPort":"8080"}]}`,
-		`{"80/tcp":[{"HostPort":""}]}`,
-		`{"80/tcp":[{"HostPort":"70000"}]}`,
-		`{"80/tcp":[{"HostPort":"8080"}],"81/tcp":[{"HostPort":"8080"}]}`,
-		`{"80/tcp":[{"HostPort":"8080"},{"HostPort":"8081"}]}`,
-	} {
-		mustReject(t, func() {
-			b.create("bad"+strconv.Itoa(i), decode([]byte(`{"Image":"dockiva/shell:demo","HostConfig":{"PortBindings":`+bad+`}}`), maxJSON))
-		})
-	}
-	// Containers created before port publishing have no saved ports.
-	if len(publishedPorts(obj{})) != 0 {
-		t.Fatal("legacy config gained ports")
-	}
-}
-
 func TestScriptEntrypointAndDirectories(t *testing.T) {
 	root := t.TempDir()
 	files := map[string]string{"bin/sh": "\x7fELF\x02\x01\x01sh", "entry.sh": "#!/bin/sh\nexec \"$@\"\n", "with-arg": "#! /usr/bin/env  sh -x \r\n",

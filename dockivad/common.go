@@ -151,6 +151,16 @@ func timestamp(v any) string {
 	}
 	return time.Unix(0, int64(n*1e9)).UTC().Format(time.RFC3339Nano)
 }
+
+// mkdirGuest makes a directory a container sees: 0755 as Docker makes it, despite the
+// engine's umask (077), which keeps its own state private.
+func mkdirGuest(p string) error {
+	if e := os.Mkdir(p, 0o755); e != nil {
+		return e
+	}
+	return os.Chmod(p, 0o755)
+}
+
 func private(path string) string {
 	p, e := filepath.Abs(path)
 	check(e)

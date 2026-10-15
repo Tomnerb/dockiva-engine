@@ -17,12 +17,15 @@
    processes of 12 GiB still fit. */
 #define MAP_MAX (UINT64_C(12288)*1024*1024)
 /* 12 GiB: where a JVM first asks for its compressed class space (4 GiB-aligned
-   attach points from 12 GiB, MAP_FIXED_NOREPLACE). Programs load at 4 MiB, the
-   dynamic loader at 60 GiB; the largest arena ends at 24 GiB. */
+   attach points from 12 GiB, MAP_FIXED_NOREPLACE). The largest arena ends at 24 GiB. */
 #define MAP_BASE UINT64_C(0x300000000)
-/* The dynamic loader (ld-musl, ld-linux) loads at 60 GiB, just below the mmap arena,
-   so a position-independent program at 4 MiB may be up to ~60 GiB (node is 107 MiB). */
-#define INTERPRETER_BASE UINT64_C(0xF00000000)
+/* Where Linux on arm64 (48-bit, no randomization) loads programs: a position-
+   independent one at ELF_ET_DYN_BASE (2/3 of the address space), the dynamic loader
+   (ld-musl, ld-linux) and a static PIE just below mmap_base (top minus 128 MiB). */
+#define PIE_BASE UINT64_C(0xaaaaaaaaa000)
+#define INTERPRETER_TOP UINT64_C(0xfffff8000000)
+/* The end of guest user addresses: the hypervisor backend's EL1 page is at the top. */
+#define GUEST_VA_END UINT64_C(0xffffffff0000)
 /* Segment flag: MAP_SHARED memory (shared anonymous mappings, System V shm). Its
    backing is never copied on write, so fork keeps every process on the same bytes. */
 #define SEG_SHARED 8u
@@ -33,6 +36,11 @@
 #define MAP_RESERVED 0x20u
 
 typedef struct { uint64_t base,size;unsigned flags;MemoryBacking *backing;size_t offset; } Segment;
+/* Address space mapped outside the arena (mapping.h): what munmap, MAP_FIXED_NOREPLACE
+   and /proc/self/maps see there. Segments inside supply its pages; the rest is
+   PROT_NONE. Sorted, disjoint, adjacent ranges joined. */
+typedef struct { uint64_t base,size; } Reservation;
+#define RESERVE_LIMIT 65536u /* Linux's default vm.max_map_count */
 /* Mappings outside the arena's page flags: the program, shared memory, mapped files
    (Go's linker maps every package archive it reads), reservations' commits. */
 #define SEGMENT_LIMIT 1024u
@@ -59,8 +67,8 @@ typedef struct {
        (0 pages: unknown); first fit for at least that many skips most of it */
     unsigned map_large_from,map_large_pages;
     unsigned map_top;                 /* no arena page at or above it has ever been mapped */
-    /* Reservations beyond the arena (mapping.h): address space only, PROT_NONE. */
-    uint64_t reserve_base[8],reserve_size[8],reserve_next;unsigned nreserve;
+    /* RESERVE_LIMIT entries, allocated on first use; heap-owned like map_flags. */
+    Reservation *reserve;unsigned nreserve;
     uint64_t layout; /* unique revision of the mapping layout (not of page contents) */
     /* mmap-arena changes since revision arena_dirty_since all lie in pages
        [arena_dirty_lo,arena_dirty_hi); a backend may update just that range. */

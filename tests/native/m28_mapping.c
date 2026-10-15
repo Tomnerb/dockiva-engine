@@ -9,7 +9,8 @@ int main(void) {
     uint64_t a=mapping(0,8192,3,34,-1,0);assert(a==MAP_BASE);
     assert(lookup(a,8192,2));store_le(a,42,8);
     assert(mapping(a,4096,7,50,-1,0)==linux_error(22));assert(read_mem(a,8)==42);
-    assert(mapping(a-4096,4096,3,50,-1,0)==linux_error(22));
+    assert(mapping(a-4096,8192,3,50,-1,0)==linux_error(22));          /* across the arena's edge */
+    assert(mapping(UINT64_C(0xffffffff0000),4096,3,50,-1,0)==linux_error(12)); /* beyond the user range */
     assert(mapping(a,4096,3,18,999,0)==linux_error(9));assert(read_mem(a,8)==42);
     cpu->gpr[0]=a;cpu->gpr[1]=4096;cpu->gpr[2]=1;assert(guest_mprotect()==0);
     assert(!lookup(a,1,2) && lookup(a,1,4) && lookup(a+4096,1,2));
