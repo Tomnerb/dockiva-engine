@@ -135,14 +135,20 @@ static uint64_t fs_error(void) {
         default:return net_error();
     }
 }
+/* A guest path, read a page at a time (one lookup each), or a byte at a time where a
+   segment ends within the page (the interpreter's ELF segments are not page-rounded). */
 static int fs_string(uint64_t ptr,char path[1025]) {
-    for(unsigned i=0;i<=1024;i++) {
+    for(unsigned i=0;i<=1024;) {
         if(ptr>UINT64_MAX-i) { errno=EFAULT;return -1; }
-        unsigned char *p=lookup(ptr+i,1,4);
+        uint64_t at=ptr+i,chunk=4096-(at&4095);if(chunk>1025-i)chunk=1025-i;
+        unsigned char *p=lookup(at,chunk,4);
+        if(!p) { chunk=1;p=lookup(at,1,4); }
         if(!p) { errno=EFAULT;return -1; }
-        path[i]=(char)*p;
-        if(!*p) return i?0:(errno=ENOENT,-1);
-        if(*p<32 || *p==127) { errno=EACCES;return -1; }
+        for(uint64_t k=0;k<chunk;k++,i++) {
+            path[i]=(char)p[k];
+            if(!p[k]) return i?0:(errno=ENOENT,-1);
+            if(p[k]<32 || p[k]==127) { errno=EACCES;return -1; }
+        }
     }
     errno=ENAMETOOLONG;return -1;
 }
@@ -251,15 +257,32 @@ static int fs_canon_push(char *c,const char *part) {
    Directory descriptors only come from this walk, so ".." cannot leave the root.
    Returns the parent descriptor and leaf (never a symlink when follow is set),
    and the leaf's canonical guest path in canon when it is known. */
+/* follow|FS_DIRECT: the caller passes the leaf only to host calls that refuse a symlink
+   anywhere in it (FS_NOFOLLOW_AT, FS_NOFOLLOW_OPEN), so the fast path may return base
+   itself (a copy) and a leaf of several components, "dir/dir/name", instead of opening
+   the directories: a host open costs about 12 us, a stat about 1. */
+/* The leaf's lstat as the last direct walk saw it (1), absent (2) or unknown (0), for
+   fs_leaf_stat: callers that stat the leaf right after the walk need no second call. */
+static _Thread_local struct { int known;struct stat st; } fs_walk_leaf;
 #ifdef O_NOFOLLOW_ANY
+#define FS_DIRECT 2
+#define FS_NOFOLLOW_AT AT_SYMLINK_NOFOLLOW_ANY
+#define FS_NOFOLLOW_OPEN O_NOFOLLOW_ANY
+#define FS_ANY_AT AT_SYMLINK_NOFOLLOW_ANY                 /* unlinkat */
+#define fs_renameat(a,b,c,d) renameatx_np(a,b,c,d,RENAME_NOFOLLOW_ANY)
 /* fs_walk for a path with no ".." component: one host openat of its directories
    with O_NOFOLLOW_ANY, which refuses a symlink anywhere on the way, so the result
-   stays beneath base exactly as the component walk would. Returns -2 when the
-   path needs that walk (a symlink, "..", an unusual form or error). */
-static int fs_walk_fast(int base,const char *cur_start,const char *rest,int follow,char leaf[1025],char canon[1025]) {
+   stays beneath base exactly as the component walk would (direct: one fstatat of the
+   whole path instead, the caller's call refusing symlinks itself). Returns -2 when
+   the path needs that walk (a symlink, "..", an unusual form or error). */
+static int fs_walk_fast(int base,const char *cur_start,const char *rest,int follow,int direct,char leaf[1025],char canon[1025]) {
     /* (canon receives the leaf's canonical path; it is always computed) */
-    size_t n=strlen(rest);
-    if(!n || rest[n-1]=='/')return -2;
+    size_t n=strlen(rest);char trimmed[1025];
+    if(n && rest[n-1]=='/') {                                   /* "dir/" (tar's mkdir -p): as the component walk, the leaf is "dir" */
+        while(n && rest[n-1]=='/')n--;
+        memcpy(trimmed,rest,n);trimmed[n]=0;rest=trimmed;
+    }
+    if(!n)return -2;
     for(const char *p=rest;*p;) {                               /* every component: no "..", at most 255 bytes */
         while(*p=='/')p++;
         const char *q=p;while(*q && *q!='/')q++;
@@ -293,12 +316,38 @@ static int fs_walk_fast(int base,const char *cur_start,const char *rest,int foll
         base=fs_mounts[to-1].fd;relative=inside;
     }
     while(*relative=='/')relative++;
+    if(direct) {
+        /* A symlink on the way (ELOOP), here or swapped in before the caller's own call,
+           is refused by the host; the component walk then follows it inside the root. */
+        char path[1025];struct stat st;size_t r=strlen(relative),l=strlen(name);
+        if(r+1+l>1024)return -2;
+        memcpy(path,relative,r);if(r)path[r++]='/';memcpy(path+r,name,l+1);
+        int known=1;
+        if(!fstatat(base,path,&st,FS_NOFOLLOW_AT)) { if(follow && S_ISLNK(st.st_mode))return -2; fs_walk_leaf.st=st; }
+        else if(errno==ENOTDIR)return -1;
+        else if(errno!=ENOENT)return -2;
+        else {
+            known=2;
+            if(*relative) {                                     /* the leaf is missing: are its directories there? */
+                if(fstatat(base,relative,&st,FS_NOFOLLOW_AT))return errno==ENOENT || errno==ENOTDIR?-1:-2;
+                if(!S_ISDIR(st.st_mode)) { errno=ENOTDIR;return -1; }
+            }
+        }
+        int fd=dup(base);if(fd<0)return -1;
+        strcpy(leaf,path);fs_walk_leaf.known=known;return fd;
+    }
     int fd=*relative?openat(base,relative,O_RDONLY|O_DIRECTORY|O_NOFOLLOW_ANY|O_CLOEXEC):dup(base);
     if(fd<0)return errno==ENOENT || errno==ENOTDIR?-1:-2;
     struct stat st;
     if(follow && fstatat(fd,name,&st,AT_SYMLINK_NOFOLLOW)==0 && S_ISLNK(st.st_mode)) { close(fd);return -2; }
     strcpy(leaf,name);return fd;
 }
+#else
+#define FS_DIRECT 0
+#define FS_NOFOLLOW_AT AT_SYMLINK_NOFOLLOW
+#define FS_NOFOLLOW_OPEN O_NOFOLLOW
+#define FS_ANY_AT 0
+#define fs_renameat renameat
 #endif
 static int fs_walk(int base,const char *base_path,const char *input,int follow,char leaf[1025],char canon[1025]);
 /* A guest directory by canonical path, as a descriptor (a mount's own, if it is one). */
@@ -308,20 +357,32 @@ static int fs_open_dir(const char *path) {
     int fd=openat(parent,leaf,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);int saved=errno;close(parent);errno=saved;
     return fd;
 }
+/* lstat of the leaf fs_walk just returned with parent (FS_NOFOLLOW_AT), from the walk's
+   own when it made one; the result is as fresh as a second call would be. */
+static int fs_leaf_stat(int parent,const char *leaf,struct stat *st) {
+    int known=fs_walk_leaf.known;fs_walk_leaf.known=0;
+    if(known==1) { *st=fs_walk_leaf.st;return 0; }
+    if(known==2) { errno=ENOENT;return -1; }
+    return fstatat(parent,leaf,st,FS_NOFOLLOW_AT);
+}
 static int fs_walk(int base,const char *base_path,const char *input,int follow,char leaf[1025],char canon[1025]) {
     if(fs_root<0) { errno=EACCES;return -1; }
+    int direct=follow&FS_DIRECT;follow&=1;(void)direct;
+    fs_walk_leaf.known=0;
     char rest[4097],cur[1025];size_t length=strlen(input),pos=0;unsigned links=0;
     if(length>1024) { errno=ENAMETOOLONG;return -1; }
     memcpy(rest,input,length+1);
     if(rest[0]!='/') {
-        struct stat st;if(fstat(base,&st)<0)return -1;
-        if(!S_ISDIR(st.st_mode)) { errno=ENOTDIR;return -1; }
+        if(base!=fs_root && !(fs_cwd && base==fs_cwd->fd)) {          /* those two are directories */
+            struct stat st;if(fstat(base,&st)<0)return -1;
+            if(!S_ISDIR(st.st_mode)) { errno=ENOTDIR;return -1; }
+        }
     } else if(fs_scope.resolve&8) { errno=EXDEV;return -1; }        /* RESOLVE_BENEATH: no absolute path */
     else base=FS_WALK_ROOT;
     strcpy(cur,rest[0]=='/'?(fs_scope.root>=0?fs_scope.path:"/"):base_path);
 #ifdef O_NOFOLLOW_ANY
     {   /* The fast path stays in base's host directory tree: not across a mount. */
-        char full[1025];int fast=fs_walk_fast(base,cur,rest,follow,leaf,full);
+        char full[1025];int fast=fs_walk_fast(base,cur,rest,follow,direct,leaf,full);
         if(fast!=-2) {
             if(fast>=0) { fs_where=fs_mount_of(full);if(canon)strcpy(canon,full); }
             return fast;
@@ -444,10 +505,8 @@ static int fs_lookup(uint64_t dir,uint64_t ptr,char leaf[1025],int follow,char c
     if(base<0) { errno=EBADF;return -1; }
     return fs_walk(base,base_path,path,follow,leaf,canon);
 }
-/* Parent directory and leaf, following every symlink including the last. */
-static int fs_parent(uint64_t dir,uint64_t ptr,char leaf[1025]) { return fs_lookup(dir,ptr,leaf,1,NULL); }
-/* As fs_parent, but a final symlink is returned as the leaf itself (lstat,
-   readlink, unlink, rename, mkdir). */
+/* Parent directory and leaf; a final symlink is returned as the leaf itself (readlink,
+   symlink, link, mknod). fs_lookup(..., 1, ...) follows it. */
 static int fs_parent_nofollow(uint64_t dir,uint64_t ptr,char leaf[1025]) { return fs_lookup(dir,ptr,leaf,0,NULL); }
 /* Minimal /dev: these guest paths open the matching host device, whose kernel
    semantics are already Linux's. Guests cannot otherwise obtain a character
@@ -503,11 +562,9 @@ static uint64_t fs_getcwd(void) {
     if(fs_cwd) {
         if(!*path)return linux_error(2);
         /* Walk the path again (through bind mounts) and check it still names the cwd. */
-        char leaf[1025],canon[1025];int parent=fs_walk(fs_root,"/",path,1,leaf,canon);
-        int fd=parent<0?-1:openat(parent,leaf,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
-        if(parent>=0)close(parent);
-        struct stat a,b;int same=fd>=0 && !fstat(fd,&a) && !fstat(fs_cwd->fd,&b) && a.st_dev==b.st_dev && a.st_ino==b.st_ino;
-        if(fd>=0)close(fd);if(!same)return linux_error(2);
+        char leaf[1025],canon[1025];int parent=fs_walk(fs_root,"/",path,1|FS_DIRECT,leaf,canon);
+        struct stat a,b;int same=parent>=0 && !fstatat(parent,leaf,&a,FS_NOFOLLOW_AT) && S_ISDIR(a.st_mode) && !fstat(fs_cwd->fd,&b) && a.st_dev==b.st_dev && a.st_ino==b.st_ino;
+        if(parent>=0)close(parent);if(!same)return linux_error(2);
     }
     size_t size=strlen(path)+1;if(cpu->gpr[1]<size)return linux_error(34);
     unsigned char *out=lookup(cpu->gpr[0],size,2);if(!out)return linux_error(14);
@@ -1066,7 +1123,7 @@ static uint64_t fs_open(void) {
     }
     /* Linux follows a final symlink unless O_NOFOLLOW (32768) or O_CREAT|O_EXCL. */
     int follow=!(flags&32768) && (flags&(64|128))!=(64|128);
-    char leaf[1025],canon[1025];int parent=fs_lookup(cpu->gpr[0],cpu->gpr[1],leaf,follow,canon);if(parent<0) return fs_error();
+    char leaf[1025],canon[1025];int parent=fs_lookup(cpu->gpr[0],cpu->gpr[1],leaf,follow|FS_DIRECT,canon);if(parent<0) return fs_error();
     int options=(flags&3)==2?O_RDWR:(flags&3)==1?O_WRONLY:O_RDONLY;
     const char *device=fs_device(canon);
     if(device) { /* Writable even on a read-only root; O_CREAT/O_TRUNC are no-ops. */
@@ -1079,7 +1136,7 @@ static uint64_t fs_open(void) {
     }
     int read_only=!fs_path_writable();
     if(read_only && (flags&(3|64|512|1024))) { close(parent);return linux_error(30); }
-    options|=O_NOFOLLOW|O_CLOEXEC|O_NONBLOCK;
+    options|=FS_NOFOLLOW_OPEN|O_CLOEXEC|O_NONBLOCK;
     if(flags&64) options|=O_CREAT;
     if(flags&128) options|=O_EXCL;
     if(flags&512) options|=O_TRUNC;
@@ -1091,14 +1148,15 @@ static uint64_t fs_open(void) {
     /* Validate the existing leaf before a possible truncate; only regular files/dirs.
        An unfollowed symlink reaches openat, which fails with ELOOP or EEXIST as on Linux. */
     struct stat before;
-    if(fstatat(parent,leaf,&before,AT_SYMLINK_NOFOLLOW)==0 && S_ISFIFO(before.st_mode)) { /* a named pipe: the container's shared pipe */
-        close(parent);
-        if((flags&(64|128))==(64|128))return linux_error(17);
-        if(syscall_unlocked) { syscall_abort=1;return linux_error(11); }             /* pipe tables need the lock */
-        return io_fifo_open(before.st_dev,before.st_ino,flags);
-    }
-    if(fstatat(parent,leaf,&before,AT_SYMLINK_NOFOLLOW)==0 && !S_ISREG(before.st_mode) && !S_ISDIR(before.st_mode) && !S_ISLNK(before.st_mode)) {
-        close(parent);return linux_error(13);
+    if(fs_leaf_stat(parent,leaf,&before)==0) {
+        if(S_ISFIFO(before.st_mode)) { /* a named pipe: the container's shared pipe */
+            close(parent);
+            if((flags&(64|128))==(64|128))return linux_error(17);
+            if(syscall_unlocked) { syscall_abort=1;return linux_error(11); }             /* pipe tables need the lock */
+            return io_fifo_open(before.st_dev,before.st_ino,flags);
+        }
+        if(!S_ISREG(before.st_mode) && !S_ISDIR(before.st_mode) && !S_ISLNK(before.st_mode)) { close(parent);return linux_error(13); }
+        if(S_ISLNK(before.st_mode) && (flags&16384) && !(flags&64)) { close(parent);return linux_error(20); } /* as Linux, not ELOOP */
     }
     int fd=openat(parent,leaf,options,(mode_t)(cpu->gpr[3]&0777&~fs_umask));int saved=errno;close(parent);errno=saved;
     if(fd<0) return fs_error();
@@ -1290,23 +1348,21 @@ static uint64_t fs_call(uint64_t call) {
     if(call==166) { unsigned previous=fs_umask;fs_umask=(unsigned)cpu->gpr[0]&0777;return previous; }
     if(call==52 || call==53) {
         uint64_t mode=cpu->gpr[call==52?1:2]&UINT64_C(07777); /* Linux ignores other bits (libuv passes st_mode); setuid/setgid/sticky allowed */
-        int fd=fs_host(cpu->gpr[0]),owned=0;
+        int fd=fs_host(cpu->gpr[0]);
         if(call==52 && fs_slot(cpu->gpr[0])>=0 && fs_ro[fs_slot(cpu->gpr[0])])return linux_error(30);
         if(call==53) {
-            char leaf[1025];int parent=fs_parent(cpu->gpr[0],cpu->gpr[1],leaf);if(parent<0)return fs_error();
+            /* By path, never opening the file (an open costs ~12 us and needs read permission). */
+            char leaf[1025];int parent=fs_lookup(cpu->gpr[0],cpu->gpr[1],leaf,1|FS_DIRECT,NULL);if(parent<0)return fs_error();
             if(!fs_path_writable()) { close(parent);return linux_error(30); }
-            struct stat link;
-            if(fstatat(parent,leaf,&link,AT_SYMLINK_NOFOLLOW)==0 && S_ISSOCK(link.st_mode)) { /* sockets cannot be opened */
-                int result=fchmodat(parent,leaf,(mode_t)mode,AT_SYMLINK_NOFOLLOW);
-                int saved=errno;close(parent);errno=saved;return result<0?fs_error():0;
-            }
-            fd=openat(parent,leaf,O_RDONLY|O_NONBLOCK|O_NOFOLLOW|O_CLOEXEC);
-            int saved=errno;close(parent);errno=saved;if(fd<0)return fs_error();owned=1;
+            struct stat st;int result=fs_leaf_stat(parent,leaf,&st);
+            if(!result && !S_ISREG(st.st_mode) && !S_ISDIR(st.st_mode) && !S_ISSOCK(st.st_mode)) { errno=EACCES;result=-1; }
+            if(!result)result=fchmodat(parent,leaf,(mode_t)mode,FS_NOFOLLOW_AT);
+            int saved=errno;close(parent);errno=saved;return result<0?fs_error():0;
         } else if(fd<0)return linux_error(9);
         struct stat st;int result=fstat(fd,&st);
         if(!result && !S_ISREG(st.st_mode) && !S_ISDIR(st.st_mode)) { errno=EACCES;result=-1; }
         if(!result)result=fchmod(fd,(mode_t)mode);
-        int saved=errno;if(owned)close(fd);errno=saved;return result<0?fs_error():0;
+        return result<0?fs_error():0;
     }
     if(call==78) {
         if(!cpu->gpr[3] || (int64_t)(int32_t)cpu->gpr[3]<=0)return linux_error(22);
@@ -1368,19 +1424,19 @@ static uint64_t fs_call(uint64_t call) {
             if(fs_ro[fs_slot(cpu->gpr[0])])return linux_error(30);
             return futimens(fd,times)<0?fs_error():0;
         }
-        char leaf[1025];int parent=fs_lookup(cpu->gpr[0],cpu->gpr[1],leaf,!(flags&0x100),NULL);if(parent<0)return fs_error();
+        char leaf[1025];int parent=fs_lookup(cpu->gpr[0],cpu->gpr[1],leaf,!(flags&0x100)|FS_DIRECT,NULL);if(parent<0)return fs_error();
         if(!fs_path_writable()) { close(parent);return linux_error(30); }
         /* The leaf is never followed by the host: a final symlink is followed by fs_lookup already. */
-        int result=utimensat(parent,leaf,times,AT_SYMLINK_NOFOLLOW);int saved=errno;close(parent);errno=saved;
+        int result=utimensat(parent,leaf,times,FS_NOFOLLOW_AT);int saved=errno;close(parent);errno=saved;
         return result<0?fs_error():0;
     }
     if(call==45) { /* truncate(path, length): ftruncate of the resolved regular file */
         uint64_t length=cpu->gpr[1];
         if((int64_t)length<0)return linux_error(22);
         if(length>fs_file_limit)return linux_error(27);
-        char leaf[1025];int parent=fs_parent((uint64_t)-100,cpu->gpr[0],leaf);if(parent<0)return fs_error();
+        char leaf[1025];int parent=fs_lookup((uint64_t)-100,cpu->gpr[0],leaf,1|FS_DIRECT,NULL);if(parent<0)return fs_error();
         if(!fs_path_writable()) { close(parent);return linux_error(30); }
-        int fd=openat(parent,leaf,O_WRONLY|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC);int saved=errno;close(parent);errno=saved;
+        int fd=openat(parent,leaf,O_WRONLY|FS_NOFOLLOW_OPEN|O_NONBLOCK|O_CLOEXEC);int saved=errno;close(parent);errno=saved;
         if(fd<0)return fs_error();
         struct stat st;if(fstat(fd,&st)<0 || !S_ISREG(st.st_mode)) { saved=S_ISDIR(st.st_mode)?EISDIR:EINVAL;close(fd);errno=saved;return fs_error(); }
         uint64_t growth=length>(uint64_t)st.st_size?length-(uint64_t)st.st_size:0;
@@ -1392,9 +1448,9 @@ static uint64_t fs_call(uint64_t call) {
     if(call==48 || call==439) { /* faccessat(2); synthetic uid 0; no-link namespace policy still applies. */
         { char proc_path[1025];if(fs_proc_path(cpu->gpr[0],cpu->gpr[1],proc_path)==0 && fs_proc_kind(proc_path))return (cpu->gpr[2]&2)?linux_error(13):0; }
         if(cpu->gpr[2]&~UINT64_C(7) || (call==439 && (cpu->gpr[3]&~UINT64_C(0x300))))return linux_error(22); /* AT_EACCESS, AT_SYMLINK_NOFOLLOW */
-        char leaf[1025];int parent=fs_parent(cpu->gpr[0],cpu->gpr[1],leaf);if(parent<0)return fs_error();
+        char leaf[1025];int parent=fs_lookup(cpu->gpr[0],cpu->gpr[1],leaf,1|FS_DIRECT,NULL);if(parent<0)return fs_error();
         int writable=fs_path_writable();
-        struct stat st;int result=fstatat(parent,leaf,&st,AT_SYMLINK_NOFOLLOW);
+        struct stat st;int result=fs_leaf_stat(parent,leaf,&st);
         int saved=errno;close(parent);errno=saved;if(result<0)return fs_error();
         if(!S_ISREG(st.st_mode) && !S_ISDIR(st.st_mode) && !S_ISSOCK(st.st_mode) && !S_ISFIFO(st.st_mode))return linux_error(13);
         if((cpu->gpr[2]&2) && !writable)return linux_error(30);
@@ -1437,9 +1493,9 @@ static uint64_t fs_call(uint64_t call) {
             }
         }
         /* AT_SYMLINK_NOFOLLOW (256) reports a final symlink itself. */
-        char leaf[1025],canon[1025];int parent=fs_lookup(cpu->gpr[0],cpu->gpr[1],leaf,!(cpu->gpr[3]&256),canon);if(parent<0)return fs_error();
+        char leaf[1025],canon[1025];int parent=fs_lookup(cpu->gpr[0],cpu->gpr[1],leaf,!(cpu->gpr[3]&256)|FS_DIRECT,canon);if(parent<0)return fs_error();
         struct stat st;const char *device=fs_device(canon);
-        int result=device?stat(device,&st):fstatat(parent,leaf,&st,AT_SYMLINK_NOFOLLOW);
+        int result=device?stat(device,&st):fs_leaf_stat(parent,leaf,&st);
         int saved=errno;close(parent);errno=saved;if(result<0)return fs_error();
         if(!S_ISREG(st.st_mode) && !S_ISDIR(st.st_mode) && !S_ISLNK(st.st_mode) && !S_ISSOCK(st.st_mode) && !S_ISFIFO(st.st_mode) && !device)return linux_error(13);
         fs_stat_pack(out,&st);return 0;
@@ -1466,13 +1522,6 @@ static uint64_t fs_call(uint64_t call) {
         cpu->gpr[2]=keep2;cpu->gpr[3]=keep3;fs_scope.root=-1;fs_scope.path="";fs_scope.resolve=0;
         return result;
     }
-    if(call==34) { /* Linux reports an existing path (including "/" or ".") before EROFS. */
-        char leaf[1025];int parent=fs_parent_nofollow(cpu->gpr[0],cpu->gpr[1],leaf);
-        if(parent>=0) {
-            struct stat st;int present=!strcmp(leaf,".") || !fstatat(parent,leaf,&st,AT_SYMLINK_NOFOLLOW);close(parent);
-            if(present)return linux_error(17);
-        }
-    }
     if(call==33) { /* mknodat: FIFOs (mkfifo) and regular files; devices need privileges we do not grant */
         unsigned type=(unsigned)(cpu->gpr[2]&0170000);mode_t mode=(mode_t)(cpu->gpr[2]&0777&~fs_umask);
         if(type!=0010000 && type!=0100000 && type)return linux_error(1);
@@ -1485,26 +1534,33 @@ static uint64_t fs_call(uint64_t call) {
         uint64_t e=result<0?fs_error():0;close(parent);if(!e)fs_count_created();return e;
     }
     if(call==34 || call==35 || call==38) {
-        if(call==34 && fs_count_full()) return linux_error(28);
         if(call==35 && cpu->gpr[2]!=0 && cpu->gpr[2]!=512) return linux_error(22);
         /* These act on a final symlink itself, never its target. */
-        char leaf[1025];int parent=fs_parent_nofollow(cpu->gpr[0],cpu->gpr[1],leaf);if(parent<0) return fs_error();
+        char leaf[1025];int parent=fs_lookup(cpu->gpr[0],cpu->gpr[1],leaf,FS_DIRECT,NULL);if(parent<0) return fs_error();
+        if(call==34) { /* Linux reports an existing path (including "/" or ".") before EROFS (tar's mkdir -p: mostly). */
+            struct stat st;
+            if(!strcmp(leaf,".") || !fs_leaf_stat(parent,leaf,&st)) { close(parent);return linux_error(17); }
+            if(fs_count_full()) { close(parent);return linux_error(28); }
+            if(strchr(leaf,'/')) {                              /* mkdirat refuses no symlink on the way: the real parent */
+                close(parent);parent=fs_lookup(cpu->gpr[0],cpu->gpr[1],leaf,0,NULL);if(parent<0) return fs_error();
+            }
+        }
         if(!fs_path_writable()) { close(parent);return linux_error(30); }
         if(!strcmp(leaf,".")) { close(parent);return linux_error(fs_where>0?16:13); } /* a mount point is busy */
         int result;
         if(call==34) { result=mkdirat(parent,leaf,(mode_t)(cpu->gpr[2]&0777&~fs_umask));if(!result) { fs_count_created(); } }
-        else if(call==35) result=unlinkat(parent,leaf,cpu->gpr[2]?AT_REMOVEDIR:0);
+        else if(call==35) result=unlinkat(parent,leaf,(cpu->gpr[2]?AT_REMOVEDIR:0)|FS_ANY_AT);
         else {
-            char target[1025];int other=fs_parent_nofollow(cpu->gpr[2],cpu->gpr[3],target);
+            char target[1025];int other=fs_lookup(cpu->gpr[2],cpu->gpr[3],target,FS_DIRECT,NULL);
             if(other<0) { uint64_t e=fs_error();close(parent);return e; }
             if(!fs_path_writable()) { close(other);close(parent);return linux_error(30); }
             if(!strcmp(target,".")) { close(other);close(parent);return linux_error(fs_where>0?16:13); }
-            result=renameat(parent,leaf,other,target);int saved=errno;close(other);errno=saved;
+            result=fs_renameat(parent,leaf,other,target);int saved=errno;close(other);errno=saved;
         }
         uint64_t e=result<0?fs_error():0;
         /* unlink of a directory: Darwin says EPERM, Linux EISDIR (glibc's remove(), and so
            Java's File.delete, then retries with rmdir). */
-        if(call==35 && !cpu->gpr[2] && result<0 && errno==EPERM) { struct stat st;if(!fstatat(parent,leaf,&st,AT_SYMLINK_NOFOLLOW) && S_ISDIR(st.st_mode))e=linux_error(21); }
+        if(call==35 && !cpu->gpr[2] && result<0 && errno==EPERM) { struct stat st;if(!fstatat(parent,leaf,&st,FS_NOFOLLOW_AT) && S_ISDIR(st.st_mode))e=linux_error(21); }
         close(parent);return e;
     }
     int fd=fs_host(cpu->gpr[0]);if(fd<0) return linux_error(9);

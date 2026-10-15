@@ -347,10 +347,10 @@ static int guest_syscall_dispatch(void) {
                 if(call==55) { fd=fs_host(cpu->gpr[0]);if(fd<0) { cpu->gpr[0]=linux_error(9);return -3; }writable=!fs_ro[fs_slot(cpu->gpr[0])]; }
                 else {
                     if(cpu->gpr[4]&~UINT64_C(256|4096)) { cpu->gpr[0]=linux_error(22);return -3; }
-                    char leaf[1025];int parent=fs_lookup(cpu->gpr[0],cpu->gpr[1],leaf,!(cpu->gpr[4]&256),NULL);
+                    char leaf[1025];int parent=fs_lookup(cpu->gpr[0],cpu->gpr[1],leaf,!(cpu->gpr[4]&256)|FS_DIRECT,NULL);
                     if(parent<0) { cpu->gpr[0]=fs_error();return -3; }
                     writable=fs_path_writable();
-                    int r=fstatat(parent,leaf,&st,AT_SYMLINK_NOFOLLOW);int saved=errno;close(parent);errno=saved;
+                    int r=fs_leaf_stat(parent,leaf,&st);int saved=errno;close(parent);errno=saved;
                     if(r<0) { cpu->gpr[0]=fs_error();return -3; }
                 }
                 if(fd>=0 && fstat(fd,&st)<0) { cpu->gpr[0]=fs_error();return -3; }
@@ -647,7 +647,7 @@ static int guest_syscall_unlocked(void) {
     /* execve of a single-threaded process: its new image is built here, and the call
        redone under the lock only swaps it in (process_exec_at). */
     if(call==221 && schedule_active && !schedule_tasks[process_pid-1].threads && fs_unlocked_path(cpu->gpr[0],path)) {
-        (void)exec_build((uint64_t)-100,0);return 0;
+        exec_unlocked=1;(void)exec_build((uint64_t)-100,0);exec_unlocked=0;return 0;
     }
     int named=(call==56 || call==79 || call==291 || call==48 || call==439 || call==78 || call==34 || call==35 || call==38 || (call==88 && cpu->gpr[1])) && fs_unlocked_path(cpu->gpr[1],path);
     if(named && call==38)named=fs_unlocked_path(cpu->gpr[3],path);
