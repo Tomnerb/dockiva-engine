@@ -28,6 +28,6 @@ void _start(void) {
     }
     int status=-1;check(call(260,(U)pid,(U)&status,0,0,0,0)==pid && status==0);
     check(call(174,0,0,0,0,0,0)==0);                                   /* parent is still root */
-    check(call(147,(U)-1,500,(U)-1,0,0,0)==0 && call(174,0,0,0,0,0,0)==500); /* setresuid */
+    check(call(147,(U)-1,500,(U)-1,0,0,0)==0 && call(175,0,0,0,0,0,0)==500 && call(174,0,0,0,0,0,0)==0); /* setresuid: effective only */
     call(64,1,(U)"identity PASS\n",14,0,0,0);call(93,0,0,0,0,0,0);for(;;){}
 }

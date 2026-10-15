@@ -57,7 +57,7 @@ static uint64_t epoll_suspend(struct GuestEpoll *e,unsigned high,unsigned count,
     if(result==IO_BLOCK && !syscall_unlocked)
         for(unsigned i=0;i<high;i++) {
             EpollWatch *w=&e->watch[i];
-            if(w->active && (w->kind==IO_READ || w->kind==IO_WRITE || w->kind==IO_EVENT))w->pipe->waiters|=UINT64_C(1)<<(process_pid-1);
+            if(w->active && (w->kind==IO_READ || w->kind==IO_WRITE || w->kind==IO_EVENT))w->pipe->waiters|=PROCESS_BIT(process_pid);
         }
     return result==IO_BLOCK?IO_BLOCK:0; /* deadline passed: no events */
 }
@@ -112,7 +112,7 @@ static uint64_t guest_epoll(uint64_t call) {
         /* A thread blocked in epoll_wait polls what it saw when it blocked; Linux applies
            the change to waits in progress (Erlang adds sockets while its poll thread
            waits). This process's waiting threads look again. */
-        if(schedule_active)schedule_wake_mask(UINT64_C(1)<<(process_pid-1));
+        if(schedule_active)schedule_wake_mask(PROCESS_BIT(process_pid));
         return 0;
     }
     int maxevents=(int32_t)cpu->gpr[2],timeout=(int32_t)cpu->gpr[3];

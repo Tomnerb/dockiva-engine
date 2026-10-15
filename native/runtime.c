@@ -323,13 +323,13 @@ static void startup(int argc, const char **argv, unsigned envc, const char **env
     vector[n++]=6; vector[n++]=4096;
     vector[n++]=7; vector[n++]=address_space->interpreter_base;
     vector[n++]=9; vector[n++]=address_space->entry;
-    vector[n++]=11; vector[n++]=guest_uid; /* Synthetic UID/EUID/GID/EGID. */
+    vector[n++]=11; vector[n++]=guest_ids.ruid; /* Synthetic UID/EUID/GID/EGID. */
     vector[n++]=12; vector[n++]=guest_uid;
-    vector[n++]=13; vector[n++]=guest_gid;
+    vector[n++]=13; vector[n++]=guest_ids.rgid;
     vector[n++]=14; vector[n++]=guest_gid;
     vector[n++]=16; vector[n++]=hwcap_bits(0);
     vector[n++]=17; vector[n++]=100;
-    vector[n++]=23; vector[n++]=0;
+    vector[n++]=23; vector[n++]=guest_uid!=guest_ids.ruid || guest_gid!=guest_ids.rgid; /* AT_SECURE: a set-ID exec */
     vector[n++]=25; vector[n++]=random_address;
     vector[n++]=26; vector[n++]=hwcap_bits(1);
     vector[n++]=31; vector[n++]=args[0];
@@ -1079,6 +1079,10 @@ int main(int argc,char **argv) {
         else if(!strcmp(argv[i],"--trace")) trace=1;
         else if(!strcmp(argv[i],"--outbound")) net_outbound=1;
         else if(!strcmp(argv[i],"--proc-publish") && i+1<argc) proc_publish_path=argv[++i]; /* this run's process table, for exec runs and docker top */
+        else if(!strcmp(argv[i],"--abstract-dir") && i+1<argc) {      /* the container's abstract Unix socket names */
+            const char *dir=argv[++i];if(dir[0]!='/' || strlen(dir)>=sizeof(net_abstract_dir))fail("Invalid --abstract-dir");
+            strcpy(net_abstract_dir,dir);
+        }
         else if(!strcmp(argv[i],"--proc-peer") && i+1<argc) proc_peer_path=argv[++i];       /* the main run's, shown in this run's /proc */
         else if(!strcmp(argv[i],"--oom-file") && i+1<argc) oom_file=argv[++i]; /* created on an OOM kill (docker inspect's OOMKilled) */
         else if(!strcmp(argv[i],"--hostname") && i+1<argc) {
@@ -1124,7 +1128,7 @@ int main(int argc,char **argv) {
             if(*value<'0' || *value>'9')fail("Invalid guest identity");
             unsigned long long id=strtoull(value,&end,10);
             if(errno || *end || id>=UINT32_MAX)fail("Invalid guest identity");
-            if(group)guest_gid=(uint32_t)id;else guest_uid=(uint32_t)id;
+            if(group)guest_ids.gid=guest_ids.rgid=guest_ids.sgid=(uint32_t)id;else guest_ids.uid=guest_ids.ruid=guest_ids.suid=(uint32_t)id;
         }
         else if(!strcmp(argv[i],"--memory-limit-mib") && i+1<argc) {
             const char *s=argv[++i];char *end;errno=0;

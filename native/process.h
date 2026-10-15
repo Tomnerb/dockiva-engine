@@ -120,11 +120,17 @@ static uint64_t process_exec(void) {
         if(fstat(fd,&st)<0 || !S_ISREG(st.st_mode) || !(st.st_mode&0111)) { close(fd);return linux_error(8); }
     }
     FILE *input=fdopen(fd,"rb");if(!input) { close(fd);return linux_error(12); }
+    /* A set-user-ID or set-group-ID file runs with its owner as effective and saved
+       ID, unless no_new_privs is set. ponytail: the owner is root (image files are;
+       per-file ownership is not tracked), and no mount is nosuid. */
+    GuestIds caller=guest_ids;
+    if(!prctl_no_new_privs && (st.st_mode&S_ISUID))guest_ids.uid=guest_ids.suid=0;
+    if(!prctl_no_new_privs && (st.st_mode&S_ISGID))guest_ids.gid=guest_ids.sgid=0;
     ProcessImage old;image_save(&old);image_clear();
     /* Loader failures must leave the calling image intact. load_stream closes input. */
     exec_loading=1;
     if(setjmp(exec_recovery)) {
-        exec_loading=0;image_free();image_restore(&old);return linux_error(8);
+        exec_loading=0;image_free();image_restore(&old);guest_ids=caller;return linux_error(8);
     }
     load_stream(input);heap_init();startup((int)argc,(const char **)args,envc,(const char **)env);
     exec_loading=0;process_exec_count++;
@@ -136,6 +142,7 @@ static uint64_t process_exec(void) {
         close(fs_fd[i]-1);fs_fd[i]=0;fs_cloexec[i]=0;fd_unbind(fs_guest[i]);
     }
     if(guest_uid)cap_held[0]=cap_held[1]=0; /* no file capabilities: a non-root exec loses them */
+    else if(caller.uid) { cap_held[0]=UINT32_MAX;cap_held[1]=0x1ffu; } /* a set-user-ID-root exec gains them all */
     /* Sockets survive exec unless SOCK_CLOEXEC/FD_CLOEXEC is set, as on Linux. */
     for(unsigned i=0;i<NET_SLOTS;i++)if(net_fd[i] && (net_flags[i]&524288))(void)net_release(i);
     net_wait.active=0;
@@ -226,12 +233,12 @@ static uint64_t process_clone(void) {
         return pid;
     }
     process_depth=1;process_pid=pid;
-    uint32_t parent_uid=guest_uid,parent_gid=guest_gid;
+    GuestIds parent_ids=guest_ids;
     static unsigned char parent_kind[GUEST_FD_LIMIT];static unsigned short parent_index[GUEST_FD_LIMIT],parent_net[NET_SLOTS],parent_fs[FS_SLOTS],parent_io_guest[IO_END];
     memcpy(parent_kind,fd_kind,sizeof(fd_kind));memcpy(parent_index,fd_index,sizeof(fd_index));
     memcpy(parent_net,net_guest,sizeof(net_guest));memcpy(parent_fs,fs_guest,sizeof(fs_guest));memcpy(parent_io_guest,io_guest,sizeof(io_guest));
     unsigned status=(unsigned)run(0);
-    guest_uid=parent_uid;guest_gid=parent_gid; /* the child's identity changes stay in the child */
+    guest_ids=parent_ids; /* the child's identity changes stay in the child */
     fs_cwd_release();fs_cwd=parent_cwd;image_free();image_restore(&parent);
     io_restore(parent_io);
     net_cleanup();memset(net_fd,0,sizeof(net_fd));

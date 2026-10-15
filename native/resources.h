@@ -2,9 +2,13 @@
    Counts requested payloads plus aligned headers, not total host RSS/libc state. */
 #include <stddef.h>
 #include <sys/mman.h>
-/* Live guest processes per container: the first plus PROCESS_LIMIT children. Task
-   slots form a 64-bit mask, and pids double as 8-bit hypervisor ASIDs. */
-#define PROCESS_LIMIT 63
+/* Live guest processes per container: the first plus PROCESS_LIMIT children. Per-pid
+   tables are static; loops over them stop at the highest slot in use (process_count). */
+#define PROCESS_LIMIT 1023
+/* A process's bit in a 64-bit wake mask: pids 64 apart share one, which costs only a
+   spurious wakeup (a woken blocked call retries). Exact sets use PROCESS_WORDS words. */
+#define PROCESS_BIT(pid) (UINT64_C(1)<<(((pid)-1)&63))
+#define PROCESS_WORDS ((PROCESS_LIMIT+64)/64)
 typedef union { max_align_t alignment;struct { size_t bytes; } value; } ResourceHeader;
 #define RESOURCE_MAPPED ((size_t)1<<(sizeof(size_t)*8-1))
 static uint64_t resource_limit=UINT64_C(256)*1024*1024,resource_used,resource_peak,resource_denials;

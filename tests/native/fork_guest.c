@@ -58,17 +58,17 @@ void _start(void) {
     pid=call(220,0x4111,0,0,0,0,0);check(pid>=0);
     if(!pid)finish(5);
     check(call(260,pid,(U)&status,0,0,0,0)==pid && status==(5<<8));
-    /* At most 63 live children (PROCESS_LIMIT); the bound reports EAGAIN.
+    /* At most 1023 live children (PROCESS_LIMIT); the bound reports EAGAIN.
        Reaped slots are reused. */
-    static long children[64];unsigned live=0;
-    while(live<64) {
+    static long children[1024];unsigned live=0;
+    while(live<1024) {
         children[live]=call(220,17,0,0,0,0,0);
         if(children[live]==-11)break;
         check(children[live]>=0);
         if(!children[live])for(;;)call(73,0,0,0,0,0,0);   /* ppoll(NULL,0,NULL): block until killed */
         live++;
     }
-    check(live==63);
+    check(live==1023);
     for(unsigned i=0;i<live;i++) {
         check(call(129,children[i],9,0,0,0,0)==0);
         check(call(260,children[i],(U)&status,0,0,0,0)==children[i] && status==9);

@@ -108,8 +108,8 @@ def main():
             main_run.wait(timeout=30)
         ps = [line.split(None, 4) for line in section(out, 'ps').splitlines()[1:]]
         yes = [r for r in ps if r[4] == 'yes']
-        # The main run's processes at 1000+pid; this run's own under the pids getpid returns.
-        assert yes and yes[0][0] == '1002' and seconds(yes[0][1]) >= 1 and int(yes[0][2]) > 0 and seconds(yes[0][3]) >= 2, ps
+        # The main run's processes at 10000+pid; this run's own under the pids getpid returns.
+        assert yes and yes[0][0] == '10002' and seconds(yes[0][1]) >= 1 and int(yes[0][2]) > 0 and seconds(yes[0][3]) >= 2, ps
         assert any(r[0] == '1' and r[4].startswith('sh -c echo') for r in ps), ps
         own = section(out, 'self').split()
         assert own[0] == own[1] == '1' and own[2] == own[3] == '/bin/busybox', own   # /proc/<getpid()> is the caller (.NET)

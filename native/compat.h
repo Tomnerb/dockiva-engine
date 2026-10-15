@@ -113,7 +113,7 @@ static uint64_t guest_writev(void) {
     }
     if(managed && IO(guestfd).kind==IO_WRITE && total) {
         struct GuestPipe *pipe=IO(guestfd).pipe;
-        if(!pipe->readers && pipe->fifo && pipe->want_read)return io_would_block(&IO(guestfd));   /* its reader is opening */
+        if(!pipe->readers && pipe->fifo && process_set_others(pipe->want_read,0))return io_would_block(&IO(guestfd));   /* its reader is opening */
         if(!pipe->readers)return linux_error(32);
         if(total<=4096 && total>PIPE_CAP-pipe->used)return io_would_block(&IO(guestfd));
     }
@@ -178,8 +178,8 @@ static unsigned prctl_keepcaps,prctl_no_new_privs,prctl_dumpable=1,prctl_pdeaths
 /* Permitted capabilities (0..40). Root starts with all; a switch away from root
    keeps them only with PR_SET_KEEPCAPS, and a non-root exec clears them. */
 static uint32_t cap_held[2]={UINT32_MAX,0x1ffu};
-static void cap_after_setuid(uint32_t old_uid,uint32_t new_uid) {
-    if(!old_uid && new_uid && !prctl_keepcaps)cap_held[0]=cap_held[1]=0;
+static void cap_after_setuid(const GuestIds *old,const GuestIds *now) {
+    if((!old->ruid || !old->uid || !old->suid) && now->ruid && now->uid && now->suid && !prctl_keepcaps)cap_held[0]=cap_held[1]=0;
 }
 static char prctl_name[16];
 static uint64_t seccomp_install(uint64_t flags,uint64_t address); /* seccomp.h */
@@ -207,17 +207,93 @@ static uint64_t guest_prctl(void) {
     return linux_error(22);
 }
 
+/* Linux abstract names (sun_path[0]==0; any bytes, and the address length is part of
+   the name) are sockets in one host directory per container (--abstract-dir, shared
+   with its execs; else a private temporary one), each named by a hash of the name.
+   A name is freed when its last socket closes, as on Linux; one left by a run that
+   ended without closing it is taken over when nothing answers on it.
+   ponytail: a socket bound but not yet listening in another run counts as stale. */
+static char net_abstract_dir[1024];
+static int net_abstract_fd=-1,net_unix_home=-1;
+static void net_abstract_cleanup(void) {                          /* the private directory */
+    DIR *d=opendir(net_abstract_dir);struct dirent *e;
+    if(d) { while((e=readdir(d)))if(e->d_name[0]=='a')unlinkat(dirfd(d),e->d_name,0);closedir(d); }
+    rmdir(net_abstract_dir);
+}
+static int net_abstract_home(void) {
+    if(net_abstract_fd>=0)return net_abstract_fd;
+    if(!net_abstract_dir[0]) {
+        strcpy(net_abstract_dir,"/tmp/dockiva-abstract.XXXXXX");
+        if(!mkdtemp(net_abstract_dir)) { net_abstract_dir[0]=0;return -1; }
+        atexit(net_abstract_cleanup);
+    }
+    return net_abstract_fd=open(net_abstract_dir,O_RDONLY|O_DIRECTORY|O_CLOEXEC);
+}
+static void net_abstract_leaf(const struct NetDescription *d,char leaf[24]) {
+    uint64_t h=UINT64_C(14695981039346656037)^d->abstract;       /* FNV-1a over the length and bytes */
+    for(unsigned i=0;i<d->abstract;i++)h=(h^(unsigned char)d->path[i])*UINT64_C(1099511628211);
+    snprintf(leaf,24,"a%016llx",(unsigned long long)h);
+}
+/* Called as the description's last reference goes: free the name if it is still this socket's. */
+static void net_abstract_release(const struct NetDescription *d) {
+    char leaf[24];struct stat st;net_abstract_leaf(d,leaf);
+    if(net_abstract_fd>=0 && !fstatat(net_abstract_fd,leaf,&st,AT_SYMLINK_NOFOLLOW) && st.st_ino==d->abstract_ino)unlinkat(net_abstract_fd,leaf,0);
+}
+static uint64_t net_abstract_address(int fd,const unsigned char *name,unsigned length,int binding,struct NetDescription *d) {
+    if(binding)for(unsigned i=0;i<NET_DESCRIPTIONS;i++) {           /* this run's own names */
+        const struct NetDescription *o=&net_descriptions[i];
+        if(o->refs && o->named==2 && o->abstract==length && !memcmp(o->path,name,length))return linux_error(98);
+    }
+    int home=net_abstract_home();if(home<0)return net_error();
+    struct NetDescription named=*d;memcpy(named.path,name,length);named.abstract=length;
+    struct sockaddr_un host;memset(&host,0,sizeof(host));host.sun_family=AF_UNIX;net_abstract_leaf(&named,host.sun_path);
+#ifdef __APPLE__
+    host.sun_len=(unsigned char)SUN_LEN(&host);
+#endif
+    if(net_unix_home<0 && (net_unix_home=open(".",O_RDONLY|O_DIRECTORY|O_CLOEXEC))<0)return net_error();
+    if(fchdir(home)<0)return net_error();
+    int result=binding?bind(fd,(struct sockaddr *)&host,(socklen_t)SUN_LEN(&host)):connect(fd,(struct sockaddr *)&host,(socklen_t)SUN_LEN(&host));
+    if(result<0 && binding && errno==EADDRINUSE) {                  /* left by an ended run? */
+        int type=SOCK_STREAM;socklen_t size=sizeof(type);getsockopt(fd,SOL_SOCKET,SO_TYPE,&type,&size);
+        int probe=socket(AF_UNIX,type,0),alive=probe>=0 && !connect(probe,(struct sockaddr *)&host,(socklen_t)SUN_LEN(&host));
+        int refused=!alive && probe>=0 && (errno==ECONNREFUSED || errno==ENOENT);
+        if(probe>=0)close(probe);
+        if(refused && !unlink(host.sun_path))result=bind(fd,(struct sockaddr *)&host,(socklen_t)SUN_LEN(&host));
+        else errno=EADDRINUSE;
+    }
+    struct stat st;if(!result && binding && !stat(host.sun_path,&st))named.abstract_ino=st.st_ino;
+    int saved=errno;
+    if(fchdir(net_unix_home)<0)fail("Cannot restore the runtime directory");
+    if(result<0) {
+        if(!binding && (saved==ENOENT || saved==ECONNREFUSED))return linux_error(111);
+        if(!binding && (saved==EINPROGRESS || saved==EAGAIN))return linux_error(11);   /* full backlog */
+        errno=saved;return net_error();
+    }
+    memcpy(d->path,named.path,sizeof(d->path));d->abstract=length;d->abstract_ino=binding?named.abstract_ino:0;
+    return 0;
+}
 /* AF_UNIX addresses are guest paths, resolved inside the root like any path (a
    final symlink is followed by connect, not by bind). macOS caps sun_path at 104
    bytes, so the host socket is bound or connected by its leaf name after a brief
-   fchdir into the resolved parent; the syscall layer runs on one thread. Linux
-   abstract names (a leading NUL) have no macOS equivalent and are unsupported. */
-static int net_unix_home=-1;
-static uint64_t net_unix_address(int fd,uint64_t address,uint64_t length,int binding,char path[108]) {
+   fchdir into the resolved parent; the syscall layer runs on one thread. A bind of
+   the family alone (length 2) autobinds an abstract name of five hex digits. */
+static uint64_t net_unix_address(int fd,uint64_t address,uint64_t length,int binding,struct NetDescription *d) {
+    if(length==2 && binding) {
+        const unsigned char *p=lookup(address,2,4);if(!p)return linux_error(14);
+        if(le(p,2)!=1)return linux_error(97);
+        static unsigned next;if(!next)next=(unsigned)getpid()*2654435761u;
+        for(unsigned i=0;i<0x100000;i++) {
+            unsigned char name[7]={0};snprintf((char *)name+1,6,"%05x",(next++)&0xfffff);
+            uint64_t result=net_abstract_address(fd,name,6,1,d);
+            if(result!=linux_error(98))return result;
+        }
+        return linux_error(98);
+    }
     if(length<3)return linux_error(22);
     if(length>110)length=110;                                     /* sizeof(struct sockaddr_un) */
     const unsigned char *p=lookup(address,length,4);if(!p)return linux_error(14);
     if(le(p,2)!=1)return linux_error(97);
+    if(!p[2])return net_abstract_address(fd,p+2,(unsigned)length-2,binding,d);
     char guest[109];size_t n=0;
     while(n<length-2 && p[2+n]) {
         unsigned char c=p[2+n];
@@ -225,7 +301,6 @@ static uint64_t net_unix_address(int fd,uint64_t address,uint64_t length,int bin
         guest[n++]=(char)c;
     }
     guest[n]=0;
-    if(!n)return linux_error(p[2]==0 && length>3?95:22);          /* abstract or empty name */
     if(n>107)return linux_error(36);
     if(net_unix_home<0 && (net_unix_home=open(".",O_RDONLY|O_DIRECTORY|O_CLOEXEC))<0)return net_error();
     int base=fs_cwd?fs_cwd->fd:fs_root;const char *base_path=fs_cwd?fs_cwd->path:"/";
@@ -248,6 +323,6 @@ static uint64_t net_unix_address(int fd,uint64_t address,uint64_t length,int bin
         return fs_error();
     }
     if(binding)fs_entries++;
-    strcpy(path,canon[0] && strlen(canon)<108?canon:guest);
+    strcpy(d->path,canon[0] && strlen(canon)<108?canon:guest);d->abstract=0;
     return 0;
 }

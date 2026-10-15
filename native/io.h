@@ -11,6 +11,7 @@ static _Thread_local int terminal_waiting;
 static int job_control_enabled;
 static void terminal_pump(int wait);
 static uint64_t terminal_read(unsigned char *data,size_t count);
+static ssize_t terminal_write(int fd,const unsigned char *data,size_t count);
 static _Thread_local unsigned schedule_slice;
 static uint64_t io_epoch,io_read_blocks,io_write_blocks;
 /* Pipes, epoll, signalfd, standard I/O and their duplicates: io_fds is indexed by
@@ -41,13 +42,21 @@ static void epoll_ref(int slot,int change);
 static void epoll_forget_socket(int host);
 static void epoll_forget_pipe(void *pipe,unsigned kind);
 /* waiters: scheduler task slots blocked in epoll_wait on this pipe (woken by its next change). */
-static struct GuestPipe { unsigned char *data;size_t used;unsigned readers,writers,read_nonblock,write_nonblock,reads,writes,semaphore,fifo,had_writer;uint64_t waiters,want_read,want_write; } io_pipes[PIPE_SLOTS]; /* want_*: processes waiting to open a FIFO */
+static struct GuestPipe { unsigned char *data;size_t used;unsigned readers,writers,read_nonblock,write_nonblock,reads,writes,semaphore,fifo,had_writer;uint64_t waiters,want_read[PROCESS_WORDS],want_write[PROCESS_WORDS]; } io_pipes[PIPE_SLOTS]; /* waiters: PROCESS_BITs; want_*: the processes waiting to open a FIFO */
 /* Named pipes (mkfifo): every open of one FIFO node in the container shares a pipe slot. */
 #define IO_FIFOS 64
 static struct { dev_t dev;ino_t ino;struct GuestPipe *pipe; } io_fifos[IO_FIFOS];
 /* A read end at end of file: no writers left. A FIFO only once a writer has come
    (until then a reader waits, as a Linux reader's open would have). */
 static int pipe_hung_up(const struct GuestPipe *p) { return !p->writers && (!p->fifo || p->had_writer); }
+/* Exact process sets (want_*): whether one holds a process other than pid (0: any). */
+static int process_set_others(const uint64_t set[PROCESS_WORDS],uint64_t pid) {
+    for(unsigned i=0;i<PROCESS_WORDS;i++)if(set[i]&~(pid && (pid-1)/64==i?UINT64_C(1)<<((pid-1)%64):0))return 1;
+    return 0;
+}
+static void process_set_mark(uint64_t set[PROCESS_WORDS],uint64_t pid,int on) {
+    uint64_t bit=UINT64_C(1)<<((pid-1)%64);if(on)set[(pid-1)/64]|=bit;else set[(pid-1)/64]&=~bit;
+}
 static void schedule_wake_mask(uint64_t mask);
 static void io_pipe_changed(struct GuestPipe *p) {
     io_epoch++;
@@ -200,21 +209,20 @@ static uint64_t io_fifo_open(dev_t dev,ino_t ino,uint64_t flags) {
         unsigned i=0;while(i<PIPE_SLOTS && io_pipes[i].data)i++;
         if(i==PIPE_SLOTS)return linux_error(23);
         p=&io_pipes[i];if(!(p->data=malloc(PIPE_CAP)))return linux_error(12);
-        p->used=0;p->readers=p->writers=0;p->fifo=1;p->had_writer=0;p->waiters=p->want_read=p->want_write=0;
+        p->used=0;p->readers=p->writers=0;p->fifo=1;p->had_writer=0;p->waiters=0;memset(p->want_read,0,sizeof(p->want_read));memset(p->want_write,0,sizeof(p->want_write));
         io_fifos[entry].dev=dev;io_fifos[entry].ino=ino;io_fifos[entry].pipe=p;
     }
     unsigned mode=(unsigned)(flags&3);int reading=mode!=1,writing=mode!=0;
-    uint64_t self=UINT64_C(1)<<(process_pid-1);
     if(!reading && !p->readers && (flags&2048))return linux_error(6);                /* ENXIO */
-    if(!reading && !p->readers && !(p->want_read&~self)) {                          /* a writer waits for a reader */
+    if(!reading && !p->readers && !process_set_others(p->want_read,process_pid)) {  /* a writer waits for a reader */
         if(!schedule_active)return linux_error(95);
-        p->want_write|=self;p->waiters|=self;return IO_BLOCK;
+        process_set_mark(p->want_write,process_pid,1);p->waiters|=PROCESS_BIT(process_pid);return IO_BLOCK;
     }
-    if(reading && !writing && !(flags&2048) && !p->writers && !(p->want_write&~self)) { /* a reader waits for a writer */
+    if(reading && !writing && !(flags&2048) && !p->writers && !process_set_others(p->want_write,process_pid)) { /* a reader waits for a writer */
         if(!schedule_active)return linux_error(95);
-        p->want_read|=self;p->waiters|=self;return IO_BLOCK;
+        process_set_mark(p->want_read,process_pid,1);p->waiters|=PROCESS_BIT(process_pid);return IO_BLOCK;
     }
-    p->want_read&=~self;p->want_write&=~self;
+    process_set_mark(p->want_read,process_pid,0);process_set_mark(p->want_write,process_pid,0);
     int fd=io_free_slot(0);if(fd<0)return linux_error(24);
     unsigned cloexec=(flags&524288)!=0,nonblock=(flags&2048)!=0;
     if(reading) { p->readers++;p->read_nonblock=nonblock; } else { p->writers++;p->write_nonblock=nonblock; }
@@ -224,8 +232,7 @@ static uint64_t io_fifo_open(dev_t dev,ino_t ino,uint64_t flags) {
     return (uint64_t)fd;
 }
 static void io_fifo_forget(uint64_t pid) {
-    uint64_t bit=UINT64_C(1)<<(pid-1);
-    for(unsigned i=0;i<IO_FIFOS;i++)if(io_fifos[i].pipe) { io_fifos[i].pipe->want_read&=~bit;io_fifos[i].pipe->want_write&=~bit; }
+    for(unsigned i=0;i<IO_FIFOS;i++)if(io_fifos[i].pipe) { process_set_mark(io_fifos[i].pipe->want_read,pid,0);process_set_mark(io_fifos[i].pipe->want_write,pid,0); }
 }
 /* A synthetic read-only file (fs_open): its own copy of the text, a new descriptor. */
 static uint64_t io_text_open(const void *data,size_t size,int cloexec,int directory,const char *path) {
@@ -462,7 +469,7 @@ static uint64_t io_call(uint64_t call) {
            description: when the reader falls behind, wait for room (back-pressure) as a
            Linux tty writer blocks, instead of failing the write with EAGAIN. */
         ssize_t n;
-        while((n=write(f->host,p,(size_t)count))<0 && (errno==EAGAIN || errno==EINTR)) {
+        while((n=terminal_write(f->host,p,(size_t)count))<0 && (errno==EAGAIN || errno==EINTR)) {
             if(schedule_active)return net_suspend_one(f->host,POLLOUT,NET_FOREVER);
             struct pollfd room={f->host,POLLOUT,0};(void)poll(&room,1,-1);
         }
@@ -478,7 +485,7 @@ static uint64_t io_call(uint64_t call) {
     struct GuestPipe *pipe=f->pipe;
     if(writing)pipe->writes++;else pipe->reads++; /* activity for edge-triggered epoll */
     if(writing) {
-        if(!pipe->readers && pipe->fifo && pipe->want_read)return io_would_block(f);   /* its reader is opening */
+        if(!pipe->readers && pipe->fifo && process_set_others(pipe->want_read,0))return io_would_block(f);   /* its reader is opening */
         if(!pipe->readers)return linux_error(32); /* Signals are still unsupported. */
         size_t free_bytes=PIPE_CAP-pipe->used;
         if(!free_bytes || (count<=4096 && count>free_bytes))return io_would_block(f);

@@ -43,9 +43,36 @@ static char guest_state_of(uint64_t pid) {
     if(t->threads) { for(unsigned i=0;i<t->threads->top;i++)if(t->threads->thread[i].state==1)return 'R';return 'S'; }
     return t->state==2?'S':'R';
 }
-static void guest_ids_of(uint64_t pid,uint32_t *uid,uint32_t *gid) {
+/* setgid 144, setuid 146, setregid 143, setreuid 145, setresuid 147, setresgid 149,
+   as Linux: with CAP_SETUID/CAP_SETGID (guest root) any ID; otherwise each new ID
+   must be the current real, effective or saved one. setuid/setgid set all three
+   when privileged, else the effective one; setre* also set the saved ID to the new
+   effective one when the real one is set or the effective one changes from the real. */
+static void cap_after_setuid(const GuestIds *old,const GuestIds *now);
+static uint64_t guest_setid(uint64_t call) {
+    int user=call==145 || call==146 || call==147;
+    GuestIds next=guest_ids;uint32_t *r=user?&next.ruid:&next.rgid,*e=user?&next.uid:&next.gid,*s=user?&next.suid:&next.sgid;
+    uint32_t old[3]={*r,*e,*s},v[3]={(uint32_t)cpu->gpr[0],(uint32_t)cpu->gpr[1],(uint32_t)cpu->gpr[2]};
+    int privileged=!guest_uid || (cap_held[0]&(user?(1u<<7):(1u<<6)));
+    unsigned n=call==144 || call==146?1:call==143 || call==145?2:3;
+    for(unsigned i=0;i<n;i++) {
+        if(v[i]==UINT32_MAX && n>1)continue;                                   /* -1 leaves a field unchanged */
+        if(!privileged && v[i]!=old[0] && v[i]!=old[1] && v[i]!=old[2])return linux_error(1);
+        if(n==1 && !privileged && v[0]!=old[0] && v[0]!=old[2])return linux_error(1);           /* set[ug]id: the real or saved ID */
+        if(n==2 && i==0 && !privileged && v[0]!=old[0] && v[0]!=old[1])return linux_error(1); /* setre*: real from real or effective */
+    }
+    if(n==1) { if(privileged)*r=*s=v[0];*e=v[0]; }
+    else if(n==2) {
+        if(v[0]!=UINT32_MAX)*r=v[0];
+        if(v[1]!=UINT32_MAX)*e=v[1];
+        if(v[0]!=UINT32_MAX || (v[1]!=UINT32_MAX && v[1]!=old[0]))*s=*e;
+    } else { if(v[0]!=UINT32_MAX)*r=v[0];if(v[1]!=UINT32_MAX)*e=v[1];if(v[2]!=UINT32_MAX)*s=v[2]; }
+    if(user)cap_after_setuid(&guest_ids,&next);
+    guest_ids=next;return 0;
+}
+static void guest_ids_of(uint64_t pid,uint32_t uid[3],uint32_t gid[3]) {
     const ProcShared *ps=schedule_active && pid && pid<=PROCESS_LIMIT+1?&schedule_tasks[pid-1].ps:proc_now;
-    *uid=ps->uid;*gid=ps->gid;
+    uid[0]=ps->ids.ruid;uid[1]=ps->ids.uid;uid[2]=ps->ids.suid;gid[0]=ps->ids.rgid;gid[1]=ps->ids.gid;gid[2]=ps->ids.sgid;
 }
 /* A process's memory for /proc. Another process's is read under its mm lock while a
    worker runs it; own_held: the caller holds the current process's. */
@@ -279,24 +306,13 @@ static int guest_syscall_dispatch(void) {
                 }
                 return -3;
             }
-            if(call>=174 && call<=177) { cpu->gpr[0]=call<=175?guest_uid:guest_gid;return -3; } /* One mapped guest identity; no host privilege change. */
-            if(call==151 || call==152) { cpu->gpr[0]=call==151?guest_uid:guest_gid;return -3; } /* setfsuid/setfsgid: file access uses the one identity; report it */
-            if(call==144 || call==146 || call==147 || call==149) {
-                /* setgid, setuid, setresuid, setresgid: guest uid 0 may switch to any
-                   identity (as with CAP_SETUID/CAP_SETGID); others may only re-assert
-                   their own. -1 leaves a setres* field unchanged. */
-                int user=call==146 || call==147;uint32_t current=user?guest_uid:guest_gid,next=current;
-                for(unsigned i=0;i<(call<147?1u:3u);i++) {
-                    uint32_t v=(uint32_t)cpu->gpr[i];if(v==UINT32_MAX && call>=147)continue;
-                    if(guest_uid && !(cap_held[0]&(user?(1u<<7):(1u<<6))) && v!=current) { cpu->gpr[0]=linux_error(1);return -3; } /* CAP_SETUID/CAP_SETGID */
-                    next=v; /* real, effective and saved IDs are one value here */
-                }
-                if(user) { cap_after_setuid(guest_uid,next);guest_uid=next; } else guest_gid=next;
-                cpu->gpr[0]=0;return -3;
-            }
-            if(call==148 || call==150) { /* getresuid/getresgid: real, effective and saved are one ID */
-                uint32_t id=call==148?guest_uid:guest_gid;uint64_t result=0,ptr[3]={cpu->gpr[0],cpu->gpr[1],cpu->gpr[2]};
-                for(unsigned i=0;i<3;i++) { unsigned char *out=lookup(ptr[i],4,2);if(!out) { result=linux_error(14);break; }fs_pack(out,0,id,4); }
+            if(call>=174 && call<=177) { cpu->gpr[0]=call==174?guest_ids.ruid:call==175?guest_uid:call==176?guest_ids.rgid:guest_gid;return -3; } /* no host privilege change */
+            if(call==151 || call==152) { cpu->gpr[0]=call==151?guest_uid:guest_gid;return -3; } /* setfsuid/setfsgid: file access uses the effective IDs; report them */
+            if((call>=143 && call<=147) || call==149) { cpu->gpr[0]=guest_setid(call);return -3; }
+            if(call==148 || call==150) { /* getresuid/getresgid: real, effective, saved */
+                uint32_t id[3]={call==148?guest_ids.ruid:guest_ids.rgid,call==148?guest_uid:guest_gid,call==148?guest_ids.suid:guest_ids.sgid};
+                uint64_t result=0,ptr[3]={cpu->gpr[0],cpu->gpr[1],cpu->gpr[2]};
+                for(unsigned i=0;i<3;i++) { unsigned char *out=lookup(ptr[i],4,2);if(!out) { result=linux_error(14);break; }fs_pack(out,0,id[i],4); }
                 cpu->gpr[0]=result;return -3;
             }
             if(call==159) { cpu->gpr[0]=guest_uid && !(cap_held[0]&(1u<<6))?linux_error(1):cpu->gpr[0]>65536?linux_error(22):0;return -3; } /* setgroups: no supplementary groups are kept */

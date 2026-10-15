@@ -101,6 +101,7 @@ static uint64_t terminal_group(uint64_t call) {
 static const struct { unsigned field,linux_bit;tcflag_t host; } terminal_flags[]={
     {0,1,IGNBRK},{0,2,BRKINT},{0,4,IGNPAR},{0,8,PARMRK},{0,16,INPCK},{0,32,ISTRIP},{0,64,INLCR},{0,128,IGNCR},
     {0,256,ICRNL},{0,1024,IXON},{0,2048,IXANY},{0,4096,IXOFF},{0,8192,IMAXBEL},{0,16384,IUTF8},{1,1,OPOST},{1,4,ONLCR},
+    {1,8,OCRNL},{1,16,ONOCR},{1,32,ONLRET},
     {3,1,ISIG},{3,2,ICANON},{3,8,ECHO},{3,16,ECHOE},{3,32,ECHOK},{3,64,ECHONL},{3,128,NOFLSH},{3,256,TOSTOP},
     {3,512,ECHOCTL},{3,1024,ECHOPRT},{3,2048,ECHOKE},{3,32768,IEXTEN}};
 static const unsigned terminal_cc_host[]={VINTR,VQUIT,VERASE,VKILL,VEOF,VTIME,VMIN,VSTART,VSTOP,VSUSP,VEOL,VREPRINT,VDISCARD,VWERASE,VLNEXT,VEOL2};
@@ -155,4 +156,57 @@ static uint64_t terminal_ioctl(GuestIO *fd) {
         fs_pack(p,4,size.ws_xpixel,2);fs_pack(p,6,size.ws_ypixel,2);return 0;
     }
     return linux_error(95);
+}
+/* Linux output processing for terminal writes (c_oflag OPOST with ONLCR, OCRNL, ONOCR
+   and ONLRET), done here: Darwin's repeats a CR when its queue fills between the CR
+   and LF of ONLCR. The host terminal keeps the guest's flags (its echo uses them)
+   and has raw output only while the runtime writes. A short write that ends
+   between a CR and its LF leaves the LF pending, written first next time.
+   ponytail: the column (for ONOCR) counts only these writes, not echo. */
+static unsigned terminal_column,terminal_lf_pending;
+static signed char terminal_is_tty[3];
+/* The output for in[0..count) (into out unless NULL), at most limit bytes of it;
+   *used: the source bytes it covers. */
+static size_t terminal_process(const unsigned char *in,size_t count,unsigned char *out,tcflag_t flags,unsigned *column,size_t limit,size_t *used) {
+    size_t n=0,i=0;
+    for(;i<count;i++) {
+        unsigned char c=in[i],e[2]={c,0};unsigned k=1,col=*column;
+        if(c=='\n') { if(flags&ONLRET)col=0;if(flags&ONLCR) { e[0]='\r';e[1]='\n';k=2;col=0; } }
+        else if(c=='\r') { if((flags&ONOCR) && !col)k=0;else if(flags&OCRNL) { e[0]='\n';if(flags&ONLRET)col=0; } else col=0; }
+        else if(c=='\t')col=(col|7)+1;
+        else if(c=='\b') { if(col)col--; }
+        else if(c>=32 && c!=127 && (c&0xc0)!=0x80)col++;              /* UTF-8 continuation bytes take no column */
+        if(n+k>limit)break;
+        if(out)memcpy(out+n,e,k);
+        n+=k;*column=col;
+    }
+    *used=i;return n;
+}
+static ssize_t terminal_write(int fd,const unsigned char *data,size_t count) {
+    struct termios host;
+    if(!(terminal_enabled || stdin_host) || fd<0 || fd>2 || terminal_is_tty[fd]<0)return write(fd,data,count);
+    if(tcgetattr(fd,&host)) { terminal_is_tty[fd]=-1;return write(fd,data,count); }
+    tcflag_t flags=host.c_oflag;size_t used;
+    if(!(flags&OPOST) || (!terminal_lf_pending && !memchr(data,'\n',count) && !memchr(data,'\r',count))) {
+        ssize_t n=write(fd,data,count);
+        if(n>0 && (flags&OPOST))terminal_process(data,(size_t)n,NULL,flags,&terminal_column,SIZE_MAX,&used);
+        return n;
+    }
+    static unsigned char out[2*65536];
+    if(count>65536)count=65536;                                          /* a short write */
+    struct termios raw=host;raw.c_oflag&=~(tcflag_t)OPOST;
+    if(tcsetattr(fd,TCSANOW,&raw))return write(fd,data,count);
+    ssize_t result=-1;
+    if(!terminal_lf_pending || write(fd,"\n",1)==1) {
+        terminal_lf_pending=0;
+        unsigned column=terminal_column;
+        ssize_t n=write(fd,out,terminal_process(data,count,out,flags,&column,SIZE_MAX,&used));
+        if(n>=0) {
+            column=terminal_column;size_t done=terminal_process(data,count,NULL,flags,&column,(size_t)n,&used);
+            if(done<(size_t)n) { used++;terminal_lf_pending=1;column=0; }   /* its CR went out alone */
+            terminal_column=column;result=(ssize_t)used;
+        }
+    }
+    int saved=errno;tcsetattr(fd,TCSANOW,&host);errno=saved;
+    return result;
 }

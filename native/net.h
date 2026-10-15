@@ -113,6 +113,7 @@ static int net_outbound; /* --outbound: connect/sendto may reach any IPv4 addres
 #define NET_UDP (1u<<30)  /* net_adopt flag: datagram socket */
 #define NET_UNIX (1u<<29) /* net_adopt flag: AF_UNIX socket */
 #define NET_V6 (1u<<28)   /* net_adopt flag: AF_INET6 socket */
+#define NET_PING (1u<<27) /* net_adopt flag: ICMP datagram ("ping") socket */
 static uint64_t net_wait_blocks;
 static int io_poll_host(uint64_t guest); /* --stdin's host descriptor or a timerfd's kqueue, polled like a socket */
 static int io_managed(uint64_t fd);static int fs_host(uint64_t n); /* io.h and fs.h, for select */
@@ -158,7 +159,7 @@ static void schedule_wake_mask(uint64_t mask);static uint64_t process_pid_now(vo
    exceed macOS's 8 KiB Unix-socket buffer). Without the lock, retry under it. */
 static uint64_t net_write_again(void) {
     if(syscall_unlocked) { syscall_abort=1;return IO_BLOCK; }
-    if(schedule_active)schedule_wake_mask(UINT64_C(1)<<(process_pid_now()-1));
+    if(schedule_active)schedule_wake_mask(PROCESS_BIT(process_pid_now()));
     net_wait.active=0;return linux_error(11);
 }
 static uint64_t net_error(void) {
@@ -188,7 +189,10 @@ static uint64_t net_error(void) {
 /* unix: AF_UNIX; named: 2 bound, 4 connected, to the guest path in path. v6: AF_INET6;
    v6only: IPV6_V6ONLY set, and bound: v6_port and v6_address are the guest's (see net_bind_v6only). */
 static struct NetDescription { int host;unsigned refs,flags,connecting,read_timeout,write_timeout,reads,writes,udp,unix_socket,named;char path[108];uint16_t private_port;
-    unsigned v6,v6only,v6_bound;uint16_t v6_port;unsigned char v6_address[16]; } net_descriptions[NET_DESCRIPTIONS];
+    unsigned v6,v6only,v6_bound;uint16_t v6_port;unsigned char v6_address[16];
+    unsigned abstract;ino_t abstract_ino;  /* abstract: an abstract name's length (in path), and its host socket */
+    unsigned ping;uint16_t ping_id;        /* ping: an ICMP socket and its identifier (network order) */
+    unsigned wildcard; } net_descriptions[NET_DESCRIPTIONS]; /* bound to 0.0.0.0 or [::] (the host socket has loopback) */
 static struct NetDescription *net_host_description(int host) {
     return host>=0 && (unsigned)host<NET_DESCRIPTIONS && net_descriptions[host].refs?&net_descriptions[host]:NULL;
 }
@@ -197,10 +201,12 @@ static struct NetDescription *net_description(unsigned slot) {
     if(!description)fail("Missing socket open description");
     return description;
 }
+static void net_abstract_release(const struct NetDescription *d); /* compat.h */
 static int net_description_release(struct NetDescription *description) {
     int result=0;
     if(!--description->refs) {
         if(description->private_port)net_private_forget(description->private_port);
+        if(description->abstract && description->named==2)net_abstract_release(description);
         epoll_forget_socket(description->host);result=close(description->host);memset(description,0,sizeof(*description));
     }
     return result;
@@ -220,27 +226,65 @@ static int net_host(uint64_t guest) { int slot=net_slot(guest);return slot>=0 &&
 static uint64_t net_adopt(int host,unsigned guest_flags) {
     if(host<0) return net_error();
     struct timeval timeout={5,0};
-    if(setsockopt(host,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(timeout)) || setsockopt(host,SOL_SOCKET,SO_SNDTIMEO,&timeout,sizeof(timeout))) {
+    /* EINVAL: an accepted connection whose peer is already gone (Darwin refuses options
+       on a shut-down socket); Linux still accepts it, and its data stays readable. */
+    if((setsockopt(host,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(timeout)) || setsockopt(host,SOL_SOCKET,SO_SNDTIMEO,&timeout,sizeof(timeout))) && errno!=EINVAL) {
         uint64_t error=net_error();close(host);return error;
     }
     if((unsigned)host>=NET_DESCRIPTIONS || net_descriptions[host].refs) { close(host);return linux_error(24); }
     int guest=fd_lowest(0);
     if(guest>=0)for(unsigned i=0;i<NET_SLOTS;i++) if(!net_fd[i]) {
-        net_descriptions[host]=(struct NetDescription){host,1,guest_flags&2048,0,NET_FOREVER,NET_FOREVER,0,0,(guest_flags&NET_UDP)!=0,(guest_flags&NET_UNIX)!=0,0,{0},0,(guest_flags&NET_V6)!=0,0,0,0,{0}};
+        net_descriptions[host]=(struct NetDescription){host,1,guest_flags&2048,0,NET_FOREVER,NET_FOREVER,0,0,(guest_flags&NET_UDP)!=0,(guest_flags&NET_UNIX)!=0,0,{0},0,(guest_flags&NET_V6)!=0,0,0,0,{0},0,0,(guest_flags&NET_PING)!=0,0,0};
         net_fd[i]=host+1;net_flags[i]=guest_flags&524288;net_guest[i]=(unsigned short)guest;fd_bind((uint64_t)guest,FD_NET,i);return (uint64_t)guest; }
     close(host);return linux_error(24);
 }
 static uint64_t net_socket(uint64_t domain,uint64_t type,uint64_t protocol) {
+    uint64_t kind=type&~(UINT64_C(2048)|524288);                              /* SOCK_STREAM 1, SOCK_DGRAM 2, SOCK_RAW 3 */
+    /* Raw IP and packet sockets need CAP_NET_RAW, which this container does not have:
+       EPERM, as Linux says, so ping and the like fall back to a ping socket. */
+    if(domain==17 || ((domain==2 || domain==10) && kind==3))return linux_error(1);
     if(domain!=2 && domain!=1 && domain!=10) return linux_error(97);
     unsigned v6=domain==10?NET_V6:0;if(v6)domain=2;
-    uint64_t kind=type&~(UINT64_C(2048)|524288);                              /* SOCK_STREAM 1, SOCK_DGRAM 2 */
+    unsigned ping=domain==2 && kind==2 && protocol==1 && !v6?NET_PING:0;       /* SOCK_DGRAM, IPPROTO_ICMP */
+    if(domain==2 && kind==2 && protocol==58 && v6)return linux_error(13);        /* ICMPv6 ping sockets: not in ping_group_range */
     if(domain==1 && ((kind!=1 && kind!=2) || protocol))return linux_error(kind==5?94:93); /* no SOCK_SEQPACKET on macOS */
-    if(domain==2 && (kind!=1 || (protocol!=0 && protocol!=6)) && (kind!=2 || (protocol!=0 && protocol!=17))) return linux_error(95);
-    int host=socket(domain==1?AF_UNIX:AF_INET,kind==2?SOCK_DGRAM:SOCK_STREAM,0);
+    if(domain==2 && !ping && (kind!=1 || (protocol!=0 && protocol!=6)) && (kind!=2 || (protocol!=0 && protocol!=17))) return linux_error(95);
+    int host=socket(domain==1?AF_UNIX:AF_INET,kind==2?SOCK_DGRAM:SOCK_STREAM,ping?IPPROTO_ICMP:0);
     if(host>=0 && (fcntl(host,F_SETFD,FD_CLOEXEC)<0 || (((type&2048) || net_scheduled) && fcntl(host,F_SETFL,O_NONBLOCK)<0))) {
         uint64_t e=net_error();close(host);return e;
     }
-    return net_adopt(host,((unsigned)type&526336)|(kind==2 && domain==2?NET_UDP:0)|(domain==1?NET_UNIX:0)|v6);
+    return net_adopt(host,((unsigned)type&526336)|(kind==2 && domain==2?NET_UDP:0)|(domain==1?NET_UNIX:0)|v6|ping);
+}
+/* Linux ping sockets on Darwin's ICMP datagram sockets. Linux takes echo requests
+   only, stamps them with the socket's identifier (its "port": bound, else the one
+   the first request carries) and checksums them; it delivers the echo replies to
+   that identifier alone, without their IP header. Darwin delivers every ICMP
+   message with its header. ponytail: ICMP errors are not reported (no IP_RECVERR). */
+static _Thread_local unsigned char net_ping_packet[65536];
+static const unsigned char *net_ping_request(struct NetDescription *d,const unsigned char *data,size_t count) {
+    if(count<8 || count>sizeof(net_ping_packet) || data[0]!=8 || data[1])return NULL;     /* EINVAL */
+    if(!d->ping_id)memcpy(&d->ping_id,data+4,2);
+    if(!d->ping_id)d->ping_id=htons((uint16_t)(getpid()|1));
+    memcpy(net_ping_packet,data,count);memcpy(net_ping_packet+4,&d->ping_id,2);net_ping_packet[2]=net_ping_packet[3]=0;
+    uint32_t sum=0;
+    for(size_t i=0;i<count;i+=2)sum+=(uint32_t)net_ping_packet[i]<<8|(i+1<count?net_ping_packet[i+1]:0);
+    while(sum>>16)sum=(sum&0xffff)+(sum>>16);
+    net_ping_packet[2]=(unsigned char)(~sum>>8);net_ping_packet[3]=(unsigned char)~sum;
+    return net_ping_packet;
+}
+static ssize_t net_ping_reply(int fd,const struct NetDescription *d,unsigned char *out,size_t count,int peek,struct sockaddr_storage *from) {
+    for(;;) {
+        socklen_t size=sizeof(*from);
+        ssize_t n=recvfrom(fd,net_ping_packet,sizeof(net_ping_packet),peek?MSG_PEEK:0,(struct sockaddr *)from,&size);
+        if(n<0)return n;
+        size_t header=(net_ping_packet[0]&15u)*4;const unsigned char *icmp=net_ping_packet+header;
+        if((size_t)n<header+8 || icmp[0] || !d->ping_id || memcmp(icmp+4,&d->ping_id,2)) {   /* not an echo reply to this socket */
+            if(peek)(void)recv(fd,net_ping_packet,sizeof(net_ping_packet),0);
+            continue;
+        }
+        size_t length=(size_t)n-header;if(length>count)length=count;
+        memcpy(out,icmp,length);return (ssize_t)length;
+    }
 }
 /* socketpair(AF_UNIX): two connected host Unix sockets. */
 static uint64_t net_socketpair(uint64_t domain,uint64_t type,uint64_t protocol,uint64_t vector) {
@@ -261,7 +305,7 @@ static uint64_t net_socketpair(uint64_t domain,uint64_t type,uint64_t protocol,u
 /* struct ucred {pid, uid, gid} for SO_PEERCRED; defined with the process layer. */
 static void net_credentials(unsigned char out[12]);
 /* bind/connect of an AF_UNIX socket to a guest path; defined with the file layer. */
-static uint64_t net_unix_address(int fd,uint64_t address,uint64_t length,int binding,char path[108]);
+static uint64_t net_unix_address(int fd,uint64_t address,uint64_t length,int binding,struct NetDescription *d);
 /* A guest IPv4 sockaddr as a host address. Loopback and the wildcard (as on Linux)
    mean the host loopback, with published-port translation; servers that bind the
    wildcard are not exposed beyond it. Other addresses need --outbound and cannot
@@ -410,7 +454,17 @@ static uint64_t net_message(int fd,unsigned slot,uint64_t header,uint64_t flag_w
     unsigned room=receiving && unix_socket && !(flags&2) && controllen>=20?(unsigned)((controllen-16)/4):0;  /* never PEEK carriers */
     if(room) { if(room>NET_RIGHTS_MAX)room=NET_RIGHTS_MAX;m.msg_control=host_control;m.msg_controllen=(socklen_t)CMSG_SPACE(room*sizeof(int)); }
     if(receiving)net_description(slot)->reads++;else net_description(slot)->writes++;
-    ssize_t result=receiving?recvmsg(fd,&m,(flags&2)?MSG_PEEK:0):sendmsg(fd,&m,0);
+    struct NetDescription *d=net_description(slot);static _Thread_local unsigned char gathered[65536];
+    if(d->ping && !receiving) {                                     /* one echo request from the pieces */
+        size_t at=0;for(unsigned i=0;i<count && at<sizeof(gathered);i++) { size_t n=vec[i].iov_len<sizeof(gathered)-at?vec[i].iov_len:sizeof(gathered)-at;memcpy(gathered+at,vec[i].iov_base,n);at+=n; }
+        const unsigned char *packet=net_ping_request(d,gathered,at);if(!packet)return linux_error(22);
+        vec[0].iov_base=(void *)(uintptr_t)packet;vec[0].iov_len=at;m.msg_iovlen=1;
+    }
+    ssize_t result;
+    if(d->ping && receiving) {
+        result=net_ping_reply(fd,d,gathered,total<sizeof(gathered)?(size_t)total:sizeof(gathered),flags&2,&address);
+        for(unsigned i=0,at=0;result>0 && i<count && at<(size_t)result;i++) { size_t n=vec[i].iov_len<(size_t)result-at?vec[i].iov_len:(size_t)result-at;memcpy(vec[i].iov_base,gathered+at,n);at+=(unsigned)n; }
+    } else result=receiving?recvmsg(fd,&m,(flags&2)?MSG_PEEK:0):sendmsg(fd,&m,0);
     if(carried) {                                       /* sent: the message holds its own copies */
         int sent=result>=0;
         for(unsigned i=0;i<carried;i++) { if(sent)close(carriers[i]);else fd_carry_cancel(carriers[i]); }
@@ -519,9 +573,9 @@ static int net_option(uint64_t level,uint64_t name,int *host_level,int *host_nam
 /* bind of an IPV6_V6ONLY socket. Servers pair one with an IPv4 listener on the same
    port (nginx's [::]:80, PostgreSQL, Redis), and both cannot be IPv4 underneath: it
    becomes a real IPv6 socket on the host's ::1, at a port of its own. getsockname
-   reports the guest's address. ponytail: other runs and published ports reach the
-   IPv4 listener only (clients' IPv6 is IPv4 underneath); a server listening on a
-   V6ONLY socket alone is unreachable. */
+   reports the guest's address, and this run's IPv6 clients reach it (net_connect_v6only).
+   ponytail: other runs and published ports reach the IPv4 listener only (their
+   IPv6 is IPv4 underneath); there a server on a V6ONLY socket alone is unreachable. */
 static uint64_t net_bind_v6only(unsigned slot,int fd) {
     struct NetDescription *d=net_description(slot);
     if(d->v6_bound)return linux_error(22);
@@ -545,6 +599,32 @@ static uint64_t net_bind_v6only(unsigned slot,int fd) {
     memcpy(&d->v6_port,q+2,2);memcpy(d->v6_address,q+8,16);d->v6_bound=1;
     if(!d->v6_port) { socklen_t size=sizeof(local);if(!getsockname(fd,(struct sockaddr *)&local,&size))d->v6_port=local.sin6_port; }
     return 0;
+}
+/* connect of an IPv6 TCP socket to [::1] or [::] at a port an IPV6_V6ONLY socket of
+   this run listens on: there, through a real IPv6 socket, as Linux would send it
+   (an IPv4 listener on the same port gets IPv4 clients only). Returns 0 when no
+   such socket exists, else 1 with the call's result in *result. */
+static int net_connect_v6only(unsigned slot,int fd,uint64_t *result) {
+    if(cpu->gpr[2]<24)return 0;
+    const unsigned char *q=lookup(cpu->gpr[1],24,4);unsigned char v4[4];
+    if(!q || le(q,2)!=10 || !net_v6_to_v4(q+8,v4) || q[19]==255)return 0;          /* [::1] or [::], not v4-mapped */
+    struct sockaddr_in6 to;socklen_t size=sizeof(to);int found=0;
+    for(unsigned i=0;i<NET_DESCRIPTIONS && !found;i++) {
+        const struct NetDescription *o=&net_descriptions[i];
+        found=o->refs && o->v6_bound && !o->udp && !memcmp(&o->v6_port,q+2,2) && !getsockname(o->host,(struct sockaddr *)&to,&size);
+    }
+    if(!found)return 0;
+    int host=socket(AF_INET6,SOCK_STREAM,0),flags=fcntl(fd,F_GETFL);
+    if(host<0 || flags<0 || fcntl(host,F_SETFL,flags)<0 || dup2(host,fd)<0 || fcntl(fd,F_SETFD,FD_CLOEXEC)<0) {
+        *result=net_error();if(host>=0)close(host);return 1;
+    }
+    close(host);
+    if(!connect(fd,(struct sockaddr *)&to,sizeof(to))) { net_wait.active=0;*result=0; }
+    else if(net_scheduled && (errno==EINPROGRESS || errno==EALREADY)) {               /* then as net_call's connect */
+        net_description(slot)->connecting=1;
+        *result=net_description(slot)->flags&2048?linux_error(115):net_suspend_one(fd,POLLOUT,net_description(slot)->write_timeout);
+    } else *result=net_error();
+    return 1;
 }
 static uint64_t net_call(uint64_t number) {
     int fd=net_host(cpu->gpr[0]);if(fd<0) return linux_error(9);
@@ -635,11 +715,20 @@ static uint64_t net_call(uint64_t number) {
         return setsockopt(fd,host_level,host_name,&value,sizeof(value))<0?net_error():0;
     }
     if((number==200 || number==203) && net_description(slot)->unix_socket) {
-        uint64_t result=net_unix_address(fd,cpu->gpr[1],cpu->gpr[2],number==200,net_description(slot)->path);
+        uint64_t result=net_unix_address(fd,cpu->gpr[1],cpu->gpr[2],number==200,net_description(slot));
         if(!result)net_description(slot)->named=number==200?2:4;
         return result;
     }
     if(number==200 && net_description(slot)->v6only)return net_bind_v6only(slot,fd);
+    if(number==200 && net_description(slot)->ping) {                  /* the port is the identifier */
+        struct sockaddr_in address;uint64_t invalid=net_address(cpu->gpr[1],cpu->gpr[2],&address,1,1,0);if(invalid)return invalid;
+        const unsigned char *p=lookup(cpu->gpr[1],4,4);if(!p)return linux_error(14);
+        if(net_description(slot)->ping_id)return linux_error(22);
+        memcpy(&net_description(slot)->ping_id,p+2,2);return 0;
+    }
+    if(number==203 && net_description(slot)->v6 && !net_description(slot)->udp && !net_description(slot)->connecting) {
+        uint64_t result;if(net_connect_v6only(slot,fd,&result))return result;
+    }
     if(number==200 || number==203) {
         net_binding_port=0;
         struct sockaddr_in address;uint64_t invalid=net_address(cpu->gpr[1],cpu->gpr[2],&address,number==200,(int)net_description(slot)->udp,(int)net_description(slot)->v6);
@@ -657,6 +746,11 @@ static uint64_t net_call(uint64_t number) {
             if(error) { errno=error;return net_error(); }return 0;
         }
         int result=number==200?bind(fd,(struct sockaddr *)&address,sizeof(address)):connect(fd,(struct sockaddr *)&address,sizeof(address));
+        if(!result && number==200) {                                  /* getsockname reports the wildcard the guest bound */
+            unsigned v6=net_description(slot)->v6,at=v6?8:4,size=v6?16:4,wildcard=1;const unsigned char *g=lookup(cpu->gpr[1],at+size,4);
+            for(unsigned i=0;g && i<size;i++)if(g[at+i])wildcard=0;
+            net_description(slot)->wildcard=g && wildcard;
+        }
         if(!result && number==200 && net_ip && net_binding_port && !net_description(slot)->udp) {
             struct sockaddr_in bound;socklen_t size=sizeof(bound);
             if(!getsockname(fd,(struct sockaddr *)&bound,&size)) { net_private_record(net_binding_port,bound.sin_port);net_description(slot)->private_port=net_binding_port; }
@@ -742,7 +836,8 @@ static uint64_t net_call(uint64_t number) {
         int named=d->named==(number==204?2u:4u);
         if(number==205 && !named && d->named!=4) { struct sockaddr_storage peer;socklen_t size=sizeof(peer);if(getpeername(fd,(struct sockaddr *)&peer,&size)<0)return net_error(); }
         unsigned char wire[110]={1,0};unsigned size=2;
-        if(named) { size_t n=strlen(d->path);memcpy(wire+2,d->path,n+1);size=(unsigned)(n+3); }
+        if(named && d->abstract) { memcpy(wire+2,d->path,d->abstract);size=2+d->abstract; }
+        else if(named) { size_t n=strlen(d->path);memcpy(wire+2,d->path,n+1);size=(unsigned)(n+3); }
         unsigned bytes=capacity<size?capacity:size;
         unsigned char *out=bytes?lookup(cpu->gpr[1],bytes,2):NULL;if(bytes && !out)return linux_error(14);
         if(bytes)memcpy(out,wire,bytes);
@@ -757,7 +852,11 @@ static uint64_t net_call(uint64_t number) {
         struct sockaddr_storage address;socklen_t length=sizeof(address);
         int result=number==204?getsockname(fd,(struct sockaddr *)&address,&length):getpeername(fd,(struct sockaddr *)&address,&length);
         if(result<0) return net_error();
-        return net_put_wire(wire,net_wire(wire,&address,(int)d->v6),cpu->gpr[1],cpu->gpr[2]);
+        if(number==204 && d->ping) { wire[0]=2;memcpy(wire+2,&d->ping_id,2);memset(wire+4,0,4);return net_put_wire(wire,16,cpu->gpr[1],cpu->gpr[2]); }
+        unsigned size=net_wire(wire,&address,(int)d->v6);
+        struct sockaddr_storage peer;socklen_t peer_size=sizeof(peer);
+        if(number==204 && d->wildcard && getpeername(fd,(struct sockaddr *)&peer,&peer_size)<0)memset(wire+(size==28?8:4),0,size==28?16:4);
+        return net_put_wire(wire,size,cpu->gpr[1],cpu->gpr[2]);
     }
     if(number==269) {
         /* sendmmsg: struct mmsghdr is a msghdr plus its msg_len (64 bytes). glibc's
@@ -791,8 +890,10 @@ static uint64_t net_call(uint64_t number) {
             unsigned char *length=lookup(cpu->gpr[5],4,2);if(!length)return linux_error(14);
             memset(length,0,4);
         }
-        int host_flags=(flags&2)?MSG_PEEK:0;
-        ssize_t result=receiving?(addressed?recvfrom(fd,buffer,(size_t)cpu->gpr[2],host_flags,(struct sockaddr *)&from,&from_size):recv(fd,buffer,(size_t)cpu->gpr[2],host_flags))
+        int host_flags=(flags&2)?MSG_PEEK:0;struct NetDescription *d=net_description(slot);
+        if(d->ping && !receiving && !(buffer=(unsigned char *)net_ping_request(d,buffer,(size_t)cpu->gpr[2])))return linux_error(22);
+        ssize_t result=receiving && d->ping?net_ping_reply(fd,d,buffer,(size_t)cpu->gpr[2],flags&2,&from)
+                      :receiving?(addressed?recvfrom(fd,buffer,(size_t)cpu->gpr[2],host_flags,(struct sockaddr *)&from,&from_size):recv(fd,buffer,(size_t)cpu->gpr[2],host_flags))
                                 :(addressed?sendto(fd,buffer,(size_t)cpu->gpr[2],0,(struct sockaddr *)&to,sizeof(to)):send(fd,buffer,(size_t)cpu->gpr[2],0));
         if(result>=0 && addressed && receiving) { uint64_t invalid=net_put_address(&from,cpu->gpr[4],cpu->gpr[5],v6);if(invalid)return invalid; }
         if(result<0 && net_scheduled && !(flags&64) && !(net_description(slot)->flags&2048) && (errno==EAGAIN || errno==EWOULDBLOCK))

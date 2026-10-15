@@ -30,13 +30,16 @@ static int fs_root=-1, fs_writable;
    guest identity, the umask and a vfork child's shared image. The identity makes
    every file appear owned by the process, so a switch (root to "redis", say) is
    coherent without per-file ownership; these are guest-visible numbers only, no
-   host credential ever changes. */
-typedef struct { struct GuestCwd *cwd;uint32_t uid,gid;unsigned umask;struct SharedImage *shared; } ProcShared;
+   host credential ever changes. uid and gid are the effective IDs (they own files);
+   real and saved ones differ after a set-user-ID exec or seteuid. */
+typedef struct { uint32_t uid,gid,ruid,rgid,suid,sgid; } GuestIds;
+typedef struct { struct GuestCwd *cwd;GuestIds ids;unsigned umask;struct SharedImage *shared; } ProcShared;
 static ProcShared proc_first={.umask=0022};
 static _Thread_local ProcShared *proc_now=&proc_first;
 #define fs_cwd (proc_now->cwd)
-#define guest_uid (proc_now->uid)
-#define guest_gid (proc_now->gid)
+#define guest_ids (proc_now->ids)
+#define guest_uid (proc_now->ids.uid)
+#define guest_gid (proc_now->ids.gid)
 #define fs_umask (proc_now->umask)
 #define shared_image (proc_now->shared)
 typedef struct GuestDirectory { DIR *stream;unsigned refs,count;char path[1025]; } GuestDirectory;
@@ -513,10 +516,11 @@ static uint64_t io_fifo_open(dev_t dev,ino_t ino,uint64_t flags);          /* io
 static char prctl_name[16];       /* compat.h: PR_SET_NAME */
 static uint64_t guest_ppid_of(uint64_t pid);static unsigned guest_threads_of(uint64_t pid); /* syscall.h */
 static int guest_process_exists(uint64_t pid);
+static unsigned process_count; /* process.h: child slots in use (the highest, plus one); scans stop there */
 static char guest_state_of(uint64_t pid);       /* syscall.h: R, S or T */
 static uint64_t guest_group_of(uint64_t pid,int session); /* syscall.h: process group or session */
 static void guest_signal_sets(uint64_t pid,uint64_t sets[4]);  /* syscall.h: pending, blocked, ignored, caught */
-static void guest_ids_of(uint64_t pid,uint32_t *uid,uint32_t *gid); /* syscall.h */
+static void guest_ids_of(uint64_t pid,uint32_t uid[3],uint32_t gid[3]); /* syscall.h: real, effective, saved */
 /* syscall.h: a process's threads (tid, R or S, CPU ns), at most capacity; the main thread's tid is the pid. */
 static unsigned guest_thread_list(uint64_t pid,unsigned *tids,char *states,uint64_t (*cpu)[2],unsigned capacity);
 static void proc_memory(uint64_t pid,int own_held,uint64_t *vsz,uint64_t *rss); /* syscall.h */
@@ -589,7 +593,7 @@ static void proc_rusage(uint64_t out[2]) {
    per process "=pid utime stime start_ticks vsz_kib rss_kib threads state\n" (older
    readers stop at the first '='). */
 static const char *proc_publish_path,*proc_peer_path;
-#define PROC_PEER_OFFSET 1000u
+#define PROC_PEER_OFFSET 10000u /* above every pid of a run (PROCESS_LIMIT+1) */
 /* Writes are coalesced: at most one per 20 ms (a build forks thousands of processes;
    each rewrite cost 0.4 ms of a fork). A change within that time is written by the
    scheduler's next pump (proc_publish_flush), so readers lag by at most about that.
@@ -664,7 +668,7 @@ static uint64_t proc_mem_used(void) {
 /* Processes in state R: this run's, and the main run's as last published. */
 static unsigned proc_running(void) {
     unsigned running=0;
-    for(uint64_t p=1;p<=PROCESS_LIMIT+1;p++)if(guest_process_exists(p))running+=guest_state_of(p)=='R';
+    for(uint64_t p=1;p<=process_count+1;p++)if(guest_process_exists(p))running+=guest_state_of(p)=='R';
     proc_peer_load();for(unsigned i=0;i<proc_npeers;i++)running+=proc_peers[i].state=='R';
     return running;
 }
@@ -709,7 +713,7 @@ static void proc_publish_write(uint64_t ended,int own_held) {
     uint64_t boot=runtime_started_ns,cpu[2];proc_cpu_all(cpu);
     length+=(size_t)snprintf(usage+length,sizeof(usage)-length,"%llu %llu %llu %llu\n",(unsigned long long)boot,
         (unsigned long long)cpu[0],(unsigned long long)cpu[1],(unsigned long long)resource_used);
-    for(uint64_t pid=1;pid<=PROCESS_LIMIT+1 && length<sizeof(usage)-128;pid++)if(pid!=ended && guest_process_exists(pid)) {
+    for(uint64_t pid=1;pid<=process_count+1 && length<sizeof(usage)-128;pid++)if(pid!=ended && guest_process_exists(pid)) {
         uint64_t vsz,rss,used[2],start=proc_started(pid);proc_memory(pid,own_held>0,&vsz,&rss);proc_cpu_of(pid,used);
         length+=(size_t)snprintf(usage+length,sizeof(usage)-length,"=%llu %llu %llu %llu %llu %llu %u %c\n",(unsigned long long)pid,
             (unsigned long long)(used[0]/PROC_TICK_NS),(unsigned long long)(used[1]/PROC_TICK_NS),(unsigned long long)(start>boot?(start-boot)/PROC_TICK_NS:0),
@@ -720,9 +724,9 @@ static void proc_publish_write(uint64_t ended,int own_held) {
     proc_publish_pending=0;proc_publish_last_ns=clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
     char temporary[1100];snprintf(temporary,sizeof(temporary),"%s.%d",proc_publish_path,(int)getpid());
     FILE *f=fopen(temporary,"wb");if(!f)return;
-    for(uint64_t pid=1;pid<=PROCESS_LIMIT+1;pid++)if(pid!=ended && guest_process_exists(pid)) {
-        uint32_t uid,gid;guest_ids_of(pid,&uid,&gid);
-        fprintf(f,"%llu %llu %u %u ",(unsigned long long)pid,(unsigned long long)guest_ppid_of(pid),uid,proc_cmdline_size[pid]);
+    for(uint64_t pid=1;pid<=process_count+1;pid++)if(pid!=ended && guest_process_exists(pid)) {
+        uint32_t uid[3],gid[3];guest_ids_of(pid,uid,gid);
+        fprintf(f,"%llu %llu %u %u ",(unsigned long long)pid,(unsigned long long)guest_ppid_of(pid),uid[1],proc_cmdline_size[pid]);
         fwrite(proc_cmdline[pid],1,proc_cmdline_size[pid],f);fputc('\n',f);
     }
     double load[3];proc_load_sample(load);
@@ -741,7 +745,7 @@ static int64_t proc_resolve(uint64_t display) {
 }
 /* What /proc shows of a process (tid: one of its threads, or 0): times in ticks
    since boot, memory in bytes. */
-typedef struct { uint64_t pid,ppid,pgrp,session,utime,stime,start,vsz,rss;unsigned threads,uid,gid,size;char state;char comm[16];const char *cmdline; } ProcInfo;
+typedef struct { uint64_t pid,ppid,pgrp,session,utime,stime,start,vsz,rss;unsigned threads,size;uint32_t uid[3],gid[3];char state;char comm[16];const char *cmdline; } ProcInfo; /* ids: real, effective, saved */
 static int proc_info(uint64_t display,uint64_t tid,ProcInfo *info) {
     int64_t r=proc_resolve(display);if(!r)return 0;
     memset(info,0,sizeof(*info));info->pid=info->pgrp=info->session=display;
@@ -749,7 +753,7 @@ static int proc_info(uint64_t display,uint64_t tid,ProcInfo *info) {
         uint64_t own=(uint64_t)r,ppid=guest_ppid_of(own),boot=proc_boot_ns(),start=proc_started(own),used[2];
         info->ppid=ppid?ppid:0;info->pgrp=guest_group_of(own,0);info->session=guest_group_of(own,1);
         info->threads=guest_threads_of(own);info->state=guest_state_of(own);
-        guest_ids_of(own,&info->uid,&info->gid);
+        guest_ids_of(own,info->uid,info->gid);
         snprintf(info->comm,sizeof(info->comm),"%s",own==process_pid && *prctl_name?prctl_name:proc_comm(own));
         info->cmdline=proc_cmdline[own];info->size=proc_cmdline_size[own];
         proc_cpu_of(own,used);
@@ -761,7 +765,7 @@ static int proc_info(uint64_t display,uint64_t tid,ProcInfo *info) {
         proc_memory(own,1,&info->vsz,&info->rss);
     } else {
         struct ProcPeer *p=&proc_peers[-r-1];
-        info->ppid=p->ppid;info->threads=p->threads;info->uid=info->gid=p->uid;info->state=p->state;info->cmdline=p->cmdline;info->size=p->size;
+        info->ppid=p->ppid;info->threads=p->threads;for(unsigned i=0;i<3;i++)info->uid[i]=info->gid[i]=p->uid;info->state=p->state;info->cmdline=p->cmdline;info->size=p->size;
         info->utime=p->utime;info->stime=p->stime;info->start=p->start;info->vsz=p->vsz;info->rss=p->rss;
         const char *argv0=p->size?p->cmdline:"guest",*slash=strrchr(argv0,'/');
         snprintf(info->comm,sizeof(info->comm),"%s",slash && slash[1]?slash+1:argv0);
@@ -911,8 +915,8 @@ static int proc_text(const char *path,char *text,size_t capacity,size_t *out) {
             "VmLib:\t0 kB\nVmPTE:\t0 kB\nVmSwap:\t0 kB\nThreads:\t%u\nSigQ:\t0/63432\nSigPnd:\t%016llx\nShdPnd:\t%016llx\n"
             "SigBlk:\t%016llx\nSigIgn:\t%016llx\nSigCgt:\t%016llx\nvoluntary_ctxt_switches:\t0\nnonvoluntary_ctxt_switches:\t0\n",
             info.comm,state,state=='S'?"sleeping":state=='T'?"stopped":"running",
-            (unsigned long long)proc,(unsigned long long)info.pid,(unsigned long long)info.ppid,info.uid,info.uid,info.uid,info.uid,
-            info.gid,info.gid,info.gid,info.gid,vsz,vsz,rss,rss,rss,vsz,info.threads,0ull,(unsigned long long)sets[0],
+            (unsigned long long)proc,(unsigned long long)info.pid,(unsigned long long)info.ppid,info.uid[0],info.uid[1],info.uid[2],info.uid[1],
+            info.gid[0],info.gid[1],info.gid[2],info.gid[1],vsz,vsz,rss,rss,rss,vsz,info.threads,0ull,(unsigned long long)sets[0],
             (unsigned long long)sets[1],(unsigned long long)sets[2],(unsigned long long)sets[3]);
     } else if(!strcmp(path,"/proc/mounts") || (proc && (!strcmp(rest,"mounts") || !strcmp(rest,"mountinfo")))) {
         /* The container's mounts (Java's FileStore looks a path's mount point up here). */
@@ -936,7 +940,7 @@ static int proc_text(const char *path,char *text,size_t capacity,size_t *out) {
         /* Boot is the container's start. Busy time is what its processes used; the
            rest of every CPU's time since boot is idle (kept from going backwards). */
         unsigned cpus=guest_cpus(),processes=0;uint64_t busy[2];proc_cpu_all(busy);
-        for(uint64_t p=1;p<=PROCESS_LIMIT+1;p++)processes+=guest_process_exists(p)!=0;
+        for(uint64_t p=1;p<=process_count+1;p++)processes+=guest_process_exists(p)!=0;
         proc_peer_load();processes+=proc_npeers;
         static uint64_t idle_last;uint64_t idle=up/PROC_TICK_NS*cpus;idle=idle>busy[0]+busy[1]?idle-busy[0]-busy[1]:0;
         if(idle<idle_last)idle=idle_last;
@@ -997,7 +1001,7 @@ static uint64_t fs_open(void) {
             used=fs_dirent(list,used,sizeof(list),20,"self",10);
             proc_peer_load();
             for(unsigned i=0;i<proc_npeers;i++) { snprintf(name,sizeof(name),"%llu",(unsigned long long)proc_peers[i].pid);used=fs_dirent(list,used,sizeof(list),100+proc_peers[i].pid,name,4); }
-            for(uint64_t p=1;p<=PROCESS_LIMIT+1;p++)if(guest_process_exists(p)) { snprintf(name,sizeof(name),"%llu",(unsigned long long)p);used=fs_dirent(list,used,sizeof(list),100+p,name,4); }
+            for(uint64_t p=1;p<=process_count+1;p++)if(guest_process_exists(p)) { snprintf(name,sizeof(name),"%llu",(unsigned long long)p);used=fs_dirent(list,used,sizeof(list),100+p,name,4); }
         } else if(*rest) {                                                     /* task: the threads */
             static unsigned tids[1024];static char states[1024];static uint64_t times[1024][2];
             int64_t own=proc_resolve(proc);unsigned n=own>0?guest_thread_list((uint64_t)own,tids,states,times,1024):0;
@@ -1379,7 +1383,7 @@ static uint64_t fs_call(uint64_t call) {
                 fs_stat_pack(out,&st);
                 /* Owned by the process's user (ps's USER column). */
                 uint64_t tid;const char *rest;uint64_t pid=proc_split(proc_path,&tid,&rest);ProcInfo info;
-                if(pid && proc_info(pid,0,&info)) { fs_pack(out,24,info.uid,4);fs_pack(out,28,info.gid,4); }
+                if(pid && proc_info(pid,0,&info)) { fs_pack(out,24,info.uid[1],4);fs_pack(out,28,info.gid[1],4); }
                 return 0;
             }
         }

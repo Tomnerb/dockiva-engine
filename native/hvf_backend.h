@@ -7,7 +7,7 @@
    process, which runs the shared Linux syscall layer and resumes the guest at
    EL0. Hardware stage-2 translation keeps guest code out of host memory.
    Guest processes share the one VM: every process keeps its own stage-1 tables
-   (tagged with its pid as the ASID) and every backing stays mapped in stage 2
+   (tagged with an ASID of its own, see hvf_asid) and every backing stays mapped in stage 2
    until it is freed, so a process switch only loads TTBR0; tables are rebuilt
    when a process's own layout changes. hvf_slice() is the scheduler's CPU slice;
    a watchdog preempts CPU-bound tasks. Threads (CLONE_THREAD) of a process share
@@ -23,14 +23,15 @@
 #define HVF_SYSTEM_VA UINT64_C(0xffffffff0000)      /* top of the 48-bit user range; EL1-only */
 #define HVF_FLUSH_OFFSET 0x800u
 #define HVF_FLUSH_VA_OFFSET 0x840u
-#define HVF_BLOCKS 1024
-#define HVF_VIEWS (PROCESS_LIMIT+2)                 /* indexed by pid; the pid is the ASID */
+#define HVF_BLOCKS 16384                           /* stage-2 blocks: a few backings for each of up to 1024 processes */
+#define HVF_VIEWS (PROCESS_LIMIT+2)                 /* indexed by pid */
 static unsigned char *hvf_tables,*hvf_system;
-static unsigned char hvf_table_owner[HVF_TABLES];   /* 0 free, else the pid whose tables use it */
+static unsigned short hvf_table_owner[HVF_TABLES];  /* 0 free, else the pid whose tables use it */
 static unsigned hvf_table_hint;
 typedef struct { const unsigned char *host;size_t size;uint64_t ipa; } HvfBlock;
 static HvfBlock hvf_blocks[HVF_BLOCKS];
 static unsigned hvf_nblocks,hvf_block_last;
+static uint64_t hvf_ipa_top;                        /* above every block: new ones go here while they fit */
 static uint64_t hvf_ipa_limit=UINT64_C(1)<<36;
 static _Thread_local int hvf_exhausted;      /* a build ran out of table pages or guest-physical space */
 /* The table pool and the stage-2 blocks are shared by every worker; each process's
@@ -59,6 +60,7 @@ typedef struct {
     Segment seg[SEGMENT_LIMIT+1];unsigned nseg;uint64_t map_capacity;
     MemoryBacking *brk_backing,*map_backing;uint64_t brk_base,brk_pages;
     uint64_t layout,arena_rev,generation;
+    unsigned asid,asid_generation;            /* valid while asid_generation is hvf_asid_generation */
 } HvfView;
 static HvfView hvf_views[HVF_VIEWS];
 static int hvf_active;                       /* run() executes natively */
@@ -66,7 +68,7 @@ static int hvf_active;                       /* run() executes natively */
    thread. view: the tables its TTBR0 holds (ttbr: their root, which a rebuild
    elsewhere may have replaced). The shadow mirrors its general registers. */
 typedef struct {
-    hv_vcpu_t vcpu;hv_vcpu_exit_t *exit;HvfView *view;uint64_t ttbr;
+    hv_vcpu_t vcpu;hv_vcpu_exit_t *exit;HvfView *view;uint64_t ttbr;unsigned asid_flushed; /* the ASID generation its TLBs were last flushed in */
     uint64_t shadow_gpr[31],shadow_sp,shadow_tls;int shadow_valid,fp_in_cpu,fp_dirty;
 } HvfCpu;
 #define hvf_cpu ((HvfCpu *)worker->backend)
@@ -93,12 +95,16 @@ static uint64_t hvf_block_ipa_locked(MemoryBacking *backing) {
     const unsigned char *host=backing_data(backing);
     if(hvf_block_last<hvf_nblocks && hvf_blocks[hvf_block_last].host==host)return hvf_blocks[hvf_block_last].ipa;
     for(unsigned i=0;i<hvf_nblocks;i++)if(hvf_blocks[i].host==host) { hvf_block_last=i;return hvf_blocks[i].ipa; }
-    uint64_t size=backing->mapped_size,ipa=HVF_IPA_BASE+HVF_TABLE_BYTES+HVF_SYSTEM_BYTES;
-    for(unsigned i=0;i<hvf_nblocks;i++)
-        if(ipa<hvf_blocks[i].ipa+hvf_blocks[i].size && hvf_blocks[i].ipa<ipa+size) { ipa=hvf_blocks[i].ipa+hvf_blocks[i].size;i=UINT_MAX; }
+    uint64_t size=backing->mapped_size,ipa=hvf_ipa_top?hvf_ipa_top:HVF_IPA_BASE+HVF_TABLE_BYTES+HVF_SYSTEM_BYTES;
+    if(ipa+size>hvf_ipa_limit) {                                            /* then first fit */
+        ipa=HVF_IPA_BASE+HVF_TABLE_BYTES+HVF_SYSTEM_BYTES;
+        for(unsigned i=0;i<hvf_nblocks;i++)
+            if(ipa<hvf_blocks[i].ipa+hvf_blocks[i].size && hvf_blocks[i].ipa<ipa+size) { ipa=hvf_blocks[i].ipa+hvf_blocks[i].size;i=UINT_MAX; }
+    }
     if(hvf_nblocks==HVF_BLOCKS || ipa+size>hvf_ipa_limit) { hvf_exhausted=1;return 0; }
     hvf_check(hv_vm_map((void *)host,ipa,size,HV_MEMORY_READ|HV_MEMORY_WRITE|HV_MEMORY_EXEC),"hv_vm_map");
     hvf_block_last=hvf_nblocks;hvf_blocks[hvf_nblocks++]=(HvfBlock){host,size,ipa};
+    if(ipa+size>hvf_ipa_top)hvf_ipa_top=ipa+size;
     return ipa;
 }
 /* Each backing remembers its address, so building tables (every page of a fork)
@@ -115,7 +121,7 @@ static uint64_t hvf_block_ipa(MemoryBacking *backing) {
 }
 static void hvf_block_unmap(unsigned i) {
     hvf_check(hv_vm_unmap(hvf_blocks[i].ipa,hvf_blocks[i].size),"hv_vm_unmap");
-    hvf_blocks[i]=hvf_blocks[--hvf_nblocks];
+    hvf_blocks[i]=hvf_blocks[--hvf_nblocks];if(!hvf_nblocks)hvf_ipa_top=0;
     __atomic_fetch_add(&hvf_ipa_epoch,1,__ATOMIC_RELEASE);
 }
 /* backing_release_hook: no live process maps a freed backing, and the tables of
@@ -136,7 +142,7 @@ static uint64_t hvf_table(void) {
     for(unsigned n=0;n<HVF_TABLES;n++) {
         unsigned i=(hvf_table_hint+n)%HVF_TABLES;
         if(hvf_table_owner[i])continue;
-        hvf_table_owner[i]=(unsigned char)owner;hvf_table_hint=i+1;
+        hvf_table_owner[i]=(unsigned short)owner;hvf_table_hint=i+1;
         pthread_mutex_unlock(&hvf_mutex);
         hvf_view->tables++;memset(hvf_tables+(size_t)i*4096,0,4096);return HVF_IPA_BASE+(uint64_t)i*4096;
     }
@@ -253,14 +259,42 @@ static void hvf_remap_arena(GuestAddressSpace *space) {
         for(i++;i<end && i<space->arena_dirty_hi && !(ipa && flags && (flags[i]&7));i++) {}
     }
 }
+/* ASIDs. Apple's vCPUs have 8-bit ones (ID_AA64MMFR0_EL1.ASIDBits 0), fewer than the
+   processes, so they are handed out as Linux's allocator does: a view takes a fresh
+   one when it is next loaded in a new generation; when all 255 are taken a new
+   generation begins, keeping those of the views loaded on a vCPU, and every vCPU
+   flushes its TLBs once before it loads a view in it (hvf_asid_flush). No two
+   views ever hold one ASID at a time, and an ASID is reused only after a flush. */
+static unsigned hvf_asid_generation=1,hvf_asid_next=1;
+static unsigned char hvf_asid_taken[256];
+static _Thread_local int hvf_asid_flush;
+static unsigned hvf_asid(HvfView *v) {
+    pthread_mutex_lock(&hvf_mutex);
+    if(v->asid_generation!=hvf_asid_generation) {
+        while(hvf_asid_next<256 && hvf_asid_taken[hvf_asid_next])hvf_asid_next++;
+        if(hvf_asid_next==256) {                           /* a new generation */
+            hvf_asid_generation++;hvf_asid_next=1;memset(hvf_asid_taken,0,sizeof(hvf_asid_taken));
+            for(unsigned w=0;w<worker_count;w++) {
+                HvfCpu *c=workers[w]?workers[w]->backend:NULL;HvfView *u=c?c->view:NULL;
+                if(u && u!=v && u->asid_generation==hvf_asid_generation-1) { u->asid_generation=hvf_asid_generation;hvf_asid_taken[u->asid]=1; }
+            }
+            while(hvf_asid_taken[hvf_asid_next])hvf_asid_next++;
+        }
+        v->asid=hvf_asid_next;v->asid_generation=hvf_asid_generation;hvf_asid_taken[hvf_asid_next++]=1;
+    }
+    if(hvf_cpu->asid_flushed!=hvf_asid_generation) { hvf_cpu->asid_flushed=hvf_asid_generation;hvf_asid_flush=1; }
+    unsigned asid=v->asid;
+    pthread_mutex_unlock(&hvf_mutex);
+    return asid;
+}
 static void hvf_activate(HvfView *v) {
     hvf_view=v;hvf_cpu->ttbr=v->root;
-    hvf_check(hv_vcpu_set_sys_reg(hvf_vcpu,HV_SYS_REG_TTBR0_EL1,v->root|((uint64_t)(v-hvf_views)<<48)),"set ttbr0");
+    hvf_check(hv_vcpu_set_sys_reg(hvf_vcpu,HV_SYS_REG_TTBR0_EL1,v->root|((uint64_t)hvf_asid(v)<<48)),"set ttbr0");
 }
 /* Other processes' tables go (each is rebuilt on its next run), except those another
    worker's vCPU may be using; with one worker every backing also leaves stage 2. */
 static void hvf_evict(void) {
-    for(unsigned i=0;i<HVF_VIEWS;i++) {
+    for(unsigned i=0;i<HVF_VIEWS && i<=process_count+1;i++) {
         int in_use=0;
         for(unsigned w=0;w<worker_count;w++)if(workers[w]!=worker && workers[w]->task+1==(int)i)in_use=1;
         if(!in_use)hvf_tables_free(&hvf_views[i]);
@@ -361,7 +395,7 @@ static void hvf_sync_memory(GuestAddressSpace *space) {
     HvfView *v=&hvf_views[process_pid];
     if(v==hvf_view && v->root && hvf_cpu->ttbr==v->root && v->generation==space->generation)return;
     int stale=hvf_sync_tables(space,v);
-    if(stale)hvf_flush();
+    if(stale || hvf_asid_flush) { hvf_asid_flush=0;hvf_flush(); }
 }
 /* After a write fault made a page private (or charged it), remap the guest pages
    that share its host page instead of rebuilding every table. */
@@ -470,7 +504,7 @@ static void hvf_flush_va(uint64_t va,unsigned pages) {
     uint64_t pc=0,cpsr=0,x0=0,x1=0;
     hvf_check(hv_vcpu_get_reg(hvf_vcpu,HV_REG_PC,&pc),"get pc");hvf_check(hv_vcpu_get_reg(hvf_vcpu,HV_REG_CPSR,&cpsr),"get cpsr");
     hvf_check(hv_vcpu_get_reg(hvf_vcpu,HV_REG_X0,&x0),"get x0");hvf_check(hv_vcpu_get_reg(hvf_vcpu,HV_REG_X1,&x1),"get x1");
-    uint64_t asid=(uint64_t)(hvf_view-hvf_views);
+    uint64_t asid=hvf_view->asid;
     hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_X0,(asid<<48)|((va>>12)&UINT64_C(0xfffffffffff))),"set x0");
     hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_X1,pages),"set x1");
     hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_PC,HVF_SYSTEM_VA+HVF_FLUSH_VA_OFFSET),"set pc");
@@ -624,7 +658,7 @@ static MemoryBacking *hvf_futex_shared(uint64_t address,size_t *offset) {
    FUTEX_PRIVATE wait. A futex in shared memory has waiters in any process. */
 static unsigned hvf_futex_wake(uint64_t address,unsigned count,uint32_t bits) {
     unsigned woken=0;size_t offset=0;MemoryBacking *shared=hvf_futex_shared(address,&offset);
-    for(unsigned i=0;i<=PROCESS_LIMIT && woken<count;i++) {
+    for(unsigned i=0;i<=process_count && woken<count;i++) {
         ScheduledTask *t=&schedule_tasks[i];
         if(!t->threads || (!shared && t!=hvf_task()))continue;
         for(unsigned j=0;j<t->threads->top && woken<count;j++) {
@@ -645,7 +679,7 @@ static unsigned hvf_futex_requeue(uint64_t address,unsigned wake,unsigned move,u
     unsigned woken=hvf_futex_wake(address,wake,UINT32_MAX),moved=0;
     size_t offset=0,target_offset=0;
     MemoryBacking *shared=hvf_futex_shared(address,&offset),*target_shared=hvf_futex_shared(target,&target_offset);
-    for(unsigned i=0;i<=PROCESS_LIMIT && moved<move;i++) {
+    for(unsigned i=0;i<=process_count && moved<move;i++) {
         ScheduledTask *t=&schedule_tasks[i];
         if(!t->threads || (!shared && t!=hvf_task()))continue;
         for(unsigned j=0;j<t->threads->top && moved<move;j++) {

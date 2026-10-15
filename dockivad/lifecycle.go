@@ -471,6 +471,10 @@ func runtimeCommand(p, native string, c obj, command []string, argv0 string, env
 	// The run creates the oom file when it kills a process over the memory limit
 	// (exec and healthchecks share the container's budget, as in a cgroup).
 	args := []string{"run", guest, "--root", root, "--argv0", argv0, "--max-steps", steps, "--memory-limit-mib", strconv.FormatInt(memory, 10), "--oom-file", filepath.Join(p, "oom")}
+	// Abstract Unix socket names live in one directory per container, shared by its execs.
+	abstract := filepath.Join(p, "abstract")
+	check(os.MkdirAll(abstract, 0o700))
+	args = append(args, "--abstract-dir", abstract)
 	// The container's own run publishes its process table; exec and healthcheck runs
 	// show it in their /proc (ps, top), and docker top reads it.
 	if publish {
@@ -496,8 +500,9 @@ func runtimeCommand(p, native string, c obj, command []string, argv0 string, env
 	// a 1 GiB class space that must start on a 4 GiB boundary and code cache beyond -m,
 	// and needs a third aligned slot free after libraries and the heap take two.
 	args = append(args, "--elf-limit-mib", "1024", "--mmap-limit-mib", "12288")
-	// Like Docker, disk use is left to the host: no storage budget, 4 GiB per file.
-	args = append(args, "--file-limit-mib", "4096", "--storage-limit-mib", "0")
+	// Like Docker, disk use is left to the host: no storage budget, and files of up to
+	// 1 TiB (the runtime's largest per-file limit).
+	args = append(args, "--file-limit-mib", "1048576", "--storage-limit-mib", "0")
 	reject(c["network"] == nil || c["network"] == "none" || c["network"] == "outbound", "Invalid network mode")
 	// Docker gives every container /dev/shm (POSIX shared memory and semaphores) and
 	// /proc; these directories stand in (the runtime serves /proc/self/fd/N itself).

@@ -128,7 +128,7 @@ static void runtime_lock(Worker *w) {
 static int process_slot_free(unsigned slot) {
     if(process_children[slot].pid || process_children[slot].live)return 0;
     if(schedule_tasks[slot+1].state || schedule_tasks[slot+1].saved)return 0;
-    for(unsigned i=0;i<=PROCESS_LIMIT;i++)if(schedule_tasks[i].state && (schedule_tasks[i].pgid==slot+2 || schedule_tasks[i].sid==slot+2))return 0;
+    for(unsigned i=0;i<=process_count;i++)if(schedule_tasks[i].state && (schedule_tasks[i].pgid==slot+2 || schedule_tasks[i].sid==slot+2))return 0;
     return 1;
 }
 /* A blocked task's own event: it retries its call (a targeted wait ignores io_epoch).
@@ -144,7 +144,7 @@ static void schedule_wake(ScheduledTask *task) {
     schedule_events++;
 }
 static void schedule_wake_mask(uint64_t mask) {
-    for(unsigned i=0;i<=PROCESS_LIMIT;i++)if(mask&(UINT64_C(1)<<i))schedule_wake(&schedule_tasks[i]);
+    for(unsigned i=0;i<=process_count;i++)if(mask&PROCESS_BIT(i+1))schedule_wake(&schedule_tasks[i]);
 }
 static void schedule_signal(ScheduledTask *task,unsigned signal);
 static void schedule_signal_apply(ScheduledTask *task,unsigned signal) {
@@ -207,7 +207,7 @@ static void schedule_pending(ScheduledTask *task) {
 /* A vfork child exited or execed: its parent runs again, and the link goes before
    the child's slot can be reused by another process. */
 static void schedule_vfork_done(uint64_t pid) {
-    for(unsigned i=0;i<=PROCESS_LIMIT;i++)if(schedule_tasks[i].vfork_child==pid)schedule_tasks[i].vfork_child=0;
+    for(unsigned i=0;i<=process_count;i++)if(schedule_tasks[i].vfork_child==pid)schedule_tasks[i].vfork_child=0;
 }
 static void schedule_exec_reset(void) {
     ScheduledTask *task=&schedule_tasks[process_pid-1];
@@ -274,7 +274,7 @@ static void task_free(void) {
 }
 static void schedule_cleanup(void) {
     static ScheduledTask active;task_save(&active); /* static: the tables stay in use afterwards */
-    for(unsigned i=0;i<=PROCESS_LIMIT;i++)if(schedule_tasks[i].saved) {
+    for(unsigned i=0;i<=process_count;i++)if(schedule_tasks[i].saved) {
         task_load(&schedule_tasks[i]);task_free();schedule_tasks[i].state=0;schedule_tasks[i].terminate_signal=0;
         free(schedule_tasks[i].threads);schedule_tasks[i].threads=NULL;
     }
@@ -481,8 +481,8 @@ static int timer_pump(void) {
 /* The next runnable task after `after` (round robin) and its thread (-1 for a
    single-threaded task), else -1. */
 static int schedule_pick(unsigned after,int *thread) {
-    for(unsigned scanned=0;scanned<=PROCESS_LIMIT;scanned++) {
-        after=(after+1)%(PROCESS_LIMIT+1);
+    for(unsigned scanned=0;scanned<=process_count;scanned++) {
+        after=(after+1)%(process_count+1);
         ScheduledTask *t=&schedule_tasks[after];
         if(!t->threads) { if(schedule_runnable(t)) { *thread=-1;return (int)after; } continue; }
         int i=task_pick_thread(t);
@@ -661,7 +661,7 @@ static void *schedule_worker(void *argument) {
 }
 static int schedule_run(uint64_t steps) {
     schedule_active=1;process_steps=steps;schedule_done=0;schedule_parked=0;
-    for(unsigned i=0;i<=PROCESS_LIMIT;i++)pthread_mutex_init(&schedule_tasks[i].mm,NULL);
+    for(unsigned i=0;i<=process_count;i++)pthread_mutex_init(&schedule_tasks[i].mm,NULL); /* later slots: schedule_child */
     task_save(&schedule_tasks[0]);task_load(&schedule_tasks[0]);    /* the first process now lives in its task */
     schedule_tasks[0].state=1;schedule_tasks[0].pgid=schedule_tasks[0].sid=1;
     if(!workers_supported)worker_count=1;                  /* the interpreter runs guest code under the lock */
