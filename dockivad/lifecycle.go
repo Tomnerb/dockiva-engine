@@ -28,6 +28,7 @@ var namePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,199}$`)
 type engine struct {
 	Home, State, Cache, Native, Worker, Assets, Self string
 	MaxContainers                                    int
+	Insecure                                         bool // --insecure-local: plain HTTP to loopback registries
 	Mu                                               sync.Mutex
 	events                                           events
 	exits                                            sync.Map      // exit status of auto-removed containers, by name, for a minute

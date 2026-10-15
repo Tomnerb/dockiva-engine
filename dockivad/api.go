@@ -59,7 +59,7 @@ func (b *engine) imageInfo(name string) obj {
 	}
 	st, e := os.Stat(filepath.Join(b.imagePath(name), "image.json"))
 	check(e)
-	return obj{"Id": im.Digest, "RepoTags": []string{name}, "RepoDigests": []string{strings.Split(name, ":")[0] + "@" + im.Digest}, "Created": st.ModTime().UTC().Format(time.RFC3339Nano), "Size": size, "Architecture": "arm64", "Os": "linux", "Config": obj{"Entrypoint": im.Entry, "Cmd": im.Args, "Env": im.Env, "WorkingDir": im.WorkingDir}, "RootFS": obj{"Type": "layers", "Layers": []string{}}}
+	return obj{"Id": im.Digest, "RepoTags": []string{name}, "RepoDigests": []string{repository(name) + "@" + im.Digest}, "Created": st.ModTime().UTC().Format(time.RFC3339Nano), "Size": size, "Architecture": "arm64", "Os": "linux", "Config": obj{"Entrypoint": im.Entry, "Cmd": im.Args, "Env": im.Env, "WorkingDir": im.WorkingDir}, "RootFS": obj{"Type": "layers", "Layers": []string{}}}
 }
 
 // imageFilter is docker images NAME (reference: a name or pattern, with or without
@@ -721,6 +721,13 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 			b.loadImages(w, r.Body, yes("quiet"))
 			return
 		}
+		// docker push, and buildx --push: layers stream up as they are read.
+		if method == "POST" && strings.HasPrefix(path, "/images/") && strings.HasSuffix(path, "/push") {
+			stream()
+			defer endStream()
+			b.pushImage(w, strings.TrimSuffix(strings.TrimPrefix(path, "/images/"), "/push"), q.Get("tag"), registryCredentials(r.Header.Get("X-Registry-Auth")))
+			return
+		}
 		// docker save: GET /images/get?names=A&names=B, or /images/NAME/get.
 		if method == "GET" && (path == "/images/get" || strings.HasPrefix(path, "/images/") && strings.HasSuffix(path, "/get")) {
 			names := q["names"]
@@ -872,6 +879,9 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 			commitImage(b.Cache, target, noLinks(b.imagePath(source), "layout"))
 			send(w, 201, nil)
 			return
+		case strings.HasPrefix(path, "/distribution/") && strings.HasSuffix(path, "/json") && method == "GET":
+			send(w, 200, b.distributionInspect(strings.TrimSuffix(strings.TrimPrefix(path, "/distribution/"), "/json"), registryCredentials(r.Header.Get("X-Registry-Auth"))))
+			return
 		case strings.HasPrefix(path, "/images/") && method == "DELETE":
 			b.Mu.Lock()
 			defer b.Mu.Unlock()
@@ -902,7 +912,7 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 			// No engine lock (a pull is staged, then renamed in) and no write deadline:
 			// a large image takes minutes, and other requests go on meanwhile.
 			unbounded(w)
-			pullImage(reference, b.Cache, false, "")
+			pullWith(reference, b.Cache, b.Insecure, registryCredentials(r.Header.Get("X-Registry-Auth")))
 			send(w, 200, obj{"status": "Downloaded verified image " + reference})
 			return
 		}
