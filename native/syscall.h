@@ -634,6 +634,84 @@ static int guest_syscall_dispatch(void) {
 static int fs_unlocked_path(uint64_t address,char path[1025]) {
     return fs_string(address,path)==0 && strncmp(path,"/proc",5) && strncmp(path,"/dev/",5) && !(path[0]!='/' && fs_cwd && !strncmp(fs_cwd->path,"/proc",5));
 }
+/* Opening, creating, removing and stat'ing by path, reading, writing and syncing files
+   hold no lock at all while the host works (tens of microseconds each), so threads
+   of one process (go build's compiler, the go command) overlap their file I/O
+   instead of queuing on its mm lock. Under it beforehand, guest strings and the
+   buffer are copied and the base and file descriptors duplicated: a sibling's close,
+   dup2, munmap, fork or exec meanwhile cannot hand their numbers to another file or
+   free memory the call uses (fs_detached in fs.h). Under it afterwards, the thread
+   must still live (a sibling's exec or exit_group ends it: the result is dropped),
+   then output is copied to the guest (EFAULT if the buffer went away) and an opened
+   file installed. Only for threaded processes: no one else waits on a lone thread's
+   lock. Returns 1 when it served the call (result, or syscall_abort set: nothing
+   changed), 0 when the caller must serve it. path: the first path argument, copied
+   (the second for renameat), or NULL; statx: newfstatat fills a 256-byte statx. */
+#define FS_DETACHED_BUFFER (1024u*1024u)
+static int fs_call_detached(uint64_t call,const char *path,uint64_t *result,int statx) {
+    static _Thread_local unsigned char *buffer;
+    ScheduledTask *task=&schedule_tasks[process_pid-1];
+    if(!schedule_active || !worker_threads || !task->threads)return 0;
+    int sync=call==82 || call==83,transfer=sync || call==63 || call==64 || call==67 || call==68,paths=call==38?2:1,fd=-1;
+    uint64_t in=0,out=0,size=0;
+    if(transfer) {
+        int slot=fs_slot(cpu->gpr[0]);size=sync?0:cpu->gpr[2];
+        if(slot<0 || !fs_fd[slot] || fs_dirs[slot] || (!sync && (fs_dev[slot] || !size || size>FS_DETACHED_BUFFER || ((call==67 || call==68) && (int64_t)cpu->gpr[3]<0))))return 0;
+        if(call==63 || call==67) { if(!lookup(cpu->gpr[1],size,2))return 0;out=cpu->gpr[1]; } else if(!sync)in=cpu->gpr[1];
+        fs_detached.read_only=fs_ro[slot];
+    } else {
+        if(!path)return 0;
+        if(call==56) {                                                     /* /sys: synthetic files, in io tables */
+            unsigned slot=0;while(slot<FS_SLOTS && fs_fd[slot])slot++;
+            if(!strncmp(path,"/sys/",5) || slot==FS_SLOTS || fd_lowest(0)<0)return 0;
+        }
+        else if(call==79) { out=cpu->gpr[2];size=statx?256:128; }
+        else if(call==78) { if(!cpu->gpr[3] || (int64_t)(int32_t)cpu->gpr[3]<=0)return 0;out=cpu->gpr[2];size=cpu->gpr[3]>4096?4096:cpu->gpr[3]; }
+        else if(call==88 && cpu->gpr[2]) { in=cpu->gpr[2];size=32; }
+        else if(call!=48 && call!=439 && call!=34 && call!=35 && call!=38 && call!=88)return 0;
+    }
+    if(!buffer && !(buffer=malloc(FS_DETACHED_BUFFER)))return 0;
+    if(in) { const unsigned char *data=lookup(in,size,4);if(!data)return 0;memcpy(buffer,data,(size_t)size); }
+    fs_detached.memory_at=in?in:out;fs_detached.memory_size=size;fs_detached.memory=buffer;
+    fs_detached.path[0][0]=fs_detached.path[1][0]=0;fs_detached.at[0]=fs_detached.at[1]=0;fs_detached.base[0]=fs_detached.base[1]=-1;
+    for(int i=0;i<paths && !transfer;i++) {
+        uint64_t at=cpu->gpr[1+2*i],dir=cpu->gpr[2*i];
+        if(call==38 && !i) { if(fs_string(at,fs_detached.path[0])<0)break; } else strcpy(fs_detached.path[i],path);
+        fs_detached.at[i]=at;fs_detached.dir[i]=dir;
+        if(fs_detached.path[i][0]=='/')continue;
+        int host=(int32_t)dir==-100?(fs_cwd?fs_cwd->fd:fs_root):fs_host(dir),slot=fs_slot(dir);
+        const char *base_path=(int32_t)dir==-100?(fs_cwd?fs_cwd->path:"/"):slot>=0 && fs_dirs[slot]?fs_dirs[slot]->path:"";
+        if(host<0 || (fs_detached.base[i]=dup(host))<0)break;
+        strcpy(fs_detached.base_path[i],base_path);
+    }
+    if(transfer)fd=dup(fs_host(cpu->gpr[0]));
+    if(transfer?fd<0:!fs_detached.path[paths-1][0] || (fs_detached.path[paths-1][0]!='/' && fs_detached.base[paths-1]<0) || (paths==2 && fs_detached.path[0][0]!='/' && fs_detached.base[0]<0)) {
+        for(int i=0;i<2;i++)if(fs_detached.base[i]>=0)close(fs_detached.base[i]);
+        return 0;
+    }
+    fs_detached.fd=-1;fs_detached.on=1;
+    mm_unlock(task);
+    uint64_t r=!transfer?fs_call(call):sync?(fsync(fd)<0?fs_error():0):call==63 || call==64?fs_transfer(fd,call):fs_transfer_at(fd,call==67?63:64,(int64_t)cpu->gpr[3]);
+    if(!transfer && call==79 && statx && (int64_t)r>=0) { statx_from_stat(buffer);r=0; }
+    mm_lock(task);
+    fs_detached.on=0;
+    if(fd>=0)close(fd);
+    for(int i=0;i<2;i++)if(fs_detached.base[i]>=0)close(fs_detached.base[i]);
+    Thread *th=task_thread(task);
+    if(syscall_abort || task->exit_pending || (th && !th->state)) {          /* nothing changed, or no one to tell */
+        if(fs_detached.fd>=0) { close(fs_detached.fd);fs_directory_release(fs_detached.directory);fs_detached.fd=-1; }
+        *result=r;return 1;
+    }
+    if(out && (int64_t)r>=0) {
+        /* The call is done and cannot be redone under the runtime lock: pages a fork
+           shared meanwhile are made private here, as a write fault does (mm lock only). */
+        uint64_t n=call==79?size:r;
+        syscall_unlocked=0;unsigned char *to=n?lookup(out,n,2):NULL;syscall_unlocked=1;
+        if(n && !to)r=linux_error(14);else if(n)memcpy(to,buffer,(size_t)n);
+    }
+    if(fs_detached.fd>=0) { r=fs_install(fs_detached.fd,fs_detached.flags,fs_detached.opened_ro,fs_detached.opened_device,fs_detached.directory);fs_detached.fd=-1; }
+    *result=r;return 1;
+}
 static int guest_syscall_unlocked(void) {
     uint64_t call=cpu->gpr[8],fd=cpu->gpr[0],count=cpu->gpr[2];
     if(trace)return 0;
@@ -654,10 +732,11 @@ static int guest_syscall_unlocked(void) {
         uint64_t saved[9];memcpy(saved,cpu->gpr,sizeof(saved));
         cpu->gpr[2]=buffer;cpu->gpr[3]=flags&(0x100|0x800);cpu->gpr[8]=79;
         cpu->exclusive_valid=0;syscall_unlocked=1;syscall_abort=0;
-        uint64_t result=fs_call(79);
+        uint64_t result;int detached=fs_call_detached(79,path,&result,1);  /* out is stale after a detached call */
+        if(!detached)result=fs_call(79);
         syscall_unlocked=0;memcpy(cpu->gpr,saved,sizeof(saved));
         if(syscall_abort || result==IO_BLOCK)return 0;
-        if((int64_t)result>=0) { statx_from_stat(out);result=0; }
+        if((int64_t)result>=0) { if(!detached)statx_from_stat(out);result=0; }
         cpu->gpr[0]=result;return 1;
     }
     /* Signal state that only this process's own threads change (they hold its mm
@@ -697,7 +776,9 @@ static int guest_syscall_unlocked(void) {
     int clamp=(call==63 || call==64 || call==206 || call==207) && count>1024*1024 && fs_host(cpu->gpr[0])<0; /* files: fs_transfer_at */
     if(clamp)cpu->gpr[2]=1024*1024;
     syscall_unlocked=1;syscall_abort=0;epoll_prepared.valid=0;net_unlocked_wait.count=0;
-    uint64_t result=epoll?guest_epoll(call):call==65?guest_readv():call==66?guest_writev():named || file?fs_call(call):net_call(call);
+    uint64_t result;
+    if(!((named || file) && !epoll && fs_call_detached(call,named?path:NULL,&result,0)))
+        result=epoll?guest_epoll(call):call==65?guest_readv():call==66?guest_writev():named || file?fs_call(call):net_call(call);
     syscall_unlocked=0;
     if(clamp)cpu->gpr[2]=count;
     if(syscall_abort || result==IO_BLOCK)return 0;

@@ -119,7 +119,31 @@ static uint64_t fs_error(void) {
         default:return net_error();
     }
 }
+/* A file call served with no lock at all (fs_call_detached, syscall.h): its path
+   strings, its one buffer and the descriptors it resolves against were copied or
+   duplicated under the process's mm lock, so sibling threads may close those
+   descriptors, unmap the buffer or exec meanwhile. fs_string, fs_lookup and
+   fs_memory read these copies instead of guest memory and the descriptor tables;
+   an opened file is installed afterwards, under the lock (fs_install). */
+static _Thread_local struct {
+    int on;
+    uint64_t at[2],dir[2];char path[2][1025];int base[2];char base_path[2][1025];   /* path arguments, and their base descriptors */
+    uint64_t memory_at,memory_size;unsigned char *memory;                   /* the buffer argument */
+    int read_only;                                                          /* the file's slot: fs_ro */
+    int fd;uint64_t flags;int opened_ro,opened_device;struct GuestDirectory *directory; /* an opened file to install (fd -1: none) */
+} fs_detached={.fd=-1};
+/* Guest memory a file call reads or writes: the copy while detached. */
+static unsigned char *fs_memory(uint64_t address,uint64_t size,int mode) {
+    if(!fs_detached.on)return lookup(address,size,mode);
+    if(address>=fs_detached.memory_at && size<=fs_detached.memory_size && address-fs_detached.memory_at<=fs_detached.memory_size-size)return fs_detached.memory+(address-fs_detached.memory_at);
+    for(unsigned i=0;i<2;i++)if(address==fs_detached.at[i] && fs_detached.path[i][0] && size<=strlen(fs_detached.path[i])+1)return (unsigned char *)fs_detached.path[i];
+    return NULL;
+}
 static int fs_string(uint64_t ptr,char path[1025]) {
+    if(fs_detached.on) {
+        for(unsigned i=0;i<2;i++)if(ptr==fs_detached.at[i] && fs_detached.path[i][0]) { strcpy(path,fs_detached.path[i]);return 0; }
+        errno=EFAULT;return -1;
+    }
     for(unsigned i=0;i<=1024;i++) {
         if(ptr>UINT64_MAX-i) { errno=EFAULT;return -1; }
         unsigned char *p=lookup(ptr+i,1,4);
@@ -419,7 +443,8 @@ static int fs_lookup(uint64_t dir,uint64_t ptr,char leaf[1025],int follow,char c
     if(path[0]=='/' && !strncmp(path,"/proc/",6)) { char exe[1025];if(fs_proc_exe(path,exe))strcpy(path,exe); }
     int base=fs_root;const char *base_path="/";
     if(path[0]!='/') {
-        if((int32_t)dir==-100) { base=fs_cwd?fs_cwd->fd:fs_root;base_path=fs_cwd?fs_cwd->path:"/"; }
+        if(fs_detached.on) { int i=ptr==fs_detached.at[1] && dir==fs_detached.dir[1];base=fs_detached.base[i];base_path=fs_detached.base_path[i]; }
+        else if((int32_t)dir==-100) { base=fs_cwd?fs_cwd->fd:fs_root;base_path=fs_cwd?fs_cwd->path:"/"; }
         else {
             base=fs_host(dir);
             base_path=fs_slot(dir)>=0 && fs_dirs[fs_slot(dir)]?fs_dirs[fs_slot(dir)]->path:"";
@@ -446,6 +471,7 @@ static const char *fs_device(const char *canon) {
 /* Whether host descriptor fd is a device: known per slot for the call's own fd (1-byte
    reads and writes, dd bs=1, paid an fstat each), else asked of the host. */
 static int fs_is_device(int fd) {
+    if(fs_detached.on)return 0;                                            /* only regular files detach */
     int slot=fs_slot(cpu->gpr[0]);if(slot>=0 && fs_fd[slot]==fd+1)return fs_dev[slot];
     struct stat st;return !fstat(fd,&st) && S_ISCHR(st.st_mode);
 }
@@ -835,7 +861,7 @@ static const char *fs_proc_sys_value(const char *path) {
    returned as given (callers that fall through reread the guest's string). */
 static int fs_proc_path(uint64_t dir,uint64_t ptr,char path[1025]) {
     if(fs_string(ptr,path))return -1;
-    if(path[0] && path[0]!='/') {
+    if(path[0] && path[0]!='/' && !fs_detached.on) {                 /* detached: not relative to a /proc directory */
         const char *base=(int32_t)dir==-100?(fs_cwd?fs_cwd->path:"/"):io_text_path(dir);
         if(base && (int32_t)dir!=-100 && syscall_unlocked) { syscall_abort=1;return -1; }  /* process tables need the runtime lock */
         if(base && !strncmp(base,"/proc",5) && (!base[5] || base[5]=='/')) {
@@ -987,6 +1013,16 @@ static int proc_text(const char *path,char *text,size_t capacity,size_t *out) {
     } else known=0;
     *out=length;return known;
 }
+/* An opened host file becomes the lowest free guest descriptor (a detached call's,
+   later, under the lock: fs_call_detached). */
+static uint64_t fs_install(int fd,uint64_t flags,int read_only,int device,GuestDirectory *directory) {
+    if(fs_detached.on) { fs_detached.fd=fd;fs_detached.flags=flags;fs_detached.opened_ro=read_only;fs_detached.opened_device=device;fs_detached.directory=directory;return 0; }
+    unsigned slot=0;while(slot<FS_SLOTS && fs_fd[slot]) slot++;
+    int guest=slot<FS_SLOTS?fd_lowest(0):-1;
+    if(guest<0) { close(fd);fs_directory_release(directory);return linux_error(24); }
+    fs_fd[slot]=fd+1;fs_cloexec[slot]=(flags&524288)!=0;fs_ro[slot]=(unsigned char)read_only;fs_dev[slot]=(unsigned char)device;fs_dirs[slot]=directory;
+    fs_guest[slot]=(unsigned short)guest;fd_bind((uint64_t)guest,FD_FILE,slot);return (uint64_t)guest;
+}
 static uint64_t fs_open(void) {
     uint64_t flags=cpu->gpr[2];
     /* O_NOCTTY (256), O_NONBLOCK (2048) and O_NOATIME (262144) have no effect on regular
@@ -1002,8 +1038,10 @@ static uint64_t fs_open(void) {
     if((flags&UINT64_C(0x400000)) || (flags&3)==3) return linux_error(95);
     if(flags&UINT64_C(0x200000))flags&=UINT64_C(16384|32768|524288);              /* O_DIRECTORY, O_NOFOLLOW, O_CLOEXEC */
     flags&=allowed;
-    unsigned slot=0;while(slot<FS_SLOTS && fs_fd[slot]) slot++;
-    if(slot==FS_SLOTS || fd_lowest(0)<0) return linux_error(24);
+    if(!fs_detached.on) {                                  /* detached: checked under the lock, installed there */
+        unsigned slot=0;while(slot<FS_SLOTS && fs_fd[slot]) slot++;
+        if(slot==FS_SLOTS || fd_lowest(0)<0) return linux_error(24);
+    }
     char path[1025];int named=fs_proc_path(cpu->gpr[0],cpu->gpr[1],path)==0;
     if(syscall_unlocked && syscall_abort)return linux_error(11);     /* relative to a /proc directory: the locked path retries */
     uint64_t tid=0;const char *rest="";uint64_t proc=named?proc_split(path,&tid,&rest):0;
@@ -1057,7 +1095,7 @@ static uint64_t fs_open(void) {
         close(parent);
         if(flags&16384)return linux_error(20);
         int fd=open(device,options|O_CLOEXEC);if(fd<0)return fs_error();
-        fs_fd[slot]=fd+1;fs_cloexec[slot]=(flags&524288)!=0;fs_ro[slot]=0;fs_dev[slot]=1;{ int guest=fd_lowest(0);fs_guest[slot]=(unsigned short)guest;fd_bind((uint64_t)guest,FD_FILE,slot);return (uint64_t)guest; }
+        return fs_install(fd,flags,0,1,NULL);
     }
     int read_only=!fs_path_writable();
     if(read_only && (flags&(3|64|512|1024))) { close(parent);return linux_error(30); }
@@ -1088,13 +1126,13 @@ static uint64_t fs_open(void) {
     if(fstat(fd,&info)<0 || (!S_ISREG(info.st_mode) && !S_ISDIR(info.st_mode)) || (uint64_t)info.st_size>fs_file_limit) {
         close(fd);return linux_error(13);
     }
+    GuestDirectory *directory=NULL;
     if(S_ISDIR(info.st_mode)) {
-        GuestDirectory *directory=calloc(1,sizeof(*directory));if(!directory) { close(fd);return linux_error(12); }
+        directory=calloc(1,sizeof(*directory));if(!directory) { close(fd);return linux_error(12); }
         directory->refs=1;strcpy(directory->path,canon);
-        fs_dirs[slot]=directory;
     }
     if(flags&64) { fs_count_created(); }
-    fs_fd[slot]=fd+1;fs_cloexec[slot]=(flags&524288)!=0;fs_ro[slot]=(unsigned char)read_only;fs_dev[slot]=0;{ int guest=fd_lowest(0);fs_guest[slot]=(unsigned short)guest;fd_bind((uint64_t)guest,FD_FILE,slot);return (uint64_t)guest; }
+    return fs_install(fd,flags,read_only,0,directory);
 }
 static void fs_pack(unsigned char *p,unsigned offset,uint64_t value,unsigned size) {
     for(unsigned i=0;i<size;i++) p[offset+i]=(unsigned char)(value>>(i*8));
@@ -1116,7 +1154,7 @@ static unsigned file_shares_live;
 static void file_share_written(int fd,uint64_t at,const unsigned char *data,size_t bytes);
 static uint64_t fs_transfer_chunk(int fd,uint64_t call,int64_t offset) {
         uint64_t count=cpu->gpr[2]>1024*1024?1024*1024:cpu->gpr[2];
-        unsigned char *buffer=count?lookup(cpu->gpr[1],count,call==63?2:4):(unsigned char *)"";
+        unsigned char *buffer=count?fs_memory(cpu->gpr[1],count,call==63?2:4):(unsigned char *)"";
         if(!buffer) return linux_error(14);
         if(fs_is_device(fd)) { /* No file size, storage or write budget to account. */
             ssize_t result=offset>=0?(call==63?pread(fd,buffer,(size_t)count,offset):pwrite(fd,buffer,(size_t)count,offset))
@@ -1125,8 +1163,8 @@ static uint64_t fs_transfer_chunk(int fd,uint64_t call,int64_t offset) {
         }
         uint64_t previous_size=0,write_position=0;
         if(call==64) {
-            int slot=fs_slot(cpu->gpr[0]);    /* a file slot knows its location; stdio files follow the root */
-            if(slot>=0?fs_ro[slot]:!fs_writable) return linux_error(30);
+            int slot=fs_detached.on?-1:fs_slot(cpu->gpr[0]); /* a file slot knows its location; stdio files follow the root */
+            if(fs_detached.on?fs_detached.read_only:slot>=0?fs_ro[slot]:!fs_writable) return linux_error(30);
             struct stat st;if(fstat(fd,&st)<0) return fs_error();
             off_t position=offset>=0?(off_t)offset:lseek(fd,0,SEEK_CUR);if(position<0) return fs_error();
             if(offset<0 && (fcntl(fd,F_GETFL)&O_APPEND)) position=st.st_size;
@@ -1284,7 +1322,7 @@ static uint64_t fs_call(uint64_t call) {
     if(call==78) {
         if(!cpu->gpr[3] || (int64_t)(int32_t)cpu->gpr[3]<=0)return linux_error(22);
         if(cpu->gpr[3]>4096)cpu->gpr[3]=4096;                     /* any buffer size, as on Linux (libc++ passes more) */
-        unsigned char *out=lookup(cpu->gpr[2],cpu->gpr[3],2);if(!out)return linux_error(14);
+        unsigned char *out=fs_memory(cpu->gpr[2],cpu->gpr[3],2);if(!out)return linux_error(14);
         char path[1025],exe[1025];
         if(fs_proc_path(cpu->gpr[0],cpu->gpr[1],path)==0 && fs_proc_exe(path,exe)) { /* readlink /proc/<pid>/exe */
             size_t n=strlen(exe);if(n>cpu->gpr[3])n=(size_t)cpu->gpr[3];memcpy(out,exe,n);return n;
@@ -1326,7 +1364,7 @@ static uint64_t fs_call(uint64_t call) {
     }
     if(call==88) { /* utimensat(dirfd, path, times, flags); a NULL path acts on dirfd itself (futimens) */
         uint64_t flags=cpu->gpr[3];if(flags&~UINT64_C(0x100))return linux_error(22); /* AT_SYMLINK_NOFOLLOW */
-        const unsigned char *in=cpu->gpr[2]?lookup(cpu->gpr[2],32,4):NULL;if(cpu->gpr[2] && !in)return linux_error(14);
+        const unsigned char *in=cpu->gpr[2]?fs_memory(cpu->gpr[2],32,4):NULL;if(cpu->gpr[2] && !in)return linux_error(14);
         struct timespec times[2];
         for(unsigned i=0;i<2;i++) {                    /* Linux UTIME_NOW/UTIME_OMIT differ from the host's */
             uint64_t sec=in?le(in+i*16,8):0,nsec=in?le(in+i*16+8,8):(UINT64_C(1)<<30)-1;
@@ -1384,8 +1422,8 @@ static uint64_t fs_call(uint64_t call) {
     }
     if(call==79) {
         if(cpu->gpr[3]&~UINT64_C(256|2048|4096)) return linux_error(95);
-        unsigned char *out=lookup(cpu->gpr[2],128,2);if(!out)return linux_error(14);
-        unsigned char *first=lookup(cpu->gpr[1],1,4);if(!first)return linux_error(14);
+        unsigned char *out=fs_memory(cpu->gpr[2],128,2);if(!out)return linux_error(14);
+        unsigned char *first=fs_memory(cpu->gpr[1],1,4);if(!first)return linux_error(14);
         if(!*first) {
             if(!(cpu->gpr[3]&4096))return linux_error(2);
             int fd=(int32_t)cpu->gpr[0]==-100?(fs_cwd?fs_cwd->fd:fs_root):fs_host(cpu->gpr[0]);
