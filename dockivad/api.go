@@ -233,8 +233,12 @@ func (b *engine) inspect(name string) obj {
 	reject(len(cmd) > 0, "Invalid saved command")
 	state := text(s["state"])
 	running := live(s)
+	paused := running && exists(filepath.Join(p, "paused"))
 	if state == "failed" {
 		state = "dead"
+	}
+	if paused {
+		state = "paused"
 	}
 	img := c["image_name"]
 	if img == nil {
@@ -254,7 +258,7 @@ func (b *engine) inspect(name string) obj {
 	if c["binds"] != nil {
 		binds = stringsOf(c["binds"])
 	}
-	return obj{"Id": key(name), "Name": "/" + name, "Created": timestamp(c["created_at"]), "Path": cmd[0], "Args": cmd[1:], "Image": c["image"], "State": obj{"Status": state, "Running": running, "Paused": false, "Restarting": s["state"] == "restarting", "Health": health(p, c), "OOMKilled": exists(filepath.Join(p, "oom")), "Dead": state == "dead", "Pid": pid, "ExitCode": code, "Error": text(s["error"]), "StartedAt": timestamp(s["started_at"]), "FinishedAt": timestamp(s["finished_at"])}, "Config": obj{"Image": img, "Entrypoint": cmd[:1], "Cmd": cmd[1:], "Env": stringsOf(c["env"]), "Labels": labels, "User": text(c["user"]), "Tty": c["tty"] == true, "OpenStdin": c["open_stdin"] == true, "StdinOnce": c["stdin_once"] == true, "WorkingDir": workdir(c), "Hostname": hostname(name, c), "Healthcheck": healthConfig(c), "ExposedPorts": exposed}, "HostConfig": obj{"NetworkMode": inspectNetwork(c), "PortBindings": bindings, "ReadonlyRootfs": c["writable"] != true, "AutoRemove": c["auto_remove"] == true, "Binds": binds, "Memory": memoryMiB(c) << 20, "NanoCpus": nanoCpus(c), "RestartPolicy": restartPolicy(c), "ExtraHosts": extraHostList(c), "LogConfig": obj{"Type": "json-file", "Config": obj{}}}, "NetworkSettings": obj{"Ports": bindings, "Networks": b.containerNetworks(name, c), "IPAddress": text(c["ip"]), "Gateway": gatewayOf(c)}, "Mounts": b.inspectMounts(c), "Driver": "dockiva-private-copy", "Platform": "linux", "RestartCount": restartCount(s), "DockivaCompatibility": profileInspection(c)}
+	return obj{"Id": key(name), "Name": "/" + name, "Created": timestamp(c["created_at"]), "Path": cmd[0], "Args": cmd[1:], "Image": c["image"], "State": obj{"Status": state, "Running": running, "Paused": paused, "Restarting": s["state"] == "restarting", "Health": health(p, c), "OOMKilled": exists(filepath.Join(p, "oom")), "Dead": state == "dead", "Pid": pid, "ExitCode": code, "Error": text(s["error"]), "StartedAt": timestamp(s["started_at"]), "FinishedAt": timestamp(s["finished_at"])}, "Config": obj{"Image": img, "Entrypoint": cmd[:1], "Cmd": cmd[1:], "Env": stringsOf(c["env"]), "Labels": labels, "User": text(c["user"]), "Tty": c["tty"] == true, "OpenStdin": c["open_stdin"] == true, "StdinOnce": c["stdin_once"] == true, "WorkingDir": workdir(c), "Hostname": hostname(name, c), "Healthcheck": healthConfig(c), "ExposedPorts": exposed}, "HostConfig": obj{"NetworkMode": inspectNetwork(c), "PortBindings": bindings, "ReadonlyRootfs": c["writable"] != true, "AutoRemove": c["auto_remove"] == true, "Binds": binds, "Memory": memoryMiB(c) << 20, "NanoCpus": nanoCpus(c), "RestartPolicy": restartPolicy(c), "ExtraHosts": extraHostList(c), "LogConfig": obj{"Type": "json-file", "Config": obj{}}}, "NetworkSettings": obj{"Ports": bindings, "Networks": b.containerNetworks(name, c), "IPAddress": text(c["ip"]), "Gateway": gatewayOf(c)}, "Mounts": b.inspectMounts(c), "Driver": "dockiva-private-copy", "Platform": "linux", "RestartCount": restartCount(s), "DockivaCompatibility": profileInspection(c)}
 }
 func onlyKeys(m obj, allowed ...string) bool {
 	for k := range m {
@@ -598,7 +602,7 @@ func (b *engine) createWith(name string, body obj, prepared *image) obj {
 }
 
 var versionPath = regexp.MustCompile(`^/v([0-9]+)\.([0-9]+)(/.*)$`)
-var containerPath = regexp.MustCompile(`^/containers/([^/]+)(?:/(json|start|stop|restart|logs|wait|attach|kill|archive|stats|exec|resize|top))?$`)
+var containerPath = regexp.MustCompile(`^/containers/([^/]+)(?:/(json|start|stop|restart|logs|wait|attach|kill|archive|stats|exec|resize|top|pause|unpause))?$`)
 var execPath = regexp.MustCompile(`^/exec/([0-9a-f]+)/(start|json|resize)$`)
 
 func send(w http.ResponseWriter, status int, v any) {
@@ -703,6 +707,13 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 			b.build(w, r, q)
 			return
 		}
+		// docker build through buildx (BuildKit's API, buildkit.go): hijacked HTTP/2.
+		if (path == "/grpc" || path == "/session") && method == "POST" {
+			stream()
+			defer endStream()
+			b.buildkitConn(w, r, path)
+			return
+		}
 		// docker load: a docker save tar of any size, read as it arrives.
 		if path == "/images/load" && method == "POST" {
 			stream()
@@ -734,8 +745,9 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 		}
 		switch {
 		case path == "/_ping" && (method == "GET" || method == "HEAD"):
-			// The classic builder (POST /build): the docker CLI then builds without BuildKit.
-			w.Header().Set("Builder-Version", "1")
+			// BuildKit's API (POST /grpc, buildkit.go): docker build goes through buildx's
+			// "docker" driver. POST /build serves DOCKER_BUILDKIT=0.
+			w.Header().Set("Builder-Version", "2")
 			w.Header().Set("Content-Type", "text/plain")
 			w.WriteHeader(200)
 			_, _ = w.Write([]byte("OK"))
@@ -947,12 +959,14 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 				send(w, 204, nil)
 				return
 			case action == "logs" && method == "GET":
-				if (q.Get("since") != "" && q.Get("since") != "0") || (q.Get("until") != "" && q.Get("until") != "0") || yes("timestamps") {
-					panic(apiError{501, "Time-filtered or timestamped logs unsupported"})
-				}
 				p := b.container(name)
 				tty := readObject(filepath.Join(p, "config.json"))["tty"] == true
 				sizes := logSizes(p)
+				var filter *logFilter // -t, --since, --until: each line's time from the index
+				if since, until := logTime(q.Get("since")), logTime(q.Get("until")); since != 0 || until != 0 || yes("timestamps") {
+					filter = &logFilter{dir: p, timestamps: yes("timestamps"), since: since, until: until}
+					defer filter.close()
+				}
 				data := []byte{}
 				for i, stream := range []string{"stdout", "stderr"} {
 					if !yes(stream) || !exists(filepath.Join(p, logNames[i])) {
@@ -962,6 +976,7 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 					if int64(len(log)) > sizes[i] {
 						log = log[:sizes[i]] // follow continues from here
 					}
+					whole := len(log)
 					tail := q.Get("tail")
 					if tail != "" && tail != "all" {
 						n, e := strconv.Atoi(tail)
@@ -975,6 +990,17 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 							lines = lines[len(lines)-n:]
 						}
 						log = []byte(strings.Join(lines, ""))
+					}
+					if filter != nil {
+						// A log older than its index: its time is the file's last write.
+						mtime := time.Now().UnixNano()
+						if st, e := os.Lstat(filepath.Join(p, logNames[i])); e == nil {
+							mtime = st.ModTime().UnixNano()
+						}
+						start := int64(whole - len(log))
+						filter.times[i] = openLineTimes(p, i, start, mtime)
+						log = filter.lines(i, log, start)
+						filter.times[i].fallback = 0 // following: lines just written, now
 					}
 					if tty { // a terminal's output is one raw stream
 						data = append(data, log...)
@@ -991,7 +1017,7 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 				w.Header().Set("Content-Type", "application/vnd.docker.raw-stream")
 				w.WriteHeader(200)
 				_, _ = w.Write(data)
-				b.followLogs(w, r, p, yes("stdout"), yes("stderr"), sizes, tty)
+				b.followLogs(w, r, p, yes("stdout"), yes("stderr"), sizes, tty, filter)
 				return
 			case action == "wait" && method == "POST":
 				stream()
@@ -1036,7 +1062,12 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 			case action == "top" && method == "GET":
 				send(w, 200, b.top(name))
 				return
+			case (action == "pause" || action == "unpause") && method == "POST":
+				b.pause(name, action == "pause")
+				send(w, 204, nil)
+				return
 			case action == "kill" && method == "POST":
+				b.unpause(name) // as stop does: a frozen container takes its signal
 				b.kill(name, signalNumber(q.Get("signal")))
 				send(w, 204, nil)
 				return

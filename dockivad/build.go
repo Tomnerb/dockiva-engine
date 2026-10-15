@@ -3,10 +3,9 @@ package main
 // docker build through Docker's classic builder API (POST /build). The Dockerfile
 // runs against the build context the client sends as a tar: RUN in a temporary
 // container on a clone of the stage's files, COPY and ADD straight into them. The
-// image is the base image's layers plus one layer with the stage's changes.
-// ponytail: no step cache (every build runs every step) and no BuildKit features
-// (RUN --mount, heredocs, secrets); a per-step cache keyed by the parent stage and
-// the instruction is the upgrade when rebuild time matters.
+// image is the base image's layers plus one layer with the stage's changes. RUN,
+// COPY and ADD reuse the build cache's result of the same step (buildcache.go).
+// ponytail: no BuildKit features (RUN --mount, heredocs, secrets).
 
 import (
 	"archive/tar"
@@ -45,6 +44,7 @@ type buildStage struct {
 	baseHistory []any
 	args        map[string]string // ARGs declared in the stage
 	cmdSet      bool              // CMD given in this stage (ENTRYPOINT keeps it)
+	cacheID     string            // the build cache's state: the base image, then each step; "" once a step is uncached
 }
 
 type builder struct {
@@ -59,6 +59,7 @@ type builder struct {
 	used    map[string]bool
 	global  map[string]string // ARGs declared before the first FROM
 	stages  []*buildStage
+	nocache bool // run every step (--no-cache); results are still cached
 }
 
 // Builders predefine these, as BuildKit does; a Dockerfile still declares them with ARG.
@@ -98,7 +99,7 @@ func (b *engine) build(w http.ResponseWriter, r *http.Request, q url.Values) {
 	defer func() { go os.RemoveAll(work) }()
 	quiet := q.Get("q") == "1" || q.Get("q") == "true"
 	bd := &builder{b: b, ctx: r.Context(), work: work, context: filepath.Join(work, "context"), network: q.Get("networkmode"),
-		args: map[string]string{}, used: map[string]bool{}, global: map[string]string{}}
+		args: map[string]string{}, used: map[string]bool{}, global: map[string]string{}, nocache: q.Get("nocache") == "1" || q.Get("nocache") == "true"}
 	bd.say = func(s string) {
 		if !quiet {
 			send(obj{"stream": s})
@@ -213,7 +214,7 @@ func extractContext(dir string, r io.Reader) {
 		}
 		parent, last := path.Split(rel)
 		dest := filepath.Join(makeParents(dir, parent), last)
-		mode := os.FileMode(h.Mode) & os.ModePerm
+		mode := tarMode(h)
 		old, e := os.Lstat(dest)
 		if e == nil && !(old.IsDir() && h.Typeflag == tar.TypeDir) {
 			check(os.RemoveAll(dest))
@@ -221,15 +222,15 @@ func extractContext(dir string, r io.Reader) {
 		switch h.Typeflag {
 		case tar.TypeDir:
 			if e != nil || !old.IsDir() {
-				check(os.Mkdir(dest, mode|0o700))
+				check(os.Mkdir(dest, 0o700))
 			}
-			check(os.Chmod(dest, mode|0o700))
+			check(setMode(dest, mode|0o700))
 		case tar.TypeReg, tar.TypeRegA:
-			f, e := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, mode|0o600)
+			f, e := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, mode&os.ModePerm|0o600)
 			check(e)
 			_, e = io.Copy(f, t)
 			check(errors.Join(e, f.Close()))
-			check(os.Chmod(dest, mode|0o400))
+			check(setMode(dest, mode|0o400))
 			check(os.Chtimes(dest, h.ModTime, h.ModTime))
 		case tar.TypeSymlink:
 			check(os.Symlink(h.Linkname, dest))
@@ -291,6 +292,9 @@ func (bd *builder) exec(in instruction) {
 		return
 	case "ARG":
 		bd.arg(in)
+		if len(bd.stages) > 0 {
+			bd.chain(bd.stages[len(bd.stages)-1], in)
+		}
 		return
 	}
 	reject(len(bd.stages) > 0, in.cmd+" comes before FROM; only ARG may")
@@ -299,9 +303,12 @@ func (bd *builder) exec(in instruction) {
 	word := func() string { return processWords(in.rest, env, bd.escape, false)[0] }
 	switch in.cmd {
 	case "RUN":
-		bd.runStep(st, in)
+		bd.cached(st, in, "", true, func() { bd.runStep(st, in) })
+		return
 	case "COPY", "ADD":
-		bd.copy(st, in, env)
+		sources, ok := bd.sourceHash(st, in, env)
+		bd.cached(st, in, sources, ok, func() { bd.copy(st, in, env) })
+		return
 	case "ENV", "LABEL":
 		for _, kv := range bd.pairs(in, env) {
 			if in.cmd == "ENV" {
@@ -369,6 +376,7 @@ func (bd *builder) exec(in instruction) {
 	default:
 		panic(apiError{400, "Unknown instruction: " + in.cmd})
 	}
+	bd.chain(st, in) // settings only: the next step's cache key covers them
 }
 
 // env is what variables in a stage's instructions expand to: its ARGs, then ENV.
@@ -514,18 +522,19 @@ func (bd *builder) from(in instruction) {
 	switch {
 	case parent != nil:
 		cloneTree(parent.root, st.root)
-		st.config = cloneObj(parent.config)
+		st.config, st.cacheID = cloneObj(parent.config), parent.cacheID
 		st.digest, st.baseRoot, st.baseLayout = parent.digest, parent.baseRoot, parent.baseLayout
 		st.baseLayers, st.baseDiffs, st.baseHistory = parent.baseLayers, parent.baseDiffs, parent.baseHistory
 	case strings.EqualFold(ref, "scratch"):
 		check(os.Mkdir(st.root, 0o755))
 		st.digest = "sha256:" + strings.Repeat("0", 64)
+		st.cacheID = st.digest
 	default:
 		im := bd.pull(ref)
 		cloneTree(im.Root, st.root)
 		manifest, config := imageDocs(im.layout)
 		st.config = cloneObj(object(config["config"]))
-		st.digest, st.baseRoot, st.baseLayout = im.Digest, im.Root, im.layout
+		st.digest, st.baseRoot, st.baseLayout, st.cacheID = im.Digest, im.Root, im.layout, im.Digest
 		st.baseLayers, st.baseDiffs = array(manifest["layers"]), array(object(config["rootfs"])["diff_ids"])
 		if h, ok := config["history"].([]any); ok {
 			st.baseHistory = h
@@ -621,11 +630,16 @@ func (bd *builder) runStep(st *buildStage, in instruction) {
 		}
 		panic(apiError{400, fmt.Sprintf("The command '%s' returned a non-zero code: %s%s", strings.Join(stringsOfAny(command), " "), code, detail)})
 	}
-	old := st.root + ".old"
-	check(os.Rename(st.root, old))
+	bd.discardRoot(st)
 	check(os.Rename(filepath.Join(p, "rootfs"), st.root))
-	go os.RemoveAll(old)
 	bd.restoreNetworkFiles(st.root, saved)
+}
+
+// discardRoot moves the stage's files aside, removed in the background.
+func (bd *builder) discardRoot(st *buildStage) {
+	old := filepath.Join(bd.work, "old-"+token()[:12])
+	check(os.Rename(st.root, old))
+	go os.RemoveAll(old)
 }
 
 // The engine writes these into each container; a build keeps the stage's own.
@@ -683,19 +697,7 @@ func (bd *builder) dispose(name string) {
 // and for ADD, URLs and local archives (unpacked).
 func (bd *builder) copy(st *buildStage, in instruction, env map[string]string) {
 	add := in.cmd == "ADD"
-	for f := range in.flags {
-		reject(f == "from" || f == "chown" || f == "chmod" || f == "link", in.cmd+" --"+f+" is not supported")
-	}
-	// ponytail: --chown is accepted and ignored; guest files belong to the container user.
-	var args []string
-	if in.json != nil {
-		for _, a := range in.json {
-			args = append(args, processWords(a, env, bd.escape, false)[0])
-		}
-	} else {
-		args = processWords(in.rest, env, bd.escape, true)
-	}
-	reject(len(args) >= 2, in.cmd+" needs a source and a destination")
+	args, root := bd.copyArgs(st, in, env)
 	dest := args[len(args)-1]
 	toDir := strings.HasSuffix(dest, "/")
 	if !strings.HasPrefix(dest, "/") {
@@ -704,16 +706,6 @@ func (bd *builder) copy(st *buildStage, in instruction, env map[string]string) {
 	if len(args) > 2 {
 		reject(toDir, "When using "+in.cmd+" with more than one source file, the destination must be a directory and end with a /")
 	}
-	root := bd.context
-	if from := in.flags["from"]; from != "" {
-		from = processWords(from, env, bd.escape, false)[0]
-		if s := bd.findStage(from); s != nil {
-			reject(s != st, in.cmd+" --from cannot name the current stage")
-			root = s.root
-		} else {
-			root = bd.pull(from).Root
-		}
-	}
 	mode, chmod := os.FileMode(0), in.flags["chmod"] != ""
 	if chmod {
 		n, e := strconv.ParseUint(in.flags["chmod"], 8, 32)
@@ -721,7 +713,7 @@ func (bd *builder) copy(st *buildStage, in instruction, env map[string]string) {
 		mode = os.FileMode(n)
 	}
 	for _, src := range args[:len(args)-1] {
-		if add && (strings.HasPrefix(src, "http://") || strings.HasPrefix(src, "https://")) {
+		if add && isURL(src) {
 			bd.download(st, src, dest, toDir, mode, chmod)
 			continue
 		}
@@ -747,6 +739,39 @@ func (bd *builder) copy(st *buildStage, in instruction, env map[string]string) {
 			}
 		}
 	}
+}
+
+// copyArgs is COPY and ADD's expanded arguments (the sources, then the destination)
+// and the root the sources are in: the context, or --from's stage or image.
+func (bd *builder) copyArgs(st *buildStage, in instruction, env map[string]string) ([]string, string) {
+	for f := range in.flags {
+		reject(f == "from" || f == "chown" || f == "chmod" || f == "link", in.cmd+" --"+f+" is not supported")
+	}
+	// ponytail: --chown is accepted and ignored; guest files belong to the container user.
+	var args []string
+	if in.json != nil {
+		for _, a := range in.json {
+			args = append(args, processWords(a, env, bd.escape, false)[0])
+		}
+	} else {
+		args = processWords(in.rest, env, bd.escape, true)
+	}
+	reject(len(args) >= 2, in.cmd+" needs a source and a destination")
+	root := bd.context
+	if from := in.flags["from"]; from != "" {
+		from = processWords(from, env, bd.escape, false)[0]
+		if s := bd.findStage(from); s != nil {
+			reject(s != st, in.cmd+" --from cannot name the current stage")
+			root = s.root
+		} else {
+			root = bd.pull(from).Root
+		}
+	}
+	return args, root
+}
+
+func isURL(src string) bool {
+	return strings.HasPrefix(src, "http://") || strings.HasPrefix(src, "https://")
 }
 
 type globMatch struct{ name, host string }
@@ -826,7 +851,7 @@ func copyIntoGuest(src, root, dest string, mode os.FileMode, chmod bool) {
 		if created {
 			info, e := d.Info()
 			check(e)
-			check(os.Chmod(h, info.Mode().Perm()|0o700))
+			check(setMode(h, info.Mode()&permBits|0o700))
 		}
 		return nil
 	}))
@@ -843,11 +868,11 @@ func copyFileTo(src, root, guest string, mode os.FileMode, chmod bool) {
 	}
 	cloneTree(src, dst)
 	if st, e := os.Lstat(dst); e == nil && st.Mode().IsRegular() {
-		m := st.Mode().Perm()
+		m := st.Mode() & permBits
 		if chmod {
 			m = mode
 		}
-		check(os.Chmod(dst, m|0o400))
+		check(setMode(dst, m|0o400))
 	}
 }
 

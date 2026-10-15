@@ -43,6 +43,9 @@ func (b *engine) createExec(container string, body obj) obj {
 	if !live(b.status(b.container(container))) {
 		panic(apiError{409, "Container " + container + " is not running"})
 	}
+	if exists(filepath.Join(b.container(container), "paused")) {
+		panic(apiError{409, "Container " + container + " is paused, unpause the container first"})
+	}
 	j := &execJob{ID: token(), Container: container, Cmd: stringsOf(body["Cmd"]), Env: stringsOf(body["Env"]),
 		User: validUser(text(body["User"])), WorkingDir: text(body["WorkingDir"]),
 		Tty: body["Tty"] == true, Stdin: body["AttachStdin"] == true, Out: body["AttachStdout"] == true, Err: body["AttachStderr"] == true}
@@ -146,11 +149,18 @@ func (b *engine) startExec(w http.ResponseWriter, r *http.Request, id string, bo
 	if j.Tty && size[0] > 0 {
 		resizeTerminal(j.terminal, size[0], size[1])
 	}
-	check(cmd.Start())
-	closeChildEnds(cmd)
-	j.mu.Lock()
-	j.running, j.pid = true, cmd.Process.Pid
-	j.mu.Unlock()
+	func() {
+		b.pausing.Lock() // a pause either sees this exec or this exec sees the pause
+		defer b.pausing.Unlock()
+		check(cmd.Start())
+		closeChildEnds(cmd)
+		j.mu.Lock()
+		j.running, j.pid = true, cmd.Process.Pid
+		j.mu.Unlock()
+		if exists(filepath.Join(b.container(j.Container), "paused")) {
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGSTOP)
+		}
+	}()
 	finished := make(chan struct{})
 	go func() {
 		err := cmd.Wait()
@@ -218,12 +228,22 @@ func (b *engine) startExec(w http.ResponseWriter, r *http.Request, id string, bo
 		pumps.Add(1)
 		go func(stream int, out *os.File) {
 			defer pumps.Done()
-			copyTo(out, func(data []byte) { write(stream, data) })
+			copyTo(out, func(data []byte) {
+				write(stream, data)
+				select {
+				case <-finished: // a slow client took its time: the quiet second starts again
+					if j.Tty {
+						_ = j.terminal.SetReadDeadline(time.Now().Add(time.Second))
+					}
+				default:
+				}
+			})
 		}(i+1, out)
 	}
 	<-finished
 	if j.Tty {
-		// The pty stays readable until its buffered output is gone, then reports EIO.
+		// The pty stays readable until its buffered output is gone, then reports EIO;
+		// stop after a quiet second, not a second in all, so no output is cut short.
 		_ = j.terminal.SetReadDeadline(time.Now().Add(time.Second))
 	}
 	pumps.Wait()

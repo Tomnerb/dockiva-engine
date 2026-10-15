@@ -332,7 +332,8 @@ func copyTree(from, to string) {
 			check(e)
 			check(os.Symlink(target, dest))
 		case info.IsDir():
-			check(os.Mkdir(dest, info.Mode().Perm()|0o700))
+			check(os.Mkdir(dest, 0o700))
+			check(setMode(dest, info.Mode()&permBits|0o700))
 		case info.Mode().IsRegular():
 			in, e := os.Open(p)
 			check(e)

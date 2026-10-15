@@ -450,7 +450,17 @@ static uint64_t io_call(uint64_t call) {
     uint64_t count=cpu->gpr[2];if(count>PIPE_CAP)return linux_error(22);
     unsigned char *p=count?lookup(cpu->gpr[1],count,writing?4:2):(unsigned char *)"";
     if(!p)return linux_error(14);if(!count)return 0;
-    if(f->kind==IO_OUTPUT) { ssize_t n=write(f->host,p,(size_t)count);return n<0?net_error():(uint64_t)n; }
+    if(f->kind==IO_OUTPUT) {
+        /* --stdin makes host fd 0 nonblocking, and a terminal's fds 0-2 share that open
+           description: when the reader falls behind, wait for room (back-pressure) as a
+           Linux tty writer blocks, instead of failing the write with EAGAIN. */
+        ssize_t n;
+        while((n=write(f->host,p,(size_t)count))<0 && (errno==EAGAIN || errno==EINTR)) {
+            if(schedule_active)return net_suspend_one(f->host,POLLOUT,NET_FOREVER);
+            struct pollfd room={f->host,POLLOUT,0};(void)poll(&room,1,-1);
+        }
+        net_wait.active=0;return n<0?net_error():(uint64_t)n;
+    }
     if(f->kind==IO_EOF)return 0;
     if(f->kind==IO_INPUT && !terminal_enabled) { /* --stdin: host fd 0 is nonblocking; wait like a socket */
         ssize_t n=read(f->host,p,(size_t)count);

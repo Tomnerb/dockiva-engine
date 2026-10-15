@@ -246,3 +246,42 @@ func TestLayerTreeSize(t *testing.T) {
 		t.Fatalf("treeSize %d, want 8", n)
 	}
 }
+
+// Unpacking keeps setuid, setgid and sticky (/tmp 1777, sudo 4755), and a layer
+// written from the result records them again.
+func TestSpecialModes(t *testing.T) {
+	root, blobs := t.TempDir(), t.TempDir()
+	headers := []tar.Header{
+		{Name: "tmp/", Typeflag: tar.TypeDir, Mode: 0o1777},
+		{Name: "usr/bin/sudo", Size: 3, Mode: 0o4755},
+		{Name: "usr/bin/wall", Size: 3, Mode: 0o2755},
+		{Name: "tmp/", Typeflag: tar.TypeDir, Mode: 0o1777}, // an existing directory again
+	}
+	applyBlob(root, layer(t, headers, []string{"", "ELF", "ELF"}))
+	for name, want := range map[string]fs.FileMode{"tmp": fs.ModeDir | fs.ModeSticky | 0o777, "usr/bin/sudo": fs.ModeSetuid | 0o755, "usr/bin/wall": fs.ModeSetgid | 0o755} {
+		if st, e := os.Lstat(filepath.Join(root, name)); e != nil || st.Mode() != want {
+			t.Fatalf("%s: %v, want %v (%v)", name, st.Mode(), want, e)
+		}
+	}
+	d, size, _ := writeDiffLayer(root, "", blobs)
+	_, written := layerHeaders(t, blobs, d, size)
+	modes := map[string]int64{}
+	for _, h := range written {
+		modes[h.Name] = h.Mode
+	}
+	if modes["tmp/"] != 0o1777 || modes["usr/bin/sudo"] != 0o4755 || modes["usr/bin/wall"] != 0o2755 {
+		t.Fatalf("layer modes: %v", modes)
+	}
+}
+
+// An APFS clone turns setuid and setgid off; cloneTree sets them again.
+func TestCloneKeepsSetuid(t *testing.T) {
+	src, dst := filepath.Join(t.TempDir(), "src"), filepath.Join(t.TempDir(), "dst")
+	check(os.MkdirAll(filepath.Join(src, "bin"), 0o755))
+	check(os.WriteFile(filepath.Join(src, "bin/sudo"), []byte("ELF"), 0o755))
+	check(setMode(filepath.Join(src, "bin/sudo"), 0o755|fs.ModeSetuid|fs.ModeSetgid))
+	cloneTree(src, dst)
+	if st, e := os.Lstat(filepath.Join(dst, "bin/sudo")); e != nil || st.Mode() != 0o755|fs.ModeSetuid|fs.ModeSetgid {
+		t.Fatalf("clone: %v %v", st.Mode(), e)
+	}
+}

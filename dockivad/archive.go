@@ -236,21 +236,21 @@ func (b *engine) putArchive(name, requested string, body io.Reader, noOverwriteD
 		if exists && !(old.IsDir() && h.Typeflag == tar.TypeDir) {
 			check(os.RemoveAll(dest))
 		}
-		mode := os.FileMode(h.Mode) & os.ModePerm
+		mode := tarMode(h)
 		switch h.Typeflag {
 		case tar.TypeDir:
 			if !exists || !old.IsDir() {
 				check(os.Mkdir(dest, 0o700))
 			}
-			check(os.Chmod(dest, mode))
+			check(setMode(dest, mode))
 			dirs = append(dirs, dated{dest, h.ModTime})
 			continue
 		case tar.TypeReg:
-			out, e := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, mode)
+			out, e := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, mode&os.ModePerm)
 			check(e)
 			_, e = io.Copy(out, in)
 			check(errors.Join(e, out.Close()))
-			check(os.Chmod(dest, mode))
+			check(setMode(dest, mode))
 		case tar.TypeSymlink:
 			check(os.Symlink(linkTarget(h.Linkname), dest))
 			continue

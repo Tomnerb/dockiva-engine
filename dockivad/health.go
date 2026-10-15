@@ -128,12 +128,19 @@ func watchHealth(p, native, worker string, c obj, stop <-chan struct{}) {
 			return
 		case <-time.After(wait):
 		}
+		paused := filepath.Join(p, "paused") // docker pause: no probes, as the container cannot answer
+		if exists(paused) {
+			continue
+		}
 		begin := time.Now()
 		code, output := probe(p, native, worker, c, argv, timeout)
 		select {
 		case <-stop: // the run ended meanwhile: its result says nothing
 			return
 		default:
+		}
+		if exists(paused) { // paused meanwhile: nor does this one
+			continue
 		}
 		switch {
 		case code == 0:
