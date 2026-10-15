@@ -147,9 +147,9 @@ containers find each other by name and alias; `host.docker.internal` is the
 Mac; `--network host` shares the Mac's network as before. One network per
 container.
 
-Published ports: `-p 8080:80` listens on every address of the Mac (0.0.0.0 and
-::, as Docker does) unless the engine runs with `--default-bind-ip 127.0.0.1`
-(or another address); `-p 127.0.0.1:8080:80`, `-p 192.168.1.5:8080:80` and
+Published ports: `-p 8080:80` listens on 127.0.0.1 only, so nothing is reachable
+from the network by default; with `--default-bind-ip 0.0.0.0` it listens on every
+address of the Mac (0.0.0.0 and ::, as Docker does). `-p 127.0.0.1:8080:80`, `-p 192.168.1.5:8080:80` and
 `-p [::]:8080:80` bind that address only. Port ranges (`-p 8000-8005:8000-8005`),
 `-p 80` and `-P` (free host ports for every exposed port) and UDP (`-p 53:53/udp`)
 work. The container binds a private loopback port and its supervisor forwards

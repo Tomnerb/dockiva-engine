@@ -56,7 +56,7 @@ func run() {
 	insecure := flags.Bool("insecure-local", false, "allow plain HTTP to loopback registries (127.0.0.1, localhost)")
 	tokenEnv := flags.String("token-env", "", "registry token environment variable")
 	maxContainers := flags.Int("max-containers", 64, "running containers at once")
-	bindIP := flags.String("default-bind-ip", "0.0.0.0", "host address of -p HOST:CONTAINER ports without one (Docker's --ip; 127.0.0.1 keeps them on this Mac)")
+	bindIP := flags.String("default-bind-ip", "127.0.0.1", "host address of -p HOST:CONTAINER ports without one (Docker's --ip; 0.0.0.0 publishes on every address, as Docker does)")
 	check(flags.Parse(os.Args[1:]))
 	reject(flags.NArg() == 0, "Unexpected arguments")
 	reject(*maxContainers >= 1 && *maxContainers <= 1024, "--max-containers must be 1..1024")

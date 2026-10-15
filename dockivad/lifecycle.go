@@ -30,7 +30,7 @@ type engine struct {
 	Home, State, Cache, Native, Worker, Assets, Self string
 	MaxContainers                                    int
 	Insecure                                         bool   // --insecure-local: plain HTTP to loopback registries
-	BindIP                                           string // -default-bind-ip: where -p HOST:GUEST publishes ("": 0.0.0.0)
+	BindIP                                           string // -default-bind-ip: where -p HOST:GUEST publishes ("": 127.0.0.1)
 	Mu                                               sync.Mutex
 	events                                           events
 	exits                                            sync.Map      // exit status of auto-removed containers, by name, for a minute

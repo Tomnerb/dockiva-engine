@@ -219,7 +219,7 @@ const udpIdle = 90 * time.Second
 // binding on 127.0.0.1 skips the forwarder: the runtime binds that port itself.
 // ports.json records what was bound, for inspect, ps and docker port.
 func publishPorts(p string, c obj, defaultIP string) (args []string, closeAll func()) {
-	defaultIP = cmp.Or(defaultIP, "0.0.0.0")
+	defaultIP = cmp.Or(defaultIP, "127.0.0.1")
 	byGuest := map[int64][]portBinding{}
 	guests := []int64{}
 	for _, b := range savedPorts(c) {

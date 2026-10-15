@@ -80,7 +80,7 @@ func TestPortForwarding(t *testing.T) {
 	p := t.TempDir()
 	direct := freePort(t)
 	c := obj{"ports": portBindings(decode([]byte(`{"80/tcp":[{"HostPort":"0"}],"53/udp":[{"HostIp":"127.0.0.1","HostPort":"0"}],"81/tcp":[{"HostIp":"127.0.0.1","HostPort":"`+strconv.Itoa(direct)+`"}]}`), maxJSON))}
-	args, closeAll := publishPorts(p, c, "")
+	args, closeAll := publishPorts(p, c, "0.0.0.0")
 	internal := map[string]string{}
 	for i := 0; i+1 < len(args); i += 2 {
 		guest, port, _ := strings.Cut(args[i+1], ":")
@@ -156,7 +156,7 @@ func TestPortForwarding(t *testing.T) {
 	}
 	// A port in use: the start fails, as Docker's does.
 	busy := obj{"ports": portBindings(decode([]byte(`{"80/tcp":[{"HostPort":"`+strconv.Itoa(tcpPort)+`"}]}`), maxJSON))}
-	if e := safeRun(func() { publishPorts(t.TempDir(), busy, "") }); e == nil || !strings.Contains(e.Error(), "Bind for 0.0.0.0:"+strconv.Itoa(tcpPort)+" failed") {
+	if e := safeRun(func() { publishPorts(t.TempDir(), busy, "0.0.0.0") }); e == nil || !strings.Contains(e.Error(), "Bind for 0.0.0.0:"+strconv.Itoa(tcpPort)+" failed") {
 		t.Fatalf("port in use: %v", e)
 	}
 	closeAll()
@@ -190,4 +190,15 @@ func otherLocalIPv4() string {
 		}
 	}
 	return ""
+}
+
+// Without -default-bind-ip, published ports stay on this Mac: the runtime binds
+// 127.0.0.1 itself and no forwarder listens on other addresses.
+func TestDefaultBindIsLoopback(t *testing.T) {
+	port := freePort(t)
+	args, closeAll := publishPorts(t.TempDir(), obj{"ports": []any{[]any{int64(80), int64(port), "tcp", ""}}}, "")
+	closeAll()
+	if len(args) != 2 || args[1] != "80:"+strconv.Itoa(port) {
+		t.Fatalf("default bind: %v", args)
+	}
 }
