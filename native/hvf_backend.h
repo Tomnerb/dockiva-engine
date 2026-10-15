@@ -1340,7 +1340,9 @@ static int hvf_slice_run(void) {
             /* in_guest is set under the mm lock, so a sibling holding it sees every
                worker of this process that may enter guest code. */
             atomic_store(&self->in_guest,1);atomic_thread_fence(memory_order_seq_cst);
-            if(!in_vector && (hvf_must_stop(task) || (schedule_active && __atomic_exchange_n(&hvf_cpu->preempt,0,__ATOMIC_ACQ_REL)))) {
+            /* A tick yields only while no worker is idle: an idle one takes any thread
+               that becomes runnable (a sleeper's timer) itself. */
+            if(!in_vector && (hvf_must_stop(task) || (schedule_active && __atomic_exchange_n(&hvf_cpu->preempt,0,__ATOMIC_ACQ_REL) && !(schedule_idle || schedule_polling)))) {
                 atomic_store(&self->in_guest,0);stopped=1;break;  /* (the guest's registers are in the frame or the vCPU) */
             }
             in_vector=0;
