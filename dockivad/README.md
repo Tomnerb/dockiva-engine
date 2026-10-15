@@ -74,8 +74,12 @@ ways, including into volumes and bind mounts; read-only paths are refused),
 `depends_on` conditions), `system df` (`-v`), `save`, `load` (classic and OCI
 archives, plain or gzip; linux/arm64 images only, others are skipped),
 `container prune`, `image prune` (`-a`), `system prune` (`until` and `label`
-filters) and `version`/`info`. Not supported: builds, tmpfs
-mounts.
+filters), `version`/`info`, and `build` and `compose build` (plain, through
+buildx's `docker` driver, or with `DOCKER_BUILDKIT=0`). Builds run the
+Dockerfile on the engine's classic builder: linux/arm64 only, results go to the
+image store, and BuildKit-only features (`RUN --mount`, heredocs,
+`--build-context`, `--output`, `--call`/`--check`) are refused. Not supported:
+tmpfs mounts.
 
 Networks: the default bridge and user networks give each container an address
 in 10.89.N.0/24 and private ports (two containers can both listen on 5432, and

@@ -707,6 +707,13 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 			b.build(w, r, q)
 			return
 		}
+		// docker build through buildx (BuildKit's API, buildkit.go): hijacked HTTP/2.
+		if (path == "/grpc" || path == "/session") && method == "POST" {
+			stream()
+			defer endStream()
+			b.buildkitConn(w, r, path)
+			return
+		}
 		// docker load: a docker save tar of any size, read as it arrives.
 		if path == "/images/load" && method == "POST" {
 			stream()
@@ -738,8 +745,9 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 		}
 		switch {
 		case path == "/_ping" && (method == "GET" || method == "HEAD"):
-			// The classic builder (POST /build): the docker CLI then builds without BuildKit.
-			w.Header().Set("Builder-Version", "1")
+			// BuildKit's API (POST /grpc, buildkit.go): docker build goes through buildx's
+			// "docker" driver. POST /build serves DOCKER_BUILDKIT=0.
+			w.Header().Set("Builder-Version", "2")
 			w.Header().Set("Content-Type", "text/plain")
 			w.WriteHeader(200)
 			_, _ = w.Write([]byte("OK"))
