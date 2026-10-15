@@ -31,8 +31,9 @@ func (b *engine) bkBuild(ctx context.Context, st *bkSolve, opts map[string]strin
 	for _, p := range strings.Split(opts["platform"], ",") {
 		reject(p == "" || p == "linux/arm64" || p == "linux/arm64/v8", "Only linux/arm64 builds are supported, not "+p)
 	}
-	// ponytail: --no-cache and --pull need nothing: every build runs every step, and
-	// FROM pulls only missing images. Once build.go caches steps, "no-cache" maps to it.
+	// --pull needs nothing: FROM pulls only missing images. buildx sends "no-cache"
+	// (empty for every stage) for --no-cache.
+	_, nocache := opts["no-cache"]
 	tags := []string{}
 	for _, t := range st.names {
 		tags = append(tags, normalizeTag(t))
@@ -41,7 +42,7 @@ func (b *engine) bkBuild(ctx context.Context, st *bkSolve, opts map[string]strin
 	check(e)
 	defer func() { go os.RemoveAll(work) }()
 	bd := &builder{b: b, ctx: ctx, work: work, context: filepath.Join(work, "context"), network: opts["force-network-mode"],
-		args: map[string]string{}, used: map[string]bool{}, global: map[string]string{}}
+		args: map[string]string{}, used: map[string]bool{}, global: map[string]string{}, nocache: nocache}
 	for k, v := range platformArgs {
 		bd.global[k] = v
 	}
