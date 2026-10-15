@@ -135,12 +135,14 @@ static uint64_t fs_error(void) {
         default:return net_error();
     }
 }
-/* A guest path, read a page at a time (one lookup each; mappings are page-granular). */
+/* A guest path, read a page at a time (one lookup each), or a byte at a time where a
+   segment ends within the page (the interpreter's ELF segments are not page-rounded). */
 static int fs_string(uint64_t ptr,char path[1025]) {
     for(unsigned i=0;i<=1024;) {
         if(ptr>UINT64_MAX-i) { errno=EFAULT;return -1; }
         uint64_t at=ptr+i,chunk=4096-(at&4095);if(chunk>1025-i)chunk=1025-i;
         unsigned char *p=lookup(at,chunk,4);
+        if(!p) { chunk=1;p=lookup(at,1,4); }
         if(!p) { errno=EFAULT;return -1; }
         for(uint64_t k=0;k<chunk;k++,i++) {
             path[i]=(char)p[k];
