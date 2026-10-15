@@ -2,16 +2,19 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -50,6 +53,7 @@ type logReader struct {
 	offsets [2]int64
 	raw     bool          // a terminal's output: unframed
 	every   time.Duration // polling interval (default 100 ms)
+	filter  *logFilter    // docker logs -t, --since, --until (nil: output as written)
 }
 
 var logNames = [2]string{"stdout.log", "stderr.log"}
@@ -84,11 +88,15 @@ func (l *logReader) next() []byte {
 			if n <= 0 {
 				break
 			}
+			data := buf[:n]
+			if l.filter != nil {
+				data = l.filter.lines(i, data, l.offsets[i])
+			}
 			l.offsets[i] += int64(n)
 			if l.raw {
-				out = append(out, buf[:n]...)
+				out = append(out, data...)
 			} else {
-				out = frame(out, i+1, buf[:n])
+				out = frame(out, i+1, data)
 			}
 		}
 	}
@@ -230,8 +238,8 @@ func (b *engine) attach(w http.ResponseWriter, r *http.Request, name string, std
 
 // followLogs streams existing output (already written by the caller) and then
 // new output until the container is no longer running.
-func (b *engine) followLogs(w http.ResponseWriter, r *http.Request, p string, stdout, stderr bool, offsets [2]int64, raw bool) {
-	reader := &logReader{dir: p, want: [2]bool{stdout, stderr}, offsets: offsets, raw: raw}
+func (b *engine) followLogs(w http.ResponseWriter, r *http.Request, p string, stdout, stderr bool, offsets [2]int64, raw bool, filter *logFilter) {
+	reader := &logReader{dir: p, want: [2]bool{stdout, stderr}, offsets: offsets, raw: raw, filter: filter}
 	flusher, _ := w.(http.Flusher)
 	reader.follow(r.Context(), func(chunk []byte) error {
 		if _, e := w.Write(chunk); e != nil {
@@ -243,7 +251,7 @@ func (b *engine) followLogs(w http.ResponseWriter, r *http.Request, p string, st
 		return nil
 	}, func() bool {
 		s := b.statusOf(p)
-		return s == nil || !live(s)
+		return s == nil || !live(s) || filter != nil && filter.until != 0 && time.Now().UnixNano() > filter.until
 	})
 }
 
@@ -523,7 +531,7 @@ func (b *engine) streamEvents(w http.ResponseWriter, r *http.Request, filters ob
 // signalNumber parses docker kill's signal: a name with or without SIG, or a number.
 // Only signals the runtime forwards to the container's first process, and SIGKILL.
 func signalNumber(v string) syscall.Signal {
-	if v == "" {
+	if v == "" || v == "KILL" || v == "SIGKILL" { // not a stop signal (stopSignal refuses it)
 		return syscall.SIGKILL
 	}
 	if n, e := strconv.Atoi(v); e == nil {
@@ -536,9 +544,6 @@ func signalNumber(v string) syscall.Signal {
 		return syscall.SIGKILL
 	}
 	name := stopSignal(v)
-	if name == "SIGKILL" {
-		return syscall.SIGKILL
-	}
 	reject(name != "SIGWINCH", "Unsupported signal: "+v)
 	return stopSignals[name]
 }
@@ -563,4 +568,175 @@ func (b *engine) kill(name string, sig syscall.Signal) {
 	if e != nil || string(reply) != "OK" {
 		panic(apiError{409, "Supervisor did not accept the signal (a container started by an older engine needs a restart)"})
 	}
+}
+
+// stampedLog appends a container stream to its log (stdout.log) and, before the
+// bytes, to its index (stdout.idx) the offset and time (Unix nanoseconds; 8 bytes
+// little-endian each) of every line that starts in them: docker logs -t, --since
+// and --until read it. The supervisor writes both; one entry is 16 bytes a line.
+type stampedLog struct {
+	mu       sync.Mutex
+	log, idx *os.File
+	end      int64 // the log's size
+	midline  bool  // the last byte written was not a newline
+}
+
+func openStampedLog(dir, name string) *stampedLog {
+	log, e := os.OpenFile(filepath.Join(dir, name+".log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	check(e)
+	idx, e := os.OpenFile(filepath.Join(dir, name+".idx"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	check(e)
+	st, e := log.Stat()
+	check(e)
+	if i, e := idx.Stat(); e == nil && i.Size()%16 != 0 { // a torn last entry (a crash)
+		_ = idx.Truncate(i.Size() - i.Size()%16)
+	}
+	return &stampedLog{log: log, idx: idx, end: st.Size()}
+}
+
+func (l *stampedLog) Write(b []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now, entries := time.Now().UnixNano(), []byte{}
+	for i, c := range b {
+		if !l.midline {
+			entries = binary.LittleEndian.AppendUint64(binary.LittleEndian.AppendUint64(entries, uint64(l.end+int64(i))), uint64(now))
+		}
+		l.midline = c != '\n'
+	}
+	if len(entries) > 0 {
+		_, _ = l.idx.Write(entries) // the output matters more than its times
+	}
+	n, e := l.log.Write(b)
+	l.end += int64(n)
+	return n, e
+}
+
+func (l *stampedLog) Close() error { return errors.Join(l.log.Close(), l.idx.Close()) }
+
+// lineTimes reads a log's index forward: the time of the line starting at an offset.
+type lineTimes struct {
+	f        *os.File // nil: no index (a log written before indexes existed)
+	pos      int64    // the next entry's position in the index
+	buf      []byte   // whole entries read and not yet used
+	fallback int64    // the time when the index has nothing at or after a line (0: now)
+}
+
+// openLineTimes starts at the first entry for an offset at or after from.
+func openLineTimes(dir string, stream int, from, fallback int64) *lineTimes {
+	t := &lineTimes{fallback: fallback}
+	f, e := os.OpenFile(filepath.Join(dir, strings.TrimSuffix(logNames[stream], ".log")+".idx"), os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if e != nil {
+		return t
+	}
+	st, e := f.Stat()
+	check(e)
+	entry := make([]byte, 8)
+	t.f, t.pos = f, 16*int64(sort.Search(int(st.Size()/16), func(k int) bool {
+		n, _ := f.ReadAt(entry, int64(k)*16)
+		return n < 8 || int64(binary.LittleEndian.Uint64(entry)) >= from
+	}))
+	return t
+}
+
+// at is the time of the line starting at off (offsets asked in increasing order).
+// A line with no entry (written by an older engine) takes the next entry's time,
+// or the fallback: no earlier than it was written.
+func (t *lineTimes) at(off int64) int64 {
+	for {
+		for len(t.buf) >= 16 {
+			o, when := int64(binary.LittleEndian.Uint64(t.buf)), int64(binary.LittleEndian.Uint64(t.buf[8:]))
+			if o > off {
+				return when
+			}
+			t.buf = t.buf[16:]
+			if o == off {
+				return when
+			}
+		}
+		n := 0
+		if t.f != nil {
+			chunk := make([]byte, 64*16)
+			n, _ = t.f.ReadAt(chunk, t.pos)
+			n -= n % 16
+			t.buf = chunk[:n]
+		}
+		if n == 0 {
+			return cmp.Or(t.fallback, time.Now().UnixNano())
+		}
+		t.pos += int64(n)
+	}
+}
+
+func (t *lineTimes) close() {
+	if t.f != nil {
+		t.f.Close()
+	}
+}
+
+// logFilter is docker logs -t (timestamps), --since and --until (Unix nanoseconds,
+// 0 for none) over the two streams, keeping where each stream is in its lines.
+type logFilter struct {
+	dir          string
+	timestamps   bool
+	since, until int64
+	times        [2]*lineTimes
+	midline      [2]bool // the last bytes seen did not end their line
+	skip         [2]bool // that line is outside since..until
+}
+
+// rfc3339NanoFixed is Docker's log timestamp: always nine digits of nanoseconds.
+const rfc3339NanoFixed = "2006-01-02T15:04:05.000000000Z07:00"
+
+// lines rewrites a stream's log bytes (data, from offset off): every line starting
+// in them is dropped when outside since..until, and otherwise, with timestamps,
+// prefixed by its time.
+func (f *logFilter) lines(stream int, data []byte, off int64) []byte {
+	out := make([]byte, 0, len(data))
+	for len(data) > 0 {
+		if !f.midline[stream] {
+			if f.times[stream] == nil { // a stream whose log was missing when docker logs began
+				f.times[stream] = openLineTimes(f.dir, stream, off, 0)
+			}
+			at := f.times[stream].at(off)
+			f.skip[stream] = f.since != 0 && at < f.since || f.until != 0 && at > f.until
+			if !f.skip[stream] && f.timestamps {
+				out = append(time.Unix(0, at).UTC().AppendFormat(out, rfc3339NanoFixed), ' ')
+			}
+		}
+		n := bytes.IndexByte(data, '\n') + 1
+		if n == 0 {
+			n = len(data)
+		}
+		if !f.skip[stream] {
+			out = append(out, data[:n]...)
+		}
+		f.midline[stream] = data[n-1] != '\n'
+		data, off = data[n:], off+int64(n)
+	}
+	return out
+}
+
+func (f *logFilter) close() {
+	for _, t := range f.times {
+		if t != nil {
+			t.close()
+		}
+	}
+}
+
+// logTime parses --since and --until as Docker's API sends them: Unix seconds with
+// an optional fraction ("1700000000.5"), or RFC 3339. "" and "0" mean none (0).
+func logTime(v string) int64 {
+	if v == "" || v == "0" {
+		return 0
+	}
+	if t, e := time.Parse(time.RFC3339Nano, v); e == nil {
+		return t.UnixNano()
+	}
+	whole, fraction, _ := strings.Cut(v, ".")
+	s, e1 := strconv.ParseUint(whole, 10, 63)
+	ns, e2 := strconv.ParseUint((fraction + "000000000")[:9], 10, 63)
+	reject(e1 == nil && e2 == nil && len(fraction) <= 9 && strings.Trim(fraction, "0123456789") == "" && s < 1<<33, "Invalid time: "+v)
+	return int64(s)*1e9 + int64(ns)
 }

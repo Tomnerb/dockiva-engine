@@ -32,6 +32,7 @@ type engine struct {
 	events                                           events
 	exits                                            sync.Map      // exit status of auto-removed containers, by name, for a minute
 	execs                                            sync.Map      // *execJob by ID
+	pausing                                          sync.Mutex    // pause and unpause, and an exec starting meanwhile
 	quit                                             chan struct{} // POST /dockiva/shutdown asks main to exit
 }
 
@@ -224,6 +225,7 @@ func (b *engine) stop(name string, seconds ...int) {
 	if !live(s) {
 		return
 	}
+	b.unpause(name)
 	defer func() {
 		if failure := recover(); failure != nil {
 			// Natural exit can remove the control endpoint after our running
@@ -266,6 +268,55 @@ func (b *engine) stop(name string, seconds ...int) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	panic(apiError{409, "Stop status timeout"})
+}
+
+// pause freezes a running container (docker pause), or thaws it (unpause): SIGSTOP
+// or SIGCONT to the process group of its run (worker guard and runtime) and of each
+// of its execs, each its own runtime. The "paused" file says so (State.Paused); the
+// supervisor skips healthchecks while it is there and removes it as a run ends.
+func (b *engine) pause(name string, freeze bool) {
+	p := b.container(name)
+	s := b.status(p)
+	if s["state"] != "running" || s["pid"] == nil {
+		panic(apiError{409, "Container " + name + " is not running"})
+	}
+	b.pausing.Lock()
+	defer b.pausing.Unlock()
+	marker := filepath.Join(p, "paused")
+	if freeze && exists(marker) {
+		panic(apiError{409, "Container " + name + " is already paused"})
+	}
+	if !freeze && !exists(marker) {
+		panic(apiError{409, "Container " + name + " is not paused"})
+	}
+	sig := syscall.SIGCONT
+	if freeze {
+		sig = syscall.SIGSTOP
+		check(os.WriteFile(marker, nil, 0600)) // first: no healthcheck starts in between
+	}
+	groups := []int{int(integer(s["pid"]))} // the run's group leader (Setpgid, or Setsid with a terminal)
+	b.execs.Range(func(_, v any) bool {
+		j := v.(*execJob)
+		j.mu.Lock()
+		if j.Container == name && j.running && j.pid > 0 {
+			groups = append(groups, j.pid)
+		}
+		j.mu.Unlock()
+		return true
+	})
+	for _, g := range groups {
+		_ = syscall.Kill(-g, sig) // a group gone meanwhile is fine
+	}
+	if !freeze {
+		check(os.Remove(marker))
+	}
+}
+
+// unpause thaws a paused container, so stop, kill and remove reach it as usual.
+func (b *engine) unpause(name string) {
+	if exists(filepath.Join(b.container(name), "paused")) {
+		_ = safeRun(func() { b.pause(name, false) }) // not running: the run's end removes it
+	}
 }
 
 // restartOnBoot starts, as the engine starts, the containers whose run ended without
@@ -573,11 +624,9 @@ func supervise(p, native, worker, generation string) (result error) {
 	check(listenerErr)
 	secret := token()
 	save(filepath.Join(p, "control.json"), obj{"port": listener.Addr().(*net.TCPAddr).Port, "token": secret})
-	out, e := os.OpenFile(filepath.Join(p, "stdout.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
-	check(e)
+	out := openStampedLog(p, "stdout") // through pipes: each line's time is indexed
 	defer out.Close()
-	errout, e := os.OpenFile(filepath.Join(p, "stderr.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
-	check(e)
+	errout := openStampedLog(p, "stderr")
 	defer errout.Close()
 	signals := make(chan os.Signal, 2)
 	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT)
@@ -602,6 +651,7 @@ func supervise(p, native, worker, generation string) (result error) {
 		cmd.ExtraFiles = []*os.File{reader}
 		cmd.Stdout = out
 		cmd.Stderr = errout
+		cmd.WaitDelay = time.Second // output a leftover process holds does not delay the run's end
 		cmd.Env = []string{"PATH=/usr/bin:/bin", "LANG=C"}
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		var child *os.File
@@ -619,7 +669,8 @@ func supervise(p, native, worker, generation string) (result error) {
 			input, child = os.NewFile(uintptr(pair[0]), "stdin"), os.NewFile(uintptr(pair[1]), "container-stdin")
 			cmd.Stdin = child
 		}
-		_ = os.Remove(filepath.Join(p, "oom")) // OOMKilled describes the latest run
+		_ = os.Remove(filepath.Join(p, "oom"))    // OOMKilled describes the latest run
+		_ = os.Remove(filepath.Join(p, "paused")) // left by a run that ended frozen
 		check(cmd.Start())
 		if child != nil {
 			child.Close()
@@ -665,6 +716,7 @@ func supervise(p, native, worker, generation string) (result error) {
 		}
 		writer.Close()
 		writer = nil
+		_ = os.Remove(filepath.Join(p, "paused"))
 		status["state"] = "exited"
 		status["exit_code"] = code
 		status["finished_at"] = now()

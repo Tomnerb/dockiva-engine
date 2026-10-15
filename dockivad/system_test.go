@@ -9,9 +9,13 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 const fixture = "../examples/m19/shell-image"
@@ -359,5 +363,63 @@ func TestTagThenRemoveSource(t *testing.T) {
 	migrateNames(b.Cache)
 	if r := request(t, h, "DELETE", "/images/test/old:1", "", ""); r.Code != 200 || exists(filepath.Join(b.Cache, key("docker.io/test/old:1"))) {
 		t.Fatalf("rmi of a migrated name: %d %s", r.Code, r.Body.String())
+	}
+}
+
+// docker pause stops the run's process group (SIGSTOP) and unpause continues it;
+// a kill of a paused container thaws it first.
+func TestPauseUnpause(t *testing.T) {
+	b := testEngine(t)
+	h := b.handler("")
+	b.create("web", decode([]byte(`{"Image":"dockiva/shell:demo"}`), maxJSON))
+	p := b.container("web")
+	run := exec.Command("/bin/sleep", "30") // stands in for the worker, its own group leader
+	run.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	check(run.Start())
+	defer func() { _ = run.Process.Kill(); _ = run.Wait() }()
+	lock, e := lockFile(filepath.Join(p, "lock"), true) // a live supervisor holds it
+	check(e)
+	defer lock.Close()
+	save(filepath.Join(p, "status.json"), obj{"state": "running", "generation": "g", "pid": run.Process.Pid})
+	stopped := func() bool {
+		out, e := exec.Command("/bin/ps", "-o", "stat=", "-p", strconv.Itoa(run.Process.Pid)).Output()
+		check(e)
+		return strings.HasPrefix(string(out), "T")
+	}
+	state := func() obj { return object(b.inspect("web")["State"]) }
+	for _, step := range []struct {
+		action string
+		code   int
+		paused bool
+	}{{"pause", 204, true}, {"pause", 409, true}, {"unpause", 204, false}, {"unpause", 409, false}, {"pause", 204, true}} {
+		if r := request(t, h, "POST", "/containers/web/"+step.action, "", ""); r.Code != step.code {
+			t.Fatalf("%s: %d %s", step.action, r.Code, r.Body.String())
+		}
+		time.Sleep(50 * time.Millisecond)
+		if s := state(); stopped() != step.paused || s["Paused"] != step.paused || s["Running"] != true || (s["Status"] == "paused") != step.paused {
+			t.Fatalf("after %s: stopped %v, state %v", step.action, stopped(), s)
+		}
+	}
+	if r := request(t, h, "POST", "/containers/web/exec", `{"Cmd":["true"]}`, ""); r.Code != 409 {
+		t.Fatalf("exec in a paused container: %d", r.Code)
+	}
+	// docker kill: thawed, then the supervisor gets the signal.
+	listener, e := net.Listen("tcp", "127.0.0.1:0")
+	check(e)
+	defer listener.Close()
+	save(filepath.Join(p, "control.json"), obj{"port": listener.Addr().(*net.TCPAddr).Port, "token": "secret"})
+	go func() {
+		conn, e := listener.Accept()
+		if e == nil {
+			_, _ = bufio.NewReader(conn).ReadString('\n')
+			_, _ = conn.Write([]byte("OK"))
+			conn.Close()
+		}
+	}()
+	if r := request(t, h, "POST", "/containers/web/kill?signal=KILL", "", ""); r.Code != 204 {
+		t.Fatalf("kill: %d %s", r.Code, r.Body.String())
+	}
+	if stopped() || exists(filepath.Join(p, "paused")) {
+		t.Fatal("kill left the container paused")
 	}
 }
