@@ -3,9 +3,10 @@
    memory is the interpreter's own address space: each MemoryBacking is mapped
    once into guest-physical space (stage 2), and 4 KiB stage-1 tables built here
    give the guest its Linux virtual layout. Every guest exception lands on an
-   EL1-only vector page that executes HVC, so SVC and faults exit to this
-   process, which runs the shared Linux syscall layer and resumes the guest at
-   EL0. Hardware stage-2 translation keeps guest code out of host memory.
+   EL1-only vector page whose routine saves the guest's registers to this
+   vCPU's frame and executes HVC, so SVC and faults exit to this process, which
+   runs the shared Linux syscall layer and resumes the guest at EL0 through the
+   frame (hvf_put_regs). Hardware stage-2 translation keeps guest code out of host memory.
    Guest processes share the one VM: every process keeps its own stage-1 tables
    (tagged with an ASID of its own, see hvf_asid) and every backing stays mapped in stage 2
    until it is freed, so a process switch only loads TTBR0; tables are rebuilt
@@ -19,13 +20,21 @@
 #define HVF_IPA_BASE UINT64_C(0x80000000)
 #define HVF_TABLE_BYTES (64u<<20)                   /* stage-1 tables of every process: 16384 x 4 KiB */
 #define HVF_TABLES (HVF_TABLE_BYTES/4096)
-#define HVF_SYSTEM_BYTES (16u<<10)                  /* one host page: vectors + flush routine */
+#define HVF_CODE_BYTES (16u<<10)                    /* one host page: vectors and EL1 routines */
+#define HVF_FRAME_BYTES 512u                        /* each vCPU's register frame (WORKER_LIMIT of them) */
+#define HVF_SYSTEM_BYTES (HVF_CODE_BYTES+WORKER_LIMIT*HVF_FRAME_BYTES) /* code (read, execute), then frames (read, write) */
 #define HVF_SYSTEM_VA UINT64_C(0xffffffff0000)      /* top of the 48-bit user range; EL1-only */
+#define HVF_FRAME_VA (HVF_SYSTEM_VA+HVF_CODE_BYTES)
 #define HVF_FLUSH_OFFSET 0x800u
-#define HVF_FLUSH_ERET_OFFSET 0x840u
+#define HVF_SAVE_OFFSET 0x900u
+#define HVF_RESTORE_OFFSET 0x968u
+#define HVF_INVALIDATE_OFFSET 0x9c4u
+/* Frame words (SP_EL1 points at the vCPU's frame): x0..x30, then these. HF_FAST:
+   the EL1 vector's own answers to syscalls 172..178 (hvf_fast_publish). */
+enum { HF_SP=31,HF_TLS,HF_ELR,HF_SPSR,HF_ESR,HF_FAR,HF_TLBI_VA,HF_TLBI_PAGES,HF_FAST=40 };
 #define HVF_BLOCKS 16384                           /* stage-2 blocks: a few backings for each of up to 1024 processes */
 #define HVF_VIEWS (PROCESS_LIMIT+2)                 /* indexed by pid */
-static unsigned char *hvf_tables,*hvf_system;
+static unsigned char *hvf_tables,*hvf_system;static unsigned hvf_frames_used;
 static unsigned short hvf_table_owner[HVF_TABLES];  /* 0 free, else the pid whose tables use it */
 static unsigned hvf_table_hint;
 typedef struct { const unsigned char *host;size_t size;uint64_t ipa; } HvfBlock;
@@ -68,20 +77,19 @@ static HvfView hvf_views[HVF_VIEWS];
 static int hvf_active;                       /* run() executes natively */
 /* Each worker's vCPU (Worker.backend), created on and used only by that worker's
    thread. view: the tables its TTBR0 holds (ttbr: their root, which a rebuild
-   elsewhere may have replaced). The shadow mirrors its general registers. */
+   elsewhere may have replaced). frame: its register frame (host address); framed:
+   the guest's registers are there (saved by the vector, or put to resume through it),
+   not in the vCPU's own registers (a preemption at EL0). */
 typedef struct {
     hv_vcpu_t vcpu;hv_vcpu_exit_t *exit;HvfView *view;uint64_t ttbr;unsigned asid_flushed; /* the ASID generation its TLBs were last flushed in */
-    uint64_t shadow_gpr[31],shadow_sp,shadow_tls;int shadow_valid,fp_in_cpu,fp_dirty;
+    uint64_t *frame;int framed,fp_in_cpu,fp_dirty;
     unsigned tso;                            /* ACTLR_EL1.EnTSO as last set: the running thread's mem_model */
 } HvfCpu;
 #define hvf_cpu ((HvfCpu *)worker->backend)
 #define hvf_vcpu (hvf_cpu->vcpu)
 #define hvf_exit (hvf_cpu->exit)
 #define hvf_view (hvf_cpu->view)
-#define hvf_shadow_gpr (hvf_cpu->shadow_gpr)
-#define hvf_shadow_sp (hvf_cpu->shadow_sp)
-#define hvf_shadow_tls (hvf_cpu->shadow_tls)
-#define hvf_shadow_valid (hvf_cpu->shadow_valid)
+#define hvf_frame (hvf_cpu->frame)
 #define hvf_fp_in_cpu (hvf_cpu->fp_in_cpu)
 #define hvf_fp_dirty (hvf_cpu->fp_dirty)
 static void hvf_check(hv_return_t result,const char *what) {
@@ -350,6 +358,7 @@ static void hvf_build(GuestAddressSpace *space) {
     hvf_exhausted=0;hvf_tables_free(hvf_view);
     if(!(hvf_view->root=hvf_table()))return;
     hvf_map_page(HVF_SYSTEM_VA,HVF_IPA_BASE+HVF_TABLE_BYTES,0,1);
+    for(unsigned i=0;i<WORKER_LIMIT*HVF_FRAME_BYTES/4096;i++)hvf_map_page(HVF_FRAME_VA+i*4096,HVF_IPA_BASE+HVF_TABLE_BYTES+HVF_CODE_BYTES+i*4096,0,1);
     for(unsigned i=0;i<space->nseg;i++)hvf_map_range(space,space->seg[i].base,space->seg[i].size,space->seg[i].flags,space->seg[i].backing,space->seg[i].offset);
     hvf_map_range(space,space->brk_base,space->brk_pages,6,space->brk_backing,0);
     hvf_map_arena_all(space);
@@ -500,21 +509,18 @@ static unsigned hvf_fault_around(GuestAddressSpace *space,uint64_t far) {
     }
     return n && address_space_make_private(space,backing,(host+1)*size,n*size)?n:0;
 }
-/* Resume the guest after a write fault (ELR/SPSR_EL1 still hold its state). Pages
-   that became writable are invalidated on the way: the vCPU runs the EL1 routine
-   "1: tlbi vale1is, x0; add x0, x0, #1; sub sp, sp, #1; cmp sp, #0; b.ne 1b; dsb ish;
-   mrs x0, tpidr_el1; eret" first, with the operand in x0, the page count in SP_EL1
-   and the guest's x0 in TPIDR_EL1, instead of a separate run for the invalidation.
-   Returns 1 then: the vCPU is at EL1 until it runs (the caller treats it as in the vector). */
+/* Resume the guest after a write fault (its registers are in the frame). Pages that
+   became writable are invalidated on the way: the vCPU runs the EL1 routine
+   "1: tlbi vale1is, x0; add x0, x0, #1; subs x1, x1, #1; b.ne 1b; dsb ish" (operand
+   and page count from the frame) and then restores the guest, instead of a separate
+   run for the invalidation. Returns 1 then: the vCPU is at EL1 until it runs (the
+   caller treats it as in the vector). */
 static int hvf_fault_resume(uint64_t elr,uint64_t spsr) {
     unsigned pages=hvf_pending_pages;hvf_pending_pages=0;
-    if(!pages) { hvf_resume_el0(elr,spsr);return 0; }
-    uint64_t x0=0,asid=hvf_view->asid;
-    hvf_check(hv_vcpu_get_reg(hvf_vcpu,HV_REG_X0,&x0),"get x0");
-    hvf_check(hv_vcpu_set_sys_reg(hvf_vcpu,HV_SYS_REG_TPIDR_EL1,x0),"set tpidr_el1");
-    hvf_check(hv_vcpu_set_sys_reg(hvf_vcpu,HV_SYS_REG_SP_EL1,pages),"set sp_el1");
-    hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_X0,(asid<<48)|((hvf_pending_va>>12)&UINT64_C(0xfffffffffff))),"set x0");
-    hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_PC,HVF_SYSTEM_VA+HVF_FLUSH_ERET_OFFSET),"set pc");
+    if(pages && !hvf_cpu->framed)hvf_flush();
+    if(!pages || !hvf_cpu->framed) { hvf_resume_el0(elr,spsr);return 0; }
+    hvf_frame[HF_TLBI_VA]=((uint64_t)hvf_view->asid<<48)|((hvf_pending_va>>12)&UINT64_C(0xfffffffffff));hvf_frame[HF_TLBI_PAGES]=pages;
+    hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_PC,HVF_SYSTEM_VA+HVF_INVALIDATE_OFFSET),"set pc");
     hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_CPSR,0x3c5),"set cpsr");           /* EL1h, interrupts masked */
     return 1;
 }
@@ -528,13 +534,17 @@ static int hvf_spurious_write(uint64_t far) {
     PROFILE_ADD(profile_spurious_faults,1);
     hvf_pending_va=far&~UINT64_C(4095);hvf_pending_pages=1;return 1;
 }
-/* Register transfer. General registers are read at every exit and written back
-   only when changed (the shadow mirrors the vCPU). FP/SIMD state stays in the vCPU
-   until something needs the whole CPU state (returning to the scheduler, a thread
-   switch, signal delivery, clone, exec, sigreturn): hvf_fp_pull() copies it into
-   cpu and marks it to be written back on the next resume. */
+/* Register transfer. The EL1 vector saves the guest's general registers, SP_EL0,
+   TPIDR_EL0, ELR, SPSR, ESR and FAR to the vCPU's frame (plain memory) before its
+   HVC, and every resume goes through the EL1 routine that loads them back from it
+   and ERETs: an exit costs no register calls (each hv_vcpu_get_reg is a library call;
+   reading 36 of them at every exit was a quarter of a system call's cost). Only a
+   preemption at EL0 leaves them in the vCPU (framed 0). FP/SIMD state stays in
+   the vCPU until something needs the whole CPU state (returning to the scheduler,
+   a thread switch, signal delivery, clone, exec, sigreturn): hvf_fp_pull() copies
+   it into cpu and marks it to be written back on the next resume. */
 /* cpu now holds a complete state the vCPU does not have (new task or thread). */
-static void hvf_regs_invalidate(void) { hvf_shadow_valid=0;hvf_fp_in_cpu=1;hvf_fp_dirty=1; }
+static void hvf_regs_invalidate(void) { hvf_fp_in_cpu=1;hvf_fp_dirty=1; }
 static void hvf_fp_pull(void) {
     if(!hvf_fp_in_cpu) {
         uint64_t value=0;
@@ -548,15 +558,31 @@ static void hvf_fp_pull(void) {
     }
     hvf_fp_dirty=1; /* the caller may change it */
 }
-static void hvf_put_regs(void) {
-    for(unsigned i=0;i<31;i++)if(!hvf_shadow_valid || hvf_shadow_gpr[i]!=cpu->gpr[i]) {
-        hvf_check(hv_vcpu_set_reg(hvf_vcpu,(hv_reg_t)(HV_REG_X0+i),cpu->gpr[i]),"set x");hvf_shadow_gpr[i]=cpu->gpr[i];
+/* The answers the EL1 vector gives getpid, (not getppid: a parent can exit),
+   getuid, geteuid, getgid, getegid and gettid without an exit: frame words
+   HF_FAST+call-172, -1 for "ask the host". Written on every resume, and pushed to
+   the frames of the process's other running threads when its IDs change (they
+   share them). Off while syscalls are traced, counted or filtered. */
+static void hvf_fast_publish(uint64_t *frame,uint64_t tid) {
+    int on=!trace && !profiling && !seccomp_active();
+    const uint64_t answers[7]={process_pid,UINT64_MAX,guest_ids.ruid,guest_uid,guest_ids.rgid,guest_gid,tid};
+    for(unsigned i=0;i<7;i++)frame[HF_FAST+i]=on?answers[i]:UINT64_MAX;
+}
+static void hvf_fast_push(void) {
+    for(unsigned w=0;w<worker_count;w++) {
+        HvfCpu *c=workers[w] && workers[w]!=worker && workers[w]->task==(int)process_pid-1?workers[w]->backend:NULL;
+        if(c)hvf_fast_publish(c->frame,c->frame[HF_FAST+6]);
     }
-    uint64_t nzcv=((uint64_t)cpu->flag_n<<31)|((uint64_t)cpu->flag_z<<30)|((uint64_t)cpu->flag_c<<29)|((uint64_t)cpu->flag_v<<28);
-    hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_PC,cpu->pc),"set pc");
-    hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_CPSR,nzcv),"set cpsr");             /* EL0t */
-    if(!hvf_shadow_valid || hvf_shadow_sp!=cpu->sp) { hvf_check(hv_vcpu_set_sys_reg(hvf_vcpu,HV_SYS_REG_SP_EL0,cpu->sp),"set sp");hvf_shadow_sp=cpu->sp; }
-    if(!hvf_shadow_valid || hvf_shadow_tls!=cpu->tls) { hvf_check(hv_vcpu_set_sys_reg(hvf_vcpu,HV_SYS_REG_TPIDR_EL0,cpu->tls),"set tpidr");hvf_shadow_tls=cpu->tls; }
+}
+static void hvf_put_regs(void) {
+    uint64_t *f=hvf_frame;
+    memcpy(f,cpu->gpr,31*sizeof(uint64_t));
+    f[HF_SP]=cpu->sp;f[HF_TLS]=cpu->tls;f[HF_ELR]=cpu->pc;
+    f[HF_SPSR]=((uint64_t)cpu->flag_n<<31)|((uint64_t)cpu->flag_z<<30)|((uint64_t)cpu->flag_c<<29)|((uint64_t)cpu->flag_v<<28); /* EL0t */
+    Thread *th=thread_current();hvf_fast_publish(f,th?th->tid:process_pid);
+    hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_PC,HVF_SYSTEM_VA+HVF_RESTORE_OFFSET),"set pc");
+    if(!hvf_cpu->framed)hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_CPSR,0x3c5),"set cpsr"); /* EL1h, interrupts masked (framed: it is) */
+    hvf_cpu->framed=1;
     if(cpu->mem_model!=hvf_cpu->tso) {                                         /* only set where guest_tso said it works */
         if(__builtin_available(macOS 15.0,*))hvf_check(hv_vcpu_set_sys_reg(hvf_vcpu,HV_SYS_REG_ACTLR_EL1,cpu->mem_model?2:0),"set actlr");
         hvf_cpu->tso=cpu->mem_model;
@@ -571,25 +597,37 @@ static void hvf_put_regs(void) {
         }
         hvf_fp_dirty=0;
     }
-    hvf_shadow_valid=1;
 }
-/* After an EL0 exception the guest's return address and flags are ELR/SPSR_EL1
-   (passed in); after a preemption they are the live PC/CPSR. */
+/* From the frame; else (a preemption, or another vector) from the vCPU: after an
+   EL0 exception the guest's return address and flags are ELR/SPSR_EL1 (passed in),
+   after a preemption the live PC/CPSR. */
 static void hvf_get_regs(int exception,uint64_t elr,uint64_t spsr) {
-    for(unsigned i=0;i<31;i++) {
-        hvf_check(hv_vcpu_get_reg(hvf_vcpu,(hv_reg_t)(HV_REG_X0+i),&cpu->gpr[i]),"get x");hvf_shadow_gpr[i]=cpu->gpr[i];
+    uint64_t value=spsr;
+    if(hvf_cpu->framed) {
+        const uint64_t *f=hvf_frame;
+        memcpy(cpu->gpr,f,31*sizeof(uint64_t));cpu->pc=f[HF_ELR];value=f[HF_SPSR];cpu->sp=f[HF_SP];cpu->tls=f[HF_TLS];
+    } else {
+        for(unsigned i=0;i<31;i++)hvf_check(hv_vcpu_get_reg(hvf_vcpu,(hv_reg_t)(HV_REG_X0+i),&cpu->gpr[i]),"get x");
+        if(exception)cpu->pc=elr;
+        else {
+            hvf_check(hv_vcpu_get_reg(hvf_vcpu,HV_REG_PC,&cpu->pc),"get pc");
+            hvf_check(hv_vcpu_get_reg(hvf_vcpu,HV_REG_CPSR,&value),"get cpsr");
+        }
+        hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_SP_EL0,&cpu->sp),"get sp");
+        hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_TPIDR_EL0,&cpu->tls),"get tpidr");
     }
     cpu->gpr[31]=0;
-    uint64_t value=spsr;
-    if(exception)cpu->pc=elr;
-    else {
-        hvf_check(hv_vcpu_get_reg(hvf_vcpu,HV_REG_PC,&cpu->pc),"get pc");
-        hvf_check(hv_vcpu_get_reg(hvf_vcpu,HV_REG_CPSR,&value),"get cpsr");
-    }
     cpu->flag_n=(value>>31)&1;cpu->flag_z=(value>>30)&1;cpu->flag_c=(value>>29)&1;cpu->flag_v=(value>>28)&1;
-    hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_SP_EL0,&cpu->sp),"get sp");hvf_shadow_sp=cpu->sp;
-    hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_TPIDR_EL0,&cpu->tls),"get tpidr");hvf_shadow_tls=cpu->tls;
-    hvf_fp_in_cpu=0;hvf_shadow_valid=1; /* the guest ran: the vCPU's FP state is newer */
+    hvf_fp_in_cpu=0; /* the guest ran: the vCPU's FP state is newer */
+}
+/* The exception an exit reports: from the frame, else (another vector) from the vCPU. */
+static void hvf_exception(uint64_t *esr,uint64_t *elr,uint64_t *spsr,uint64_t *far) {
+    if(hvf_cpu->framed) { *esr=hvf_frame[HF_ESR];*elr=hvf_frame[HF_ELR];*spsr=hvf_frame[HF_SPSR];*far=hvf_frame[HF_FAR];return; }
+    hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_ESR_EL1,esr),"get esr");
+    hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_ELR_EL1,elr),"get elr");
+    hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_SPSR_EL1,spsr),"get spsr");
+    hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_FAR_EL1,far),"get far");
+    if(*spsr&0xf)fail("Hypervisor EL1 routine faulted");                      /* not the guest's exception */
 }
 /* Run the EL1 routine "ic ialluis; tlbi vmalle1is; dsb ish; isb; hvc #1" so the
    guest sees rebuilt tables and freshly written code on every vCPU, then return to
@@ -607,7 +645,14 @@ static void hvf_flush(void) {
         fail("Hypervisor TLB/cache maintenance did not complete");
     hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_PC,pc),"set pc");hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_CPSR,cpsr),"set cpsr");
 }
+/* Back to the guest at pc with flags spsr, its registers otherwise unchanged. */
 static void hvf_resume_el0(uint64_t pc,uint64_t spsr) {
+    if(hvf_cpu->framed) {
+        hvf_frame[HF_ELR]=pc;hvf_frame[HF_SPSR]=spsr;
+        hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_PC,HVF_SYSTEM_VA+HVF_RESTORE_OFFSET),"set pc");
+        hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_CPSR,0x3c5),"set cpsr");
+        return;
+    }
     hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_PC,pc),"set pc");hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_CPSR,spsr),"set cpsr");
 }
 /* Stop a worker's guest code soon (preemption, a signal for its task, the run ending). */
@@ -615,11 +660,13 @@ static void hvf_interrupt(Worker *w) {
     HvfCpu *c=w->backend;
     if(c && atomic_load(&w->in_guest))(void)hv_vcpus_exit(&c->vcpu,1);
 }
-/* Preempt CPU-bound guests so the scheduler can switch tasks (10 ms slices). */
+/* Preempt CPU-bound guests so the scheduler can switch tasks (10 ms slices), and
+   keep the vDSO's realtime offset current (only this thread refreshes it). */
 static void *hvf_watchdog(void *unused) {
     (void)unused;
     for(;;) {
         struct timespec slice={0,10000000};nanosleep(&slice,NULL);
+        if(vdso_backing)vdso_tick();
         for(unsigned i=0;i<worker_count;i++)hvf_interrupt(workers[i]);
     }
     return NULL;
@@ -630,7 +677,11 @@ static void hvf_futex_init(void);
 static HvfCpu *hvf_cpu_new(int first) {
     HvfCpu *c=calloc(1,sizeof(*c));if(!c)fail("Cannot allocate a vCPU");
     c->fp_in_cpu=c->fp_dirty=1;
+    unsigned index=__atomic_fetch_add(&hvf_frames_used,1,__ATOMIC_RELAXED);
+    if(index>=WORKER_LIMIT)fail("Too many vCPUs");
+    c->frame=(uint64_t *)(void *)(hvf_system+HVF_CODE_BYTES+index*HVF_FRAME_BYTES);
     hvf_check(hv_vcpu_create(&c->vcpu,&c->exit,NULL),"hv_vcpu_create");
+    hvf_check(hv_vcpu_set_sys_reg(c->vcpu,HV_SYS_REG_SP_EL1,HVF_FRAME_VA+index*HVF_FRAME_BYTES),"set sp_el1"); /* the vector's frame */
     if(first)hvf_check(hv_vcpu_get_vtimer_offset(c->vcpu,&hvf_vtimer_offset),"get vtimer offset");
     else hvf_check(hv_vcpu_set_vtimer_offset(c->vcpu,hvf_vtimer_offset),"set vtimer offset");
     hvf_check(hv_vcpu_set_sys_reg(c->vcpu,HV_SYS_REG_MAIR_EL1,0xff),"set mair");     /* attr 0: normal write-back */
@@ -667,7 +718,8 @@ static void hvf_init(void) {
     hvf_futex_init();
     hvf_tables=hvf_host_pages(HVF_TABLE_BYTES);hvf_system=hvf_host_pages(HVF_SYSTEM_BYTES);
     hvf_check(hv_vm_map(hvf_tables,HVF_IPA_BASE,HVF_TABLE_BYTES,HV_MEMORY_READ|HV_MEMORY_WRITE),"hv_vm_map tables");
-    hvf_check(hv_vm_map(hvf_system,HVF_IPA_BASE+HVF_TABLE_BYTES,HVF_SYSTEM_BYTES,HV_MEMORY_READ|HV_MEMORY_EXEC),"hv_vm_map system");
+    hvf_check(hv_vm_map(hvf_system,HVF_IPA_BASE+HVF_TABLE_BYTES,HVF_CODE_BYTES,HV_MEMORY_READ|HV_MEMORY_EXEC),"hv_vm_map system");
+    hvf_check(hv_vm_map(hvf_system+HVF_CODE_BYTES,HVF_IPA_BASE+HVF_TABLE_BYTES+HVF_CODE_BYTES,HVF_SYSTEM_BYTES-HVF_CODE_BYTES,HV_MEMORY_READ|HV_MEMORY_WRITE),"hv_vm_map frames");
     /* Each HVC is followed by "b .-4": under load Hypervisor.framework can resume a
        vCPU past an HVC without reporting its exit (the next instruction, zeros, then
        faulted at EL1 and the guest saw SIGILL at the vector). Looping back takes the
@@ -681,12 +733,33 @@ static void hvf_init(void) {
         ((uint32_t *)hvf_system)[i*0x80/4]=UINT32_C(0xd4000062);                       /* hvc #3 */
         ((uint32_t *)hvf_system)[i*0x80/4+1]=UINT32_C(0x17ffffff);                     /* b .-4 */
     }
+    /* Synchronous exceptions from EL0 (0x400) save the guest to the frame at SP_EL1
+       and exit with "hvc #4" (0x900); the routine at 0x968 resumes the guest from the
+       frame, the one at 0x9c4 invalidates hvf_fault_resume's pages first. Getpid,
+       gettid and the uid/gid getters are answered at 0x400 from the frame, without
+       an exit. Assembled with clang --target=aarch64-linux-gnu, rust-objcopy -O binary:
+       0x400: stp x0, x1, [sp]; mrs x0, esr_el1; lsr x0, x0, #26; cmp x0, #0x15; b.ne save
+              sub x0, x8, #172; cmp x0, #6; b.hi save; add x1, sp, #320 (HF_FAST)
+              ldr x0, [x1, x0, lsl #3]; tbnz x0, #63, save; ldr x1, [sp, #8]; eret
+       save:  stp x2, x3, [sp, #16] ... stp x28, x29, [sp, #224]
+              mrs x0, sp_el0; stp x30, x0, [sp, #240]; mrs x0, tpidr_el0; mrs x1, elr_el1; stp x0, x1, [sp, #256]
+              mrs x0, spsr_el1; mrs x1, esr_el1; stp x0, x1, [sp, #272]; mrs x0, far_el1; str x0, [sp, #288]
+              hvc #4; b .-4
+       restore: ldp x0, x1, [sp, #248]; msr sp_el0, x0; msr tpidr_el0, x1
+              ldp x0, x1, [sp, #264]; msr elr_el1, x0; msr spsr_el1, x1
+              ldp x0, x1, [sp] ... ldp x28, x29, [sp, #224]; ldr x30, [sp, #240]; eret
+       invalidate: ldp x0, x1, [sp, #296]; 1: tlbi vale1is, x0; add x0, x0, #1; subs x1, x1, #1; b.ne 1b; dsb ish; b restore */
+    static const uint32_t lower_sync[]={0xa90007e0,0xd5385200,0xd35afc00,0xf100541f,0x54002781,0xd102b100,0xf100181f,0x54002728,0x910503e1,0xf8607820,0xb7f826c0,0xf94007e1,0xd69f03e0};
+    static const uint32_t frame_code[]={
+        0xa9010fe2,0xa90217e4,0xa9031fe6,0xa90427e8,0xa9052fea,0xa90637ec,0xa9073fee,0xa90847f0,0xa9094ff2,0xa90a57f4,0xa90b5ff6,0xa90c67f8,0xa90d6ffa,0xa90e77fc,
+        0xd5384100,0xa90f03fe,0xd53bd040,0xd5384021,0xa91007e0,0xd5384000,0xd5385201,0xa91107e0,0xd5386000,0xf90093e0,0xd4000082,0x17ffffff,
+        0xa94f87e0,0xd5184100,0xd51bd041,0xa95087e0,0xd5184020,0xd5184001,0xa94007e0,0xa9410fe2,0xa94217e4,0xa9431fe6,0xa94427e8,0xa9452fea,
+        0xa94637ec,0xa9473fee,0xa94847f0,0xa9494ff2,0xa94a57f4,0xa94b5ff6,0xa94c67f8,0xa94d6ffa,0xa94e77fc,0xf9407bfe,0xd69f03e0,
+        0xa95287e0,0xd50883a0,0x91000400,0xf1000421,0x54ffffa1,0xd5033b9f,0x17ffffe3};
+    memcpy(hvf_system+0x400,lower_sync,sizeof(lower_sync));
+    memcpy(hvf_system+HVF_SAVE_OFFSET,frame_code,sizeof(frame_code));
     const uint32_t flush[]={UINT32_C(0xd508711f),UINT32_C(0xd508831f),UINT32_C(0xd5033b9f),UINT32_C(0xd5033fdf),UINT32_C(0xd4000022),UINT32_C(0x17ffffff)};
     memcpy(hvf_system+HVF_FLUSH_OFFSET,flush,sizeof(flush));
-    /* hvf_fault_resume's routine (sp counts; x0 comes back from tpidr_el1; eret to the guest) */
-    const uint32_t flush_eret[]={UINT32_C(0xd50883a0),UINT32_C(0x91000400),UINT32_C(0xd10007ff),UINT32_C(0xf10003ff),UINT32_C(0x54ffff81),
-                                 UINT32_C(0xd5033b9f),UINT32_C(0xd538d080),UINT32_C(0xd69f03e0)};
-    memcpy(hvf_system+HVF_FLUSH_ERET_OFFSET,flush_eret,sizeof(flush_eret));
     worker->backend=hvf_cpu_new(1);
     if(vdso_backing)vdso_start(hvf_vtimer_offset);
     pthread_t watchdog;
@@ -997,24 +1070,18 @@ static int signal_deliverable(void) {
 #define HVF_SHORT_SLEEP_NS 1000000u
 static int hvf_must_stop(ScheduledTask *t);
 static int hvf_short_sleep(uint64_t call) {
-    uint64_t x0=0,x1=0,x2=0;
-    hvf_check(hv_vcpu_get_reg(hvf_vcpu,HV_REG_X0,&x0),"get x0");
+    uint64_t x0=hvf_frame[0];
     if(call==115) {
-        hvf_check(hv_vcpu_get_reg(hvf_vcpu,HV_REG_X1,&x1),"get x1");hvf_check(hv_vcpu_get_reg(hvf_vcpu,HV_REG_X2,&x2),"get x2");
-        if(x0>1 || x1)return 0;                                     /* REALTIME or MONOTONIC, relative */
-        x0=x2;
+        if(x0>1 || hvf_frame[1])return 0;                           /* REALTIME or MONOTONIC, relative */
+        x0=hvf_frame[2];
     }
     const unsigned char *ts=lookup(x0,16,4);if(!ts)return 0;
     uint64_t sec=le(ts,8),ns=le(ts+8,8);
     if(sec || ns>=HVF_SHORT_SLEEP_NS || hvf_must_stop(schedule_active?hvf_task():NULL))return 0;
-    uint64_t elr=0,spsr=0;
-    hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_ELR_EL1,&elr),"get elr");
-    hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_SPSR_EL1,&spsr),"get spsr");
     ScheduledTask *task=schedule_active?hvf_task():NULL;
     struct timespec pause={0,(long)ns};
     mm_unlock(task);(void)nanosleep(&pause,NULL);mm_lock(task);
-    hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_X0,0),"set x0");hvf_shadow_gpr[0]=0;
-    hvf_resume_el0(elr,spsr);return 1;
+    hvf_frame[0]=0;hvf_resume_el0(hvf_frame[HF_ELR],hvf_frame[HF_SPSR]);return 1;
 }
 /* futex without the runtime lock (the process's mm lock is held), for private
    futexes of a threaded process: WAKE when no thread of the process is parked in
@@ -1073,15 +1140,14 @@ static int hvf_futex_unlocked(void) {
     return 0;
 }
 static int hvf_unlocked_exit(void) {
-    if(hvf_exit->reason!=HV_EXIT_REASON_EXCEPTION || (hvf_exit->exception.syndrome>>26)!=0x16)return 0;
-    uint64_t esr=0,elr=0,spsr=0,call=0,far=0;
-    hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_ESR_EL1,&esr),"get esr");
+    if(!hvf_cpu->framed)return 0;                                             /* only the frame's exits */
+    uint64_t esr=0,elr=0,spsr=0,far=0;
+    hvf_exception(&esr,&elr,&spsr,&far);
     unsigned ec=(unsigned)(esr>>26);
     if(ec==0x24 && (esr&(UINT64_C(1)<<6)) && !HVF_ALIGNMENT(esr)) {
         if(profiling)__atomic_fetch_add(&profile_write_faults,1,__ATOMIC_RELAXED);
         /* A write to a copy-on-write or not yet charged page: the same handling as
            under the lock. A genuine fault goes to the locked path. */
-        hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_FAR_EL1,&far),"get far");
         uint64_t layout=address_space->layout;
         if(!hvf_spurious_write(far)) {
             if(!lookup(far,1,2))return 0;
@@ -1091,16 +1157,19 @@ static int hvf_unlocked_exit(void) {
                 hvf_remap_host_page(address_space,far,1+around);hvf_view->generation=address_space->generation;
             } else hvf_views[process_pid].stale=HVF_STALE_COW;
         }
-        hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_ELR_EL1,&elr),"get elr");
-        hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_SPSR_EL1,&spsr),"get spsr");
         hvf_resume_el1=hvf_fault_resume(elr,spsr);return 1;
     }
     if(ec!=0x15 || seccomp_active())return 0;                                 /* SVC from EL0; filtered calls take the locked path */
-    hvf_check(hv_vcpu_get_reg(hvf_vcpu,HV_REG_X8,&call),"get x8");
+    uint64_t call=hvf_frame[8];
     if((call==101 || call==115) && hvf_short_sleep(call))return 1;
+    /* sched_yield while workers are idle: no runnable thread waits for a CPU (an idle
+       worker would take it), so, as on Linux, it returns at once. */
+    if(call==124 && (schedule_idle || schedule_polling)) {
+        PROFILE_ADD(profile_unlocked_calls,1);
+        if(profiling)__atomic_fetch_add(&profile_syscalls[124],1,__ATOMIC_RELAXED);
+        hvf_frame[0]=0;hvf_resume_el0(hvf_frame[HF_ELR],hvf_frame[HF_SPSR]);return 1;
+    }
     if(call==98) {
-        hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_ELR_EL1,&elr),"get elr");
-        hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_SPSR_EL1,&spsr),"get spsr");
         hvf_get_regs(1,elr,spsr);
         if(!hvf_futex_unlocked())return 0;
         PROFILE_ADD(profile_unlocked_calls,1);
@@ -1109,8 +1178,6 @@ static int hvf_unlocked_exit(void) {
     }
     int memory=call==222 || call==215 || call==226 || call==233 || call==214;
     if(!memory && call!=22 && call!=25 && call!=56 && call!=34 && call!=35 && call!=38 && call!=48 && call!=439 && call!=78 && call!=88 && call!=132 && call!=134 && call!=135 && call!=172 && call!=178 && call!=79 && call!=80 && (call<62 || call>68) && call!=82 && call!=83 && call!=206 && call!=207 && call!=291)return 0;
-    hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_ELR_EL1,&elr),"get elr");
-    hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_SPSR_EL1,&spsr),"get spsr");
     hvf_get_regs(1,elr,spsr);
     if(!(memory?guest_memory_unlocked():guest_syscall_unlocked()))return 0;   /* the locked path rereads the same exit */
     PROFILE_ADD(profile_unlocked_calls,1);
@@ -1186,10 +1253,10 @@ static int hvf_slice_run(void) {
             if(!in_vector && hvf_must_stop(task)) { atomic_store(&self->in_guest,0);stopped=1;break; }
             in_vector=0;
             hvf_sync_memory(address_space);
-            if(vdso_backing)vdso_tick();
             mm_unlock(task);
             ran=hv_vcpu_run(vcpu);
             atomic_store(&self->in_guest,0);
+            hvf_cpu->framed=ran==HV_SUCCESS && hvf_exit->reason==HV_EXIT_REASON_EXCEPTION && (hvf_exit->exception.syndrome>>26)==0x16 && (hvf_exit->exception.syndrome&0xffff)==4; /* hvc #4 */
             mm_lock(task);
             if(!worker_threads || ran!=HV_SUCCESS || hvf_must_stop(task))break;
             hvf_resume_el1=0;
@@ -1238,11 +1305,8 @@ static int hvf_slice_run(void) {
             fail("Unexpected hypervisor exit");
         }
         uint64_t esr=0,elr=0,spsr=0,far=0;
-        hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_ESR_EL1,&esr),"get esr");
-        hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_ELR_EL1,&elr),"get elr");
-        hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_SPSR_EL1,&spsr),"get spsr");
+        hvf_exception(&esr,&elr,&spsr,&far);
         unsigned ec=(unsigned)(esr>>26);
-        if(ec!=0x15)hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_FAR_EL1,&far),"get far"); /* aborts only */
         if(ec==0x15) { /* SVC from EL0 */
             hvf_get_regs(1,elr,spsr);
             uint64_t call=cpu->gpr[8],flags=cpu->gpr[0];unsigned execs=process_exec_count;
@@ -1258,6 +1322,7 @@ static int hvf_slice_run(void) {
                    snapshotted or replaced. */
                 if(fork || exec)hvf_siblings_out();
                 result=guest_syscall();
+                if((call>=143 && call<=147) || call==149 || call==277)hvf_fast_push(); /* set*id, seccomp: sibling threads' answers change */
                 if(result==-3 && fork && (int64_t)cpu->gpr[0]>0) {     /* the child starts single-threaded, on new tables */
                     hvf_main_clear_tid[cpu->gpr[0]]=0;hvf_views[cpu->gpr[0]].stale=HVF_STALE_NEW;
                 }
