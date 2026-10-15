@@ -568,6 +568,31 @@ static int guest_syscall_unlocked(void) {
         if((int64_t)result>=0) { statx_from_stat(out);result=0; }
         cpu->gpr[0]=result;return 1;
     }
+    /* Signal state that only this process's own threads change (they hold its mm
+       lock), read by senders under the runtime lock as single words: getpid, gettid,
+       sigaltstack; rt_sigaction, except SIG_IGN (it drops pending signals senders
+       set); rt_sigprocmask, unless it makes a process-directed pending signal
+       deliverable (schedule_pending sends it). A thread-directed one stops the
+       guest before it resumes (hvf_must_stop) and is delivered under the lock. Go
+       sets about 130 handlers in every process it starts. */
+    if(call==172 || call==178 || call==132 || call==134 || call==135) {
+        if(!schedule_active)return 0;
+        ScheduledTask *task=&schedule_tasks[process_pid-1];
+        if(call==172 || call==178) { Thread *th=task_thread(task);cpu->gpr[0]=call==178 && th?th->tid:process_pid;return 1; }
+        cpu->exclusive_valid=0;syscall_unlocked=1;syscall_abort=0;
+        const unsigned char *in=(call==134 || call==135) && cpu->gpr[1]?lookup(cpu->gpr[1],8,4):NULL;
+        int locked=(call==134 || call==135) && cpu->gpr[1] && !in;
+        if(call==134 && in && le(in,8)==1)locked=1;
+        if(call==135 && in && cpu->gpr[3]==8) {
+            uint64_t value=le(in,8)&~((UINT64_C(1)<<8)|(UINT64_C(1)<<18)),next=*signal_mask_now();
+            if(cpu->gpr[0]==0)next|=value;else if(cpu->gpr[0]==1)next&=~value;else if(cpu->gpr[0]==2)next=value;
+            if(task->signal_pending&~next&~task->signal_ignored)locked=1;
+        }
+        uint64_t result=locked || syscall_abort?0:call==132?signal_altstack():signal_call(call);
+        syscall_unlocked=0;
+        if(locked || syscall_abort)return 0;
+        cpu->gpr[0]=result;return 1;
+    }
     /* fcntl's descriptor flags on a file: this process's own (record locks take the lock). */
     if(call==25 && file && cpu->gpr[1]>=1 && cpu->gpr[1]<=4) {
         cpu->exclusive_valid=0;syscall_unlocked=1;syscall_abort=0;
