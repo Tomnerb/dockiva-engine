@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -220,7 +221,46 @@ func (b *boundedProbeOutput) Write(p []byte) (int, error) {
 	}
 	return b.data.Write(p)
 }
+
+// probeRuntime asks a runtime for its capabilities, once per runtime file: every
+// create and start checks its container's profile, and a probe is a process launch.
 func probeRuntime(native string) runtimeCapabilities {
+	st, err := os.Stat(native)
+	file := ""
+	if err == nil {
+		file = fmt.Sprint(native, st.Size(), st.ModTime().UnixNano(), st.Sys().(*syscall.Stat_t).Ino)
+		if known, ok := probes.Load(file); ok {
+			return known.(runtimeCapabilities)
+		}
+	}
+	capabilities := probeRuntimeNow(native)
+	if file != "" {
+		probes.Store(file, capabilities)
+	}
+	return capabilities
+}
+
+var probes sync.Map // runtimeCapabilities by runtime path and file identity
+
+// knownProbes and learnProbes hand the probes to a supervisor, which checks its
+// container's profile again before the run (DOCKIVA_PROBES).
+func knownProbes() string {
+	known := map[string]runtimeCapabilities{}
+	probes.Range(func(k, v any) bool { known[k.(string)] = v.(runtimeCapabilities); return true })
+	raw, e := json.Marshal(known)
+	check(e)
+	return string(raw)
+}
+func learnProbes(raw string) {
+	known := map[string]runtimeCapabilities{}
+	if json.Unmarshal([]byte(raw), &known) == nil {
+		for k, v := range known {
+			probes.Store(k, v)
+		}
+	}
+}
+
+func probeRuntimeNow(native string) runtimeCapabilities {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, native, "capabilities")

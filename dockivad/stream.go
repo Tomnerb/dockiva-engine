@@ -139,6 +139,26 @@ func (b *backoff) after() <-chan time.Time {
 }
 func (b *backoff) reset() { b.next = b.min }
 
+// changes wakes the loops that poll container status (attach, wait, stop and the
+// watcher) as soon as this engine sees a run end (its supervisor exits) or a
+// container go, rather than at their next poll. Take the channel before reading.
+var changes = struct {
+	sync.Mutex
+	ch chan struct{}
+}{ch: make(chan struct{})}
+
+func changed() <-chan struct{} {
+	changes.Lock()
+	defer changes.Unlock()
+	return changes.ch
+}
+func notifyChanged() {
+	changes.Lock()
+	defer changes.Unlock()
+	close(changes.ch)
+	changes.ch = make(chan struct{})
+}
+
 // follow writes new output (checking within 2 ms at first, every 25 ms when idle)
 // until done reports the run is over (then drains what is left) or ctx ends. done
 // must not panic.
@@ -146,6 +166,7 @@ func (l *logReader) follow(ctx context.Context, write func([]byte) error, done f
 	defer l.close()
 	pace := newBackoff(2*time.Millisecond, cmp.Or(l.every, 25*time.Millisecond))
 	for {
+		wake := changed()
 		finished := done()
 		for {
 			chunk := l.next()
@@ -164,6 +185,7 @@ func (l *logReader) follow(ctx context.Context, write func([]byte) error, done f
 		case <-ctx.Done():
 			return
 		case <-pace.after():
+		case <-wake:
 		}
 	}
 }
@@ -271,6 +293,7 @@ func (b *engine) wait(w http.ResponseWriter, r *http.Request, name, condition st
 	}
 	pace := newBackoff(2*time.Millisecond, 25*time.Millisecond) // a status read is cheap; docker run waits on this
 	for {
+		wake := changed()
 		s := b.statusOf(p)
 		if s != nil && s["exit_code"] != nil {
 			code = s["exit_code"]
@@ -307,6 +330,7 @@ func (b *engine) wait(w http.ResponseWriter, r *http.Request, name, condition st
 		case <-r.Context().Done():
 			return
 		case <-pace.after():
+		case <-wake:
 		}
 	}
 }
@@ -426,6 +450,7 @@ func (b *engine) watch(stop <-chan struct{}) {
 	tick := time.NewTicker(250 * time.Millisecond)
 	defer tick.Stop()
 	for {
+		wake := changed()
 		if remove := b.watchPass(); len(remove) > 0 {
 			for _, name := range remove {
 				_ = safeRun(func() { b.autoRemove(name) })
@@ -437,6 +462,7 @@ func (b *engine) watch(stop <-chan struct{}) {
 			return
 		case <-tick.C:
 		case <-watchNow:
+		case <-wake:
 		}
 	}
 }

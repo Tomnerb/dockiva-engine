@@ -126,3 +126,31 @@ func TestStatsSample(t *testing.T) {
 		t.Fatalf("sample: %v", sample)
 	}
 }
+
+// A container's macOS process name is a hard link to the runtime in <home>/process,
+// kept after the container goes (each new executable path costs macOS an online
+// malware-scan lookup on its first exec); engine-made names run the runtime itself.
+func TestProcessNameLinks(t *testing.T) {
+	home := t.TempDir()
+	runtime, other := filepath.Join(home, "runtime"), filepath.Join(home, "older")
+	check(os.WriteFile(runtime, []byte("runtime"), 0o700))
+	check(os.WriteFile(other, []byte("older"), 0o700))
+	p := filepath.Join(home, "containers", "web")
+	check(os.MkdirAll(p, 0o700))
+	link := processName(p, runtime)
+	if link != filepath.Join(home, "process", "web") {
+		t.Fatalf("named container: %s", link)
+	}
+	check(os.RemoveAll(p)) // docker rm, then docker compose up creates it again
+	if again := processName(p, runtime); again != link || !exists(link) {
+		t.Fatalf("link after removal: %s", again)
+	}
+	if name := processName(filepath.Join(home, "containers", token()[:24]), runtime); name != runtime {
+		t.Fatalf("generated name: %s", name)
+	}
+	check(os.Link(other, filepath.Join(home, "process", "stale")))
+	pruneProcessNames(home, runtime)
+	if !exists(link) || exists(filepath.Join(home, "process", "stale")) {
+		t.Fatal("prune keeps current links and drops an older runtime's")
+	}
+}

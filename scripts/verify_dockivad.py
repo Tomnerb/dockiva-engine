@@ -145,6 +145,30 @@ def main():
             expect('POST', '/containers/shell/wait', 200)
             expect('DELETE', '/containers/shell', 204)
             check('20 immediate restarts and removal tolerate natural exit and supervisor cleanup')
+            # docker run --rm, as the docker CLI issues it: create (an engine-made name), wait
+            # for removal, start. A new executable path per container once cost each start
+            # an online macOS malware scan (~280 ms) whenever the last one was not recent.
+            def run_rm():
+                began = time.monotonic()
+                cid = json.loads(expect('POST', '/containers/create', 201,
+                                        {'Image':'dockiva/shell:demo', 'Cmd':['-c', 'exit 3'], 'HostConfig':{'AutoRemove':True}}))['Id']
+                conn = UnixHTTP(home/'engine.sock')
+                try:
+                    conn.request('POST', f'/v1.45/containers/{cid}/wait?condition=removed', None, {'X-VMFree-Token': token()})
+                    waiting = conn.getresponse() # headers come once the wait is registered
+                    expect('POST', f'/containers/{cid}/start', 204)
+                    code = json.loads(waiting.read())['StatusCode']
+                finally:
+                    conn.close()
+                return time.monotonic()-began, code
+            runs = []
+            for _ in range(20):
+                time.sleep(.25)
+                runs.append(run_rm())
+            seconds = sorted(t for t, _ in runs)
+            report['run_rm_seconds'] = [round(t, 3) for t, _ in runs]
+            check('20 docker run --rm: exit statuses kept, all removed', all(code == 3 for _, code in runs) and not list((home/'containers').glob('[0-9a-f]'*24)))
+            check(f'20 docker run --rm: median {seconds[10]:.3f} s under 0.2 s, at most 3 over 0.25 s', seconds[10] < .2 and seconds[-4] < .25)
             for i in range(9):
                 expect('POST', f'/containers/create?name=server-{i}', 201,
                        {'Image':'dockiva/server:demo', 'Cmd':['0'], 'HostConfig':{'ReadonlyRootfs':True}})

@@ -139,6 +139,7 @@ func (b *engine) idOf(name string) string {
 func settledContainerLock(p string) (*os.File, error) {
 	deadline := time.Now().Add(time.Second)
 	for {
+		wake := changed()
 		f, err := lockFile(filepath.Join(p, "lock"), true)
 		if err != syscall.EWOULDBLOCK && err != syscall.EAGAIN {
 			return f, err
@@ -146,8 +147,11 @@ func settledContainerLock(p string) (*os.File, error) {
 		if live(readObject(filepath.Join(p, "status.json"))) || time.Now().After(deadline) {
 			return nil, err
 		}
-		// Terminal status precedes final descriptor/lock cleanup.
-		time.Sleep(20 * time.Millisecond)
+		// Terminal status precedes final descriptor/lock cleanup (the supervisor's exit).
+		select {
+		case <-wake:
+		case <-time.After(20 * time.Millisecond):
+		}
 	}
 }
 func (b *engine) start(name string) {
@@ -200,12 +204,12 @@ func (b *engine) start(name string) {
 	cmd.Stdout = log
 	cmd.Stderr = log
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	cmd.Env = append(os.Environ(), "DOCKIVA_DEFAULT_BIND_IP="+b.BindIP)
+	cmd.Env = append(os.Environ(), "DOCKIVA_DEFAULT_BIND_IP="+b.BindIP, "DOCKIVA_PROBES="+knownProbes())
 	check(cmd.Start())
 	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
+	go func() { done <- cmd.Wait(); notifyChanged() }() // its runs are over (a restart keeps it)
 	deadline := time.Now().Add(10 * time.Second)
-	pace := newBackoff(2*time.Millisecond, 20*time.Millisecond)
+	pace := newBackoff(time.Millisecond, 4*time.Millisecond) // a start takes about 20 ms
 	for time.Now().Before(deadline) {
 		s = readObject(filepath.Join(p, "status.json"))
 		if s["generation"] == generation {
@@ -277,10 +281,14 @@ func (b *engine) stop(name string, seconds ...int) {
 	reject(n == 2 && string(reply[:]) == "OK", "Supervisor did not confirm stop")
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
+		wake := changed()
 		if !live(b.status(p)) {
 			return
 		}
-		time.Sleep(20 * time.Millisecond)
+		select { // the supervisor saves the status as it exits
+		case <-wake:
+		case <-time.After(20 * time.Millisecond):
+		}
 	}
 	panic(apiError{409, "Stop status timeout"})
 }
@@ -432,7 +440,6 @@ func (b *engine) rename(name, to string) {
 		save(filepath.Join(p, "config.json"), c)
 	}
 	check(os.WriteFile(filepath.Join(p, "id"), []byte(id), 0600))
-	_ = os.RemoveAll(filepath.Join(p, "process")) // the process name link (processName) is named after it
 	check(os.Rename(p, q))
 	b.refreshHosts(text(c["net_name"]))
 	b.emit("rename", to, obj{"oldName": "/" + name})
@@ -510,6 +517,7 @@ func (b *engine) remove(name string) {
 	// background. A removal cut short is finished at the next engine start.
 	gone := filepath.Join(b.State, ".removing-"+token()[:16])
 	check(os.Rename(p, gone))
+	notifyChanged()
 	go func() { _ = os.RemoveAll(gone) }()
 	b.refreshHosts(network)
 }
@@ -660,10 +668,17 @@ func runtimeCommand(p, native string, c obj, command []string, argv0 string, env
 
 // processName runs a container as a macOS process named after it, so Activity
 // Monitor, top and the Energy tab show each container by name, with its own CPU,
-// memory and energy: a hard link to the runtime in the container's directory (the
-// same signed file), or the runtime itself where no link can be made.
+// memory and energy: a hard link to the runtime (the same signed file) in
+// <home>/process, or the runtime itself where no link can be made.
+// macOS checks each new executable path once (syspolicyd's malware scan, an online
+// lookup of about 280 ms), so links outlive their containers: a container created
+// again under the same name (docker compose up) starts at once. Names the engine
+// made up (docker run without --name) never come back, so they run the runtime.
 func processName(p, runtime string) string {
-	link := filepath.Join(p, "process", filepath.Base(p))
+	if generatedName.MatchString(filepath.Base(p)) {
+		return runtime
+	}
+	link := filepath.Join(filepath.Dir(filepath.Dir(p)), "process", filepath.Base(p))
 	if have, e := os.Stat(link); e == nil {
 		if target, e := os.Stat(runtime); e == nil && os.SameFile(have, target) {
 			return link
@@ -674,6 +689,27 @@ func processName(p, runtime string) string {
 		return runtime
 	}
 	return link
+}
+
+// generatedName: the names create makes up (token()[:24]).
+var generatedName = regexp.MustCompile(`^[0-9a-f]{24}$`)
+
+// pruneProcessNames drops process name links to runtimes other than these (an
+// earlier engine's, which they would keep on disk).
+func pruneProcessNames(home string, runtimes ...string) {
+	rows, _ := os.ReadDir(filepath.Join(home, "process"))
+	for _, r := range rows {
+		link := filepath.Join(home, "process", r.Name())
+		have, e := os.Lstat(link)
+		current := false
+		for _, runtime := range runtimes {
+			target, err := os.Stat(runtime)
+			current = current || e == nil && err == nil && os.SameFile(have, target)
+		}
+		if !current {
+			_ = os.Remove(link)
+		}
+	}
 }
 
 func supervise(p, native, worker, generation string) (result error) {
@@ -713,6 +749,7 @@ func supervise(p, native, worker, generation string) (result error) {
 		}
 	}()
 	c := readObject(filepath.Join(p, "config.json"))
+	learnProbes(os.Getenv("DOCKIVA_PROBES"))
 	command := stringsOf(c["command"])
 	env := stringsOf(c["env"])
 	clearPorts(filepath.Dir(filepath.Dir(p)), c) // left by a run that did not end cleanly
