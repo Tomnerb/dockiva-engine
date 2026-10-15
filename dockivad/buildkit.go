@@ -25,6 +25,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -478,6 +479,13 @@ func (b *engine) buildkitCall(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// bkUsage is a step cache entry as a BuildKit UsageRecord.
+func bkUsage(e obj) pbuf {
+	at := func(k string) time.Time { t, _ := time.Parse(time.RFC3339Nano, text(e[k])); return t }
+	return pbuf{}.str(1, str(e["ID"])).num(4, uint64(integer(e["Size"]))).time(6, at("CreatedAt")).time(7, at("LastUsedAt")).
+		num(8, uint64(integer(e["UsageCount"]))).str(9, text(e["Description"])).str(10, text(e["Type"]))
+}
+
 const bkControl, bkGateway = "/moby.buildkit.v1.Control/", "/moby.buildkit.v1.frontend.LLBBridge/"
 
 func (b *engine) buildkitMethod(w http.ResponseWriter, r *http.Request) {
@@ -489,11 +497,28 @@ func (b *engine) buildkitMethod(w http.ResponseWriter, r *http.Request) {
 	case bkControl + "Info":
 		grpcRequest(r)
 		grpcWrite(w, pbuf{}.msg(1, bkVersion()))
-	case bkControl + "DiskUsage": // nothing is kept between builds
+	case bkControl + "DiskUsage": // the step cache, as docker buildx du lists it
 		grpcRequest(r)
-		grpcWrite(w, nil)
-	case bkControl + "Prune":
-		grpcRequest(r)
+		buildCacheMu.Lock()
+		entries := b.buildCacheEntries()
+		buildCacheMu.Unlock()
+		out := pbuf{}
+		for _, e := range entries {
+			out = out.msg(1, bkUsage(object(e)))
+		}
+		grpcWrite(w, out)
+	case bkControl + "Prune": // docker builder prune: one UsageRecord per removed entry
+		q := grpcRequest(r)
+		age, keep := time.Duration(q.num(3)), int64(max(q.num(4), q.num(5))) // keepDuration; reservedSpace, maxUsedSpace
+		buildCacheMu.Lock()
+		entries := b.buildCacheEntries()
+		deleted, _ := b.pruneBuildCache(keep, func(used time.Time) bool { return age == 0 || time.Since(used) > age })
+		buildCacheMu.Unlock()
+		for _, e := range entries {
+			if slices.Contains(deleted, str(object(e)["ID"])) {
+				grpcWrite(w, bkUsage(object(e)))
+			}
+		}
 	case bkControl + "Solve":
 		grpcWrite(w, b.bkControlSolve(ctx, grpcRequest(r)))
 	case bkControl + "Session":
