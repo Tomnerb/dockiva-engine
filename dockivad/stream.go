@@ -321,14 +321,21 @@ func floatOf(v any) float64 {
 	return 0
 }
 
-// Container events, derived from state changes seen every 250 ms (supervisors, not
-// this daemon, run containers). Subscribers get create, start, die and destroy.
+// Events (docker events). Container create, start, die, destroy and health_status
+// come from state changes the watcher sees (supervisors, not this daemon, run
+// containers); the API publishes the rest as it acts. The latest 256 are kept for
+// --since and --until, as Docker keeps them.
 type events struct {
 	mu   sync.Mutex
 	subs map[chan obj]bool
+	past []obj
 }
 
-func (e *events) subscribe() chan obj {
+const eventHistory = 256
+
+// subscribe starts a subscription and returns the kept events from since on
+// (Unix nanoseconds; 0 with until 0: none), with nothing missed in between.
+func (e *events) subscribe(since, until int64) (chan obj, []obj) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.subs == nil {
@@ -336,7 +343,13 @@ func (e *events) subscribe() chan obj {
 	}
 	ch := make(chan obj, 256)
 	e.subs[ch] = true
-	return ch
+	past := []obj{}
+	for _, ev := range e.past {
+		if (since != 0 || until != 0) && ev["timeNano"].(int64) >= since {
+			past = append(past, ev)
+		}
+	}
+	return ch, past
 }
 func (e *events) unsubscribe(ch chan obj) {
 	e.mu.Lock()
@@ -346,6 +359,10 @@ func (e *events) unsubscribe(ch chan obj) {
 func (e *events) publish(ev obj) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if len(e.past) == eventHistory {
+		e.past = e.past[1:]
+	}
+	e.past = append(e.past, ev)
 	for ch := range e.subs {
 		select {
 		case ch <- ev:
@@ -359,11 +376,45 @@ func labelAttributes(labels, attributes obj) obj {
 	}
 	return attributes
 }
-func containerEvent(action, name, image string, attributes obj) obj {
+func containerEvent(action, id, name, image string, attributes obj) obj {
 	t := time.Now()
 	attributes["name"], attributes["image"] = name, image
-	return obj{"status": action, "id": key(name), "from": image, "Type": "container", "Action": action,
-		"Actor": obj{"ID": key(name), "Attributes": attributes}, "scope": "local", "time": t.Unix(), "timeNano": t.UnixNano()}
+	return obj{"status": action, "id": id, "from": image, "Type": "container", "Action": action,
+		"Actor": obj{"ID": id, "Attributes": attributes}, "scope": "local", "time": t.Unix(), "timeNano": t.UnixNano()}
+}
+
+// imageEvent is an image's event: Docker names the image by its ID, or, for a
+// pull, by the reference pulled.
+func imageEvent(action, id, name string) obj {
+	t := time.Now()
+	return obj{"status": action, "id": id, "Type": "image", "Action": action,
+		"Actor": obj{"ID": id, "Attributes": obj{"name": name}}, "scope": "local", "time": t.Unix(), "timeNano": t.UnixNano()}
+}
+
+// emit publishes a container event the API caused (kill, stop, pause, exec_start,
+// ...), with the container's image and labels as Docker gives them.
+func (b *engine) emit(action, name string, attributes obj) {
+	_ = safeRun(func() {
+		c := readObject(filepath.Join(b.container(name), "config.json"))
+		image, _ := c["image_name"].(string)
+		b.events.publish(containerEvent(action, b.idOf(name), name, image, labelAttributes(object(c["labels"]), attributes)))
+	})
+}
+
+// watcher is what the last pass saw, by container ID (a renamed container is the
+// same container).
+type watcher struct {
+	mu    sync.Mutex
+	known map[string]seen
+	ready bool // a first pass has run: containers it found are not new
+}
+type seen struct {
+	name       string
+	live       bool
+	generation any
+	image      string
+	labels     obj    // Docker puts them on each event (docker compose filters by them)
+	health     string // healthy or unhealthy, else ""
 }
 
 // watch publishes container events and removes exited --rm containers.
@@ -372,55 +423,15 @@ func containerEvent(action, name, image string, attributes obj) obj {
 var watchNow = make(chan struct{}, 1)
 
 func (b *engine) watch(stop <-chan struct{}) {
-	type seen struct {
-		live       bool
-		generation any
-		image      string
-		labels     obj // Docker puts them on each event (docker compose filters by them)
-	}
-	known := map[string]seen{}
-	first := true
 	tick := time.NewTicker(250 * time.Millisecond)
 	defer tick.Stop()
 	for {
-		current := map[string]seen{}
-		var names []string
-		_ = safeRun(func() { names = b.names() })
-		for _, name := range names {
-			// Each container on its own: one unreadable container must not stall the rest.
-			_ = safeRun(func() {
-				p := filepath.Join(b.State, name)
-				s := b.statusOf(p)
-				if s == nil {
-					return
-				}
-				c := readObject(filepath.Join(p, "config.json"))
-				image, _ := c["image_name"].(string)
-				cur := seen{live(s), s["generation"], image, object(c["labels"])}
-				current[name] = cur
-				before, had := known[name]
-				if !first {
-					if !had {
-						b.events.publish(containerEvent("create", name, image, labelAttributes(cur.labels, obj{})))
-					}
-					if cur.live && (!had || !before.live || before.generation != cur.generation) {
-						b.events.publish(containerEvent("start", name, image, labelAttributes(cur.labels, obj{})))
-					}
-					if had && before.live && !cur.live {
-						b.events.publish(containerEvent("die", name, image, labelAttributes(cur.labels, obj{"exitCode": fmt.Sprint(s["exit_code"])})))
-					}
-				}
-				if c["auto_remove"] == true && !cur.live && s["state"] != "created" {
-					b.autoRemove(name, s)
-				}
-			})
-		}
-		for name, before := range known {
-			if _, ok := current[name]; !ok && !first {
-				b.events.publish(containerEvent("destroy", name, before.image, labelAttributes(before.labels, obj{})))
+		if remove := b.watchPass(); len(remove) > 0 {
+			for _, name := range remove {
+				_ = safeRun(func() { b.autoRemove(name) })
 			}
+			b.watchPass() // their destroy events
 		}
-		known, first = current, false
 		select {
 		case <-stop:
 			return
@@ -430,11 +441,75 @@ func (b *engine) watch(stop <-chan struct{}) {
 	}
 }
 
+// watchPass publishes the events since the last pass, and returns the exited --rm
+// containers to remove. The API runs one after it starts, stops or removes a
+// container, so die comes before stop, as in Docker.
+func (b *engine) watchPass() (remove []string) {
+	w := &b.watched
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	current := map[string]seen{}
+	var names []string
+	_ = safeRun(func() { names = b.names() })
+	for _, name := range names {
+		// Each container on its own: one unreadable container must not stall the rest.
+		_ = safeRun(func() {
+			p := filepath.Join(b.State, name)
+			s := b.statusOf(p)
+			if s == nil {
+				return
+			}
+			c := readObject(filepath.Join(p, "config.json"))
+			image, _ := c["image_name"].(string)
+			id := b.idOf(name)
+			cur := seen{name, live(s), s["generation"], image, object(c["labels"]), ""}
+			if c["healthcheck"] != nil && cur.live && exists(filepath.Join(p, "health.json")) {
+				if h := text(readObject(filepath.Join(p, "health.json"))["Status"]); h == "healthy" || h == "unhealthy" {
+					cur.health = h
+				}
+			}
+			current[id] = cur
+			before, had := w.known[id]
+			event := func(action string, attributes obj) {
+				b.events.publish(containerEvent(action, id, name, image, labelAttributes(cur.labels, attributes)))
+			}
+			if w.ready {
+				if !had {
+					event("create", obj{})
+				}
+				if cur.live && (!had || !before.live || before.generation != cur.generation) {
+					event("start", obj{})
+				}
+				if had && before.live && (!cur.live || before.generation != cur.generation) {
+					event("die", obj{"exitCode": fmt.Sprint(cmp.Or(s["exit_code"], any(0)))})
+				}
+				if cur.health != "" && cur.health != before.health {
+					event("health_status: "+cur.health, obj{})
+				}
+			}
+			if c["auto_remove"] == true && !cur.live && s["state"] != "created" {
+				remove = append(remove, name)
+			}
+		})
+	}
+	for id, before := range w.known {
+		if _, ok := current[id]; !ok && w.ready {
+			b.events.publish(containerEvent("destroy", id, before.name, before.image, labelAttributes(before.labels, obj{})))
+		}
+	}
+	w.known, w.ready = current, true
+	return remove
+}
+
 // autoRemove deletes an exited --rm container, keeping its exit status for a
 // docker run that waits for removal.
-func (b *engine) autoRemove(name string, s obj) {
+func (b *engine) autoRemove(name string) {
 	b.Mu.Lock()
 	defer b.Mu.Unlock()
+	s := b.statusOf(b.container(name))
+	if s == nil || live(s) { // removed, or started again, meanwhile
+		return
+	}
 	code := s["exit_code"]
 	if code == nil {
 		code = 0
@@ -448,81 +523,91 @@ func (b *engine) autoRemove(name string, s obj) {
 	}
 }
 
-// streamEvents sends events as JSON lines until the client goes away.
-func (b *engine) streamEvents(w http.ResponseWriter, r *http.Request, filters obj) {
-	for k := range filters {
-		reject(k == "type" || k == "container" || k == "event" || k == "label", "Unsupported events filter: "+k)
+// streamEvents sends events as JSON lines: those kept from since on, then new ones
+// until the client goes away or until passes. Filters: type, container, event,
+// image and label, each value of a key an alternative, every key required.
+func (b *engine) streamEvents(w http.ResponseWriter, r *http.Request, filters obj, since, until int64) {
+	values := map[string]map[string]bool{}
+	for k, v := range filters {
+		reject(k == "type" || k == "container" || k == "event" || k == "label" || k == "image", "Unsupported events filter: "+k)
+		_, isMap := v.(map[string]any)
+		_, isList := v.([]any)
+		reject(isMap || isList, "Invalid events filter")
+		values[k] = map[string]bool{}
+		for _, value := range filterValues(v) {
+			values[k][value] = true
+		}
 	}
 	match := func(ev obj) bool {
-		for k, v := range filters {
-			values := map[string]bool{}
-			switch x := v.(type) {
-			case map[string]any:
-				for value := range x {
-					values[value] = true
-				}
-			case []any:
-				for _, value := range x {
-					values[str(value)] = true
-				}
-			default:
-				reject(false, "Invalid events filter")
-			}
-			actor := object(ev["Actor"])
-			name := text(object(actor["Attributes"])["name"])
-			id := text(actor["ID"])
+		actor := object(ev["Actor"])
+		attributes := object(actor["Attributes"])
+		id, name, action := text(actor["ID"]), text(attributes["name"]), text(ev["Action"])
+		for k, want := range values {
+			ok := false
 			switch k {
 			case "type":
-				if !values["container"] {
-					return false
-				}
-			case "event":
-				if !values[text(ev["Action"])] {
-					return false
-				}
+				ok = want[text(ev["Type"])]
+			case "event": // health_status, exec_create and exec_start also match "<event>: <detail>"
+				before, _, _ := strings.Cut(action, ":")
+				ok = want[action] || want[before]
 			case "label": // key, or key=value; every one must hold, as in Docker
-				attributes := object(actor["Attributes"])
-				for value := range values {
-					k, want, hasValue := strings.Cut(value, "=")
-					got, ok := attributes[k].(string)
-					if !ok || hasValue && got != want {
-						return false
-					}
+				ok = true
+				for value := range want {
+					k, v, hasValue := strings.Cut(value, "=")
+					got, isText := attributes[k].(string)
+					ok = ok && isText && (!hasValue || got == v)
 				}
 			case "container":
-				found := values[name] || values[id]
-				for value := range values {
-					found = found || (len(value) >= 12 && len(value) <= len(id) && id[:len(value)] == value)
+				ok = ev["Type"] == "container" && (want[name] || want[id])
+				for value := range want {
+					ok = ok || ev["Type"] == "container" && len(value) >= 12 && strings.HasPrefix(id, value)
 				}
-				if !found {
-					return false
-				}
+			case "image":
+				ok = want[text(attributes["image"])] || want[id] || ev["Type"] == "image" && want[name]
+			}
+			if !ok {
+				return false
 			}
 		}
 		return true
 	}
-	ch := b.events.subscribe()
+	ch, past := b.events.subscribe(since, until)
 	defer b.events.unsubscribe(ch)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
 	flusher, _ := w.(http.Flusher)
+	encoder := json.NewEncoder(w)
+	send := func(ev obj) bool {
+		if until != 0 && ev["timeNano"].(int64) > until || !match(ev) {
+			return true
+		}
+		if encoder.Encode(ev) != nil {
+			return false
+		}
+		if flusher != nil {
+			flusher.Flush()
+		}
+		return true
+	}
+	for _, ev := range past {
+		send(ev)
+	}
 	if flusher != nil {
 		flusher.Flush()
 	}
-	encoder := json.NewEncoder(w)
+	var end <-chan time.Time
+	if until != 0 {
+		end = time.After(time.Until(time.Unix(0, until)))
+	}
 	for {
 		select {
 		case <-r.Context().Done():
 			return
+		case <-end:
+			return
 		case ev := <-ch:
-			if !match(ev) {
-				continue
-			}
-			if encoder.Encode(ev) != nil {
+			if !send(ev) {
 				return
-			}
-			if flusher != nil {
-				flusher.Flush()
 			}
 		}
 	}
@@ -548,12 +633,27 @@ func signalNumber(v string) syscall.Signal {
 	return stopSignals[name]
 }
 
-// kill sends a signal to a running container through its supervisor.
+// stopSignalNumber is the signal docker stop sends a container: its StopSignal, else SIGTERM.
+func stopSignalNumber(c obj) syscall.Signal {
+	if name, ok := c["stop_signal"].(string); ok && name != "" {
+		return stopSignals[stopSignal(name)]
+	}
+	return syscall.SIGTERM
+}
+
+// kill sends a signal to a running container through its supervisor. A paused
+// container takes SIGKILL alone (thawed first, so its execs end too), as in Docker.
 func (b *engine) kill(name string, sig syscall.Signal) {
 	p := b.container(name)
 	s := b.status(p)
 	if !live(s) {
 		panic(apiError{409, "Container " + name + " is not running"})
+	}
+	if exists(filepath.Join(p, "paused")) {
+		if sig != syscall.SIGKILL {
+			panic(apiError{409, "Container " + name + " is paused. Unpause the container before stopping or killing"})
+		}
+		b.unpause(name)
 	}
 	control := readObject(filepath.Join(p, "control.json"))
 	port := integer(control["port"])
@@ -568,6 +668,7 @@ func (b *engine) kill(name string, sig syscall.Signal) {
 	if e != nil || string(reply) != "OK" {
 		panic(apiError{409, "Supervisor did not accept the signal (a container started by an older engine needs a restart)"})
 	}
+	b.emit("kill", name, obj{"signal": strconv.Itoa(int(sig))})
 }
 
 // stampedLog appends a container stream to its log (stdout.log) and, before the
@@ -699,7 +800,7 @@ func (f *logFilter) lines(stream int, data []byte, off int64) []byte {
 				f.times[stream] = openLineTimes(f.dir, stream, off, 0)
 			}
 			at := f.times[stream].at(off)
-			f.skip[stream] = f.since != 0 && at < f.since || f.until != 0 && at > f.until
+			f.skip[stream] = f.outside(at)
 			if !f.skip[stream] && f.timestamps {
 				out = append(time.Unix(0, at).UTC().AppendFormat(out, rfc3339NanoFixed), ' ')
 			}
@@ -717,12 +818,64 @@ func (f *logFilter) lines(stream int, data []byte, off int64) []byte {
 	return out
 }
 
+// outside: a line written at is before --since or after --until.
+func (f *logFilter) outside(at int64) bool {
+	return f.since != 0 && at < f.since || f.until != 0 && at > f.until
+}
+
 func (f *logFilter) close() {
 	for _, t := range f.times {
 		if t != nil {
 			t.close()
 		}
 	}
+}
+
+// logLine is a line (or an unfinished last line) of a container's stdout (stream 0)
+// or stderr (1) log, at off, written at (Unix nanoseconds).
+type logLine struct {
+	stream  int
+	off, at int64
+	data    []byte
+}
+
+// logLines reads the wanted logs up to sizes and merges their lines in the order
+// they were written (their indexes' times), as docker logs interleaves stdout and
+// stderr. Each stream keeps its own order. A log without an index (an older
+// engine's) takes its file's last write as every line's time: its lines come after
+// those of the other stream written before then.
+func logLines(p string, want [2]bool, sizes [2]int64) []logLine {
+	var streams [2][]logLine
+	for i := range logNames {
+		if !want[i] || !exists(filepath.Join(p, logNames[i])) {
+			continue
+		}
+		log := readBounded(p, logNames[i], 16<<20)
+		log = log[:min(int64(len(log)), sizes[i])] // follow continues from here
+		mtime := time.Now().UnixNano()
+		if st, e := os.Lstat(filepath.Join(p, logNames[i])); e == nil {
+			mtime = st.ModTime().UnixNano()
+		}
+		times := openLineTimes(p, i, 0, mtime)
+		for off := 0; off < len(log); {
+			n := bytes.IndexByte(log[off:], '\n') + 1
+			if n == 0 {
+				n = len(log) - off
+			}
+			streams[i] = append(streams[i], logLine{i, int64(off), times.at(int64(off)), log[off : off+n]})
+			off += n
+		}
+		times.close()
+	}
+	out, a, b := make([]logLine, 0, len(streams[0])+len(streams[1])), streams[0], streams[1]
+	for len(a) > 0 || len(b) > 0 {
+		if len(b) == 0 || len(a) > 0 && a[0].at <= b[0].at {
+			out, a = append(out, a[0]), a[1:]
+		} else {
+			out, b = append(out, b[0]), b[1:]
+		}
+	}
+	return out
 }
 
 // logTime parses --since and --until as Docker's API sends them: Unix seconds with

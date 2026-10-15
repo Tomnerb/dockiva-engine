@@ -56,10 +56,12 @@ func run() {
 	insecure := flags.Bool("insecure-local", false, "allow plain HTTP to loopback registries (127.0.0.1, localhost)")
 	tokenEnv := flags.String("token-env", "", "registry token environment variable")
 	maxContainers := flags.Int("max-containers", 64, "running containers at once")
+	bindIP := flags.String("default-bind-ip", "0.0.0.0", "host address of -p HOST:CONTAINER ports without one (Docker's --ip; 127.0.0.1 keeps them on this Mac)")
 	check(flags.Parse(os.Args[1:]))
 	reject(flags.NArg() == 0, "Unexpected arguments")
 	reject(*maxContainers >= 1 && *maxContainers <= 1024, "--max-containers must be 1..1024")
-	b := &engine{Home: private(*home), Self: self, Assets: *assetRoot, MaxContainers: *maxContainers, Insecure: *insecure, quit: make(chan struct{}, 1)}
+	reject(net.ParseIP(*bindIP) != nil, "--default-bind-ip must be an IP address")
+	b := &engine{Home: private(*home), Self: self, Assets: *assetRoot, MaxContainers: *maxContainers, Insecure: *insecure, BindIP: *bindIP, quit: make(chan struct{}, 1)}
 	b.State = private(filepath.Join(b.Home, "containers"))
 	b.Cache = private(filepath.Join(b.Home, "images"))
 	lock, e := lockFile(filepath.Join(b.Home, "daemon.lock"), true)

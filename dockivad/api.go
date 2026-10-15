@@ -145,9 +145,11 @@ func (b *engine) removeImage(ref string, force bool) []obj {
 	for p, name := range dirs {
 		check(os.RemoveAll(p))
 		out = append(out, obj{"Untagged": name})
+		b.events.publish(imageEvent("untag", digest, digest)) // Docker names both by the image ID
 	}
 	if last {
 		out = append(out, obj{"Deleted": digest})
+		b.events.publish(imageEvent("delete", digest, digest))
 	}
 	return out
 }
@@ -253,12 +255,11 @@ func (b *engine) inspect(name string) obj {
 		code = s["exit_code"]
 	}
 	labels := object(c["labels"])
-	bindings, exposed := dockerPorts(c)
 	binds := []string{}
 	if c["binds"] != nil {
 		binds = stringsOf(c["binds"])
 	}
-	return obj{"Id": key(name), "Name": "/" + name, "Created": timestamp(c["created_at"]), "Path": cmd[0], "Args": cmd[1:], "Image": c["image"], "State": obj{"Status": state, "Running": running, "Paused": paused, "Restarting": s["state"] == "restarting", "Health": health(p, c), "OOMKilled": exists(filepath.Join(p, "oom")), "Dead": state == "dead", "Pid": pid, "ExitCode": code, "Error": text(s["error"]), "StartedAt": timestamp(s["started_at"]), "FinishedAt": timestamp(s["finished_at"])}, "Config": obj{"Image": img, "Entrypoint": cmd[:1], "Cmd": cmd[1:], "Env": stringsOf(c["env"]), "Labels": labels, "User": text(c["user"]), "Tty": c["tty"] == true, "OpenStdin": c["open_stdin"] == true, "StdinOnce": c["stdin_once"] == true, "WorkingDir": workdir(c), "Hostname": hostname(name, c), "Healthcheck": healthConfig(c), "ExposedPorts": exposed}, "HostConfig": obj{"NetworkMode": inspectNetwork(c), "PortBindings": bindings, "ReadonlyRootfs": c["writable"] != true, "AutoRemove": c["auto_remove"] == true, "Binds": binds, "Memory": memoryMiB(c) << 20, "NanoCpus": nanoCpus(c), "RestartPolicy": restartPolicy(c), "ExtraHosts": extraHostList(c), "LogConfig": obj{"Type": "json-file", "Config": obj{}}}, "NetworkSettings": obj{"Ports": bindings, "Networks": b.containerNetworks(name, c), "IPAddress": text(c["ip"]), "Gateway": gatewayOf(c)}, "Mounts": b.inspectMounts(c), "Driver": "dockiva-private-copy", "Platform": "linux", "RestartCount": restartCount(s), "DockivaCompatibility": profileInspection(c)}
+	return obj{"Id": b.idOf(name), "Name": "/" + name, "Created": timestamp(c["created_at"]), "Path": cmd[0], "Args": cmd[1:], "Image": c["image"], "State": obj{"Status": state, "Running": running, "Paused": paused, "Restarting": s["state"] == "restarting", "Health": health(p, c), "OOMKilled": exists(filepath.Join(p, "oom")), "Dead": state == "dead", "Pid": pid, "ExitCode": code, "Error": text(s["error"]), "StartedAt": timestamp(s["started_at"]), "FinishedAt": timestamp(s["finished_at"])}, "Config": obj{"Image": img, "Entrypoint": cmd[:1], "Cmd": cmd[1:], "Env": stringsOf(c["env"]), "Labels": labels, "User": text(c["user"]), "Tty": c["tty"] == true, "OpenStdin": c["open_stdin"] == true, "StdinOnce": c["stdin_once"] == true, "WorkingDir": workdir(c), "Hostname": hostname(name, c), "Healthcheck": healthConfig(c), "ExposedPorts": exposedPorts(c)}, "HostConfig": obj{"NetworkMode": inspectNetwork(c), "PortBindings": hostPortBindings(c), "PublishAllPorts": c["publish_all"] == true, "ReadonlyRootfs": c["writable"] != true, "AutoRemove": c["auto_remove"] == true, "Binds": binds, "Memory": memoryMiB(c) << 20, "NanoCpus": nanoCpus(c), "RestartPolicy": restartPolicy(c), "ExtraHosts": extraHostList(c), "LogConfig": obj{"Type": "json-file", "Config": obj{}}}, "NetworkSettings": obj{"Ports": networkPortBindings(p, c, running), "Networks": b.containerNetworks(name, c), "IPAddress": text(c["ip"]), "Gateway": gatewayOf(c)}, "Mounts": b.inspectMounts(c), "Driver": "dockiva-private-copy", "Platform": "linux", "RestartCount": restartCount(s), "DockivaCompatibility": profileInspection(c)}
 }
 func onlyKeys(m obj, allowed ...string) bool {
 	for k := range m {
@@ -281,76 +282,6 @@ func workdir(c obj) string {
 	return "/"
 }
 
-// portBindings validates Docker PortBindings, {"80/tcp":[{"HostIp":"","HostPort":"8080"}]},
-// as [container, host] pairs. Ports publish on the host loopback only, and each
-// needs an explicit host port.
-func portBindings(v any) []any {
-	m := object(v)
-	reject(len(m) <= 32, "Too many published ports")
-	out, guests, hosts := []any{}, map[int64]bool{}, map[int64]bool{}
-	for k, raw := range m {
-		port, proto, _ := strings.Cut(k, "/")
-		if proto != "tcp" && proto != "" {
-			panic(apiError{501, "Only TCP port publishing supported"})
-		}
-		guest, e := strconv.ParseInt(port, 10, 32)
-		reject(e == nil && guest >= 1 && guest <= 65535, "Invalid container port: "+k)
-		bindings := array(raw)
-		reject(len(bindings) == 1, "Publish each container port to exactly one host port")
-		b := object(bindings[0])
-		reject(onlyKeys(b, "HostIp", "HostPort"), "Unsupported port binding option")
-		if ip := text(b["HostIp"]); ip != "" && ip != "127.0.0.1" {
-			panic(apiError{501, "Dockiva Engine publishes ports on 127.0.0.1 only"})
-		}
-		host, e := strconv.ParseInt(text(b["HostPort"]), 10, 32)
-		reject(e == nil && host >= 1 && host <= 65535, "Explicit host port 1..65535 required for "+k)
-		reject(!guests[guest] && !hosts[host], "Duplicate published port")
-		guests[guest], hosts[host] = true, true
-		out = append(out, []any{guest, host})
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].([]any)[0].(int64) < out[j].([]any)[0].(int64) })
-	return out
-}
-
-// publishedPorts reads the saved [container, host] pairs.
-func publishedPorts(c obj) [][2]int64 {
-	out := [][2]int64{}
-	if c["ports"] == nil {
-		return out
-	}
-	for _, v := range array(c["ports"]) {
-		pair := array(v)
-		reject(len(pair) == 2, "Invalid saved port")
-		out = append(out, [2]int64{integer(pair[0]), integer(pair[1])})
-	}
-	return out
-}
-
-// portRows lists an inspected container's published ports as /containers/json rows.
-func portRows(item obj) []any {
-	rows := []any{}
-	for k, v := range item["HostConfig"].(obj)["PortBindings"].(obj) {
-		port, _, _ := strings.Cut(k, "/")
-		guest, _ := strconv.ParseInt(port, 10, 32)
-		host, _ := strconv.ParseInt(v.([]any)[0].(obj)["HostPort"].(string), 10, 32)
-		rows = append(rows, obj{"IP": "127.0.0.1", "PrivatePort": guest, "PublicPort": host, "Type": "tcp"})
-	}
-	sort.Slice(rows, func(i, j int) bool {
-		return rows[i].(obj)["PrivatePort"].(int64) < rows[j].(obj)["PrivatePort"].(int64)
-	})
-	return rows
-}
-
-// dockerPorts renders saved ports as Docker's PortBindings and ExposedPorts maps.
-func dockerPorts(c obj) (obj, obj) {
-	bindings, exposed := obj{}, obj{}
-	for _, p := range publishedPorts(c) {
-		k := strconv.FormatInt(p[0], 10) + "/tcp"
-		bindings[k] = []any{obj{"HostIp": "127.0.0.1", "HostPort": strconv.FormatInt(p[1], 10)}}
-		exposed[k] = obj{}
-	}
-	return bindings, exposed
-}
 func (b *engine) create(name string, body obj) obj { return b.createWith(name, body, nil) }
 
 // createWith is create from a prepared image (a build step's root and settings)
@@ -372,11 +303,12 @@ func (b *engine) createWith(name string, body obj, prepared *image) obj {
 			panic(apiError{501, "Unsupported container option: " + k})
 		}
 	}
-	// ExposedPorts is metadata in Docker; only PortBindings publishes.
+	// ExposedPorts is metadata in Docker; PortBindings publishes, and -P every exposed port.
+	exposed := map[string]bool{}
 	for k, v := range object(body["ExposedPorts"]) {
-		port, proto, _ := strings.Cut(k, "/")
-		n, e := strconv.ParseInt(port, 10, 32)
-		reject(e == nil && n >= 1 && n <= 65535 && (proto == "tcp" || proto == "") && idle(v), "Only TCP ExposedPorts supported: "+k)
+		port, proto := portKey(k)
+		reject(idle(v), "Invalid ExposedPorts value: "+k)
+		exposed[strconv.FormatInt(port, 10)+"/"+proto] = true
 	}
 	network := object(body["NetworkingConfig"])
 	if !onlyKeys(network, "EndpointsConfig") {
@@ -423,7 +355,7 @@ func (b *engine) createWith(name string, body obj, prepared *image) obj {
 		case "NetworkMode":
 			mode, isText := v.(string)
 			ok = isText && !strings.HasPrefix(mode, "container:")
-		case "ReadonlyRootfs", "AutoRemove":
+		case "ReadonlyRootfs", "AutoRemove", "PublishAllPorts":
 			_, ok = v.(bool)
 		case "Binds", "Mounts":
 			ok = true // parseMounts validates them
@@ -433,10 +365,7 @@ func (b *engine) createWith(name string, body obj, prepared *image) obj {
 			m := object(v)
 			ok = onlyKeys(m, "Type", "Config") && (idle(m["Type"]) || m["Type"] == "json-file") && idle(m["Config"])
 		case "RestartPolicy":
-			m := object(v)
-			name := text(m["Name"])
-			ok = onlyKeys(m, "Name", "MaximumRetryCount") && slices.Contains([]string{"", "no", "always", "unless-stopped", "on-failure"}, name) &&
-				(idle(m["MaximumRetryCount"]) || name == "on-failure" && integer(m["MaximumRetryCount"]) > 0)
+			ok = restartPolicyOK(object(v))
 		case "ExtraHosts":
 			ok = true // extraHosts validates them
 		case "Init":
@@ -493,7 +422,18 @@ func (b *engine) createWith(name string, body obj, prepared *image) obj {
 		reject(len(k)+len(str(v)) <= 4096, "Label too long")
 	}
 	command := im.command(override)
-	config := obj{"image": im.Digest, "image_name": imageName, "command": command, "env": im.Env, "writable": host["ReadonlyRootfs"] != true, "cpu_backend": "interpreter", "schedule": false, "process_tree": false, "scheduled_network": false, "dynamic": false, "job_control": false, "memory_limit_mib": 256, "host_sandbox": false, "max_steps": 10000000, "labels": labels, "ports": ports, "workdir": im.WorkingDir, "network": networkMode(host), "stop_signal": im.StopSignal, "created_at": now()}
+	for _, k := range im.Exposed {
+		exposed[k] = true
+	}
+	exposedList := []string{}
+	for k := range exposed {
+		exposedList = append(exposedList, k)
+	}
+	sort.Strings(exposedList)
+	if host["PublishAllPorts"] == true { // docker run -P
+		ports = publishAll(ports, exposedList)
+	}
+	config := obj{"image": im.Digest, "image_name": imageName, "command": command, "env": im.Env, "writable": host["ReadonlyRootfs"] != true, "cpu_backend": "interpreter", "schedule": false, "process_tree": false, "scheduled_network": false, "dynamic": false, "job_control": false, "memory_limit_mib": 256, "host_sandbox": false, "max_steps": 10000000, "labels": labels, "ports": ports, "exposed": exposedList, "workdir": im.WorkingDir, "network": networkMode(host), "stop_signal": im.StopSignal, "created_at": now()}
 	// The default bridge or a user network: a private address and ports. "host" shares
 	// the Mac's network; "none" keeps the container to its own loopback.
 	mode := text(host["NetworkMode"])
@@ -538,9 +478,7 @@ func (b *engine) createWith(name string, body obj, prepared *image) obj {
 		}
 		config["extra_hosts"] = pairs
 	}
-	if rp := object(host["RestartPolicy"]); !idle(rp["Name"]) && rp["Name"] != "no" {
-		config["restart"] = obj{"name": rp["Name"], "max": rp["MaximumRetryCount"]}
-	}
+	setRestart(config, object(host["RestartPolicy"]))
 	if body["Tty"] == true { // docker run -t: the container's stdio is a terminal
 		config["tty"] = true
 		if a, ok := host["ConsoleSize"].([]any); ok && !idle(a[0]) {
@@ -550,16 +488,9 @@ func (b *engine) createWith(name string, body obj, prepared *image) obj {
 	if body["OpenStdin"] == true { // docker run -i
 		config["open_stdin"], config["stdin_once"] = true, body["StdinOnce"] == true
 	}
-	if !idle(host["Memory"]) {
-		mib := (integer(host["Memory"]) + 1<<20 - 1) >> 20
-		reject(mib >= 6 && mib <= 65536, "Memory limit must be 6 MiB to 64 GiB")
-		config["memory_mib"] = json.Number(strconv.FormatInt(mib, 10))
-	}
-	if !idle(host["NanoCpus"]) {
-		// ponytail: --cpus sets the vCPU count, rounded up, not a CFS quota.
-		cpus := (integer(host["NanoCpus"]) + 1e9 - 1) / 1e9
-		reject(cpus <= 64, "At most 64 CPUs")
-		config["cpus"] = json.Number(strconv.FormatInt(cpus, 10))
+	setLimits(config, host)
+	if host["PublishAllPorts"] == true {
+		config["publish_all"] = true
 	}
 	if host["AutoRemove"] == true {
 		config["auto_remove"] = true // docker run --rm: removed once it exits (engine.watch)
@@ -602,7 +533,7 @@ func (b *engine) createWith(name string, body obj, prepared *image) obj {
 }
 
 var versionPath = regexp.MustCompile(`^/v([0-9]+)\.([0-9]+)(/.*)$`)
-var containerPath = regexp.MustCompile(`^/containers/([^/]+)(?:/(json|start|stop|restart|logs|wait|attach|kill|archive|stats|exec|resize|top|pause|unpause))?$`)
+var containerPath = regexp.MustCompile(`^/containers/([^/]+)(?:/(json|start|stop|restart|logs|wait|attach|kill|archive|stats|exec|resize|top|pause|unpause|rename|update))?$`)
 var execPath = regexp.MustCompile(`^/exec/([0-9a-f]+)/(start|json|resize)$`)
 
 func send(w http.ResponseWriter, status int, v any) {
@@ -778,7 +709,9 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 			}
 			b.Mu.Lock()
 			defer b.Mu.Unlock()
-			send(w, 201, b.create(name, body))
+			created := b.create(name, body)
+			b.watchPass() // its create event
+			send(w, 201, created)
 			return
 		case b.systemAPI(w, method, path, q): // before /containers/NAME: /containers/prune
 			return
@@ -877,6 +810,8 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 			target := q.Get("repo") + ":" + cmp.Or(q.Get("tag"), "latest")
 			reject(q.Get("repo") != "" && len(target) <= 512 && !strings.Contains(target, "@"), "Invalid tag")
 			commitImage(b.Cache, target, noLinks(b.imagePath(source), "layout"))
+			digest := str(readObject(filepath.Join(b.imagePath(target), "image.json"))["digest"])
+			b.events.publish(imageEvent("tag", digest, shortName(target)))
 			send(w, 201, nil)
 			return
 		case strings.HasPrefix(path, "/distribution/") && strings.HasSuffix(path, "/json") && method == "GET":
@@ -888,16 +823,14 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 			send(w, 200, b.removeImage(strings.TrimPrefix(path, "/images/"), yes("force")))
 			return
 		case path == "/events" && method == "GET":
-			if (q.Get("since") != "" && q.Get("since") != "0") || q.Get("until") != "" {
-				panic(apiError{501, "Event history (since/until) unsupported"})
-			}
+			since, until := logTime(q.Get("since")), logTime(q.Get("until"))
 			filters := obj{}
 			if q.Get("filters") != "" {
 				filters = decode([]byte(q.Get("filters")), maxJSON)
 			}
 			stream()
 			defer endStream()
-			b.streamEvents(w, r, filters)
+			b.streamEvents(w, r, filters, since, until)
 			return
 		case strings.HasPrefix(path, "/volumes") && b.volumesAPI(w, method, path, q, raw):
 			return
@@ -913,6 +846,11 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 			// a large image takes minutes, and other requests go on meanwhile.
 			unbounded(w)
 			pullWith(reference, b.Cache, b.Insecure, registryCredentials(r.Header.Get("X-Registry-Auth")))
+			pulled := shortName(reference)
+			if !strings.Contains(pulled, "@") && !strings.Contains(pulled[strings.LastIndex(pulled, "/")+1:], ":") {
+				pulled += ":latest"
+			}
+			b.events.publish(imageEvent("pull", pulled, repository(pulled)))
 			send(w, 200, obj{"status": "Downloaded verified image " + reference})
 			return
 		}
@@ -952,6 +890,11 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 				defer b.Mu.Unlock()
 				unbounded(w) // a long stop grace period
 				if action == "stop" || action == "restart" {
+					// Docker's events for a stop: kill (the stop signal), die, stop.
+					wasLive := live(b.status(b.container(name)))
+					if wasLive {
+						b.emit("kill", name, obj{"signal": strconv.Itoa(int(stopSignalNumber(readObject(filepath.Join(b.container(name), "config.json")))))})
+					}
 					if t := q.Get("t"); t != "" {
 						n, e := strconv.Atoi(t)
 						reject(e == nil && n >= -1 && n <= 3600, "Invalid stop timeout")
@@ -962,9 +905,17 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 					} else {
 						b.stop(name)
 					}
+					if wasLive {
+						b.watchPass() // die
+						b.emit("stop", name, obj{})
+					}
 				}
 				if action == "start" || action == "restart" {
 					b.start(name)
+					b.watchPass() // start
+				}
+				if action == "restart" {
+					b.emit("restart", name, obj{})
 				}
 				send(w, 204, nil)
 				return
@@ -977,47 +928,45 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 					filter = &logFilter{dir: p, timestamps: yes("timestamps"), since: since, until: until}
 					defer filter.close()
 				}
-				data := []byte{}
-				for i, stream := range []string{"stdout", "stderr"} {
-					if !yes(stream) || !exists(filepath.Join(p, logNames[i])) {
-						continue
+				lines := logLines(p, [2]bool{yes("stdout"), yes("stderr")}, sizes)
+				if filter != nil { // following picks up where each stream's last line is
+					for i := range logNames {
+						filter.times[i] = openLineTimes(p, i, sizes[i], 0) // lines just written: now
 					}
-					log := readBounded(p, logNames[i], 16<<20)
-					if int64(len(log)) > sizes[i] {
-						log = log[:sizes[i]] // follow continues from here
-					}
-					whole := len(log)
-					tail := q.Get("tail")
-					if tail != "" && tail != "all" {
-						n, e := strconv.Atoi(tail)
-						check(e)
-						reject(n >= 0, "Invalid tail")
-						lines := strings.SplitAfter(string(log), "\n")
-						if lines[len(lines)-1] == "" {
-							lines = lines[:len(lines)-1]
-						}
-						if n < len(lines) {
-							lines = lines[len(lines)-n:]
-						}
-						log = []byte(strings.Join(lines, ""))
-					}
-					if filter != nil {
-						// A log older than its index: its time is the file's last write.
-						mtime := time.Now().UnixNano()
-						if st, e := os.Lstat(filepath.Join(p, logNames[i])); e == nil {
-							mtime = st.ModTime().UnixNano()
-						}
-						start := int64(whole - len(log))
-						filter.times[i] = openLineTimes(p, i, start, mtime)
-						log = filter.lines(i, log, start)
-						filter.times[i].fallback = 0 // following: lines just written, now
-					}
-					if tty { // a terminal's output is one raw stream
-						data = append(data, log...)
-					} else {
-						data = frame(data, i+1, log)
+					for _, l := range lines {
+						filter.midline[l.stream] = l.data[len(l.data)-1] != '\n'
+						filter.skip[l.stream] = filter.outside(l.at)
 					}
 				}
+				if tail := q.Get("tail"); tail != "" && tail != "all" { // the last lines of both streams
+					n, e := strconv.Atoi(tail)
+					check(e)
+					reject(n >= 0, "Invalid tail")
+					lines = lines[len(lines)-min(n, len(lines)):]
+				}
+				data, pending, current := []byte{}, []byte{}, 0
+				flush := func() { // a frame for each run of lines from one stream
+					if tty { // a terminal's output is one raw stream
+						data = append(data, pending...)
+					} else if len(pending) > 0 {
+						data = frame(data, current+1, pending)
+					}
+					pending = pending[:0]
+				}
+				for _, l := range lines {
+					if filter != nil && filter.outside(l.at) {
+						continue
+					}
+					if l.stream != current {
+						flush()
+						current = l.stream
+					}
+					if filter != nil && filter.timestamps {
+						pending = append(time.Unix(0, l.at).UTC().AppendFormat(pending, rfc3339NanoFixed), ' ')
+					}
+					pending = append(pending, l.data...)
+				}
+				flush()
 				if !yes("follow") {
 					send(w, 200, data)
 					return
@@ -1038,6 +987,7 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 				reject(yes("stream") && !yes("logs"), "Attach supports stream=1 without logs replay")
 				stream()
 				defer endStream()
+				b.emit("attach", name, obj{})
 				b.attach(w, r, name, yes("stdin"), yes("stdout"), yes("stderr"))
 				return
 			case action == "resize" && method == "POST":
@@ -1074,24 +1024,43 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 				return
 			case (action == "pause" || action == "unpause") && method == "POST":
 				b.pause(name, action == "pause")
+				b.emit(action, name, obj{})
 				send(w, 204, nil)
 				return
 			case action == "kill" && method == "POST":
-				b.unpause(name) // as stop does: a frozen container takes its signal
 				b.kill(name, signalNumber(q.Get("signal")))
 				send(w, 204, nil)
+				return
+			case action == "rename" && method == "POST":
+				b.Mu.Lock()
+				defer b.Mu.Unlock()
+				b.rename(name, q.Get("name"))
+				b.watchPass() // later events name it so
+				send(w, 204, nil)
+				return
+			case action == "update" && method == "POST":
+				b.Mu.Lock()
+				defer b.Mu.Unlock()
+				body := obj{}
+				if len(raw) > 0 {
+					body = decode(raw, maxJSON)
+				}
+				send(w, 200, b.update(name, body))
 				return
 			case action == "" && method == "DELETE":
 				b.Mu.Lock()
 				defer b.Mu.Unlock()
-				if yes("force") {
+				if yes("force") && live(b.status(b.container(name))) { // events: kill, die, destroy
+					b.emit("kill", name, obj{"signal": "9"})
 					b.stop(name)
+					b.watchPass()
 				}
 				mounts := savedMounts(readObject(filepath.Join(b.container(name), "config.json")))
 				b.remove(name)
 				if yes("v") { // docker rm -v: the container's anonymous volumes go too
 					b.removeAnonymousVolumes(mounts)
 				}
+				b.watchPass() // destroy
 				send(w, 204, nil)
 				return
 			}
