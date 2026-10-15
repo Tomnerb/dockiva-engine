@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -344,6 +345,12 @@ func (e *events) publish(ev obj) {
 		}
 	}
 }
+func labelAttributes(labels, attributes obj) obj {
+	for k, v := range labels {
+		attributes[k] = v
+	}
+	return attributes
+}
 func containerEvent(action, name, image string, attributes obj) obj {
 	t := time.Now()
 	attributes["name"], attributes["image"] = name, image
@@ -361,6 +368,7 @@ func (b *engine) watch(stop <-chan struct{}) {
 		live       bool
 		generation any
 		image      string
+		labels     obj // Docker puts them on each event (docker compose filters by them)
 	}
 	known := map[string]seen{}
 	first := true
@@ -380,18 +388,18 @@ func (b *engine) watch(stop <-chan struct{}) {
 				}
 				c := readObject(filepath.Join(p, "config.json"))
 				image, _ := c["image_name"].(string)
-				cur := seen{live(s), s["generation"], image}
+				cur := seen{live(s), s["generation"], image, object(c["labels"])}
 				current[name] = cur
 				before, had := known[name]
 				if !first {
 					if !had {
-						b.events.publish(containerEvent("create", name, image, obj{}))
+						b.events.publish(containerEvent("create", name, image, labelAttributes(cur.labels, obj{})))
 					}
 					if cur.live && (!had || !before.live || before.generation != cur.generation) {
-						b.events.publish(containerEvent("start", name, image, obj{}))
+						b.events.publish(containerEvent("start", name, image, labelAttributes(cur.labels, obj{})))
 					}
 					if had && before.live && !cur.live {
-						b.events.publish(containerEvent("die", name, image, obj{"exitCode": fmt.Sprint(s["exit_code"])}))
+						b.events.publish(containerEvent("die", name, image, labelAttributes(cur.labels, obj{"exitCode": fmt.Sprint(s["exit_code"])})))
 					}
 				}
 				if c["auto_remove"] == true && !cur.live && s["state"] != "created" {
@@ -401,7 +409,7 @@ func (b *engine) watch(stop <-chan struct{}) {
 		}
 		for name, before := range known {
 			if _, ok := current[name]; !ok && !first {
-				b.events.publish(containerEvent("destroy", name, before.image, obj{}))
+				b.events.publish(containerEvent("destroy", name, before.image, labelAttributes(before.labels, obj{})))
 			}
 		}
 		known, first = current, false
@@ -435,7 +443,7 @@ func (b *engine) autoRemove(name string, s obj) {
 // streamEvents sends events as JSON lines until the client goes away.
 func (b *engine) streamEvents(w http.ResponseWriter, r *http.Request, filters obj) {
 	for k := range filters {
-		reject(k == "type" || k == "container" || k == "event", "Unsupported events filter: "+k)
+		reject(k == "type" || k == "container" || k == "event" || k == "label", "Unsupported events filter: "+k)
 	}
 	match := func(ev obj) bool {
 		for k, v := range filters {
@@ -463,6 +471,15 @@ func (b *engine) streamEvents(w http.ResponseWriter, r *http.Request, filters ob
 			case "event":
 				if !values[text(ev["Action"])] {
 					return false
+				}
+			case "label": // key, or key=value; every one must hold, as in Docker
+				attributes := object(actor["Attributes"])
+				for value := range values {
+					k, want, hasValue := strings.Cut(value, "=")
+					got, ok := attributes[k].(string)
+					if !ok || hasValue && got != want {
+						return false
+					}
 				}
 			case "container":
 				found := values[name] || values[id]

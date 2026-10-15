@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -25,6 +26,16 @@ func (b *engine) imagePath(name string) string {
 	p := filepath.Join(b.Cache, key(name))
 	if !exists(p) && !strings.Contains(name, "@") && !strings.Contains(name[strings.LastIndex(name, "/")+1:], ":") {
 		p = filepath.Join(b.Cache, key(name+":latest")) // Docker treats an untagged name as :latest.
+	}
+	if !exists(p) && imageID.MatchString(name) { // docker run IMAGE-ID, as docker build prints
+		entries, e := os.ReadDir(b.Cache)
+		check(e)
+		for _, entry := range entries {
+			meta := filepath.Join(b.Cache, entry.Name(), "image.json")
+			if len(entry.Name()) == 64 && exists(meta) && strings.HasPrefix(str(readObject(meta)["digest"]), "sha256:"+strings.TrimPrefix(name, "sha256:")) {
+				return filepath.Join(b.Cache, entry.Name())
+			}
+		}
 	}
 	if !exists(p) {
 		panic(apiError{404, "Image is not cached: " + name})
@@ -49,6 +60,36 @@ func (b *engine) imageInfo(name string) obj {
 	st, e := os.Stat(filepath.Join(b.imagePath(name), "image.json"))
 	check(e)
 	return obj{"Id": im.Digest, "RepoTags": []string{name}, "RepoDigests": []string{strings.Split(name, ":")[0] + "@" + im.Digest}, "Created": st.ModTime().UTC().Format(time.RFC3339Nano), "Size": size, "Architecture": "arm64", "Os": "linux", "Config": obj{"Entrypoint": im.Entry, "Cmd": im.Args, "Env": im.Env, "WorkingDir": im.WorkingDir}, "RootFS": obj{"Type": "layers", "Layers": []string{}}}
+}
+
+// imageFilter is docker images NAME (reference: a name or pattern, with or without
+// the tag) and dangling (untagged build results, named "<none>:ID").
+func imageFilter(name string, filters obj) bool {
+	repo := name
+	if i := strings.LastIndex(name, ":"); i > strings.LastIndex(name, "/") {
+		repo = name[:i]
+	}
+	for k, v := range filters {
+		values := []string{}
+		for value := range object(v) {
+			values = append(values, value)
+		}
+		ok := false
+		for _, value := range values {
+			switch k {
+			case "dangling":
+				ok = ok || (value == "true") == strings.HasPrefix(name, "<none>:")
+			case "reference":
+				m1, _ := path.Match(value, name)
+				m2, _ := path.Match(value, repo)
+				ok = ok || m1 || m2
+			}
+		}
+		if !ok {
+			return false
+		}
+	}
+	return true
 }
 
 var imageID = regexp.MustCompile(`^(sha256:)?[0-9a-f]{4,64}$`)
@@ -292,7 +333,11 @@ func dockerPorts(c obj) (obj, obj) {
 	}
 	return bindings, exposed
 }
-func (b *engine) create(name string, body obj) obj {
+func (b *engine) create(name string, body obj) obj { return b.createWith(name, body, nil) }
+
+// createWith is create from a prepared image (a build step's root and settings)
+// instead of the cached image body names.
+func (b *engine) createWith(name string, body obj, prepared *image) obj {
 	p := b.container(name)
 	if exists(p) {
 		panic(apiError{409, "Container name already exists"})
@@ -387,7 +432,10 @@ func (b *engine) create(name string, body obj) obj {
 	}
 	imageName := str(body["Image"])
 	reject(len(imageName) > 0 && len(imageName) <= 512, "Invalid image name")
-	im := b.image(imageName)
+	im := prepared
+	if im == nil {
+		im = b.image(imageName)
+	}
 	if wd := text(body["WorkingDir"]); wd != "" {
 		reject(strings.HasPrefix(wd, "/"), "WorkingDir must be absolute")
 		pathName(wd[1:])
@@ -635,6 +683,13 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 			send(w, 200, nil)
 			return
 		}
+		// docker build (the classic builder): the context tar streams in as it is read.
+		if path == "/build" && method == "POST" {
+			stream()
+			defer endStream()
+			b.build(w, r, q)
+			return
+		}
 		if len(r.TransferEncoding) > 0 {
 			panic(apiError{400, "Chunked requests unsupported"})
 		}
@@ -648,6 +703,8 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 		}
 		switch {
 		case path == "/_ping" && (method == "GET" || method == "HEAD"):
+			// The classic builder (POST /build): the docker CLI then builds without BuildKit.
+			w.Header().Set("Builder-Version", "1")
 			w.Header().Set("Content-Type", "text/plain")
 			w.WriteHeader(200)
 			_, _ = w.Write([]byte("OK"))
@@ -736,6 +793,11 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 			return
 		case path == "/images/json" && method == "GET":
 			defer debug.FreeOSMemory()
+			filters := obj{}
+			if q.Get("filters") != "" {
+				filters = decode([]byte(q.Get("filters")), maxJSON)
+			}
+			reject(onlyKeys(filters, "reference", "dangling"), "Unsupported image filter")
 			entries, e := os.ReadDir(b.Cache)
 			check(e)
 			rows := []any{}
@@ -743,6 +805,9 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 				if entry.IsDir() && len(entry.Name()) == 64 {
 					p := filepath.Join(b.Cache, entry.Name(), "image.json")
 					meta := readObject(p)
+					if !imageFilter(str(meta["name"]), filters) {
+						continue
+					}
 					item := b.imageInfo(str(meta["name"]))
 					st, e := os.Stat(p)
 					check(e)
