@@ -98,6 +98,15 @@ def main():
               'echo ==relative==; cd /proc && head -1 stat; cd /; echo ==task==; ls /proc/1/task; echo ==; kill $!')
     out = run(root, script)
     check_own(out)
+    # Where Linux on arm64 (no randomization) loads a PIE program and its dynamic loader;
+    # the brk heap follows the program.
+    maps = [line.split() for line in run(root, 'cat /proc/self/maps').splitlines()]
+    ranges = [tuple(int(v, 16) for v in m[0].split('-')) for m in maps]
+    assert ranges[maps.index(next(m for m in maps if m[1] == 'r-xp' and m[-1] != '[vdso]'))][0] == 0xaaaaaaaa0000, maps
+    assert any(0xfffff0000000 <= low and high <= 0xfffff8000000 and m[1] == 'r-xp' for (low, high), m in zip(ranges, maps)), maps
+    heap = ranges[maps.index(next(m for m in maps if m[-1] == '[heap]'))]
+    assert any(high == heap[0] and 0xaaaaaaaa0000 <= low for low, high in ranges), maps
+    print('PASS PIE program at 0xaaaaaaaa0000, ld-musl below 0xfffff8000000, heap after the program')
     with tempfile.TemporaryDirectory() as temp:
         table = Path(temp)/'procs'
         main_run = run(root, 'yes >/dev/null & sleep 6; kill $!', '--proc-publish', str(table), background=True)

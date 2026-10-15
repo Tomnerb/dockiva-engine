@@ -18,9 +18,8 @@ an experiment.
   the slow fallback for correctness. All three are arm64 Linux ELF programs that our
   runtime can already almost run.
 - **The real work is in our runtime, not in a translator.** Every translator needs:
-  - a general 47/48-bit address space (today's runtime refuses `MAP_FIXED` outside its
-    12 GiB arena and returns ENOSYS for `mremap`);
-  - the translator loaded high, out of the x86 program's way (today PIE programs load at 4 MiB);
+  - a general 47/48-bit address space (done 2026-10-15: `MAP_FIXED` anywhere, `mremap`);
+  - the translator loaded high, out of the x86 program's way (done 2026-10-15: PIE at `0xaaaaaaaa0000`);
   - binfmt-style dispatch in `execve`;
   - a way to turn on Apple's hardware TSO per thread (`ACTLR_EL1` bit 1, which Hypervisor.framework exposes from
     macOS 15).
@@ -39,11 +38,11 @@ All of the following is **[known]** from the engine source:
 | Area | Current behaviour | Source |
 |---|---|---|
 | amd64 rejection | `Only linux/arm64 supported` in pull/load/run/build paths | `dockivad/image.go:164,171`, `dockivad/api.go:751`, `dockivad/build.go:73,498`, `oci.py:97`, `daemon.py:131` |
-| ELF loader | Accepts only `e_machine == 183` (AArch64); PIE main programs load at `0x400000`, PT_INTERP at 60 GiB | `native/runtime.c:150-152`, `native/address_space.h:20-25` |
+| ELF loader | Accepts only `e_machine == 183` (AArch64); since 2026-10-15 PIE main programs load at `0xaaaaaaaa0000` and PT_INTERP / static PIE just below `0xfffff8000000`, as Linux arm64 without ASLR (was `0x400000` and 60 GiB) | `native/runtime.c` (`load_stream_inner`), `native/address_space.h` |
 | exec | `#!` scripts handled in `process_exec`, up to 4 levels deep. That loop is the natural binfmt hook | `native/process.h:92-121` |
 | Page tables | Stage 1 uses a 4 KiB granule, 48-bit VA (T0SZ=16), 40-bit IPA. Guest pages are 4 KiB | `native/hvf_backend.h:152,481` |
-| mmap | One arena at `0x300000000` of at most 12 GiB. `MAP_FIXED` / `MAP_FIXED_NOREPLACE` **outside the arena return EINVAL/ENOMEM**. PROT_NONE reservations: up to 8, anonymous commits only, placed in [16 TiB, 112 TiB) | `native/mapping.h:203-216,340-405` |
-| mremap | Returns ENOSYS | `native/syscall.h:495-497` |
+| mmap | One arena at `0x300000000` of at most 12 GiB for non-fixed mappings. Since 2026-10-15: `MAP_FIXED` / `MAP_FIXED_NOREPLACE` anywhere in [64 KiB, `0xffffffff0000`) outside the arena (anonymous, private file, shared), replacing what was there; up to 65536 reservations, split by munmap holes; fresh PROT_NONE reservations in [16 TiB, 112 TiB). A fixed range across the arena's edge is still EINVAL, and hints outside the arena are ignored | `native/mapping.h` (`guest_dynamic_mmap`, `reserve_*`) |
+| mremap | Implemented 2026-10-15: in-place grow/shrink, `MREMAP_MAYMOVE`, `MREMAP_FIXED`, `MREMAP_DONTUNMAP`, old size 0 on shared memory; private file mappings do not grow | `native/mapping.h` (`guest_mremap`) |
 | JIT support | RWX mappings allowed under HVF; memfd double-mapping supported; membarrier supported | `native/runtime.c:1151`, `native/fs.h:492`, `native/hvf_backend.h:728` |
 | Signals | SIGSEGV/SIGILL delivered to handlers with si_code/si_addr; arm64 sigcontext with FPSIMD record (`0x46508001`); sigaltstack | `native/hvf_backend.h:732-756`, `native/signals.h:179` |
 | Threads/processes | 1024 threads per process, 63 processes | `native/scheduler.h:7`, `native/resources.h:7` |

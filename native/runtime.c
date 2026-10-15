@@ -133,7 +133,8 @@ static void text_cache_add(const struct stat *st,uint64_t off,uint64_t bytes,uin
         text_cache_bytes-=text_cache[victim].mem;backing_release(text_cache[victim].backing);memset(&text_cache[victim],0,sizeof(text_cache[victim]));
     }
 }
-static void load_stream_inner(FILE *f,int interpreter) {
+/* Returns the load bias. */
+static uint64_t load_stream_inner(FILE *f,int interpreter) {
     char interpreter_path[1025]={0};
     struct stat input_stat;
     if(fstat(fileno(f),&input_stat)<0 || !S_ISREG(input_stat.st_mode) || input_stat.st_size<0) { fclose(f);fail("ELF input must be a readable regular file"); }
@@ -147,13 +148,29 @@ static void load_stream_inner(FILE *f,int interpreter) {
     address_space->file_data=mapped;address_space->file_size=size;
     const unsigned char *d=address_space->file_data;
     if(size<64 || memcmp(d,"\177ELF\002\001\001",7)) fail("Expected little-endian ELF64 version 1");
-    uint64_t elf_type=le(d+16,2),bias=elf_type==3?(interpreter?INTERPRETER_BASE:UINT64_C(0x400000)):0;
+    uint64_t elf_type=le(d+16,2),bias=0;
     if(interpreter && elf_type!=3)fail("Interpreter must be ET_DYN");
     if((elf_type!=2 && elf_type!=3) || le(d+18,2)!=183 || le(d+20,4)!=1) fail("Only ARM64 ET_EXEC/static PIE version 1 supported");
     uint64_t phoff=le(d+32,8), count=le(d+56,2), total=0;
     for(unsigned i=0;i<address_space->nseg;i++)total+=address_space->seg[i].size;
     if(le(d+52,2)!=64 || le(d+54,2)!=56 || !count || count>128) fail("Invalid program header size/count");
     if(phoff<64 || phoff>size || count*56>size-phoff) fail("Program headers outside file");
+    if(elf_type==3) {
+        /* Where Linux puts it: a program with an interpreter at ELF_ET_DYN_BASE, the
+           interpreter and a static PIE (a loader run directly) just below mmap_base;
+           aligned down to the largest segment alignment. */
+        uint64_t span=0,align=4096;int dynamic=0;
+        for(uint64_t i=0;i<count;i++) {
+            const unsigned char *h=d+(size_t)phoff+i*56;
+            if(le(h,4)==3)dynamic=1;
+            if(le(h,4)!=1)continue;
+            uint64_t addr=le(h+16,8),mem=le(h+40,8),a=le(h+48,8);
+            if(addr>UINT64_C(1)<<40 || mem>UINT64_C(1)<<40)fail("Invalid load segment bounds");
+            if(addr+mem>span)span=addr+mem;
+            if(a>align && !(a&(a-1)) && a<=(UINT64_C(1)<<30))align=a;
+        }
+        bias=(!interpreter && dynamic?PIE_BASE:INTERPRETER_TOP-page_up(span))&~(align-1);
+    }
     if(le(d+24,8)>UINT64_MAX-bias)fail("ELF entry overflow");
     cpu->pc=address_space->entry=le(d+24,8)+bias; address_space->phcount=count;
     for(uint64_t i=0;i<count;i++) {
@@ -223,14 +240,14 @@ static void load_stream_inner(FILE *f,int interpreter) {
         FILE *input=fdopen(fd,"rb");if(!input) { close(fd);fail("Cannot read guest interpreter"); }
         uint64_t main_entry=address_space->entry,main_ph=address_space->phaddr,main_count=address_space->phcount;
         munmap(address_space->file_data,address_space->file_size);address_space->file_data=NULL;
-        load_stream_inner(input,1);
-        address_space->interpreter_base=INTERPRETER_BASE;address_space->entry=main_entry;address_space->phaddr=main_ph;address_space->phcount=main_count;
+        address_space->interpreter_base=load_stream_inner(input,1);address_space->entry=main_entry;address_space->phaddr=main_ph;address_space->phcount=main_count;
     }
+    return bias;
 }
 /* The file mapping is loader input only: drop it as soon as the segments are copied,
    so no image (vfork shares its parent's) ever holds, and later unmaps, it. */
 static void load_stream(FILE *f) {
-    load_stream_inner(f,0);
+    (void)load_stream_inner(f,0);
     if(address_space->file_data) { munmap(address_space->file_data,address_space->file_size);address_space->file_data=NULL; }
 }
 static void store_le(uint64_t addr, uint64_t value, unsigned bytes) {

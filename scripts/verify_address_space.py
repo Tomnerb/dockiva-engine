@@ -45,10 +45,29 @@ def main():
         rows.append(dict(test='smccc-x0-'+backend, passed=result.returncode == 0 and checks == 640, exit=result.returncode,
                          checks=checks, stderr=result.stderr.decode(errors='replace')))
         print(rows[-1]['test'], 'PASS' if rows[-1]['passed'] else rows[-1], flush=True)
+    # Linux's address space beyond the arena (reservations, MAP_FIXED anywhere, mremap),
+    # and a static PIE loaded where Linux puts it.
+    guests = []
+    for name, expected, pie in (('wide_mmap_guest', 214, False), ('pie_base_guest', 5, True)):
+        source_file = ROOT/'tests/native'/(name+'.c')
+        obj, elf = folder/(name+'.o'), folder/(name+'.elf')
+        subprocess.run(['clang', '--target=aarch64-linux-gnu', '-O0', '-ffreestanding', '-fno-builtin', '-fno-stack-protector',
+                        '-fPIE' if pie else '-fno-pic', '-mgeneral-regs-only', '-c', str(source_file), '-o', str(obj)], check=True)
+        subprocess.run([str(linker), '-m', 'aarch64elf', '-static', *(['-pie', '--no-dynamic-linker'] if pie else []), '-e', '_start',
+                        str(obj), '-o', str(elf)], check=True)
+        guests.append(source_file)
+        for backend, binary in [('interpreter', 'dockiva-runtime'), ('hvf', 'dockiva-hvf')]:
+            cmd = [str(ROOT/'build'/binary), 'run', str(elf), '--dynamic', '--cpu-backend', backend, '--mmap-limit-mib', '64',
+                   '--process-tree', '--scheduled-network']
+            result = subprocess.run(cmd, capture_output=True, timeout=120)
+            checks = struct.unpack('<I', result.stdout)[0] if len(result.stdout) == 4 else None
+            rows.append(dict(test=name.removesuffix('_guest').replace('_', '-')+'-'+backend, passed=result.returncode == 0 and checks == expected,
+                             exit=result.returncode, checks=checks, stderr=result.stderr.decode(errors='replace')))
+            print(rows[-1]['test'], 'PASS' if rows[-1]['passed'] else rows[-1], flush=True)
     report = args.report
     report.parent.mkdir(parents=True, exist_ok=True)
     report.write_text(json.dumps(dict(results=rows, source_hashes={str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
-        for p in [source, guest, *sorted((ROOT/'native').glob('*.h')), ROOT/'native/runtime.c']}), indent=2)+'\n')
+        for p in [source, guest, *guests, *sorted((ROOT/'native').glob('*.h')), ROOT/'native/runtime.c']}), indent=2)+'\n')
     return 0 if all(row['passed'] for row in rows) else 1
 
 
