@@ -473,7 +473,9 @@ static uint64_t guest_dynamic_mmap(void) {
         /* ponytail: a range across the arena's edge is refused; split it if that is ever needed */
         if(addr<MAP_BASE+address_space->map_capacity && MAP_BASE<addr+bytes)return linux_error(22);
         if(noreplace && map_outside_used(addr,bytes))return linux_error(17);
-        if(address_space->brk_base && addr<address_space->brk_base+BRK_CAP && address_space->brk_base<addr+bytes)return linux_error(12); /* the heap's room */
+        /* The heap in use stays; the rest of its room may be mapped, as on Linux (FEX
+           puts a guard page at the break), and brk then stops short of it. */
+        if(address_space->brk_base && addr<address_space->brk_base+address_space->brk_pages && address_space->brk_base<addr+bytes)return linux_error(12);
     } else if(noreplace) {
         flags=(flags&~UINT64_C(0x100000))|16;
         if(addr%4096)return linux_error(22);

@@ -1,6 +1,6 @@
 /* Linux's address space beyond the mmap arena: any number of PROT_NONE reservations,
    holes punched in them, MAP_FIXED / MAP_FIXED_NOREPLACE anywhere in the user range
-   (anonymous, file-backed, shared), and mremap. Run with --mmap-limit-mib 64 (so
+   (anonymous, file-backed, shared), mremap, and the heap's unused room. Run with --mmap-limit-mib 64 (so
    128 MiB reservations lie beyond the arena) and --process-tree (fork). Writes the
    number of passed checks (4 bytes); on a failure, that number and exit status 99. */
 typedef unsigned long U;
@@ -112,6 +112,16 @@ void _start(void) {
     U res=(U)map(0,128*MiB,0,PRIV_ANON);check(res>=0x100000000000UL);
     check(map(res,4096,RW,PRIV_ANON|FIXED)==(long)res);*at(res)=27;
     U fromres=(U)remap(res,4096,8192,1,0);check((long)fromres>0 && *at(fromres)==27);
+    }
+    {   /* The heap's unused room takes fixed mappings (FEX guards the break with one);
+           brk then stops short of them and returns the old break. */
+        U b=(U)call(214,0,0,0,0,0,0);check(b && !(b&4095));
+        check((U)call(214,b+8192,0,0,0,0,0)==b+8192);*at(b)=30;
+        check(map(b+8192,4096,0,PRIV_ANON|NOREPLACE)==(long)(b+8192));
+        check((U)call(214,b+3*4096,0,0,0,0,0)==b+8192);
+        check(map(b+6*4096,4096,RW,PRIV_ANON|FIXED)==(long)(b+6*4096));*at(b+6*4096)=31;check(*at(b+6*4096)==31);
+        check(map(b,4096,0,PRIV_ANON|NOREPLACE)==-17);                            /* the heap in use */
+        check(unmap(b+8192,4096)==0 && (U)call(214,b+3*4096,0,0,0,0,0)==b+3*4096 && *at(b)==30);
     }
     call(64,1,(U)&checks,4,0,0,0);call(93,0,0,0,0,0,0);for(;;){}
 }
