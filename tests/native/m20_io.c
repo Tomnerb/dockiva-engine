@@ -48,10 +48,12 @@ int main(void) {
     memcpy(fd_kind,kinds,sizeof(kinds));memcpy(fd_index,slots,sizeof(slots));memcpy(io_guest,guests,sizeof(guests));
     assert(invoke(63,r,0x2000,3)==3);assert(invoke(57,w,0,0)==0);assert(invoke(57,r,0,0)==0);
     /* Exercise both the pipe-object and descriptor-table bounds and reclamation. */
-    for(unsigned i=0;i<PIPE_SLOTS;i++) { cpu->gpr[0]=0x1000;cpu->gpr[1]=2048;assert(io_pipe()==0); }
+    /* Pipes end at whichever comes first: pipe objects or this process's slots. */
+    unsigned pipes=PIPE_SLOTS<(IO_END-3)/2?PIPE_SLOTS:(IO_END-3)/2;
+    for(unsigned i=0;i<pipes;i++) { cpu->gpr[0]=0x1000;cpu->gpr[1]=2048;assert(io_pipe()==0); }
     cpu->gpr[0]=0x1000;cpu->gpr[1]=2048;assert(io_pipe()==linux_error(24));
     unsigned dups=0;while((int64_t)guest_dup(3,-1,0,0)>=0)dups++;
-    assert(dups+2*PIPE_SLOTS+3==IO_END && io_free_slot(0)==-1);io_cleanup(); /* every slot the pipes and stdio left */
+    assert(dups+2*pipes+3==IO_END && io_free_slot(0)==-1);io_cleanup(); /* every slot the pipes and stdio left */
     for(unsigned i=0;i<PIPE_SLOTS;i++)assert(!io_pipes[i].data);
     memset(fd_kind+3,0,sizeof(fd_kind)-3); /* io_cleanup released every slot */
     FILE *file=tmpfile();assert(file);fs_fd[0]=dup(fileno(file))+1;assert(fs_fd[0]>0);

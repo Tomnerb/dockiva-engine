@@ -510,6 +510,7 @@ static char prctl_name[16];       /* compat.h: PR_SET_NAME */
 static uint64_t guest_ppid_of(uint64_t pid);static unsigned guest_threads_of(uint64_t pid); /* syscall.h */
 static int guest_process_exists(uint64_t pid);
 static char guest_state_of(uint64_t pid);       /* syscall.h: R, S or T */
+static uint64_t guest_group_of(uint64_t pid,int session); /* syscall.h: process group or session */
 static void guest_signal_sets(uint64_t pid,uint64_t sets[4]);  /* syscall.h: pending, blocked, ignored, caught */
 static uint64_t fs_proc_file(const char *path,const char *name);
 static uint64_t runtime_started_ns;             /* the container's boot time, for /proc/stat and uptime */
@@ -569,13 +570,13 @@ static int64_t proc_resolve(uint64_t display) {
     for(unsigned i=0;i<proc_npeers;i++)if(proc_peers[i].pid==display)return -(int64_t)i-1;
     return 0;
 }
-typedef struct { uint64_t pid,ppid;unsigned threads,uid,size;char state;char comm[16];const char *cmdline; } ProcInfo;
+typedef struct { uint64_t pid,ppid,pgrp,session;unsigned threads,uid,size;char state;char comm[16];const char *cmdline; } ProcInfo;
 static int proc_info(uint64_t display,ProcInfo *info) {
     int64_t r=proc_resolve(display);if(!r)return 0;
-    memset(info,0,sizeof(*info));info->pid=display;
+    memset(info,0,sizeof(*info));info->pid=info->pgrp=info->session=display;
     if(r>0) {
         uint64_t own=(uint64_t)r,ppid=guest_ppid_of(own);
-        info->ppid=ppid?proc_display(ppid):0;info->threads=guest_threads_of(own);info->uid=guest_uid;info->state=guest_state_of(own);
+        info->ppid=ppid?proc_display(ppid):0;info->pgrp=proc_display(guest_group_of(own,0));info->session=proc_display(guest_group_of(own,1));info->threads=guest_threads_of(own);info->uid=guest_uid;info->state=guest_state_of(own);
         snprintf(info->comm,sizeof(info->comm),"%s",own==process_pid && *prctl_name?prctl_name:proc_comm(own));
         info->cmdline=proc_cmdline[own];info->size=proc_cmdline_size[own];
     } else {
@@ -707,7 +708,7 @@ static uint64_t fs_open(void) {
             unsigned threads=info.threads;uint64_t ppid=info.ppid;
             length=(size_t)snprintf(text,sizeof text,"%llu (%s) %c %llu %llu %llu 0 -1 0 %ld 0 %ld 0 %ld %ld 0 0 20 0 %u 0 0 %llu %llu"
                 " 18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n",
-                (unsigned long long)proc,info.comm,info.state,(unsigned long long)ppid,(unsigned long long)proc,(unsigned long long)proc,
+                (unsigned long long)proc,info.comm,info.state,(unsigned long long)ppid,(unsigned long long)info.pgrp,(unsigned long long)info.session,
                 (long)use.ru_minflt,(long)use.ru_majflt,(long)use.ru_utime.tv_sec*100+use.ru_utime.tv_usec/10000,(long)use.ru_stime.tv_sec*100+use.ru_stime.tv_usec/10000,
                 threads,(unsigned long long)resource_used,(unsigned long long)(resource_used/4096));
         } else if(fs_proc_file(path,"statm")) {

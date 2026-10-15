@@ -25,6 +25,11 @@ static int64_t guest_fd_path(const char *path) {
 static uint64_t guest_ppid_of(uint64_t pid) { return pid>1?process_children[pid-2].parent:0; }
 static uint64_t guest_ppid(void) { return guest_ppid_of(process_pid); }
 static unsigned guest_threads_of(uint64_t pid) { return schedule_active && schedule_tasks[pid-1].threads?schedule_tasks[pid-1].threads->top:1; }
+/* A process's group (session 0) or session (1). */
+static uint64_t guest_group_of(uint64_t pid,int session) {
+    if(!schedule_active)return pid;
+    ScheduledTask *t=&schedule_tasks[pid-1];return session?t->sid:t->pgid;
+}
 static char guest_state_of(uint64_t pid) {
     if(!schedule_active || pid==process_pid)return 'R';
     unsigned state=schedule_tasks[pid-1].state;return state==2?'S':state==3?'T':'R';
@@ -286,17 +291,17 @@ static int guest_syscall_dispatch(void) {
             if(call==195) { cpu->gpr[0]=shm_control();return -3; }
             if(call==196) { cpu->gpr[0]=shm_attach();return -3; }
             if(call==197) { cpu->gpr[0]=shm_detach();return -3; }
-            if(call==157) { /* setsid: a new session (tracked as its process group); a group leader gets EPERM */
+            if(call==157) { /* setsid: a new session and process group; a group leader gets EPERM */
                 unsigned *group=schedule_active?&schedule_tasks[process_pid-1].pgid:NULL;
                 if(!group || *group==process_pid)cpu->gpr[0]=linux_error(1);
-                else { *group=(unsigned)process_pid;io_epoch++;cpu->gpr[0]=process_pid; }
+                else { *group=schedule_tasks[process_pid-1].sid=(unsigned)process_pid;io_epoch++;cpu->gpr[0]=process_pid; }
                 return -3;
             }
-            if(call==156) { /* getsid: the session is reported as the process group */
+            if(call==156) { /* getsid: inherited by children; only setsid starts one (setpgid does not) */
                 uint64_t pid=cpu->gpr[0]?cpu->gpr[0]:process_pid;
                 if(!schedule_active)cpu->gpr[0]=pid==process_pid?process_pid:linux_error(3);
                 else if(pid>process_count+1 || !schedule_tasks[pid-1].state)cpu->gpr[0]=linux_error(3);
-                else cpu->gpr[0]=schedule_tasks[pid-1].pgid;
+                else cpu->gpr[0]=guest_group_of(pid,1);
                 return -3;
             }
             if(call==131 && job_control_enabled) { /* tgkill without threads: tid is the process */

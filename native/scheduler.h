@@ -31,7 +31,7 @@ typedef struct { unsigned cursor,top;Thread thread[THREAD_LIMIT]; } ThreadTable;
 typedef struct {
     ProcessImage image;IoTable io;NetTable net;NetWait network_wait;
     ProcShared ps;FsTable fs;FdTable fds;
-    unsigned vfork_child,saved,state,terminate_signal,pgid,input_wait,stop_signal,execed,blocked,worker;uint64_t epoch,wakeups;
+    unsigned vfork_child,saved,state,terminate_signal,pgid,sid,input_wait,stop_signal,execed,blocked,worker;uint64_t epoch,wakeups;
     unsigned child_wait;  /* blocked in wait4/waitid (single-threaded): woken by a child's event or a signal, not by I/O */
     uint64_t signal_mask,signal_ignored,signal_pending,timer_deadline,timer_interval;
     uint64_t signal_flags[64],signal_action_mask[64],signal_restorer[64],signal_handler[64];
@@ -115,7 +115,7 @@ static void runtime_lock(Worker *w) {
 static int process_slot_free(unsigned slot) {
     if(process_children[slot].pid || process_children[slot].live)return 0;
     if(schedule_tasks[slot+1].state || schedule_tasks[slot+1].saved)return 0;
-    for(unsigned i=0;i<=PROCESS_LIMIT;i++)if(schedule_tasks[i].state && schedule_tasks[i].pgid==slot+2)return 0;
+    for(unsigned i=0;i<=PROCESS_LIMIT;i++)if(schedule_tasks[i].state && (schedule_tasks[i].pgid==slot+2 || schedule_tasks[i].sid==slot+2))return 0;
     return 1;
 }
 /* A blocked task's own event: it retries its call (a targeted wait ignores io_epoch).
@@ -270,7 +270,7 @@ static void schedule_cleanup(void) {
 static void schedule_child(uint64_t pid) {
     ScheduledTask *t=&schedule_tasks[pid-1];memset(t,0,sizeof(*t)); /* a reused slot starts clean */
     pthread_mutex_init(&t->mm,NULL);
-    task_save(t);t->state=1;t->pgid=schedule_tasks[process_pid-1].pgid;
+    task_save(t);t->state=1;t->pgid=schedule_tasks[process_pid-1].pgid;t->sid=schedule_tasks[process_pid-1].sid;
     ScheduledTask *parent=&schedule_tasks[process_pid-1];
     t->signal_mask=*signal_mask_now();t->signal_ignored=parent->signal_ignored; /* the forking thread's mask */
     memcpy(t->signal_flags,parent->signal_flags,sizeof(t->signal_flags));
@@ -644,7 +644,7 @@ static int schedule_run(uint64_t steps) {
     schedule_active=1;process_steps=steps;schedule_done=0;schedule_parked=0;
     for(unsigned i=0;i<=PROCESS_LIMIT;i++)pthread_mutex_init(&schedule_tasks[i].mm,NULL);
     task_save(&schedule_tasks[0]);task_load(&schedule_tasks[0]);    /* the first process now lives in its task */
-    schedule_tasks[0].state=1;schedule_tasks[0].pgid=1;
+    schedule_tasks[0].state=1;schedule_tasks[0].pgid=schedule_tasks[0].sid=1;
     if(!workers_supported)worker_count=1;                  /* the interpreter runs guest code under the lock */
     for(unsigned i=1;i<worker_count;i++)if(!workers[i]) {
         Worker *w=calloc(1,sizeof(*w));RuntimeContext *context=calloc(1,sizeof(*context));
