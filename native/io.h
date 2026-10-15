@@ -19,7 +19,7 @@ static uint64_t io_epoch,io_read_blocks,io_write_blocks;
 static int io_slot(uint64_t fd) { return fd_slot(fd,FD_IO); }
 #define IO(fd) io_fds[io_slot(fd)] /* a managed descriptor's entry */
 #define PIPE_CAP (1024u*1024u)
-#define PIPE_SLOTS 64
+#define PIPE_SLOTS 1024 /* pipes and eventfds in the container: each .NET process holds several */
 #define IO_FILE 1
 #define IO_OUTPUT 2
 #define IO_EOF 3

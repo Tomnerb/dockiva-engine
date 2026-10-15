@@ -150,6 +150,17 @@ static uint64_t net_suspend(const struct pollfd *fds,unsigned count,unsigned tim
 static uint64_t net_suspend_one(int fd,short events,unsigned timeout) {
     struct pollfd wait={fd,events,0};return net_suspend(&wait,1,timeout);
 }
+static void schedule_wake_mask(uint64_t mask);static uint64_t process_pid_now(void);
+/* A nonblocking socket write that found the buffer full (EAGAIN). Its process's
+   epoll waits look again: an edge-triggered wait that already reported EPOLLOUT
+   sleeps without polling for it, and would miss the edge of the buffer draining
+   (Linux reports one; .NET waits for it to finish a send, MSBuild's node packets
+   exceed macOS's 8 KiB Unix-socket buffer). Without the lock, retry under it. */
+static uint64_t net_write_again(void) {
+    if(syscall_unlocked) { syscall_abort=1;return IO_BLOCK; }
+    if(schedule_active)schedule_wake_mask(UINT64_C(1)<<(process_pid_now()-1));
+    net_wait.active=0;return linux_error(11);
+}
 static uint64_t net_error(void) {
     unsigned e;
     switch(errno) {
@@ -406,6 +417,7 @@ static uint64_t net_message(int fd,unsigned slot,uint64_t header,uint64_t flag_w
     }
     if(result<0 && net_scheduled && !(flags&64) && !(net_description(slot)->flags&2048) && (errno==EAGAIN || errno==EWOULDBLOCK))
         return net_suspend_one(fd,receiving?POLLIN:POLLOUT,receiving?net_description(slot)->read_timeout:net_description(slot)->write_timeout);
+    if(result<0 && !receiving && (errno==EAGAIN || errno==EWOULDBLOCK))return net_write_again();
     net_wait.active=0;if(result<0)return net_error();
     if(receiving) {
         if(name && udp) { uint64_t invalid=net_put_address(&address,name,header+8,v6);if(invalid)return invalid; }
@@ -785,6 +797,7 @@ static uint64_t net_call(uint64_t number) {
         if(result>=0 && addressed && receiving) { uint64_t invalid=net_put_address(&from,cpu->gpr[4],cpu->gpr[5],v6);if(invalid)return invalid; }
         if(result<0 && net_scheduled && !(flags&64) && !(net_description(slot)->flags&2048) && (errno==EAGAIN || errno==EWOULDBLOCK))
             return net_suspend_one(fd,receiving?POLLIN:POLLOUT,receiving?net_description(slot)->read_timeout:net_description(slot)->write_timeout);
+        if(result<0 && !receiving && (errno==EAGAIN || errno==EWOULDBLOCK))return net_write_again();
         net_wait.active=0;return result<0?net_error():(uint64_t)result;
     }
     return linux_error(38);

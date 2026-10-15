@@ -121,6 +121,7 @@ static uint64_t guest_writev(void) {
         ssize_t n=writev(network>=0?network:(int)guestfd,vec,(int)count);
         if(n<0 && net_scheduled && !(net_description((unsigned)net_slot(guestfd))->flags&2048) && (errno==EAGAIN || errno==EWOULDBLOCK))
             return net_suspend_one(network,POLLOUT,net_description((unsigned)net_slot(guestfd))->write_timeout);
+        if(n<0 && network>=0 && (errno==EAGAIN || errno==EWOULDBLOCK))return net_write_again();
         net_wait.active=0;return n<0?net_error():(uint64_t)n;
     }
     uint64_t old1=cpu->gpr[1],old2=cpu->gpr[2],written=0,result=0;
