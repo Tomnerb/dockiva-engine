@@ -29,9 +29,10 @@
 #define HVF_SAVE_OFFSET 0x900u
 #define HVF_RESTORE_OFFSET 0x968u
 #define HVF_INVALIDATE_OFFSET 0x9c4u
+#define HVF_FLUSH_RESTORE_OFFSET 0xa00u
 /* Frame words (SP_EL1 points at the vCPU's frame): x0..x30, then these. HF_FAST:
    the EL1 vector's own answers to syscalls 172..178 (hvf_fast_publish). */
-enum { HF_SP=31,HF_TLS,HF_ELR,HF_SPSR,HF_ESR,HF_FAR,HF_TLBI_VA,HF_TLBI_PAGES,HF_FAST=40 };
+enum { HF_SP=31,HF_TLS,HF_ELR,HF_SPSR,HF_ESR,HF_FAR,HF_TLBI_VA,HF_TLBI_PAGES,HF_FLUSH,HF_FAST };
 #define HVF_BLOCKS 16384                           /* stage-2 blocks: a few backings for each of up to 1024 processes */
 #define HVF_VIEWS (PROCESS_LIMIT+2)                 /* indexed by pid */
 static unsigned char *hvf_tables,*hvf_system;static unsigned hvf_frames_used;
@@ -420,7 +421,8 @@ static int hvf_sync_partial(GuestAddressSpace *space,HvfView *v) {
     if(all || v->map_backing!=space->map_backing)hvf_map_arena_all(space);
     return !hvf_exhausted;
 }
-/* Bring the current process's tables up to date; returns whether TLBs need maintenance. */
+/* Bring the current process's tables up to date; returns whether TLBs need maintenance:
+   1 for this view's ASID, 2 for every one (the tables were rebuilt). */
 static int hvf_sync_tables(GuestAddressSpace *space,HvfView *v) {
     if(hvf_view_matches(space)) {
         if(v!=hvf_view || hvf_cpu->ttbr!=v->root)hvf_activate(v);             /* a process switch */
@@ -443,13 +445,27 @@ rebuild:
         if(hvf_exhausted)fail("Guest memory exceeds the hypervisor's page tables or guest-physical space");
     }
     hvf_activate(v);hvf_view_record(v,space);hvf_arena_synced(space);
-    return 1;                                            /* drop every ASID's stale translations */
+    return 2;                                            /* drop every ASID's stale translations */
 }
+/* TLB (and, for new code, instruction cache) maintenance runs on the way back to the
+   guest when it resumes through the frame: the EL1 routine "ic ialluis (if code was
+   mapped); tlbi aside1is (this view's ASID) or tlbi vmalle1is; dsb ish; isb" then
+   restores it. munmap and mprotect paid a second vCPU run each for hvf_flush, and
+   flushed every process's translations on every vCPU. */
 static void hvf_sync_memory(GuestAddressSpace *space) {
     HvfView *v=&hvf_views[process_pid];
     if(v==hvf_view && v->root && hvf_cpu->ttbr==v->root && v->generation==space->generation)return;
+    hvf_stale_code=0;
     int stale=hvf_sync_tables(space,v);
-    if(stale || hvf_asid_flush) { hvf_asid_flush=0;hvf_flush(); }
+    if(!stale && !hvf_asid_flush)return;
+    uint64_t pc=0;
+    if(hvf_cpu->framed)hvf_check(hv_vcpu_get_reg(hvf_vcpu,HV_REG_PC,&pc),"get pc");
+    if(pc==HVF_SYSTEM_VA+HVF_RESTORE_OFFSET) {
+        int all=stale==2 || hvf_asid_flush;
+        hvf_frame[HF_FLUSH]=((uint64_t)v->asid<<48)|(all?2:0)|(all || hvf_stale_code?1:0);
+        hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_PC,HVF_SYSTEM_VA+HVF_FLUSH_RESTORE_OFFSET),"set pc");
+    } else hvf_flush();
+    hvf_asid_flush=0;
 }
 /* The mapping holding va: its backing, guest range [*low,*high), the backing offset
    at *low and (outside the mmap arena, whose pages have their own) its flags. */
@@ -758,6 +774,10 @@ static void hvf_init(void) {
         0xa95287e0,0xd50883a0,0x91000400,0xf1000421,0x54ffffa1,0xd5033b9f,0x17ffffe3};
     memcpy(hvf_system+0x400,lower_sync,sizeof(lower_sync));
     memcpy(hvf_system+HVF_SAVE_OFFSET,frame_code,sizeof(frame_code));
+    /* 0xa00, hvf_sync_memory's: ldr x0, [sp, #312] (HF_FLUSH); tbz x0, #0, 1f; ic ialluis; 1: tbz x0, #1, 2f
+       tlbi vmalle1is; b 3f; 2: and x1, x0, #0xffff000000000000; tlbi aside1is, x1; 3: dsb ish; isb; b restore */
+    static const uint32_t flush_restore[]={0xf9409fe0,0x36000040,0xd508711f,0x36080060,0xd508831f,0x14000003,0x92503c01,0xd5088341,0xd5033b9f,0xd5033fdf,0x17ffffd0};
+    memcpy(hvf_system+HVF_FLUSH_RESTORE_OFFSET,flush_restore,sizeof(flush_restore));
     const uint32_t flush[]={UINT32_C(0xd508711f),UINT32_C(0xd508831f),UINT32_C(0xd5033b9f),UINT32_C(0xd5033fdf),UINT32_C(0xd4000022),UINT32_C(0x17ffffff)};
     memcpy(hvf_system+HVF_FLUSH_OFFSET,flush,sizeof(flush));
     worker->backend=hvf_cpu_new(1);
