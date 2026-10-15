@@ -92,13 +92,13 @@ func (b *engine) loadImages(w http.ResponseWriter, body io.Reader, quiet bool) {
 		if len(l.tags) == 0 { // as untagged builds are named
 			b.commitTag("<none>:"+im.Digest[7:19], im.Digest, l.layout)
 			say(obj{"stream": "Loaded image ID: " + im.Digest + "\n"})
-			continue
 		}
 		layout := l.layout
 		for _, t := range l.tags {
 			layout = b.commitTag(t, im.Digest, layout) // later tags clone the first one's files
 			say(obj{"stream": "Loaded image: " + t + "\n"})
 		}
+		b.events.publish(imageEvent("load", im.Digest, im.Digest))
 	}
 }
 
@@ -347,4 +347,7 @@ func (b *engine) saveImages(w http.ResponseWriter, names []string) {
 		file(name, raw)
 	}
 	check(t.Close())
+	for _, s := range images {
+		b.events.publish(imageEvent("save", s.im.Digest, s.im.Digest))
+	}
 }

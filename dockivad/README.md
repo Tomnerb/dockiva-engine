@@ -56,25 +56,34 @@ docker run --rm redis:7-alpine sh -c 'echo hello'
 ```
 
 Supported docker commands: `run` (foreground or `-d`, `-i`, `-t`, `--rm`,
-`-p`, `-e`, `-u`, `-m`, `--cpus`, `--entrypoint`, `-w`, `-v`, `--mount`,
+`-p`, `-P`, `-e`, `-u`, `-m`, `--cpus`, `--entrypoint`, `-w`, `-v`, `--mount`,
 `--read-only`, `--network`, `--network-alias`, `-h`, `--add-host`, `--restart`,
 `--health-*`, `--stop-timeout`, `--init`), `exec` (`-i`, `-t`, `-u`, `-w`, `-e`, `-d`), `create`, `start`,
 `stop`, `restart`, `kill` (TERM, INT, QUIT, HUP, USR1, USR2 reach the
-container's first process; KILL ends it), `wait`, `rm` (with `-v`), `ps`,
-`inspect`, `logs` (with `-f`, `--tail`, `-t`, `--since` and `--until`; logs
-written before this engine version carry their file's last write time), `pause`
-and `unpause` (SIGSTOP and SIGCONT to the run's and its execs' processes;
-healthchecks wait), `attach`, `events`
-(create, start, die, destroy), `pull`, `images`, `tag`, `rmi`, `cp` (both
+container's first process; KILL ends it; a paused container takes KILL only, as
+in Docker), `wait` (and the API's `next-exit` and `removed` conditions), `rm`
+(with `-v`), `ps`, `inspect`, `logs` (with `-f`, `--tail`, `-t`, `--since` and
+`--until`; stdout and stderr lines come in the order they were written, and
+`--tail` counts both; logs written before this engine version carry their
+file's last write time), `pause` and `unpause` (SIGSTOP and SIGCONT to the run's
+and its execs' processes; healthchecks wait), `attach`, `rename` (stopped or
+created containers; the ID stays), `update` (`-m`, `--cpus`, `--restart`; limits
+apply from the next start, a policy from the run's next end), `events`
+(container create, start, kill, die, stop, restart, pause, unpause, attach,
+exec_create, exec_start, exec_die, health_status, rename, update, destroy; image
+pull, tag, untag, delete, load, save; Docker's Actor attributes; `--since` and
+`--until` over the latest 256; `type`, `container`, `event`, `image` and `label`
+filters), `pull`, `images`, `tag`, `rmi`, `cp` (both
 ways, including into volumes and bind mounts; read-only paths are refused),
-`stats` (host CPU time and resident memory of the container's processes),
+`stats` (host CPU time, resident memory and disk I/O of the container's
+processes, and its guest threads as PIDs; no network counters),
 `volume` (`create`, `ls`, `inspect`, `rm`, `prune`), `network` (`create`, `ls`,
 `inspect`, `rm`, `prune`, `connect`, `disconnect`), `docker compose` (`up`,
 `down`, `ps`, `logs`, `exec`, `start`, `stop`, `restart`, healthchecks and
 `depends_on` conditions), `system df` (`-v`), `save`, `load` (classic and OCI
 archives, plain or gzip; linux/arm64 images only, others are skipped),
-`container prune`, `image prune` (`-a`), `system prune` (`until` and `label`
-filters), `version`/`info`, and `build` and `compose build` (plain, through
+`container prune`, `image prune` (`-a`), `system prune` (`until`, `label`
+and `label!` filters), `version`/`info`, and `build` and `compose build` (plain, through
 buildx's `docker` driver, or with `DOCKER_BUILDKIT=0`). Builds run the
 Dockerfile on the engine's classic builder: linux/arm64 only, results go to the
 image store, and BuildKit-only features (`RUN --mount`, heredocs,
@@ -86,7 +95,18 @@ in 10.89.N.0/24 and private ports (two containers can both listen on 5432, and
 unpublished ports stay off the Mac). On a user network (Compose's default)
 containers find each other by name and alias; `host.docker.internal` is the
 Mac; `--network host` shares the Mac's network as before. One network per
-container. Restart policies and healthchecks are run by each container's
+container.
+
+Published ports: `-p 8080:80` listens on every address of the Mac (0.0.0.0 and
+::, as Docker does) unless the engine runs with `--default-bind-ip 127.0.0.1`
+(or another address); `-p 127.0.0.1:8080:80`, `-p 192.168.1.5:8080:80` and
+`-p [::]:8080:80` bind that address only. Port ranges (`-p 8000-8005:8000-8005`),
+`-p 80` and `-P` (free host ports for every exposed port) and UDP (`-p 53:53/udp`)
+work. The container binds a private loopback port and its supervisor forwards
+each published address to it (TCP with half-closes, UDP with a session per
+client that ends after 90 idle seconds); a single TCP port on 127.0.0.1 is bound
+by the container directly. A port already in use fails the start, as in Docker.
+macOS may ask once whether `dockiva-engine` may accept incoming connections. Restart policies and healthchecks are run by each container's
 supervisor; `always` and `unless-stopped` containers start again with the
 engine.
 

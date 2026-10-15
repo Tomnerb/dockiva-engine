@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -403,7 +404,11 @@ func TestPauseUnpause(t *testing.T) {
 	if r := request(t, h, "POST", "/containers/web/exec", `{"Cmd":["true"]}`, ""); r.Code != 409 {
 		t.Fatalf("exec in a paused container: %d", r.Code)
 	}
-	// docker kill: thawed, then the supervisor gets the signal.
+	// docker kill: a paused container refuses any signal but SIGKILL, as Docker's does.
+	if r := request(t, h, "POST", "/containers/web/kill?signal=TERM", "", ""); r.Code != 409 || !strings.Contains(r.Body.String(), "is paused. Unpause the container before stopping or killing") || !stopped() {
+		t.Fatalf("kill -s TERM of a paused container: %d %s", r.Code, r.Body.String())
+	}
+	// SIGKILL: thawed, then the supervisor gets the signal.
 	listener, e := net.Listen("tcp", "127.0.0.1:0")
 	check(e)
 	defer listener.Close()
@@ -421,5 +426,12 @@ func TestPauseUnpause(t *testing.T) {
 	}
 	if stopped() || exists(filepath.Join(p, "paused")) {
 		t.Fatal("kill left the container paused")
+	}
+	actions := []string{}
+	for _, ev := range b.events.past {
+		actions = append(actions, str(ev["Action"])+fmt.Sprint(object(object(ev["Actor"])["Attributes"])["signal"]))
+	}
+	if got := strings.Join(actions, " "); got != "pause<nil> unpause<nil> pause<nil> kill9" {
+		t.Fatalf("events: %s", got)
 	}
 }

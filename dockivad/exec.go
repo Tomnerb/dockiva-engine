@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -64,6 +65,7 @@ func (b *engine) createExec(container string, body obj) obj {
 		panic(apiError{503, "Too many execs; retry shortly"})
 	}
 	b.execs.Store(j.ID, j)
+	b.emit("exec_create: "+strings.Join(j.Cmd, " "), container, obj{"execID": j.ID})
 	return obj{"Id": j.ID}
 }
 
@@ -83,7 +85,7 @@ func (b *engine) inspectExec(id string) obj {
 	if j.done {
 		code = j.exitCode
 	}
-	return obj{"ID": j.ID, "Running": j.running, "ExitCode": code, "Pid": j.pid, "ContainerID": key(j.Container), "CanRemove": false, "DetachKeys": "",
+	return obj{"ID": j.ID, "Running": j.running, "ExitCode": code, "Pid": j.pid, "ContainerID": b.idOf(j.Container), "CanRemove": false, "DetachKeys": "",
 		"OpenStdin": j.Stdin, "OpenStdout": j.Out, "OpenStderr": j.Err,
 		"ProcessConfig": obj{"tty": j.Tty, "entrypoint": j.Cmd[0], "arguments": j.Cmd[1:], "privileged": false, "user": j.User}}
 }
@@ -161,6 +163,7 @@ func (b *engine) startExec(w http.ResponseWriter, r *http.Request, id string, bo
 			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGSTOP)
 		}
 	}()
+	b.emit("exec_start: "+strings.Join(j.Cmd, " "), j.Container, obj{"execID": j.ID})
 	finished := make(chan struct{})
 	go func() {
 		err := cmd.Wait()
@@ -176,6 +179,7 @@ func (b *engine) startExec(w http.ResponseWriter, r *http.Request, id string, bo
 		j.mu.Lock()
 		j.running, j.done, j.exitCode = false, true, code
 		j.mu.Unlock()
+		b.emit("exec_die", j.Container, obj{"execID": j.ID, "exitCode": strconv.Itoa(code)})
 		close(finished)
 		time.AfterFunc(10*time.Minute, func() { b.execs.Delete(j.ID) })
 	}()

@@ -54,6 +54,7 @@ type image struct {
 	StopSignal       string   // signal name sent on stop: SIGTERM unless the image sets one
 	User             string   // USER: name or uid, with an optional :group or :gid; "" for root
 	Volumes          []string // declared VOLUME paths, sorted
+	Exposed          []string // EXPOSE: "80/tcp", "53/udp"
 	Healthcheck      obj      // HEALTHCHECK, as Config.Healthcheck (Test, Interval, ...)
 	Root             string
 	layout           string
@@ -205,6 +206,11 @@ func loadImage(layout string) *image {
 		im.Volumes = append(im.Volumes, v)
 	}
 	sort.Strings(im.Volumes)
+	for k := range object(settings["ExposedPorts"]) {
+		if port, proto, _ := strings.Cut(k, "/"); proto == "" || proto == "tcp" || proto == "udp" { // not sctp
+			im.Exposed = append(im.Exposed, port+"/"+cmp.Or(proto, "tcp"))
+		}
+	}
 	return im
 }
 
