@@ -109,7 +109,7 @@ static uint64_t guest_dup(uint64_t oldfd,int64_t target,uint64_t min,int cloexec
     if(kind==FD_FILE) {
         int host=dup(fs_fd[from]-1);if(host<0)return fs_error();
         if(target>=0 && fd_kind[fd])(void)guest_close((uint64_t)fd);
-        fs_fd[slot]=host+1;fs_cloexec[slot]=(unsigned char)(cloexec!=0);fs_ro[slot]=fs_ro[from];fs_dirs[slot]=fs_dirs[from];
+        fs_fd[slot]=host+1;fs_cloexec[slot]=(unsigned char)(cloexec!=0);fs_ro[slot]=fs_ro[from];fs_dev[slot]=fs_dev[from];fs_dirs[slot]=fs_dirs[from];
         if(fs_dirs[slot])fs_dirs[slot]->refs++;
         fs_guest[slot]=(unsigned short)fd;
     } else if(kind==FD_NET) {
@@ -130,7 +130,7 @@ static uint64_t guest_dup(uint64_t oldfd,int64_t target,uint64_t min,int cloexec
    ponytail: an entry whose message is never received (its socket closes unread)
    keeps its reference; free entries on socket close if that matters. */
 #define FD_CARRIES 256
-static struct FdCarry { unsigned kind,used;int host;unsigned char ro;GuestDirectory *dir;GuestIO io; } fd_carries[FD_CARRIES];
+static struct FdCarry { unsigned kind,used;int host;unsigned char ro,dev;GuestDirectory *dir;GuestIO io; } fd_carries[FD_CARRIES];
 static void fd_carry_drop(struct FdCarry *c) {
     if(c->kind==FD_FILE) { close(c->host);fs_directory_release(c->dir); }
     else if(c->kind==FD_NET) { struct NetDescription *d=net_host_description(c->host-1);if(d)(void)net_description_release(d); }
@@ -146,7 +146,7 @@ static int fd_carry_send(uint64_t guestfd) {
     *c=(struct FdCarry){0};c->kind=fd_kind[guestfd];
     if(c->kind==FD_FILE) {
         c->host=dup(fs_fd[from]-1);if(c->host<0) { c->kind=0;return -24; }
-        c->ro=fs_ro[from];c->dir=fs_dirs[from];if(c->dir)c->dir->refs++;
+        c->ro=fs_ro[from];c->dev=fs_dev[from];c->dir=fs_dirs[from];if(c->dir)c->dir->refs++;
     } else if(c->kind==FD_NET) { c->host=net_fd[from];net_description(from)->refs++; }
     else if(io_copy(&c->io,&io_fds[from])<0) { c->kind=0;return -24; }
     int ends[2];
@@ -169,7 +169,7 @@ static int64_t fd_carry_receive(int carrier,int cloexec) {
     else if(c->kind==FD_FILE) { for(unsigned i=0;i<FS_SLOTS && slot<0;i++)if(!fs_fd[i])slot=(int)i; }
     else for(unsigned i=3;i<IO_END && slot<0;i++)if(!io_fds[i].kind)slot=(int)i;
     if(slot<0 || fd<0) { fd_carry_drop(c);return -1; }
-    if(c->kind==FD_FILE) { fs_fd[slot]=c->host+1;fs_cloexec[slot]=(unsigned char)(cloexec!=0);fs_ro[slot]=c->ro;fs_dirs[slot]=c->dir;fs_guest[slot]=(unsigned short)fd; }
+    if(c->kind==FD_FILE) { fs_fd[slot]=c->host+1;fs_cloexec[slot]=(unsigned char)(cloexec!=0);fs_ro[slot]=c->ro;fs_dev[slot]=c->dev;fs_dirs[slot]=c->dir;fs_guest[slot]=(unsigned short)fd; }
     else if(c->kind==FD_NET) { net_fd[slot]=c->host;net_flags[slot]=cloexec?524288:0;net_guest[slot]=(unsigned short)fd; }
     else { c->io.cloexec=(unsigned)(cloexec!=0);io_fds[slot]=c->io;io_guest[slot]=(unsigned short)fd; }
     fd_bind((uint64_t)fd,c->kind,(unsigned)slot);memset(c,0,sizeof(*c));
@@ -256,7 +256,7 @@ static void statx_from_stat(unsigned char *out) {
 }
 static int guest_syscall_dispatch(void) {
             uint64_t call=cpu->gpr[8];cpu->exclusive_valid=0;
-            if(profiling && call<512) profile_syscalls[call]++;
+            if(profiling && call<512)__atomic_fetch_add(&profile_syscalls[call],1,__ATOMIC_RELAXED);
             if(trace) fprintf(stderr,"pid %" PRIu64 " syscall %" PRIu64 ": x0..5=[%" PRIu64 ", %" PRIu64 ", %" PRIu64 ", %" PRIu64 ", %" PRIu64 ", %" PRIu64 "]\n",process_pid,call,cpu->gpr[0],cpu->gpr[1],cpu->gpr[2],cpu->gpr[3],cpu->gpr[4],cpu->gpr[5]);
             if(trace && (call==56 || call==79 || call==48 || call==35 || call==78 || call==34)) { char path[1025];if(!fs_string(cpu->gpr[1],path))fprintf(stderr,"  path %s\n",path); }
             if(call==139 && job_control_enabled) { signal_return();if(schedule_tasks[process_pid-1].terminate_signal || schedule_tasks[process_pid-1].stop_signal)return -1;return -3; }
@@ -586,13 +586,21 @@ static int guest_syscall_dispatch(void) {
    epoll_pwait on an epoll no other process shares. Returns 1 when done (result in
    x0), 0 when the call must run under the lock; an aborted attempt changed nothing. */
 #ifdef VMFREE_HVF
+static int fs_unlocked_path(uint64_t address,char path[1025]) {
+    return fs_string(address,path)==0 && strncmp(path,"/proc",5) && strncmp(path,"/dev/",5) && !(path[0]!='/' && fs_cwd && !strncmp(fs_cwd->path,"/proc",5));
+}
 static int guest_syscall_unlocked(void) {
     uint64_t call=cpu->gpr[8],fd=cpu->gpr[0],count=cpu->gpr[2];
-    if(profiling || trace)return 0;
+    if(trace)return 0;
     int file=fs_host(fd)>=0 && !fs_dirs[fs_slot(fd)],socket=!file && net_host(fd)>=0;
     int epoll=call==22 && io_managed(fd) && IO(fd).kind==IO_EPOLL && epolls[IO(fd).host].refs==1;
-    /* openat and newfstatat by path, except under /proc (process tables). */
-    char path[1025];int named=(call==56 || call==79 || call==291) && fs_string(cpu->gpr[1],path)==0 && strncmp(path,"/proc",5) && strncmp(path,"/dev/",5) && !(path[0]!='/' && fs_cwd && !strncmp(fs_cwd->path,"/proc",5));
+    /* Calls by path, except under /proc (process tables) and /dev: openat, newfstatat,
+       statx, faccessat(2), readlinkat, mkdirat, unlinkat, renameat (both paths) and
+       utimensat. They use the process's descriptors, working directory and umask,
+       which its threads change only under its mm lock, and the atomic entry count. */
+    char path[1025];
+    int named=(call==56 || call==79 || call==291 || call==48 || call==439 || call==78 || call==34 || call==35 || call==38 || (call==88 && cpu->gpr[1])) && fs_unlocked_path(cpu->gpr[1],path);
+    if(named && call==38)named=fs_unlocked_path(cpu->gpr[3],path);
     if(call==291) {
         /* statx of a path (npm stats thousands): newfstatat without the lock, rewritten. */
         uint64_t flags=cpu->gpr[2],buffer=cpu->gpr[4];
@@ -639,7 +647,7 @@ static int guest_syscall_unlocked(void) {
         if(syscall_abort)return 0;
         cpu->gpr[0]=result;return 1;
     }
-    if(!epoll && !named && !((call==62 || call==63 || call==64 || call==65 || call==66 || call==67 || call==68 || call==80 || call==82 || call==83) && file) && !((call==63 || call==64 || call==65 || call==206 || call==207) && socket))return 0;
+    if(!epoll && !named && !((call==62 || call==63 || call==64 || call==65 || call==66 || call==67 || call==68 || call==80 || call==82 || call==83 || (call==88 && !cpu->gpr[1])) && file) && !((call==63 || call==64 || call==65 || call==206 || call==207) && socket))return 0;
     cpu->exclusive_valid=0;
     int clamp=(call==63 || call==64 || call==206 || call==207) && count>1024*1024 && fs_host(cpu->gpr[0])<0; /* files: fs_transfer_at */
     if(clamp)cpu->gpr[2]=1024*1024;
@@ -655,7 +663,7 @@ static int guest_syscall_unlocked(void) {
    they too run without the runtime lock; the backend then syncs its tables. */
 static int guest_memory_unlocked(void) {
     uint64_t call=cpu->gpr[8];
-    if(!dynamic_enabled || profiling || trace)return 0;
+    if(!dynamic_enabled || trace)return 0;
     if(call!=222 && call!=215 && call!=226 && call!=233 && call!=214)return 0;
     cpu->exclusive_valid=0;
     cpu->gpr[0]=call==222?guest_dynamic_mmap():call==215?guest_munmap(cpu->gpr[0],cpu->gpr[1]):call==226?guest_mprotect():call==233?guest_madvise():guest_brk(cpu->gpr[0]);
