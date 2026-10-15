@@ -51,8 +51,18 @@ func (b *engine) systemAPI(w http.ResponseWriter, method, path string, q url.Val
 		defer b.Mu.Unlock()
 		send(w, 200, b.pruneImages(danglingOnly, keep))
 	case path == "/build/prune" && method == "POST":
-		// There is no build cache (builds run every step), so every filter matches nothing.
-		send(w, 200, obj{"CachesDeleted": []string{}, "SpaceReclaimed": 0})
+		// ponytail: until is the only filter (on last use); all=1 changes nothing, as no entry is ever in use.
+		_, keep := pruneFilter(q)
+		limit := int64(0)
+		if v := q.Get("keep-storage"); v != "" {
+			n, e := strconv.ParseInt(v, 10, 64)
+			reject(e == nil && n >= 0, "Invalid keep-storage: "+v)
+			limit = n
+		}
+		buildCacheMu.Lock()
+		defer buildCacheMu.Unlock()
+		deleted, reclaimed := b.pruneBuildCache(limit, func(used time.Time) bool { return keep(used, nil) })
+		send(w, 200, obj{"CachesDeleted": deleted, "SpaceReclaimed": reclaimed})
 	case path == "/dockiva/shutdown" && method == "POST":
 		unbounded(w) // stop grace periods
 		b.Mu.Lock()  // held until the engine exits: nothing starts meanwhile
@@ -127,7 +137,7 @@ func (b *engine) diskUsage() obj {
 			volumes = append(volumes, info)
 		})
 	}
-	return obj{"LayersSize": layers, "Images": images, "Containers": containers, "Volumes": volumes, "BuildCache": []any{}}
+	return obj{"LayersSize": layers, "Images": images, "Containers": containers, "Volumes": volumes, "BuildCache": b.buildCacheEntries()}
 }
 
 // cachedImage is one cached image name (a directory of the image cache).

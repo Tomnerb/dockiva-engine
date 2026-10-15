@@ -178,3 +178,76 @@ func TestImageFilter(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildCache(t *testing.T) {
+	if !exists("../build/dockivad") {
+		t.Skip("RUN needs ../build/dockivad (scripts/bundle_dockiva_engine.py)")
+	}
+	b := testEngine(t)
+	runs := func(on bool) { // without a supervisor, any RUN that runs fails
+		b.Self, b.Worker = "", ""
+		if on {
+			b.Self, b.Worker = "../build/dockivad", "../build/dockiva-worker"
+		}
+	}
+	dockerfile := "FROM dockiva/shell:demo\nSHELL [\"busybox\", \"sh\", \"-c\"]\nARG V=1\nRUN busybox echo $V > /run.txt\nCOPY a.txt /a.txt\nRUN busybox cat /a.txt > /copied.txt\n"
+	build := func(query, a string) (string, string, string) {
+		return buildResult(t, buildMessages(t, b, query, tarOf(t, map[string]string{"Dockerfile": dockerfile, "a.txt": a})))
+	}
+	hits := func(stream string) int { return strings.Count(stream, " ---> Using cache\n") }
+
+	runs(true)
+	if _, stream, failure := build("t=cached", "one"); failure != "" || hits(stream) != 0 {
+		t.Fatalf("first build: %q\n%s", failure, stream)
+	}
+	// Unchanged Dockerfile and context: no RUN runs.
+	runs(false)
+	if _, stream, failure := build("t=cached", "one"); failure != "" || hits(stream) != 3 {
+		t.Fatalf("cached rebuild: %q\n%s", failure, stream)
+	}
+	if got, _ := os.ReadFile(filepath.Join(b.image("cached").Root, "copied.txt")); string(got) != "one\n" && string(got) != "one" {
+		t.Fatalf("cached files: %q", got)
+	}
+	// A changed COPY source reuses the steps before it and reruns the steps from it.
+	if _, stream, failure := build("t=cached", "two"); hits(stream) != 1 || !strings.Contains(failure, "no command") {
+		t.Fatalf("changed source: %q\n%s", failure, stream)
+	}
+	// So do a changed build arg and --no-cache, from the first RUN.
+	for _, query := range []string{"t=cached&buildargs=%7B%22V%22%3A%222%22%7D", "t=cached&nocache=1"} {
+		if _, stream, failure := build(query, "one"); hits(stream) != 0 || !strings.Contains(failure, "no command") {
+			t.Fatalf("%s: %q\n%s", query, failure, stream)
+		}
+	}
+	runs(true) // the failed build above cached its COPY
+	if _, stream, failure := build("t=cached", "two"); failure != "" || hits(stream) != 2 {
+		t.Fatalf("rebuild: %q\n%s", failure, stream)
+	}
+	if got, _ := os.ReadFile(filepath.Join(b.image("cached").Root, "copied.txt")); !strings.HasPrefix(string(got), "two") {
+		t.Fatalf("rebuilt files: %q", got)
+	}
+
+	// docker system df lists the entries; docker builder prune empties the cache.
+	h := b.socketHandler()
+	entries := decodeBody(t, request(t, h, "GET", "/v1.45/system/df", "", "").Body.String())["BuildCache"].([]any)
+	if len(entries) != 5 || entries[0].(obj)["Type"] != "regular" || entries[0].(obj)["LastUsedAt"] == nil {
+		t.Fatalf("df: %v", entries)
+	}
+	out := decodeBody(t, request(t, h, "POST", "/v1.45/build/prune?all=1", "", "").Body.String())
+	if len(out["CachesDeleted"].([]any)) != 5 || out["SpaceReclaimed"].(float64) <= 0 || len(b.buildCacheEntries()) != 0 {
+		t.Fatalf("prune: %v", out)
+	}
+	runs(false)
+	if _, _, failure := build("t=cached", "two"); !strings.Contains(failure, "no command") {
+		t.Fatalf("a pruned cache was used: %q", failure)
+	}
+
+	// Over the cap, the least recently used entries go.
+	defer func(max int64) { buildCacheMax = max }(buildCacheMax)
+	buildCacheMax = 2500
+	big := strings.Repeat("x", 1000)
+	_, stream, failure := buildResult(t, buildMessages(t, b, "", tarOf(t, map[string]string{"Dockerfile": "FROM dockiva/shell:demo\nCOPY big /1\nCOPY big /2\n", "big": big})))
+	left := b.buildCacheEntries()
+	if failure != "" || len(left) != 1 || !strings.Contains(stream, "COPY big /2\n ---> "+left[0].(obj)["ID"].(string)[:12]+"\n") {
+		t.Fatalf("eviction: %q %v\n%s", failure, left, stream)
+	}
+}
