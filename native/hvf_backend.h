@@ -536,9 +536,14 @@ static void hvf_init(void) {
     /* Each HVC is followed by "b .-4": under load Hypervisor.framework can resume a
        vCPU past an HVC without reporting its exit (the next instruction, zeros, then
        faulted at EL1 and the guest saw SIGILL at the vector). Looping back takes the
-       exit on the retry; ESR/ELR_EL1 are unchanged, and the exit PC is HVC+4 either way. */
+       exit on the retry; ESR/ELR_EL1 are unchanged, and the exit PC is HVC+4 either way.
+       Never "hvc #0": that is an Arm SMCCC call, and Hypervisor.framework answers some
+       function IDs itself, overwriting the guest's live x0 with 0xffffffff
+       (NOT_SUPPORTED) when it reads like one (0xC1xxxxxx: an mmap address 0x3c1xxxxxx
+       passed to munmap, a pointer in a faulting thread). Non-zero immediates are not
+       SMCCC calls, so every register reaches the exit intact. */
     for(unsigned i=0;i<16;i++) {
-        ((uint32_t *)hvf_system)[i*0x80/4]=UINT32_C(0xd4000002);                       /* hvc #0 */
+        ((uint32_t *)hvf_system)[i*0x80/4]=UINT32_C(0xd4000062);                       /* hvc #3 */
         ((uint32_t *)hvf_system)[i*0x80/4+1]=UINT32_C(0x17ffffff);                     /* b .-4 */
     }
     const uint32_t flush[]={UINT32_C(0xd508711f),UINT32_C(0xd508831f),UINT32_C(0xd5033b9f),UINT32_C(0xd5033fdf),UINT32_C(0xd4000022),UINT32_C(0x17ffffff)};
