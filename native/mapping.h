@@ -70,12 +70,26 @@ static int file_copy_demote(uint64_t address,uint64_t bytes,int partial) {
 /* Shared memory: a segment over arena pages marked MAP_RESERVED. backing is the
    memory to share (System V shm) or NULL for fresh zeroed memory (MAP_SHARED|
    MAP_ANONYMOUS, charged in full now). fixed is a page address in the arena, or 0. */
+static int map_in_arena(uint64_t address,uint64_t bytes);
+static int map_outside_used(uint64_t address,uint64_t bytes);
+static int reserve_add(uint64_t address,uint64_t bytes);
 static uint64_t shared_map(uint64_t fixed,uint64_t length,uint64_t prot,MemoryBacking *backing,size_t offset) {
     uint64_t hint=0;
-    if(length>address_space->map_capacity)return linux_error(12); /* more than the arena holds: ENOMEM, as Linux */
     if(!length || prot>7 || ((prot&6)==6 && !map_rwx_allowed))return linux_error(22);
-    if(!address_space_map_flags(address_space))return linux_error(12);
     if(address_space->nseg>=SEGMENT_LIMIT)return linux_error(12);
+    if(fixed && length<=GUEST_VA_END && !map_in_arena(fixed,page_up(length))) {
+        /* Outside the arena: a segment of its own in a reservation of its range. */
+        uint64_t bytes=page_up(length);
+        if(fixed%4096 || fixed<UINT64_C(0x10000) || bytes>GUEST_VA_END-fixed || (fixed<MAP_BASE+address_space->map_capacity && MAP_BASE<fixed+bytes) ||
+           map_outside_used(fixed,bytes))return linux_error(22);
+        if(backing) { if(!backing_retain(backing,1))return linux_error(12); }
+        else if(!(backing=backing_alloc((size_t)bytes,1)))return linux_error(12);
+        if(!reserve_add(fixed,bytes)) { backing_release(backing);return linux_error(12); }
+        address_space->seg[address_space->nseg++]=(Segment){fixed,bytes,SEG_SHARED|((prot&1)?4:0)|((prot&2)?2:0)|((prot&4)?1:0),backing,offset};
+        address_space_changed(address_space);return fixed;
+    }
+    if(length>address_space->map_capacity)return linux_error(12); /* more than the arena holds: ENOMEM, as Linux */
+    if(!address_space_map_flags(address_space))return linux_error(12);
     unsigned pages=(unsigned)(page_up(length)/4096),start=0;
     if(fixed) {
         if(fixed%4096 || fixed<MAP_BASE || fixed-MAP_BASE>=address_space->map_capacity || page_up(length)>address_space->map_capacity-(fixed-MAP_BASE))return linux_error(22);
@@ -93,19 +107,29 @@ static uint64_t shared_map(uint64_t fixed,uint64_t length,uint64_t prot,MemoryBa
     for(unsigned i=start;i<start+pages;i++)address_space->map_flags[i]=MAP_RESERVED;
     address_space_changed(address_space);return MAP_BASE+(uint64_t)start*4096;
 }
-/* Remove the shared segments inside [address,address+bytes); a partly covered one is EINVAL. */
+static int reserve_remove(uint64_t address,uint64_t bytes);
+/* Take the shared segments, or their ends, out of [address,address+bytes); a hole
+   inside one is EINVAL (ponytail: split it if that is ever needed). */
 static uint64_t shared_unmap(uint64_t address,uint64_t bytes) {
     for(unsigned i=0;i<address_space->nseg;) {
-        Segment *s=&address_space->seg[i];
-        if(!(s->flags&SEG_SHARED) || s->base+s->size<=address || s->base>=address+bytes) { i++;continue; }
-        if(s->base<address || s->base+s->size>address+bytes)return linux_error(22);
-        unsigned first=(unsigned)((s->base-MAP_BASE)/4096),pages=(unsigned)(s->size/4096);
-        for(unsigned p=first;p<first+pages;p++)address_space->map_flags[p]=0;
-        map_freed(address_space,first);
+        Segment *s=&address_space->seg[i];uint64_t top=s->base+s->size,end=address+bytes;
+        if(!(s->flags&SEG_SHARED) || top<=address || s->base>=end) { i++;continue; }
+        uint64_t low=s->base>address?s->base:address,high=top<end?top:end;
+        if(low>s->base && high<top)return linux_error(22);
+        if(map_in_arena(low,high-low)) {
+            unsigned first=(unsigned)((low-MAP_BASE)/4096),pages=(unsigned)((high-low)/4096);
+            for(unsigned p=first;p<first+pages;p++)address_space->map_flags[p]=0;
+            map_freed(address_space,first);
+        } else if(!reserve_remove(low,high-low))return linux_error(12);
+        address_space_changed(address_space);
+        if(low>s->base || high<top) {                                           /* an end */
+            if(low==s->base) { s->offset+=(size_t)(high-s->base);s->size=top-high;s->base=high; }
+            else s->size=low-s->base;
+            i++;continue;
+        }
         MemoryBacking *backing=s->backing;
         address_space->seg[i]=address_space->seg[--address_space->nseg];
         file_share_unmapped(backing);backing_release(backing);
-        address_space_changed(address_space);
     }
     return 0;
 }
@@ -198,28 +222,86 @@ static uint64_t guest_msync(void) {
 }
 /* Reservations beyond the arena: an anonymous private PROT_NONE mapping the arena
    cannot hold (MariaDB reserves 128 GiB for its buffer pool's maximum, a JVM its heap)
-   is address space alone, unmapped, from 16 TiB up. A MAP_FIXED anonymous mapping
-   inside one commits that range (reserve_commit); munmap gives both back. */
+   is address space alone, unmapped, from 16 TiB up. A MAP_FIXED mapping anywhere
+   outside the arena reserves its range too and commits it (reserve_commit); munmap
+   gives both back. */
 #define RESERVE_BASE UINT64_C(0x100000000000)
 #define RESERVE_END UINT64_C(0x700000000000)
+#define RESERVE_WINDOW (UINT64_C(1)<<30)
+static int map_in_arena(uint64_t address,uint64_t bytes) {
+    return address>=MAP_BASE && address-MAP_BASE<address_space->map_capacity && bytes<=address_space->map_capacity-(address-MAP_BASE);
+}
+/* The first reservation of space that ends above address (nreserve: none). */
+static unsigned reserve_after_in(const GuestAddressSpace *space,uint64_t address) {
+    unsigned low=0,high=space->nreserve;
+    while(low<high) {
+        unsigned middle=(low+high)/2;const Reservation *r=&space->reserve[middle];
+        if(r->base+r->size<=address)low=middle+1;else high=middle;
+    }
+    return low;
+}
+static unsigned reserve_after(uint64_t address) { return reserve_after_in(address_space,address); }
 static int reserve_find(uint64_t address,uint64_t bytes) {
-    for(unsigned i=0;i<address_space->nreserve;i++)
-        if(address>=address_space->reserve_base[i] && bytes<=address_space->reserve_size[i]-(address-address_space->reserve_base[i]))return (int)i;
-    return -1;
+    unsigned i=reserve_after(address);if(i==address_space->nreserve)return -1;
+    const Reservation *r=&address_space->reserve[i];
+    return address>=r->base && bytes<=r->size-(address-r->base)?(int)i:-1;
 }
+static int reserve_overlaps(uint64_t address,uint64_t bytes) {
+    unsigned i=reserve_after(address);
+    return i<address_space->nreserve && address_space->reserve[i].base<address+bytes;
+}
+/* Add [address, address+bytes), joining the reservations it overlaps or touches. 0 if
+   the table is full. */
+static int reserve_add(uint64_t address,uint64_t bytes) {
+    if(!address_space->reserve && !(address_space->reserve=calloc(RESERVE_LIMIT,sizeof(Reservation))))return 0;
+    Reservation *r=address_space->reserve;uint64_t end=address+bytes;unsigned n=address_space->nreserve,i=reserve_after(address-1),j=i;
+    for(;j<n && r[j].base<=end;j++) {
+        if(r[j].base<address)address=r[j].base;
+        if(r[j].base+r[j].size>end)end=r[j].base+r[j].size;
+    }
+    if(j==i && n==RESERVE_LIMIT)return 0;
+    memmove(&r[i+1],&r[j],(n-j)*sizeof(*r));address_space->nreserve=n+1-(j-i);
+    r[i]=(Reservation){address,end-address};return 1;
+}
+/* Take [address, address+bytes) out, splitting a reservation around a hole. 0 if the
+   table is full. */
+static int reserve_remove(uint64_t address,uint64_t bytes) {
+    Reservation *r=address_space->reserve;uint64_t end=address+bytes;unsigned n=address_space->nreserve,i=reserve_after(address);
+    if(i<n && r[i].base<address && r[i].base+r[i].size>end) {                         /* a hole inside */
+        if(n==RESERVE_LIMIT)return 0;
+        memmove(&r[i+1],&r[i],(n-i)*sizeof(*r));address_space->nreserve=n+1;
+        r[i+1].size=r[i].base+r[i].size-end;r[i+1].base=end;r[i].size=address-r[i].base;return 1;
+    }
+    if(i<n && r[i].base<address) { r[i].size=address-r[i].base;i++; }
+    unsigned j=i;while(j<n && r[j].base+r[j].size<=end)j++;
+    memmove(&r[i],&r[j],(n-j)*sizeof(*r));address_space->nreserve=n-=j-i;
+    if(i<n && r[i].base<end) { r[i].size=r[i].base+r[i].size-end;r[i].base=end; }
+    return 1;
+}
+/* A fresh reservation: the lowest 1 GiB-aligned range in [RESERVE_BASE, RESERVE_END)
+   with a 1 GiB guard gap to its neighbours. */
 static uint64_t reserve_new(uint64_t length) {
-    uint64_t size=page_up(length),base=address_space->reserve_next?address_space->reserve_next:RESERVE_BASE;
-    if(address_space->nreserve==8 || size>RESERVE_END-base)return linux_error(12);
-    address_space->reserve_base[address_space->nreserve]=base;address_space->reserve_size[address_space->nreserve++]=size;
-    address_space->reserve_next=base+size+(UINT64_C(1)<<30);                     /* a guard gap */
-    return base;
+    uint64_t size=page_up(length),at=RESERVE_BASE;
+    for(unsigned i=0;i<address_space->nreserve;i++) {
+        const Reservation *r=&address_space->reserve[i];
+        if(r->base+r->size+RESERVE_WINDOW<=at)continue;
+        if(at+size+RESERVE_WINDOW<=r->base)break;
+        at=(r->base+r->size+2*RESERVE_WINDOW-1)&~(RESERVE_WINDOW-1);
+    }
+    if(at>RESERVE_END || size>RESERVE_END-at || !reserve_add(at,size))return linux_error(12);
+    return at;
 }
-/* Take segments, or their parts, out of [low, high): commits inside a reservation. */
+/* Take segments, or their parts, out of [low, high) (outside the arena). */
 static uint64_t segments_remove(uint64_t low,uint64_t high) {
     for(unsigned i=0;i<address_space->nseg;) {
         Segment *s=&address_space->seg[i];uint64_t begin=s->base,end=s->base+s->size;
         if(end<=low || begin>=high) { i++;continue; }
-        if(low<=begin && high>=end) { backing_release(s->backing);address_space->seg[i]=address_space->seg[--address_space->nseg];continue; }
+        if(low<=begin && high>=end) {
+            MemoryBacking *backing=s->backing;unsigned shared=s->flags&SEG_SHARED;
+            address_space->seg[i]=address_space->seg[--address_space->nseg];
+            if(shared)file_share_unmapped(backing);
+            backing_release(backing);continue;
+        }
         if(low>begin && high<end) {                                                  /* split around the hole */
             if(address_space->nseg>=SEGMENT_LIMIT || !backing_retain(s->backing,1))return linux_error(12);
             address_space->seg[address_space->nseg++]=(Segment){high,end-high,s->flags,s->backing,s->offset+(size_t)(high-begin)};
@@ -234,11 +316,10 @@ static uint64_t segments_remove(uint64_t low,uint64_t high) {
    through any segment that maps it (its base minus its offset is the window). A
    commit zeroes its range there, maps it, and merges with neighbouring segments of
    the same backing, so a heap committed region by region stays a few segments. */
-#define RESERVE_WINDOW (UINT64_C(1)<<30)
 static MemoryBacking *reserve_window(uint64_t window) {
     for(unsigned i=0;i<address_space->nseg;i++) {
         Segment *s=&address_space->seg[i];
-        if(s->base>=window && s->base-window<RESERVE_WINDOW && s->base-s->offset==window && s->backing && s->backing->size==RESERVE_WINDOW)return s->backing;
+        if(s->base>=window && s->base-window<RESERVE_WINDOW && s->base-s->offset==window && !(s->flags&SEG_SHARED) && s->backing && s->backing->size==RESERVE_WINDOW)return s->backing;
     }
     return NULL;
 }
@@ -287,17 +368,17 @@ static uint64_t reserve_commit(uint64_t address,uint64_t length,uint64_t prot) {
     return address;
 }
 /* mprotect inside a reservation (.NET's GC commits its regions this way): committed
-   pages change protection and keep their bytes, as on Linux; uncommitted ones are
-   committed, zero, unless the protection is PROT_NONE (then they stay reserved). */
+   and shared pages change protection and keep their bytes, as on Linux; uncommitted
+   ones are committed, zero, unless the protection is PROT_NONE (then they stay reserved). */
 static uint64_t reserve_protect(uint64_t address,uint64_t bytes,uint64_t prot) {
     unsigned flags=(unsigned)(((prot&1)?4:0)|((prot&2)?2:0)|((prot&4)?1:0));uint64_t end=address+bytes;
     for(unsigned i=0;i<address_space->nseg;i++) {
         Segment *s=&address_space->seg[i];uint64_t begin=s->base,top=s->base+s->size;
-        if(top<=address || begin>=end || (s->flags&SEG_SHARED))continue;
+        if(top<=address || begin>=end)continue;
         unsigned extra=(begin<address)+(top>end);
         if(address_space->nseg+extra>SEGMENT_LIMIT || !backing_retain(s->backing,extra))return linux_error(12);
         Segment old=*s;uint64_t low=begin<address?address:begin,high=top>end?end:top;
-        *s=(Segment){low,high-low,flags,old.backing,old.offset+(size_t)(low-begin)};
+        *s=(Segment){low,high-low,flags|(old.flags&SEG_SHARED),old.backing,old.offset+(size_t)(low-begin)};
         if(begin<address)address_space->seg[address_space->nseg++]=(Segment){begin,address-begin,old.flags,old.backing,old.offset};
         if(top>end)address_space->seg[address_space->nseg++]=(Segment){end,top-end,old.flags,old.backing,old.offset+(size_t)(end-begin)};
     }
@@ -314,63 +395,107 @@ static uint64_t reserve_protect(uint64_t address,uint64_t bytes,uint64_t prot) {
     }
     segments_merge();return 0;
 }
-/* munmap beyond the arena: commits and reservations in the range go; 0 if none was there. */
+/* munmap beyond the arena: the reserved parts of the range, and the segments in them,
+   go (a hole splits a reservation); 0 if none was there. */
 static int reserve_unmap(uint64_t address,uint64_t bytes) {
-    int found=0;uint64_t end=address+bytes;
-    for(unsigned i=0;i<address_space->nreserve;) {
-        uint64_t base=address_space->reserve_base[i],top=base+address_space->reserve_size[i];
-        if(top<=address || base>=end) { i++;continue; }
-        found=1;
-        if(address<=base && end>=top) {
-            address_space->reserve_base[i]=address_space->reserve_base[--address_space->nreserve];
-            address_space->reserve_size[i]=address_space->reserve_size[address_space->nreserve];continue;
-        }
-        if(address<=base) { address_space->reserve_base[i]=end;address_space->reserve_size[i]=top-end; }
-        else if(end>=top)address_space->reserve_size[i]=address-base;
-        i++;                                                                         /* a hole inside: the range stays reserved */
+    uint64_t end=address+bytes;
+    if(!reserve_overlaps(address,bytes))return 0;
+    for(unsigned i=reserve_after(address);i<address_space->nreserve && address_space->reserve[i].base<end;i++) {
+        const Reservation *r=&address_space->reserve[i];
+        if(segments_remove(r->base>address?r->base:address,r->base+r->size<end?r->base+r->size:end))return -1;
     }
-    if(found)(void)segments_remove(address,end);
-    return found;
+    if(!reserve_remove(address,bytes))return -1;
+    address_space_changed(address_space);return 1;
+}
+/* Whether anything is mapped in [address, address+bytes), outside the arena. */
+static int map_outside_used(uint64_t address,uint64_t bytes) {
+    if(reserve_overlaps(address,bytes))return 1;
+    if(address_space->brk_pages && address<address_space->brk_base+address_space->brk_pages && address_space->brk_base<address+bytes)return 1;
+    for(unsigned i=0;i<address_space->nseg;i++)
+        if(address<address_space->seg[i].base+address_space->seg[i].size && address_space->seg[i].base<address+bytes)return 1;
+    return 0;
+}
+/* The memory behind a mapped guest page, whatever its protection: its backing, the
+   offset there and the bytes that follow in the same mapping; NULL for none. */
+static MemoryBacking *map_bytes(uint64_t address,size_t *offset,uint64_t *available) {
+    if(map_in_arena(address,1)) {
+        unsigned char f=address_space->map_flags?address_space->map_flags[(address-MAP_BASE)/4096]:0;
+        if((f&8) && f!=MAP_RESERVED && address_space->map_backing) {
+            *offset=(size_t)(address-MAP_BASE);*available=address_space->map_capacity-(address-MAP_BASE);return address_space->map_backing;
+        }
+    }
+    for(unsigned i=0;i<address_space->nseg;i++) {
+        const Segment *s=&address_space->seg[i];
+        if(address>=s->base && address-s->base<s->size && s->backing) { *offset=s->offset+(size_t)(address-s->base);*available=s->size-(address-s->base);return s->backing; }
+    }
+    return NULL;
+}
+/* Write data at address (mapped, any protection), detaching shared pages first. */
+static int map_store(uint64_t address,const unsigned char *data,uint64_t size) {
+    for(uint64_t done=0;done<size;) {
+        size_t offset;uint64_t available;MemoryBacking *backing=map_bytes(address+done,&offset,&available);
+        uint64_t n=size-done<available?size-done:available;
+        if(!backing || !address_space_make_private(address_space,backing,offset,(size_t)n))return 0;
+        backing=map_bytes(address+done,&offset,&available);                            /* a detach replaces it */
+        memcpy(backing_data(backing)+offset,data+done,(size_t)n);done+=n;
+    }
+    return 1;
+}
+/* MAP_FIXED outside the arena takes the range from whatever was there, the loader's
+   segments included, as Linux does. */
+static uint64_t map_outside_clear(uint64_t address,uint64_t bytes) {
+    if(!reserve_remove(address,bytes))return linux_error(12);
+    return segments_remove(address,address+bytes);
 }
 /* Private file-backed guest mappings. Bytes remain ordinary non-executable host
-   allocations; MAP_FIXED is confined to the bounded guest mmap arena, or a reservation. */
+   allocations; MAP_FIXED outside the arena maps anywhere in the user address space. */
 static int dynamic_enabled;
 static uint64_t guest_dynamic_mmap(void) {
     uint64_t addr=cpu->gpr[0],length=cpu->gpr[1],prot=cpu->gpr[2],flags=cpu->gpr[3],offset=cpu->gpr[5],hint=(flags&16)?0:addr;
     int anonymous_private=(flags&32) && (flags&3)==2 && !(flags&0x100000);
-    if(anonymous_private && (flags&16) && !(addr%4096) && length && length<=RESERVE_END && reserve_find(addr,page_up(length))>=0) {
-        if(prot>7 || ((prot&6)==6 && !map_rwx_allowed))return linux_error(22);
-        return reserve_commit(addr,length,prot);                                     /* a commit inside a reservation */
-    }
     int reservable=anonymous_private && !(flags&16) && !prot && length && length<=RESERVE_END;
-    if(length>address_space->map_capacity)return reservable?reserve_new(length):linux_error(12); /* more than the arena holds */
+    /* MAP_FIXED or MAP_FIXED_NOREPLACE wholly or partly outside the arena */
+    int outside=(flags&0x100010) && !(addr%4096) && length && length<=GUEST_VA_END && !map_in_arena(addr,page_up(length));
+    if(!outside && length>address_space->map_capacity)return reservable?reserve_new(length):linux_error(12); /* more than the arena holds */
     if(!length || offset%4096 || offset>INT64_MAX-length || prot>7 || ((prot&6)==6 && !map_rwx_allowed))return linux_error(22);
     if(!address_space_map_flags(address_space))return linux_error(12);
     /* Linux ignores MAP_DENYWRITE, MAP_EXECUTABLE and MAP_STACK. Stack guards
        still use ordinary PROT_NONE/mprotect; this does not create a thread. */
     flags&=~UINT64_C(0x2d800);                       /* also MAP_NORESERVE and MAP_POPULATE: hints */
     int noreplace=(flags&0x100000)!=0;               /* MAP_FIXED_NOREPLACE: fixed, but never over a mapping */
-    if(noreplace) {
+    uint64_t bytes=page_up(length);
+    if(outside) {
+        flags=(flags&~UINT64_C(0x100000))|16;
+        if(addr<UINT64_C(0x10000))return linux_error(1);                         /* below mmap_min_addr: EPERM */
+        if(bytes>GUEST_VA_END-addr)return linux_error(12);
+        /* ponytail: a range across the arena's edge is refused; split it if that is ever needed */
+        if(addr<MAP_BASE+address_space->map_capacity && MAP_BASE<addr+bytes)return linux_error(22);
+        if(noreplace && map_outside_used(addr,bytes))return linux_error(17);
+        if(address_space->brk_base && addr<address_space->brk_base+BRK_CAP && address_space->brk_base<addr+bytes)return linux_error(12); /* the heap's room */
+    } else if(noreplace) {
         flags=(flags&~UINT64_C(0x100000))|16;
         if(addr%4096)return linux_error(22);
-        if(addr<MAP_BASE || addr-MAP_BASE>=address_space->map_capacity || page_up(length)>address_space->map_capacity-(addr-MAP_BASE))
-            return linux_error(12);                  /* outside the arena: this address cannot be had */
-        for(uint64_t p=(addr-MAP_BASE)/4096;p<(addr-MAP_BASE+page_up(length))/4096;p++)if(address_space->map_flags[p])return linux_error(17);
+        for(uint64_t p=(addr-MAP_BASE)/4096;p<(addr-MAP_BASE+bytes)/4096;p++)if(address_space->map_flags[p])return linux_error(17);
     }
-    if((flags&3) && (flags&3)!=2 && (flags&32) && !(flags&~UINT64_C(0x33)))   /* MAP_SHARED|MAP_ANONYMOUS */
+    /* Shared mappings replace what a MAP_FIXED range held (the private path below keeps
+       it until the new mapping cannot fail). */
+    int shared=(flags&3) && (flags&3)!=2 && !(flags&~UINT64_C(0x33)),fixed=(flags&16) && !noreplace;
+    int share_file=shared && !(flags&32) && ((prot&2) ||
+        /* A read-only MAP_SHARED file mapping (ICU data, for instance) can never write
+           through, so a private copy is equivalent, unless the file is or can be mapped
+           shared and writable: then it must see those writes. JITs map a memfd twice,
+           asmjit (Erlang's BEAM) the executable view first. */
+        file_share_find(cpu->gpr[4]) || (fs_host(cpu->gpr[4])>=0 && !fs_ro[fs_slot(cpu->gpr[4])]));
+    if(shared && ((flags&32) || share_file) && fixed) {
+        uint64_t e=outside?map_outside_clear(addr,bytes):map_in_arena(addr,bytes)?guest_munmap(addr,bytes):0;
+        if(e)return e;
+    }
+    if(shared && (flags&32))                         /* MAP_SHARED|MAP_ANONYMOUS */
         return shared_map((flags&16)?addr:0,length,prot,NULL,0);
-    if((flags&3) && (flags&3)!=2 && !(flags&32) && (prot&2) && !(flags&~UINT64_C(0x13)))  /* writable MAP_SHARED of a file */
-        return file_share_map((flags&16)?addr:0,length,prot,cpu->gpr[4],offset);
-    /* A read-only MAP_SHARED file mapping (ICU data, for instance) can never write
-       through, so a private copy is equivalent, unless the file is or can be mapped
-       shared and writable: then it must see those writes. JITs map a memfd twice,
-       asmjit (Erlang's BEAM) the executable view first. */
-    if((flags&3) && (flags&3)!=2 && !(flags&32) && !(prot&2) && !(flags&~UINT64_C(0x13)) &&
-       (file_share_find(cpu->gpr[4]) || (fs_host(cpu->gpr[4])>=0 && !fs_ro[fs_slot(cpu->gpr[4])])))
-        return file_share_map((flags&16)?addr:0,length,prot,cpu->gpr[4],offset);
+    if(share_file)return file_share_map((flags&16)?addr:0,length,prot,cpu->gpr[4],offset);
     if((flags&3) && (flags&3)!=2 && !(flags&32) && !(prot&2))flags=(flags&~UINT64_C(3))|2;
     if((flags&~UINT64_C(0x32)) || (flags&3)!=2)return linux_error(95);
-    if(!(flags&48) && !(prot&2) && page_up(length)>=(UINT64_C(16)<<20)) {
+    if(!(flags&48) && !(prot&2) && bytes>=(UINT64_C(16)<<20)) {
         /* A large read-only private file mapping (ClickHouse maps its own 755 MiB binary,
            in two processes): like the loader's text, not charged to the memory budget, as
            Linux keeps such pages in its reclaimable page cache. ponytail: it is a shared
@@ -378,7 +503,7 @@ static uint64_t guest_dynamic_mmap(void) {
            on such an mprotect if that ever matters. */
         int fd=fs_host(cpu->gpr[4]);if(fd<0)return linux_error(9);
         struct stat st;if(fstat(fd,&st)<0)return fs_error();if(!S_ISREG(st.st_mode))return linux_error(19);
-        MemoryBacking *text=backing_alloc_text((size_t)page_up(length));if(!text)return linux_error(12);
+        MemoryBacking *text=backing_alloc_text((size_t)bytes);if(!text)return linux_error(12);
         for(size_t done=0;done<length;) {
             ssize_t n=pread(fd,backing_data(text)+done,(size_t)(length-done),(off_t)(offset+done));
             if(n<0 && errno==EINTR)continue;
@@ -393,11 +518,11 @@ static uint64_t guest_dynamic_mmap(void) {
     if(!(flags&32)) { fd=fs_host(cpu->gpr[4]);if(fd<0)return linux_error(9);
         struct stat st;if(fstat(fd,&st)<0)return fs_error();if(!S_ISREG(st.st_mode))return linux_error(19);
     }
-    unsigned pages=(unsigned)(page_up(length)/4096),start=0;
+    unsigned pages=(unsigned)(bytes/4096),start=0;
     if(flags&16) {
-        if(addr%4096 || addr<MAP_BASE || addr-MAP_BASE>=address_space->map_capacity || page_up(length)>address_space->map_capacity-(addr-MAP_BASE))return linux_error(22);
-        if(!file_copy_demote(addr,page_up(length),0))return linux_error(12);  /* MAP_FIXED over a file copy */
-        start=(unsigned)((addr-MAP_BASE)/4096);
+        if(!outside && (addr%4096 || !map_in_arena(addr,bytes)))return linux_error(22);
+        if(!outside && !file_copy_demote(addr,bytes,0))return linux_error(12);  /* MAP_FIXED over a file copy */
+        start=outside?0:(unsigned)((addr-MAP_BASE)/4096);
     } else {
         start=map_hint(address_space,hint,pages);if(start==address_space->map_capacity/4096)start=map_find(address_space,pages);
         if(start==address_space->map_capacity/4096)return reservable?reserve_new(length):linux_error(12);
@@ -405,21 +530,29 @@ static uint64_t guest_dynamic_mmap(void) {
     }
     /* Read into a temporary buffer first, so a failed fixed mapping preserves
        both old contents and protections. */
-    unsigned char *bytes=NULL;
+    unsigned char *data=NULL;
     if(fd>=0) {
-        if(!(bytes=calloc(pages,4096)))return linux_error(12);
+        if(!(data=calloc(pages,4096)))return linux_error(12);
         size_t done=0;
         while(done<length) {
-            ssize_t n=pread(fd,bytes+done,(size_t)(length-done),(off_t)(offset+done));
+            ssize_t n=pread(fd,data+done,(size_t)(length-done),(off_t)(offset+done));
             if(n<0 && errno==EINTR)continue;
-            if(n<0) { uint64_t e=fs_error();free(bytes);return e; }
+            if(n<0) { uint64_t e=fs_error();free(data);return e; }
             if(!n)break;done+=(size_t)n;
         }
     }
-    if(!backing_data(address_space->map_backing)) { address_space->map_backing=backing_reserve(address_space->map_capacity);if(!backing_data(address_space->map_backing)) { free(bytes);return linux_error(12); } }
-    if(bytes) { /* file contents are written (and charged) now */
-        if(!address_space_make_private(address_space,address_space->map_backing,(size_t)start*4096,(size_t)pages*4096)) { free(bytes);return linux_error(12); }
-        memcpy(backing_data(address_space->map_backing)+(size_t)start*4096,bytes,(size_t)pages*4096);free(bytes);
+    if(outside) {                                    /* a reservation, committed unless PROT_NONE */
+        uint64_t e=map_outside_clear(addr,bytes);
+        if(!e && !reserve_add(addr,bytes))e=linux_error(12);
+        if(!e && prot)e=reserve_commit(addr,bytes,prot)==addr?0:linux_error(12);
+        if(!e && prot && data && !map_store(addr,data,bytes))e=linux_error(12);
+        free(data);return e?e:addr;
+    }
+    if(!backing_data(address_space->map_backing)) { address_space->map_backing=backing_reserve(address_space->map_capacity);if(!backing_data(address_space->map_backing)) { free(data);return linux_error(12); } }
+    if(flags&16) { uint64_t e=shared_unmap(addr,bytes);if(e) { free(data);return e; } }   /* MAP_FIXED over shared memory */
+    if(data) { /* file contents are written (and charged) now */
+        if(!address_space_make_private(address_space,address_space->map_backing,(size_t)start*4096,(size_t)pages*4096)) { free(data);return linux_error(12); }
+        memcpy(backing_data(address_space->map_backing)+(size_t)start*4096,data,(size_t)pages*4096);free(data);
     } else if(!address_space_discard_map(address_space,(size_t)start*4096,(size_t)pages*4096))return linux_error(12); /* anonymous: zero, charged on first write */
     unsigned char permission=(unsigned char)((fd>=0?16:0)|8|((prot&1)?4:0)|((prot&2)?2:0)|((prot&4)?1:0));
     for(unsigned i=start;i<start+pages;i++)address_space->map_flags[i]=permission;
@@ -464,6 +597,14 @@ static uint64_t guest_mprotect(void) {
     address_space_arena_changed(address_space,first,first+pages);return 0;
 }
 
+/* Zero the private commits in [address, address+bytes) of a reservation, giving their memory back. */
+static int reserve_discard(uint64_t address,uint64_t bytes) {
+    for(unsigned i=0;i<address_space->nseg;i++) {
+        Segment *s=&address_space->seg[i];uint64_t low=s->base>address?s->base:address,high=s->base+s->size<address+bytes?s->base+s->size:address+bytes;
+        if(low<high && !(s->flags&SEG_SHARED) && !address_space_discard(address_space,s->backing,s->offset+(size_t)(low-s->base),(size_t)(high-low)))return 0;
+    }
+    return 1;
+}
 /* Linux madvise advice values are not host ABI values. Pure hints are accepted on
    mapped guest ranges; this runtime has no read-ahead, merging, huge page or core
    dump policy to change. MADV_DONTNEED releases anonymous mmap-arena pages. Other reclamation/fork advice reports Linux EINVAL, never success. No
@@ -472,11 +613,7 @@ static uint64_t guest_madvise(void) {
     uint64_t addr=cpu->gpr[0],length=cpu->gpr[1];int32_t advice=(int32_t)cpu->gpr[2];
     if(!(addr&4095) && length && length<=RESERVE_END && reserve_find(addr,page_up(length))>=0) {
         /* Inside a reservation: hints are accepted; MADV_DONTNEED zeroes committed pages. */
-        if(advice==4)
-            for(unsigned i=0;i<address_space->nseg;i++) {
-                Segment *s=&address_space->seg[i];uint64_t low=s->base>addr?s->base:addr,high=s->base+s->size<addr+page_up(length)?s->base+s->size:addr+page_up(length);
-                if(low<high && !(s->flags&SEG_SHARED) && !address_space_discard(address_space,s->backing,s->offset+(size_t)(low-s->base),(size_t)(high-low)))return linux_error(12);
-            }
+        if(advice==4 && !reserve_discard(addr,page_up(length)))return linux_error(12);
         return advice==4 || (advice>=0 && advice<=3) || (advice>=12 && advice<=17)?0:linux_error(22);
     }
     if(advice==4) {
@@ -518,6 +655,158 @@ static uint64_t guest_madvise(void) {
         cursor=next;
     }
     return 0;
+}
+
+/* mremap. As on Linux, the old range must lie in one mapping (else EFAULT): arena
+   pages of one kind and protection, a shared segment, or part of a reservation
+   committed with one protection or not at all. Private memory moves by copying the
+   host pages that hold any (the rest reads zero anyway); shared memory moves as a
+   segment over the same bytes. A private file mapping does not grow (its file is not
+   kept). */
+static uint64_t map_prot(unsigned f) { return ((f&4)?1u:0u)|((f&2)?2u:0u)|((f&1)?4u:0u); }
+static int backing_owned(const MemoryBacking *backing,size_t offset) {
+#ifdef __APPLE__
+    size_t page=offset/backing->page_size;return page<backing->used && backing->pages[page];
+#else
+    (void)backing;(void)offset;return 1;
+#endif
+}
+/* mmap from inside the runtime, as the guest would call it. */
+static uint64_t map_call(uint64_t address,uint64_t length,uint64_t prot,uint64_t flags) {
+    uint64_t saved[6];memcpy(saved,cpu->gpr,sizeof(saved));
+    cpu->gpr[0]=address;cpu->gpr[1]=length;cpu->gpr[2]=prot;cpu->gpr[3]=flags;cpu->gpr[4]=UINT64_MAX;cpu->gpr[5]=0;
+    uint64_t result=guest_dynamic_mmap();memcpy(cpu->gpr,saved,sizeof(saved));return result;
+}
+/* Whether [address, address+bytes) is free to map: unmapped arena pages, or unused
+   address space outside it (not across its edge, nor the heap's room). */
+static int map_range_free(uint64_t address,uint64_t bytes) {
+    if(bytes>GUEST_VA_END || address<UINT64_C(0x10000) || bytes>GUEST_VA_END-address)return 0;
+    if(map_in_arena(address,bytes)) {
+        for(uint64_t p=(address-MAP_BASE)/4096;p<(address-MAP_BASE+bytes)/4096;p++)if(address_space->map_flags[p])return 0;
+        return 1;
+    }
+    if(address<MAP_BASE+address_space->map_capacity && MAP_BASE<address+bytes)return 0;
+    if(address_space->brk_base && address<address_space->brk_base+BRK_CAP && address_space->brk_base<address+bytes)return 0;
+    return !map_outside_used(address,bytes);
+}
+static int map_copy(uint64_t target,uint64_t source,uint64_t bytes) {
+    for(uint64_t at=0;at<bytes;at+=4096) {
+        size_t from,to;uint64_t available;MemoryBacking *in=map_bytes(source+at,&from,&available);
+        if(!in || !backing_owned(in,from) || !map_bytes(target+at,&to,&available))continue;
+        unsigned char page[4096];memcpy(page,backing_data(in)+from,4096);
+        if(!map_store(target+at,page,4096))return 0;
+    }
+    return 1;
+}
+static uint64_t guest_mremap(void) {
+    uint64_t old=cpu->gpr[0],old_size=cpu->gpr[1],new_size=cpu->gpr[2],flags=cpu->gpr[3],target=cpu->gpr[4];
+    if(old%4096 || (flags&~UINT64_C(7)) || ((flags&6) && !(flags&1)) || !new_size || old_size>GUEST_VA_END || new_size>GUEST_VA_END)return linux_error(22);
+    old_size=page_up(old_size);new_size=page_up(new_size);
+    if((flags&4) && old_size!=new_size)return linux_error(22);                     /* MREMAP_DONTUNMAP moves, never resizes */
+    if((flags&2) && (target%4096 || target<UINT64_C(0x10000) || new_size>GUEST_VA_END-target || (target<old+old_size && old<target+new_size)))return linux_error(22);
+    if(old_size>GUEST_VA_END-old)return linux_error(14);
+    if(!address_space_map_flags(address_space))return linux_error(12);
+    /* What the old range is. */
+    Segment *shared=NULL;unsigned f=0;int arena=map_in_arena(old,old_size?old_size:4096);
+    if(arena) {
+        if(!file_copy_demote(old,old_size?old_size:4096,0))return linux_error(12);
+        f=address_space->map_flags[(old-MAP_BASE)/4096];
+        if(f==MAP_RESERVED)arena=0;
+        else {
+            if(!(f&8) || !old_size)return linux_error(old_size?14:22);
+            for(uint64_t p=(old-MAP_BASE)/4096;p<(old-MAP_BASE+old_size)/4096;p++)if(address_space->map_flags[p]!=f)return linux_error(14);
+        }
+    }
+    if(!arena) {
+        for(unsigned i=0;i<address_space->nseg && !shared;i++) {
+            Segment *s=&address_space->seg[i];
+            if((s->flags&SEG_SHARED) && old>=s->base && (old_size?old_size:4096)<=s->size-(old-s->base) && old-s->base<s->size)shared=&address_space->seg[i];
+        }
+        if(shared)f=shared->flags&7;
+        else if(f==MAP_RESERVED)return linux_error(14);
+        else {
+            if(!old_size)return linux_error(22);                                     /* duplicating private memory */
+            if(reserve_find(old,old_size)<0)return linux_error(14);
+            uint64_t covered=0;int any=0;
+            for(unsigned i=0;i<address_space->nseg;i++) {
+                const Segment *s=&address_space->seg[i];uint64_t low=s->base>old?s->base:old,high=s->base+s->size<old+old_size?s->base+s->size:old+old_size;
+                if(low>=high)continue;
+                if((any && s->flags!=f) || (s->flags&SEG_SHARED))return linux_error(14);
+                f=s->flags;any=1;covered+=high-low;
+            }
+            if(any && covered!=old_size)return linux_error(14);
+        }
+    }
+    uint64_t prot=map_prot(f&7);
+    if(!old_size) {                                       /* a second mapping of shared memory */
+        size_t offset=shared->offset+(size_t)(old-shared->base);
+        if(!(flags&1))return linux_error(22);
+        if(new_size>shared->backing->size-offset)return linux_error(12);
+        if((flags&2) && guest_munmap(target,new_size))return linux_error(12);
+        return shared_map((flags&2)?target:0,new_size,prot,shared->backing,offset);
+    }
+    if(new_size<old_size) {
+        uint64_t e=guest_munmap(old+new_size,old_size-new_size);if(e)return e;
+        old_size=new_size;
+        if(!(flags&2))return old;
+    }
+    if(old_size==new_size && !(flags&6))return old;
+    if(new_size>old_size && (f&16))return linux_error(12);                         /* private file mapping */
+    if(shared && new_size>old_size && old==shared->base && old_size==shared->size && shared->backing->refs==1 &&
+       new_size>shared->backing->size-shared->offset) {
+        /* Shared anonymous memory nobody else maps (Python's mmap.resize): a larger copy. */
+        MemoryBacking *larger=backing_alloc(shared->offset+(size_t)new_size,1);if(!larger)return linux_error(12);
+        memcpy(backing_data(larger),backing_data(shared->backing),shared->backing->size);
+        backing_release(shared->backing);shared->backing=larger;address_space_changed(address_space);
+    }
+    uint64_t grow=old+old_size,extra=new_size-old_size;
+    if(!(flags&6) && extra && map_range_free(grow,extra)) {                        /* in place */
+        if(arena && map_in_arena(grow,extra)) {
+            unsigned first=(unsigned)((grow-MAP_BASE)/4096),pages=(unsigned)(extra/4096);
+            if(!address_space_discard_map(address_space,(size_t)first*4096,(size_t)extra))return linux_error(12);
+            memset(address_space->map_flags+first,(int)f,pages);
+            address_space_arena_changed(address_space,first,first+pages);return old;
+        }
+        if(shared && old+old_size==shared->base+shared->size && extra<=shared->backing->size-shared->offset-(size_t)shared->size) {
+            int inside=map_in_arena(old,old_size);
+            if(inside!=map_in_arena(grow,extra))goto move;
+            if(inside)memset(address_space->map_flags+(grow-MAP_BASE)/4096,MAP_RESERVED,(size_t)(extra/4096));
+            else if(!reserve_add(grow,extra))goto move;
+            shared->size+=extra;address_space_changed(address_space);return old;
+        }
+        if(!arena && !shared && !map_in_arena(grow,extra)) {
+            if(!reserve_add(grow,extra))return linux_error(12);
+            if(prot && reserve_commit(grow,extra,prot)!=grow) { (void)reserve_unmap(grow,extra);return linux_error(12); }
+            return old;
+        }
+    }
+move:
+    if(!(flags&1))return linux_error(12);
+    if(shared) {
+        if((flags&4) || old!=shared->base || old_size!=shared->size)return linux_error(22); /* ponytail: whole shared segments only */
+        MemoryBacking *backing=shared->backing;size_t offset=shared->offset;
+        if(new_size>backing->size-offset)return linux_error(12);
+        if(!backing_retain(backing,1))return linux_error(12);
+        uint64_t result=(flags&2) && guest_munmap(target,new_size)?linux_error(12):shared_map((flags&2)?target:0,new_size,prot,backing,offset);
+        if((int64_t)result>=0 && shared_unmap(old,old_size)) { (void)shared_unmap(result,new_size);result=linux_error(12); }
+        backing_release(backing);return result;
+    }
+    uint64_t result=map_call((flags&2)?target:0,new_size,prot,(flags&2)?0x32:0x22);
+    if(result==linux_error(12) && !(flags&2)) {                                    /* beyond the arena */
+        result=reserve_new(new_size);
+        if((int64_t)result>=0 && prot && reserve_commit(result,new_size,prot)!=result) { (void)reserve_unmap(result,new_size);result=linux_error(12); }
+    }
+    if((int64_t)result<0)return result;
+    if(!map_copy(result,old,old_size)) { (void)guest_munmap(result,new_size);return linux_error(12); }
+    if(map_in_arena(result,new_size) && (f&16))                                    /* still file-backed */
+        for(uint64_t p=(result-MAP_BASE)/4096;p<(result-MAP_BASE+new_size)/4096;p++)address_space->map_flags[p]|=16;
+    if(!(flags&4))return guest_munmap(old,old_size)?linux_error(12):result;
+    if(arena) {                                           /* MREMAP_DONTUNMAP: the old range stays, its pages fresh */
+        unsigned first=(unsigned)((old-MAP_BASE)/4096);
+        if(!address_space_discard_map(address_space,(size_t)first*4096,(size_t)old_size))return linux_error(12);
+        address_space_arena_changed(address_space,first,first+(unsigned)(old_size/4096));
+    } else if(!reserve_discard(old,old_size))return linux_error(12);
+    return result;
 }
 
 /* System V shared memory, shared by every process of the container. Each table
@@ -609,17 +898,21 @@ static uint64_t proc_resident(const MemoryBacking *backing,size_t offset,size_t 
    bytes (the pages its memory owns, shared ones included, as Linux counts RSS). */
 static void proc_space_memory(const GuestAddressSpace *space,uint64_t *vsz,uint64_t *rss) {
     uint64_t size=0,resident=0;
-    for(unsigned i=0;i<space->nseg;i++) { const Segment *s=&space->seg[i];size+=s->size;resident+=proc_resident(s->backing,s->offset,(size_t)s->size); }
+    for(unsigned i=0;i<space->nseg;i++) {
+        const Segment *s=&space->seg[i];resident+=proc_resident(s->backing,s->offset,(size_t)s->size);
+        unsigned j=reserve_after_in(space,s->base);       /* a reservation's commits are in its size */
+        if(j==space->nreserve || s->base<space->reserve[j].base)size+=s->size;
+    }
     if(space->brk_pages) { size+=page_up(space->brk_pages);resident+=proc_resident(space->brk_backing,0,(size_t)page_up(space->brk_pages)); }
     if(space->map_flags) {
         for(unsigned p=0;p<space->map_top && p<space->map_capacity/4096;p++)size+=space->map_flags[p] && space->map_flags[p]!=MAP_RESERVED?4096:0;
         if(space->map_backing)resident+=proc_resident(space->map_backing,0,space->map_backing->size);
     }
-    for(unsigned i=0;i<space->nreserve;i++)size+=space->reserve_size[i];
+    for(unsigned i=0;i<space->nreserve;i++)size+=space->reserve[i].size;
     *vsz=size;*rss=resident;
 }
 static size_t proc_maps(char *out,size_t capacity) {
-    GuestAddressSpace *space=address_space;size_t limit=space->nseg+space->nreserve+2+(space->map_flags?space->map_top:0),n=0,used=0;
+    GuestAddressSpace *space=address_space;size_t limit=2*space->nseg+space->nreserve+2+(space->map_flags?space->map_top:0),n=0,used=0;
     ProcMap *m=malloc(limit*sizeof(*m));if(!m)return 0;
     for(unsigned i=0;i<space->nseg;i++) {
         Segment *s=&space->seg[i];
@@ -633,7 +926,16 @@ static size_t proc_maps(char *out,size_t capacity) {
         if(f && f!=MAP_RESERVED)m[n++]=(ProcMap){MAP_BASE+(uint64_t)p*4096,MAP_BASE+(uint64_t)q*4096,f&7,""};
         p=q;
     }
-    for(unsigned i=0;i<space->nreserve;i++)m[n++]=(ProcMap){space->reserve_base[i],space->reserve_base[i]+space->reserve_size[i],0,""};
+    for(unsigned i=0;i<space->nreserve;i++)                  /* the reservations' uncommitted (PROT_NONE) parts */
+        for(uint64_t at=space->reserve[i].base,top=at+space->reserve[i].size;at<top;) {
+            uint64_t next=top;
+            for(unsigned j=0;j<space->nseg;j++) {
+                const Segment *s=&space->seg[j];
+                if(s->base<=at && at<s->base+s->size) { next=at;at=s->base+s->size;break; }
+                if(s->base>at && s->base<next)next=s->base;
+            }
+            if(next>at) { m[n++]=(ProcMap){at,next,0,""};at=next; }
+        }
     qsort(m,n,sizeof(*m),proc_map_order);
     for(size_t i=0;i<n && used+128<capacity;i++)
         used+=(size_t)snprintf(out+used,capacity-used,"%llx-%llx %c%c%c%c 00000000 00:00 0%s%s\n",(unsigned long long)m[i].from,(unsigned long long)m[i].to,

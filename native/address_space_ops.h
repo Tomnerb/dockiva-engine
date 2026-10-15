@@ -40,7 +40,7 @@ static void address_space_reset(GuestAddressSpace *space) {
 }
 static void address_space_destroy(GuestAddressSpace *space) {
     for(unsigned i=0;i<space->nseg;i++)backing_release(space->seg[i].backing);
-    free(space->map_flags); /* file_data: dropped by load_stream */backing_release(space->brk_backing);backing_release(space->map_backing);
+    free(space->map_flags);free(space->reserve); /* file_data: dropped by load_stream */backing_release(space->brk_backing);backing_release(space->map_backing);
     address_space_reset(space);
 }
 /* Private fork retains backing without copying bytes. Staging permits rollback
@@ -49,12 +49,16 @@ static void address_space_destroy(GuestAddressSpace *space) {
 static int address_space_fork_private(GuestAddressSpace *destination,GuestAddressSpace *source) {
     if(destination==source) { errno=EINVAL;return 0; }
     GuestAddressSpace copy=*source;
-    copy.file_data=NULL;copy.brk_backing=copy.map_backing=NULL;copy.map_flags=NULL;
+    copy.file_data=NULL;copy.brk_backing=copy.map_backing=NULL;copy.map_flags=NULL;copy.reserve=NULL;
     memset(copy.lookup_cache,0,sizeof(copy.lookup_cache));
     for(unsigned i=0;i<copy.nseg;i++)copy.seg[i].backing=NULL;
     if(source->map_flags) {
         if(!(copy.map_flags=malloc(source->map_capacity/4096)))goto failed;
         memcpy(copy.map_flags,source->map_flags,source->map_capacity/4096);
+    }
+    if(source->reserve) {
+        if(!(copy.reserve=malloc(RESERVE_LIMIT*sizeof(Reservation))))goto failed;
+        memcpy(copy.reserve,source->reserve,source->nreserve*sizeof(Reservation));
     }
     for(unsigned i=0;i<copy.nseg;i++) {
         if(!backing_retain(source->seg[i].backing,1))goto failed;

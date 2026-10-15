@@ -313,6 +313,7 @@ static int hvf_sync_partial(GuestAddressSpace *space,HvfView *v) {
         int kept=0;
         for(unsigned j=0;j<space->nseg && !kept;j++)kept=hvf_same_segment(&v->seg[i],&space->seg[j]);
         if(kept)continue;
+        if(removed==129)return 0;                        /* many segments went (an munmap of many commits): rebuild */
         hvf_unmap_range(v->seg[i].base,v->seg[i].size);
         removed_low[removed]=v->seg[i].base;removed_high[removed++]=v->seg[i].base+v->seg[i].size;
     }

@@ -5,13 +5,18 @@ static void map_freed(GuestAddressSpace *space,unsigned first) {
 }
 static uint64_t linux_error(unsigned error) { return UINT64_C(0)-error; }
 static uint64_t page_up(uint64_t n) { return (n+4095)&~UINT64_C(4095); }
+/* The heap follows the program (not its interpreter), as on Linux. */
 static void heap_init(void) {
-    uint64_t end=0;
-    for(unsigned i=0;i<address_space->nseg;i++) if(address_space->seg[i].base+address_space->seg[i].size>end) end=address_space->seg[i].base+address_space->seg[i].size;
-    if(end>UINT64_MAX-BRK_CAP-4095) fail("No room for bounded guest heap");
+    uint64_t end=0,interpreter=address_space->interpreter_base?address_space->interpreter_base:UINT64_MAX;
+    for(unsigned i=0;i<address_space->nseg;i++)
+        if(address_space->seg[i].base<interpreter && address_space->seg[i].base+address_space->seg[i].size>end) end=address_space->seg[i].base+address_space->seg[i].size;
+    if(end>GUEST_VA_END-BRK_CAP-4095) fail("No room for bounded guest heap");
     address_space->brk_base=address_space->brk_current=page_up(end);
     if(address_space->brk_base<MAP_BASE+address_space->map_capacity && MAP_BASE<address_space->brk_base+BRK_CAP) fail("ELF heap overlaps mmap arena");
-    if(address_space->brk_base+BRK_CAP>STACK_TOP-STACK_SIZE-UINT64_C(0x200000)) fail("ELF heap exceeds supported address range");
+    uint64_t stack=STACK_TOP-STACK_SIZE-UINT64_C(0x200000);                  /* with the vDSO below it */
+    if(address_space->brk_base<STACK_TOP && stack<address_space->brk_base+BRK_CAP) fail("ELF heap exceeds supported address range");
+    for(unsigned i=0;i<address_space->nseg;i++)
+        if(address_space->seg[i].base>=address_space->brk_base && address_space->seg[i].base<address_space->brk_base+BRK_CAP) fail("ELF heap overlaps the interpreter");
     for(unsigned i=0;i<address_space->nseg;i++)
         if(address_space->seg[i].base<MAP_BASE+address_space->map_capacity && MAP_BASE<address_space->seg[i].base+address_space->seg[i].size) fail("ELF overlaps mmap arena");
 }
@@ -60,13 +65,12 @@ static uint64_t guest_munmap(uint64_t addr,uint64_t length) {
     uint64_t bytes=page_up(length);
     if(addr<MAP_BASE || addr-MAP_BASE>=address_space->map_capacity || bytes>address_space->map_capacity-(addr-MAP_BASE))
     {
-        /* Outside the arena: reservations and their commits go; anything else is left
-           and the call succeeds, as Linux's munmap of an unmapped range does
-           (ClickHouse calls munmap(NULL, n) after a failed mmap). The loader's own
-           segments stay: a position-independent program sits at 4 MiB here, where on
-           Linux it would be far from such a range. */
+        /* Outside the arena: reservations (every mmap made there) and their commits go;
+           anything else is left and the call succeeds, as Linux's munmap of an unmapped
+           range does (ClickHouse calls munmap(NULL, n) after a failed mmap). The
+           loader's own segments (program, interpreter, stack) stay. */
         if(bytes>UINT64_C(0x1000000000000)-addr)return linux_error(22);           /* beyond the user address space */
-        (void)reserve_unmap(addr,bytes);return 0;
+        return reserve_unmap(addr,bytes)<0?linux_error(12):0;
     }
     unsigned first=(unsigned)((addr-MAP_BASE)/4096), pages=(unsigned)(bytes/4096);
     if(!address_space->map_flags) return 0;
