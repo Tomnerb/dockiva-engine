@@ -228,12 +228,22 @@ func (b *engine) startExec(w http.ResponseWriter, r *http.Request, id string, bo
 		pumps.Add(1)
 		go func(stream int, out *os.File) {
 			defer pumps.Done()
-			copyTo(out, func(data []byte) { write(stream, data) })
+			copyTo(out, func(data []byte) {
+				write(stream, data)
+				select {
+				case <-finished: // a slow client took its time: the quiet second starts again
+					if j.Tty {
+						_ = j.terminal.SetReadDeadline(time.Now().Add(time.Second))
+					}
+				default:
+				}
+			})
 		}(i+1, out)
 	}
 	<-finished
 	if j.Tty {
-		// The pty stays readable until its buffered output is gone, then reports EIO.
+		// The pty stays readable until its buffered output is gone, then reports EIO;
+		// stop after a quiet second, not a second in all, so no output is cut short.
 		_ = j.terminal.SetReadDeadline(time.Now().Add(time.Second))
 	}
 	pumps.Wait()
