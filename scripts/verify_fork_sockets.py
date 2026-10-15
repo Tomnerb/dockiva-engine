@@ -76,6 +76,10 @@ def main():
             ok = r.returncode == 0 and r.stdout == expected
             failed += not ok
             print(f'{backend} {elf.stem}: {"PASS" if ok else "FAIL"} exit={r.returncode} {r.stdout.decode().strip()} {r.stderr.decode().strip()}')
+        # A set-user-ID first program (docker exec -u 1000 of one) runs as root too: setuid_leaf exits 10.
+        r = subprocess.run([str(runtime), 'run', str(setuid_root/'suid'), '--root', str(setuid_root), '--uid', '1000', '--gid', '1000', *common, *extra], capture_output=True, timeout=60)
+        failed += r.returncode != 10
+        print(f'{backend} setuid first program: {"PASS" if r.returncode == 10 else "FAIL"} exit={r.returncode} {r.stderr.decode().strip()}')
     return 1 if failed else 0
 
 

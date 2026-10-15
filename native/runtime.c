@@ -1163,6 +1163,11 @@ int main(int argc,char **argv) {
     if(use_hvf)vdso_build();
 #endif
     FILE *input=fopen(argv[2],"rb");if(!input)fail("Cannot open ELF file");
+    { /* As execve would: a set-ID file runs as its owner (root, see process_exec); a non-root run holds no capabilities */
+        struct stat st;
+        if(!fstat(fileno(input),&st)) { if(st.st_mode&S_ISUID)guest_ids.uid=guest_ids.suid=0;if(st.st_mode&S_ISGID)guest_ids.gid=guest_ids.sgid=0; }
+        if(guest_uid)cap_held[0]=cap_held[1]=0;
+    }
     load_stream(input);
     { /* /proc/1/exe: the ELF's path inside the root */
         char root_real[PATH_MAX],elf_real[PATH_MAX];size_t n;

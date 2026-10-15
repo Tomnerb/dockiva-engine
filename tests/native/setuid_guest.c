@@ -1,7 +1,7 @@
 /* Set-user-ID and set-group-ID exec, run as uid/gid 1000 (--uid 1000 --gid 1000):
    /suid (04755) and /sgid (02755) run with effective and saved ID 0 (setuid_leaf
    checks the details and exits 10 or 30), /plain keeps 1000 (20), and with
-   no_new_privs /suid keeps it too. Needs --process-tree and a root holding them. */
+   no_new_privs /suid keeps it too; uid 1000 itself cannot become root. Needs --process-tree and a root holding them. */
 typedef unsigned long U;
 static long call(U n,U a,U b,U c,U d,U e,U f) {
     register U x8 __asm__("x8")=n,x0 __asm__("x0")=a,x1 __asm__("x1")=b;
@@ -19,6 +19,7 @@ static int run(const char *path) {                                    /* the lea
 }
 void _start(void) {
     check(call(174,0,0,0,0,0,0)==1000 && call(175,0,0,0,0,0,0)==1000 && call(177,0,0,0,0,0,0)==1000);
+    check(call(146,0,0,0,0,0,0)==-1 && call(144,0,0,0,0,0,0)==-1);       /* a non-root run holds no capabilities */
     check(run("/suid")==10);
     check(run("/sgid")==30);
     check(run("/plain")==20);
