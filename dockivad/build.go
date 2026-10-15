@@ -559,7 +559,7 @@ func (bd *builder) pull(ref string) *image {
 		return im
 	}
 	bd.say("Pulling " + ref + "\n")
-	pullImage(ref, bd.b.Cache, false, "")
+	pullImage(ref, bd.b.Cache, bd.b.Insecure, "") // -insecure-local: FROM a localhost registry
 	return bd.b.image(ref)
 }
 
