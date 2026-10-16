@@ -11,6 +11,7 @@ typedef struct {
     unsigned tid,private_wait,realtime,blocked,input_wait;
     unsigned child_wait;          /* blocked in wait4/waitid: only a child's event or a signal wakes it */
     unsigned preempted;           /* its last slice ended by preemption or sched_yield, not a wait (schedule_pick) */
+    unsigned vfork_child;         /* waits in vfork until that child execs or exits */
     uint32_t bitset;
     uint64_t clear_tid,futex_address,deadline_ns,epoch,wakeups;
     GuestCpuState regs;           /* while it is not running */
@@ -47,6 +48,7 @@ typedef struct {
     ThreadTable *threads;unsigned running,exit_pending,exit_signal;int exit_result;
     pthread_mutex_t mm;
     uint64_t futex_epoch; /* the image's identity for futexes waited on in place (hvf_backend.h): new at fork and exec */
+    unsigned mm_owner;    /* a vfork child sharing a threaded process's memory: that pid (its mm lock and page tables), else 0 */
 } ScheduledTask;
 static uint64_t schedule_futex_epochs;
 static uint64_t schedule_switches,schedule_cancellations;
@@ -99,20 +101,32 @@ static void schedule_interrupt(ScheduledTask *t) {
 /* Threads of a process take its mm lock around every exit and hold it for
    microseconds: spin briefly before sleeping in the kernel, where a wakeup takes far
    longer than a typical hold (and a barging thread can retake the lock meanwhile). */
+/* A process sharing its memory with a threaded one (a vfork child) takes the
+   owner's lock (SharedImage). The lock taken is remembered: exec drops the shared
+   image while holding it. */
+static _Thread_local pthread_mutex_t *mm_held;
+/* The process whose mm lock and page tables task index uses (1-based). */
+static unsigned mm_id(unsigned index) { unsigned owner=schedule_tasks[index].mm_owner;return owner?owner:index+1; }
+static pthread_mutex_t *mm_of(ScheduledTask *t) { return &schedule_tasks[mm_id((unsigned)(t-schedule_tasks))-1].mm; }
+static int mm_trylock(ScheduledTask *t) {
+    pthread_mutex_t *m=mm_of(t);
+    if(pthread_mutex_trylock(m))return 0;
+    mm_held=m;return 1;
+}
 static void mm_lock(ScheduledTask *t) {
-    if(!schedule_active || !pthread_mutex_trylock(&t->mm))return;
+    if(!schedule_active || mm_trylock(t))return;
     uint64_t since=profiling?profile_now_ns():0;
     for(unsigned spin=0;spin<2000;spin++) {
-        if(!pthread_mutex_trylock(&t->mm))goto held;
+        if(mm_trylock(t))goto held;
 #if defined(__aarch64__)
         __asm__ volatile("yield");
 #endif
     }
-    pthread_mutex_lock(&t->mm);
+    pthread_mutex_lock(mm_held=mm_of(t));
 held:
     if(profiling) { PROFILE_ADD(profile_mm_waits,1);PROFILE_ADD(profile_mm_wait_ns,profile_now_ns()-since); }
 }
-static void mm_unlock(ScheduledTask *t) { if(schedule_active)pthread_mutex_unlock(&t->mm); }
+static void mm_unlock(ScheduledTask *t) { (void)t;if(schedule_active && mm_held) { pthread_mutex_t *m=mm_held;mm_held=NULL;pthread_mutex_unlock(m); } }
 static void schedule_notify(void);
 static _Thread_local int runtime_held; /* this worker holds runtime_mutex */
 /* Memory of images that ended (exit, exec) under the runtime lock: no task refers
@@ -157,6 +171,7 @@ held:
 static int process_slot_free(unsigned slot) {
     if(process_children[slot].pid || process_children[slot].live)return 0;
     if(schedule_tasks[slot+1].state || schedule_tasks[slot+1].saved)return 0;
+    for(unsigned i=0;i<=process_count;i++)if(schedule_tasks[i].state && schedule_tasks[i].mm_owner==slot+2)return 0; /* a vfork child uses its lock and tables */
     for(unsigned i=0;i<=process_count;i++)if(schedule_tasks[i].state && (schedule_tasks[i].pgid==slot+2 || schedule_tasks[i].sid==slot+2))return 0;
     return 1;
 }
@@ -236,11 +251,16 @@ static void schedule_pending(ScheduledTask *task) {
 /* A vfork child exited or execed: its parent runs again, and the link goes before
    the child's slot can be reused by another process. */
 static void schedule_vfork_done(uint64_t pid) {
-    for(unsigned i=0;i<=process_count;i++)if(schedule_tasks[i].vfork_child==pid)schedule_tasks[i].vfork_child=0;
+    io_epoch++;                                        /* an exec waiting for its vfork child to leave its memory retries */
+    for(unsigned i=0;i<=process_count;i++) {
+        ScheduledTask *t=&schedule_tasks[i];
+        if(t->vfork_child==pid)t->vfork_child=0;
+        for(unsigned j=0;t->threads && j<t->threads->top;j++)if(t->threads->thread[j].vfork_child==pid) { t->threads->thread[j].vfork_child=0;schedule_events++; }
+    }
 }
 static void schedule_exec_reset(void) {
     ScheduledTask *task=&schedule_tasks[process_pid-1];
-    task->execed=1;schedule_vfork_done(process_pid);
+    task->execed=1;task->mm_owner=0;schedule_vfork_done(process_pid);
     memset(task->signal_handler,0,sizeof(task->signal_handler));
     memset(task->signal_flags,0,sizeof(task->signal_flags));
     memset(task->signal_action_mask,0,sizeof(task->signal_action_mask));
@@ -279,7 +299,11 @@ static uint64_t process_kill(void) {
 /* The descriptor tables are copied only into a record that does not already hold
    them (a new child, the first switch away from the first process). */
 static void task_save(ScheduledTask *t) {
-    image_save(&t->image);t->saved=1;
+    /* A threaded owner's memory is in use by its threads: no snapshot of it here (it is
+       read under the mm lock only), the shared image is the memory. */
+    if(t->mm_owner) { t->image.shared=shared_image;t->image.cpu=*cpu;t->image.mask=fs_umask; }
+    else image_save(&t->image);
+    t->saved=1;
     if(proc_now!=&t->ps)t->ps=*proc_now;
     if(io_table!=&t->io)t->io=*io_table;
     if(net_table!=&t->net)t->net=*net_table;
@@ -288,7 +312,12 @@ static void task_save(ScheduledTask *t) {
     if(fd_table!=&t->fds)t->fds=*fd_table;
 }
 static void task_load(ScheduledTask *t) {
-    proc_now=&t->ps;image_home_scheduled=&t->image.memory;image_restore(&t->image);t->saved=0;
+    proc_now=&t->ps;image_home_scheduled=&t->image.memory;
+    /* A vfork child of a threaded process: its memory is in place and in use (the
+       owner's threads change it under the mm lock, not held here). */
+    if(t->mm_owner) { shared_image=t->image.shared;address_space=image_place(shared_image);*cpu=t->image.cpu;fs_umask=t->image.mask;cpu->exclusive_valid=0; }
+    else image_restore(&t->image);
+    t->saved=0;
     io_table=&t->io;net_table=&t->net;net_wait_now=&t->network_wait;fs_table=&t->fs;fd_table=&t->fds;
 }
 static void seccomp_forget(uint64_t pid); /* seccomp.h */
@@ -322,7 +351,9 @@ static void schedule_child(uint64_t pid) {
     schedule_live++;
 }
 static void schedule_vfork(uint64_t pid) {
-    schedule_tasks[process_pid-1].vfork_child=(unsigned)pid;
+    Thread *th=thread_current();
+    if(shared_image && shared_image->owner)schedule_tasks[pid-1].mm_owner=shared_image->owner; /* it runs as one of the owner's threads would */
+    if(th)th->vfork_child=(unsigned)pid;else schedule_tasks[process_pid-1].vfork_child=(unsigned)pid;
     schedule_slice=0;
 }
 /* --signals: stop and control signals sent to the runtime (docker stop/kill)
@@ -394,6 +425,7 @@ static void schedule_leave(int task) {
    deadline passed, or a generic blocked call after any I/O event. */
 static int thread_runnable(const Thread *th) {
     if(!th->state || th->worker)return 0;
+    if(th->vfork_child && schedule_tasks[th->vfork_child-1].state && !schedule_tasks[th->vfork_child-1].execed)return 0;
     if(th->state==1)return 1;
     if(th->state==2)return th->deadline_ns && thread_time_ns((int)th->realtime)>=th->deadline_ns;
     return !(th->network.active && th->network.targeted) && !th->child_wait && th->epoch!=io_epoch;
@@ -527,7 +559,9 @@ static void schedule_wait_idle(unsigned ms) {
     if(image_dead_count) { Worker *self=worker;runtime_unlock();runtime_lock(self); }
     struct timespec until;clock_gettime(CLOCK_REALTIME,&until);
     until.tv_nsec+=(long)ms*1000000;if(until.tv_nsec>=1000000000) { until.tv_sec++;until.tv_nsec-=1000000000; }
+    uint64_t since=profiling?profile_now_ns():0;
     schedule_idle++;(void)pthread_cond_timedwait(&schedule_idle_cond,&runtime_mutex,&until);schedule_idle--;
+    profile_wait(0,since);
 }
 /* Nothing is runnable for this worker: wait for work, or diagnose a deadlock. */
 static void schedule_idle_step(void) {

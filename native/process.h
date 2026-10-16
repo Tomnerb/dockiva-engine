@@ -21,11 +21,17 @@ typedef struct {
     GuestCpuState cpu;
     unsigned mask;
 } ProcessImage;
-struct SharedImage { unsigned refs;ProcessImage state; };
+/* owner: the process whose threads use the image (hvf_share_image): every sharer's
+   runtime work takes that process's mm lock and runs on its page tables, and its pid
+   stays taken while the image lives (process_slot_free). 0 for a single-threaded
+   vfork pair: each uses its own (the parent waits). */
+struct SharedImage { unsigned refs,owner;ProcessImage state; };
 /* A process's memory lives in one place that every thread uses: its own image
-   (image_home, set when a worker loads the process) or, for a vfork pair, the
-   shared image. ProcessImage copies made by fork and exec are snapshots, not
-   independently owning deep copies; those paths duplicate or share backings. */
+   (image_home, set when a worker loads the process) or the shared image: for a
+   vfork pair, and for a threaded process (its vfork children share it while its
+   other threads run on, as CLONE_VM does). ProcessImage copies made by fork and exec
+   are snapshots, not independently owning deep copies; those paths duplicate or
+   share backings. */
 static _Thread_local GuestAddressSpace *image_home_scheduled=&runtime_context.memory;
 #define image_home (schedule_active?image_home_scheduled:address_space) /* unscheduled: wherever memory is now */
 static GuestAddressSpace *image_place(SharedImage *shared) { return shared?&shared->state.memory:image_home; }
@@ -213,15 +219,18 @@ static uint64_t process_exec_at(uint64_t dir,unsigned r) {
     if(schedule_active)schedule_exec_reset();
     return 0;
 }
+/* Whether a vfork shares this process's memory with the child (else a private copy). */
+static int process_vfork_shares(void) { return !process_threaded() || (shared_image && shared_image->owner==process_pid); }
 static uint64_t process_clone(void) {
     fork_shared_private=0;
     if(epoll_live() && !schedule_active)return linux_error(95); /* scheduled children share inherited epoll instances */
     /* vfork shares memory, but never files or signal handlers. The scheduler
-       holds the parent until child exec or exit. General threads remain unsupported. */
+       holds the calling thread until child exec or exit. A threaded process's other
+       threads run on meanwhile, in the same memory (its shared image); without one
+       the child gets a private copy (like fork) and no thread waits for it. A
+       copy made every page of a go command copy-on-write at each of its compiles. */
     unsigned vfork=cpu->gpr[0]==(17|0x100|0x4000);
-    /* Other threads keep running during a threaded process's vfork, so its child
-       gets a private copy (like fork) and no thread waits for it. */
-    unsigned share=vfork && !process_threaded();
+    unsigned share=vfork && process_vfork_shares();
     /* glibc's fork adds CHILD_SETTID|CHILD_CLEARTID|PARENT_SETTID (0x1300000): the child
        PID goes to child_tid in the child and parent_tid in the parent. CLEARTID has no
        observer once a private child exits. */

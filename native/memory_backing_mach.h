@@ -150,7 +150,8 @@ static MemoryBacking *backing_reserve(size_t size) { return backing_region(size)
 /* Zero whole host pages and give them back: ownership and charge are released and
    the host may reclaim the memory. The caller owns the backing privately. */
 static void backing_discard(MemoryBacking *backing,size_t offset,size_t size) {
-    for(size_t i=offset/backing->page_size;i<(offset+size)/backing->page_size;i++) {
+    size_t end=(offset+size)/backing->page_size;if(end>backing->used)end=backing->used; /* none owned above */
+    for(size_t i=offset/backing->page_size;i<end;i++) {
         if(!backing->pages[i])continue;
         unsigned char *bytes=backing->bytes+i*backing->page_size;
         memset(bytes,0,backing->page_size);(void)madvise(bytes,backing->page_size,MADV_FREE_REUSABLE);

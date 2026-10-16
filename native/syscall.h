@@ -79,10 +79,11 @@ static void guest_ids_of(uint64_t pid,uint32_t uid[3],uint32_t gid[3]) {
 static void proc_memory(uint64_t pid,int own_held,uint64_t *vsz,uint64_t *rss) {
     if(!schedule_active || !pid || pid>PROCESS_LIMIT+1) { if(pid==process_pid)proc_space_memory(address_space,vsz,rss);else *vsz=*rss=0;return; }
     ScheduledTask *t=&schedule_tasks[pid-1];
-    int lock=!(own_held && pid==process_pid) && (t->worker || t->running);
-    if(lock)pthread_mutex_lock(&t->mm);
+    pthread_mutex_t *mm=mm_of(t);                                       /* a vfork child's: its owner's */
+    int lock=!(own_held && (pid==process_pid || mm==mm_held)) && (t->worker || t->running);
+    if(lock)pthread_mutex_lock(mm);
     proc_space_memory(t->ps.shared?&t->ps.shared->state.memory:&t->image.memory,vsz,rss);
-    if(lock)pthread_mutex_unlock(&t->mm);
+    if(lock)pthread_mutex_unlock(mm);
 }
 static unsigned guest_thread_list(uint64_t pid,unsigned *tids,char *states,uint64_t (*cpu)[2],unsigned capacity) {
     const ThreadTable *table=schedule_active && capacity?schedule_tasks[pid-1].threads:NULL;
@@ -775,6 +776,11 @@ static int guest_syscall_unlocked(void) {
         int slot=fs_slot(fd),host=fs_fd[slot]-1;
         fs_fd[slot]=0;fs_cloexec[slot]=0;fd_unbind(fd);
         cpu->gpr[0]=close(host)<0?fs_error():0;return 1;
+    }
+    /* epoll_ctl of a file (Go offers every file it opens to its poller): EPERM, as Linux
+       answers for files that cannot be polled, after the epoll descriptor's checks. */
+    if(call==21 && fs_host(cpu->gpr[2])>=0 && io_managed(fd) && IO(fd).kind==IO_EPOLL) {
+        unsigned op=(unsigned)cpu->gpr[1];cpu->gpr[0]=op<1 || op>3?linux_error(22):linux_error(1);return 1;
     }
     /* fcntl's descriptor flags on a file: this process's own (record locks take the lock). */
     if(call==25 && file && cpu->gpr[1]>=1 && cpu->gpr[1]<=4) {

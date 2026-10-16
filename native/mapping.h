@@ -8,6 +8,11 @@ static int map_rwx_allowed;
 static unsigned map_find_free(const unsigned char *flags,unsigned from,unsigned total,unsigned pages) {
     unsigned run=0,start=0;
     for(unsigned i=from;i<total;) {
+        if(!(i&63) && i+64<=total && run+64<pages) {                    /* 64 free pages at once (a 64 MiB Go arena probe is 16384) */
+            uint64_t w[8],any=0;memcpy(w,flags+i,64);
+            for(unsigned k=0;k<8;k++)any|=w[k];
+            if(!any) { if(!run)start=i;run+=64;i+=64;continue; }
+        }
         if(!(i&7) && i+8<=total) {
             uint64_t w;memcpy(&w,flags+i,8);
             int has_zero=((w-UINT64_C(0x0101010101010101))&~w&UINT64_C(0x8080808080808080))!=0;
@@ -61,7 +66,7 @@ static int file_copy_demote(uint64_t address,uint64_t bytes,int partial) {
         if(!address_space_make_private(address_space,address_space->map_backing,offset,(size_t)s.size))return 0;
         memcpy(backing_data(address_space->map_backing)+offset,segment_data(&s),(size_t)s.size);
         address_space->seg[i]=address_space->seg[--address_space->nseg];backing_release(s.backing);
-        for(unsigned p=first;p<first+pages;p++)address_space->map_flags[p]=(unsigned char)(8|16|(s.flags&7));
+        memset(address_space->map_flags+first,8|16|(s.flags&7),pages);
         address_space_arena_changed(address_space,first,first+pages);address_space_changed(address_space);
         i=(unsigned)-1;                                                  /* the table changed: start over */
     }
@@ -104,7 +109,7 @@ static uint64_t shared_map(uint64_t fixed,uint64_t length,uint64_t prot,MemoryBa
     else if(!(backing=backing_alloc((size_t)pages*4096,1)))return linux_error(12);
     unsigned flags=SEG_SHARED|((prot&1)?4:0)|((prot&2)?2:0)|((prot&4)?1:0);
     address_space->seg[address_space->nseg++]=(Segment){MAP_BASE+(uint64_t)start*4096,(uint64_t)pages*4096,flags,backing,offset};
-    for(unsigned i=start;i<start+pages;i++)address_space->map_flags[i]=MAP_RESERVED;
+    memset(address_space->map_flags+start,MAP_RESERVED,pages);
     if(start+pages>address_space->map_top)address_space->map_top=start+pages;   /* fork and reuse copy or clear below it */
     address_space_changed(address_space);return MAP_BASE+(uint64_t)start*4096;
 }
@@ -119,7 +124,7 @@ static uint64_t shared_unmap(uint64_t address,uint64_t bytes) {
         if(low>s->base && high<top)return linux_error(22);
         if(map_in_arena(low,high-low)) {
             unsigned first=(unsigned)((low-MAP_BASE)/4096),pages=(unsigned)((high-low)/4096);
-            for(unsigned p=first;p<first+pages;p++)address_space->map_flags[p]=0;
+            memset(address_space->map_flags+first,0,pages);
             map_freed(address_space,first);
         } else if(!reserve_remove(low,high-low))return linux_error(12);
         address_space_changed(address_space);
@@ -560,7 +565,7 @@ static uint64_t guest_dynamic_mmap(void) {
         memcpy(backing_data(address_space->map_backing)+(size_t)start*4096,data,(size_t)pages*4096);free(data);
     } else if(!address_space_discard_map(address_space,(size_t)start*4096,(size_t)pages*4096))return linux_error(12); /* anonymous: zero, charged on first write */
     unsigned char permission=(unsigned char)((fd>=0?16:0)|8|((prot&1)?4:0)|((prot&2)?2:0)|((prot&4)?1:0));
-    for(unsigned i=start;i<start+pages;i++)address_space->map_flags[i]=permission;
+    memset(address_space->map_flags+start,permission,pages);
     address_space_arena_changed(address_space,start,start+pages);return MAP_BASE+(uint64_t)start*4096;
 }
 static uint64_t guest_mprotect(void) {
@@ -598,7 +603,8 @@ static uint64_t guest_mprotect(void) {
     }
     for(unsigned i=first;i<first+pages;i++)if(!address_space->map_flags[i])return linux_error(12);
     unsigned char permission=(unsigned char)(8|((prot&1)?4:0)|((prot&2)?2:0)|((prot&4)?1:0));
-    for(unsigned i=first;i<first+pages;i++)address_space->map_flags[i]=(unsigned char)((address_space->map_flags[i]&16)|permission);
+    unsigned char *flags=address_space->map_flags;                         /* (a local: stores through it may alias the struct) */
+    for(unsigned i=first;i<first+pages;i++)flags[i]=(unsigned char)((flags[i]&16)|permission);
     address_space_arena_changed(address_space,first,first+pages);return 0;
 }
 

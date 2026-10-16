@@ -57,7 +57,7 @@ static uint64_t guest_mmap(uint64_t length,uint64_t prot,uint64_t flags,uint64_t
     if(!backing_data(address_space->map_backing)) { address_space->map_backing=backing_reserve(address_space->map_capacity); if(!backing_data(address_space->map_backing)) return linux_error(12); }
     if(!address_space_discard_map(address_space,(size_t)start*4096,(size_t)pages*4096))return linux_error(12);
     unsigned char permission=(unsigned char)(8|((prot&1)?4:0)|((prot&2)?2:0));
-    for(unsigned i=start;i<start+pages;i++) address_space->map_flags[i]=permission;
+    memset(address_space->map_flags+start,permission,pages);
     address_space_arena_changed(address_space,start,start+pages);return MAP_BASE+(uint64_t)start*4096;
 }
 static uint64_t shared_unmap(uint64_t address,uint64_t bytes); /* mapping.h */
@@ -80,7 +80,7 @@ static uint64_t guest_munmap(uint64_t addr,uint64_t length) {
     if(!file_copy_demote(addr,bytes,1)) return linux_error(12);          /* part of a file copy */
     uint64_t shared=shared_unmap(addr,bytes);if(shared) return shared;
     if(!address_space_discard_map(address_space,(size_t)first*4096,(size_t)pages*4096)) return linux_error(12); /* release the pages */
-    for(unsigned i=first;i<first+pages;i++) address_space->map_flags[i]=0;
+    memset(address_space->map_flags+first,0,pages);
     map_freed(address_space,first);
     address_space_arena_changed(address_space,first,first+pages);return 0; /* Unmapped holes are permitted. */
 }

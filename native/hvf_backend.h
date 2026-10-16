@@ -76,6 +76,10 @@ typedef struct {
     unsigned asid,asid_generation;            /* valid while asid_generation is hvf_asid_generation */
 } HvfView;
 static HvfView hvf_views[HVF_VIEWS];
+/* The view of the current process's memory: its own, or (a vfork child of a threaded
+   process, sharing its memory) the owner's, which every sharer's vCPU runs on. */
+static unsigned hvf_view_pid(void) { return schedule_active?mm_id((unsigned)process_pid-1):(unsigned)process_pid; }
+#define hvf_own_view (&hvf_views[hvf_view_pid()])
 static int hvf_active;                       /* run() executes natively */
 /* Each worker's vCPU (Worker.backend), created on and used only by that worker's
    thread. view: the tables its TTBR0 holds (ttbr: their root, which a rebuild
@@ -294,7 +298,7 @@ static void hvf_flush(void);
 static void hvf_resume_el0(uint64_t pc,uint64_t spsr);
 static void hvf_siblings_out(void);
 static int hvf_view_matches(const GuestAddressSpace *space) {
-    const HvfView *v=&hvf_views[process_pid];
+    const HvfView *v=hvf_own_view;
     if(!v->root || v->stale || v->nseg!=space->nseg || v->map_capacity!=space->map_capacity ||
        v->brk_backing!=space->brk_backing || v->map_backing!=space->map_backing ||
        v->brk_base!=space->brk_base || v->brk_pages!=space->brk_pages)return 0;
@@ -346,6 +350,13 @@ static void hvf_remap_arena(GuestAddressSpace *space) {
         uint64_t va=MAP_BASE+(uint64_t)i*4096;
         unsigned end=i+512-(unsigned)((va>>12)&511);if(end>hi)end=hi;          /* this leaf table's last page */
         uint64_t *leaf=hvf_leaf(hvf_view,va,0);
+        if(!leaf && flags) {           /* nothing mapped here to clear: just find a page to map (Go probes 64 MiB at a time) */
+            unsigned j=i;
+            for(;j+64<=end;j+=64) { uint64_t w[8],any=0;memcpy(w,flags+j,64);for(unsigned k=0;k<8;k++)any|=w[k];if(any&UINT64_C(0x0707070707070707))break; }
+            if(j+64>end) { while(j<end && !(flags[j]&7))j++; }
+            if(j==end || !ipa) { i=end;continue; }
+            i=j;
+        }
         while(i<end) {
             if(!(i&7) && i+8<=end) {
                 uint64_t w=0;if(flags)memcpy(&w,flags+i,8);
@@ -410,7 +421,10 @@ static void hvf_evict(void) {
     backing_pool_drain();                                /* recycled memory holds guest-physical space */
     for(unsigned i=0;i<HVF_VIEWS && i<=process_count+1;i++) {
         int in_use=0;
-        for(unsigned w=0;w<worker_count;w++)if(workers[w]!=worker && workers[w]->task+1==(int)i)in_use=1;
+        for(unsigned w=0;w<worker_count;w++) {
+            HvfCpu *c=workers[w]!=worker?workers[w]->backend:NULL;
+            if(workers[w]!=worker && (workers[w]->task+1==(int)i || (c && c->view==&hvf_views[i])))in_use=1;
+        }
         if(!in_use)hvf_tables_free(&hvf_views[i]);
     }
     if(!worker_threads) { pthread_mutex_lock(&hvf_mutex);for(unsigned i=hvf_nblocks;i--;)if(hvf_blocks[i].host)hvf_block_unmap(i);pthread_mutex_unlock(&hvf_mutex); } /* (no host: being unmapped) */
@@ -514,7 +528,7 @@ rebuild:
    restores it. munmap and mprotect paid a second vCPU run each for hvf_flush, and
    flushed every process's translations on every vCPU. */
 static void hvf_sync_memory(GuestAddressSpace *space) {
-    HvfView *v=&hvf_views[process_pid];
+    HvfView *v=hvf_own_view;
     if(v==hvf_view && v->root && hvf_cpu->ttbr==v->root && v->generation==space->generation)return;
     hvf_stale_code=0;
     int stale=hvf_sync_tables(space,v);
@@ -604,7 +618,7 @@ static int hvf_fault_resume(uint64_t elr,uint64_t spsr) {
 /* A write fault on a page this view already maps writable: a TLB still held its
    read-only entry. Invalidate it on the way back (the caller resumes the guest). */
 static int hvf_spurious_write(uint64_t far) {
-    if(hvf_view!=&hvf_views[process_pid] || !hvf_view->root || hvf_cpu->ttbr!=hvf_view->root)return 0;
+    if(hvf_view!=hvf_own_view || !hvf_view->root || hvf_cpu->ttbr!=hvf_view->root)return 0;
     const uint64_t *leaf=hvf_leaf(hvf_view,far,0);if(!leaf)return 0;
     uint64_t descriptor=leaf[(far>>12)&511];
     if(!(descriptor&1) || (descriptor&(UINT64_C(1)<<7)))return 0;
@@ -867,11 +881,26 @@ static ScheduledTask *hvf_task(void) { return &schedule_tasks[process_pid-1]; }
    out while the caller holds the process's mm lock (they take it to re-enter).
    Needed before their page tables are freed or their memory is snapshotted. */
 static void hvf_siblings_out(void) {
-    if(!schedule_active || !worker_threads || !hvf_task()->threads)return;
-    int index=(int)(process_pid-1);
-    for(unsigned i=0;i<worker_count;i++)if(workers[i]!=worker && workers[i]->task==index)hvf_interrupt(workers[i]);
+    if(!schedule_active || !worker_threads)return;
+    /* Threads of this process, and vfork children sharing its memory: the vCPUs on its
+       view (one entering guest code activates its view under this mm lock first). */
+    unsigned mm=hvf_view_pid();int task;
+#define HVF_SIBLING(w) ((w)!=worker && (task=__atomic_load_n(&(w)->task,__ATOMIC_ACQUIRE))>=0 && mm_id((unsigned)task)==mm)
+    for(unsigned i=0;i<worker_count;i++)if(HVF_SIBLING(workers[i]))hvf_interrupt(workers[i]);
     for(unsigned i=0;i<worker_count;i++)
-        while(workers[i]!=worker && workers[i]->task==index && atomic_load(&workers[i]->in_guest))sched_yield();
+        while(HVF_SIBLING(workers[i]) && atomic_load(&workers[i]->in_guest))sched_yield();
+#undef HVF_SIBLING
+}
+/* A threaded process's memory moves to a shared image while it has one thread, so
+   its vfork children can share it in place later (process_clone) while its other
+   threads run. */
+static void hvf_share_image(void) {
+    ThreadTable *p=hvf_task()->threads;
+    if(shared_image) { if(!shared_image->owner && shared_image->refs==1)shared_image->owner=(unsigned)process_pid;return; }
+    for(unsigned i=0;p && i<p->top;i++)if((int)i!=thread_now && (p->thread[i].state || p->thread[i].worker))return; /* not alone: it stays put */
+    SharedImage *shared=calloc(1,sizeof(*shared));if(!shared)return;
+    shared->refs=1;shared->owner=(unsigned)process_pid;
+    address_space_assign(&shared->state.memory,address_space);address_space=&shared->state.memory;shared_image=shared;
 }
 /* The process's thread table, created on first use: thread 0 is the caller. */
 static ThreadTable *hvf_threads_ensure(void) {
@@ -882,6 +911,7 @@ static ThreadTable *hvf_threads_ensure(void) {
         th->state=1;th->tid=(unsigned)process_pid;th->clear_tid=hvf_main_clear_tid[process_pid];
         th->signal_mask=t->signal_mask;th->network=net_wait;th->worker=t->worker;th->wakeups=t->wakeups;
         p->top=1;t->worker=0;t->running=1;t->threads=p;thread_now=0;net_wait_now=&th->network;
+        hvf_share_image();
     }
     return t->threads;
 }
@@ -989,6 +1019,7 @@ static uint64_t hvf_thread_clone(void) {
     if(((flags&0x100000) && !parent) || ((flags&0x1000000) && !child))return linux_error(14);
     if(!schedule_active)return linux_error(11);
     ThreadTable *p=hvf_threads_ensure();if(!p)return linux_error(12);
+    hvf_share_image();
     unsigned i=0;while(i<THREAD_LIMIT && (p->thread[i].state || p->thread[i].worker))i++; /* a killed thread may still be leaving a worker */
     if(i==THREAD_LIMIT || hvf_next_tid>1048575)return linux_error(11);
     if(i>=p->top)p->top=i+1;
@@ -1169,7 +1200,8 @@ static int hvf_short_sleep(uint64_t call) {
     if(sec || ns>=HVF_SHORT_SLEEP_NS || hvf_must_stop(schedule_active?hvf_task():NULL))return 0;
     ScheduledTask *task=schedule_active?hvf_task():NULL;
     struct timespec pause={0,(long)ns};
-    mm_unlock(task);(void)nanosleep(&pause,NULL);mm_lock(task);
+    uint64_t since=profiling?profile_now_ns():0;
+    mm_unlock(task);(void)nanosleep(&pause,NULL);mm_lock(task);profile_wait(2,since);
     hvf_frame[0]=0;hvf_resume_el0(hvf_frame[HF_ELR],hvf_frame[HF_SPSR]);return 1;
 }
 /* futex without the runtime lock (the process's mm lock is held), for private
@@ -1218,8 +1250,8 @@ static int hvf_futex_unlocked(void) {
     }
     w.next=hvf_futex_buckets[b].head;hvf_futex_buckets[b].head=&w;
     mm_unlock(task);
-    struct timespec pause={0,(long)wait};
-    (void)pthread_cond_timedwait_relative_np(&w.cond,&hvf_futex_buckets[b].lock,&pause);
+    struct timespec pause={0,(long)wait};uint64_t since=profiling?profile_now_ns():0;
+    (void)pthread_cond_timedwait_relative_np(&w.cond,&hvf_futex_buckets[b].lock,&pause);profile_wait(1,since);
     if(!w.woken)for(HvfFutexWaiter **link=&hvf_futex_buckets[b].head;*link;link=&(*link)->next)if(*link==&w) { *link=w.next;break; }
     pthread_mutex_unlock(&hvf_futex_buckets[b].lock);
     mm_lock(task);pthread_cond_destroy(&w.cond);
@@ -1241,10 +1273,10 @@ static int hvf_unlocked_exit(void) {
         if(!hvf_spurious_write(far)) {
             if(!lookup(far,1,2))return 0;
             address_space_touched(address_space);
-            if(address_space->layout==layout && hvf_view==&hvf_views[process_pid] && hvf_view_matches(address_space)) {
+            if(address_space->layout==layout && hvf_view==hvf_own_view && hvf_view_matches(address_space)) {
                 unsigned around=hvf_fault_around(address_space,far);PROFILE_ADD(profile_fault_around,around);
                 hvf_remap_host_page(address_space,far,1+around);hvf_view->generation=address_space->generation;
-            } else hvf_views[process_pid].stale=HVF_STALE_COW;
+            } else hvf_own_view->stale=HVF_STALE_COW;
         }
         hvf_resume_el1=hvf_fault_resume(elr,spsr);return 1;
     }
@@ -1266,7 +1298,7 @@ static int hvf_unlocked_exit(void) {
         hvf_put_regs();return 1;
     }
     int memory=call==222 || call==215 || call==226 || call==233 || call==214;
-    if(!memory && call!=22 && call!=25 && call!=57 && call!=56 && call!=34 && call!=35 && call!=38 && call!=48 && call!=439 && call!=78 && call!=88 && call!=132 && call!=134 && call!=135 && call!=172 && call!=178 && call!=79 && call!=80 && (call<62 || call>68) && call!=82 && call!=83 && call!=206 && call!=207 && call!=291 && call!=221)return 0; /* 221: execve builds its image (exec_build) */
+    if(!memory && call!=21 && call!=22 && call!=25 && call!=57 && call!=56 && call!=34 && call!=35 && call!=38 && call!=48 && call!=439 && call!=78 && call!=88 && call!=132 && call!=134 && call!=135 && call!=172 && call!=178 && call!=79 && call!=80 && (call<62 || call>68) && call!=82 && call!=83 && call!=206 && call!=207 && call!=291 && call!=221)return 0; /* 221: execve builds its image (exec_build) */
     hvf_get_regs(1,elr,spsr);
     if(!(memory?guest_memory_unlocked():guest_syscall_unlocked()))return 0;   /* the locked path rereads the same exit */
     PROFILE_ADD(profile_unlocked_calls,1);
@@ -1284,8 +1316,8 @@ static int hvf_direct_wait(ScheduledTask *task) {
     unsigned count=net_unlocked_wait.count;net_unlocked_wait.count=0;
     if(!count || !net_unlocked_wait.timeout || !(schedule_idle || schedule_polling) || hvf_must_stop(task))return 0;
     int budget=net_unlocked_wait.timeout<HVF_DIRECT_WAIT_MS?(int)net_unlocked_wait.timeout:HVF_DIRECT_WAIT_MS;
-    mm_unlock(task);
-    int ready=poll(net_unlocked_wait.fds,count,budget);
+    mm_unlock(task);uint64_t since=profiling?profile_now_ns():0;
+    int ready=poll(net_unlocked_wait.fds,count,budget);profile_wait(3,since);
     mm_lock(task);
     return ready>0 && !hvf_must_stop(task);
 }
@@ -1348,13 +1380,21 @@ static int hvf_slice_run(void) {
             in_vector=0;
             hvf_sync_memory(address_space);
             mm_unlock(task);
+            profile_exit_done();
+            uint64_t entered=profiling?profile_now_ns():0;
             ran=hv_vcpu_run(vcpu);
             atomic_store(&self->in_guest,0);
             hvf_cpu->framed=ran==HV_SUCCESS && hvf_exit->reason==HV_EXIT_REASON_EXCEPTION && (hvf_exit->exception.syndrome>>26)==0x16 && (hvf_exit->exception.syndrome&0xffff)==4; /* hvc #4 */
+            if(profiling) {
+                profile_exit_at=profile_now_ns();__atomic_fetch_add(&profile_guest_ns,profile_exit_at-entered,__ATOMIC_RELAXED);
+                unsigned ec=(unsigned)(hvf_frame[HF_ESR]>>26);
+                profile_class=!hvf_cpu->framed?(ran==HV_SUCCESS && hvf_exit->reason==HV_EXIT_REASON_EXCEPTION?514:513):ec==0x15?(int)(hvf_frame[8]&511):ec==0x24 && (hvf_frame[HF_ESR]&(UINT64_C(1)<<6))?512:514;
+                profile_locked=0;profile_waited_ns=0;
+            }
             mm_lock(task);
-            if(!worker_threads || ran!=HV_SUCCESS || hvf_must_stop(task))break;
+            if(!worker_threads || ran!=HV_SUCCESS || hvf_must_stop(task)) { profile_locked=1;break; }
             hvf_resume_el1=0;
-            if(!hvf_unlocked_exit() && !(hvf_direct_wait(task) && hvf_unlocked_exit()))break;
+            if(!hvf_unlocked_exit() && !(hvf_direct_wait(task) && hvf_unlocked_exit())) { profile_locked=1;break; }
             in_vector=hvf_resume_el1;
         }
         /* The runtime lock comes before the mm lock. Waiting for the mm lock with the
@@ -1363,7 +1403,7 @@ static int hvf_slice_run(void) {
            and otherwise wait for each lock while holding neither. */
         for(unsigned tries=0;!runtime_trylock();tries++) {
             mm_unlock(task);runtime_lock(self);
-            if(tries>=2 || !schedule_active || !pthread_mutex_trylock(&task->mm)) { if(tries>=2)mm_lock(task);break; }
+            if(tries>=2 || !schedule_active || mm_trylock(task)) { if(tries>=2)mm_lock(task);break; }
             runtime_unlock();mm_lock(task);
         }
         if(stopped) { hvf_get_regs(0,0,0);return -1; }
@@ -1388,7 +1428,7 @@ static int hvf_slice_run(void) {
             uint64_t pc=0;hvf_check(hv_vcpu_get_reg(hvf_vcpu,HV_REG_PC,&pc),"get pc");
             if(pc!=retry_pc || hvf_exit->exception.virtual_address!=retry_va || address_space->generation!=retry_generation) {
                 retry_pc=pc;retry_va=hvf_exit->exception.virtual_address;retry_generation=address_space->generation;
-                hvf_views[process_pid].stale=HVF_STALE_NEW;hvf_views[process_pid].generation=UINT64_MAX;
+                hvf_own_view->stale=HVF_STALE_NEW;hvf_own_view->generation=UINT64_MAX;
                 fast=1;continue;
             }
         }
@@ -1412,13 +1452,17 @@ static int hvf_slice_run(void) {
             if(profiling && result!=HVF_UNHANDLED && call<512)__atomic_fetch_add(&profile_syscalls[call],1,__ATOMIC_RELAXED);   /* served here, not by the dispatcher */
             if(result==HVF_UNHANDLED) {
                 /* Sibling threads stay out of guest code while their memory is
-                   snapshotted or replaced. */
-                if(fork || exec)hvf_siblings_out();
+                   snapshotted or replaced (a vfork child shares it instead). A
+                   process whose memory a vfork child still uses execs once the child
+                   has: the child runs on its page tables, which the exec rebuilds. */
+                int share=fork && flags==(17|0x100|0x4000) && process_vfork_shares();
+                if(exec && shared_image && shared_image->owner==process_pid && shared_image->refs>1) { cpu->pc-=4;return -2; }
+                if((fork && !share) || exec)hvf_siblings_out();
                 result=guest_syscall();
                 if((call>=143 && call<=147) || call==149 || call==277)hvf_fast_push(); /* set*id, seccomp: sibling threads' answers change */
                 if(result==-3 && fork && (int64_t)cpu->gpr[0]>0) {     /* the child starts single-threaded, on new tables */
                     hvf_main_clear_tid[cpu->gpr[0]]=0;hvf_views[cpu->gpr[0]].stale=HVF_STALE_NEW;
-                    if(fork_shared_private)hvf_views[process_pid].stale=HVF_STALE_COW; /* the fork shared this process's private pages */
+                    if(fork_shared_private)hvf_own_view->stale=HVF_STALE_COW; /* the fork shared this process's private pages */
                 }
                 if(exec && process_exec_count!=execs)hvf_exec_threads();
             }
@@ -1442,10 +1486,10 @@ static int hvf_slice_run(void) {
                 /* The page is private (and charged) now: remap its host page writable.
                    A new backing (a fork snapshot) changes the layout: rebuild then. */
                 address_space_touched(address_space);
-                if(address_space->layout==layout && hvf_view==&hvf_views[process_pid] && hvf_view_matches(address_space)) {
+                if(address_space->layout==layout && hvf_view==hvf_own_view && hvf_view_matches(address_space)) {
                     unsigned around=hvf_fault_around(address_space,far);PROFILE_ADD(profile_fault_around,around);
                     hvf_remap_host_page(address_space,far,1+around);hvf_view->generation=address_space->generation;
-                } else hvf_views[process_pid].stale=HVF_STALE_COW;
+                } else hvf_own_view->stale=HVF_STALE_COW;
                 in_vector=hvf_fault_resume(elr,spsr);fast=1;continue;
             }
         }
@@ -1457,7 +1501,7 @@ static int hvf_slice_run(void) {
             if(elr!=stale_pc || far!=stale_far || address_space->generation!=stale_generation) {
                 stale_pc=elr;stale_far=far;stale_generation=address_space->generation;
                 if(!reported) { reported=1;fprintf(stderr,"dockiva: stale page tables at pc=0x%" PRIx64 " address=0x%" PRIx64 "; rebuilt (please report)\n",elr,far); }
-                hvf_views[process_pid].stale=HVF_STALE_NEW;hvf_views[process_pid].generation=UINT64_MAX;
+                hvf_own_view->stale=HVF_STALE_NEW;hvf_own_view->generation=UINT64_MAX;
                 hvf_resume_el0(elr,spsr);fast=1;continue;
             }
         }
@@ -1474,8 +1518,14 @@ static int hvf_slice_run(void) {
 /* The scheduler's CPU slice: whatever happens, hand back a complete CPU state. */
 static int hvf_slice(void) {
     ScheduledTask *task=schedule_active?hvf_task():NULL;
+    if(profiling) {
+        uint64_t now=profile_now_ns();
+        if(profile_slice_end) { uint64_t ns=now-profile_slice_end;__atomic_fetch_add(&profile_sched_ns,ns>profile_waited_ns?ns-profile_waited_ns:0,__ATOMIC_RELAXED); }
+        profile_waited_ns=0;__atomic_fetch_add(&profile_slices,1,__ATOMIC_RELAXED);
+    }
     int result=hvf_slice_run();
     hvf_fp_pull();mm_unlock(task);
+    if(profiling) { profile_locked=1;profile_exit_done();profile_slice_end=profile_now_ns();profile_waited_ns=0; }
     return result;
 }
 static int hvf_run(uint64_t steps) {

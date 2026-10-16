@@ -36,6 +36,8 @@ def main():
     setuid, setuid_leaf, ping, many_procs, inet6, bigfile = (build(n, folder, linker) for n in ('setuid_guest', 'setuid_leaf', 'ping_guest', 'many_procs_guest', 'inet6_guest', 'bigfile_guest'))
     lazy_charge, lazy_leaf, oom_kill = (build(n, folder, linker) for n in ('lazy_charge_guest', 'lazy_charge_leaf', 'oom_kill_guest'))
     fs_stress = build('fs_stress_guest', folder, linker)  # file calls racing close, dup2, munmap, fork, exec
+    vfork_threads = build('vfork_threads_guest', folder, linker)  # vfork from a threaded process shares its memory
+    mmap_probe = build('mmap_probe_guest', folder, linker)  # Go's 64 MiB arena probes: cheap, first fit and zeroing exact
     stress, stress_leaf = (build(n, folder, linker) for n in ('fork_exec_stress_guest', 'fork_exec_stress_leaf'))
     stress_root = folder/'stress-root'  # fork_exec_stress_guest execs /leaf in /d0../d2 and reads /data
     shutil.rmtree(stress_root, ignore_errors=True)
@@ -85,13 +87,17 @@ def main():
                                      (cow_stress, [], b'cow-stress PASS\n'), (smp_atomic, [], b'smp-atomic PASS\n'), (fork_churn, [], b'fork-churn PASS\n'), (thread_smp, [], b'thread-smp PASS\n'), (out_edge, [], b'epoll-out-edge PASS\n'),
                                      (around, ['--mmap-limit-mib', '256', '--signals'], b'fault-around PASS\n'), (fastcall, [], b'fastcall PASS\n'),
                                      (fs_stress, ['--root', str(shared), '--writable', '--dynamic', '--storage-limit-mib', '0'], b'fs-stress PASS\n'),
-                                     (stress, ['--root', str(stress_root), '--signals'], b'fork-exec-stress PASS\n')):
-            if backend == 'interpreter' and elf in (threads, fork_threads, thread_group, futex, thread_limit, fp_preserve, sleep, vdso, sigmask, cow_stress, smp_atomic, fork_churn, thread_smp, out_edge, around, oom_kill, fastcall):
+                                     (stress, ['--root', str(stress_root), '--signals'], b'fork-exec-stress PASS\n'),
+                                     (vfork_threads, ['--root', str(shared), '--writable'], b'vfork-threads PASS\n'),
+                                     (mmap_probe, ['--mmap-limit-mib', '2048', '--dynamic'], b'mmap-probe PASS\n')):
+            if backend == 'interpreter' and elf in (vfork_threads, threads, fork_threads, thread_group, futex, thread_limit, fp_preserve, sleep, vdso, sigmask, cow_stress, smp_atomic, fork_churn, thread_smp, out_edge, around, oom_kill, fastcall):
                 continue  # the interpreter has no CLONE_THREAD support (nor these SIMD instructions); its OOM kill ends the run
             shutil.rmtree(shared, ignore_errors=True)
             shared.mkdir()
             if elf == fs_stress:  # it execs itself
                 shutil.copy(elf, shared/'fs_stress')
+            if elf == vfork_threads:
+                shutil.copy(elf, shared/'vfork_threads')
             r = subprocess.run([str(runtime), 'run', str(elf), *args, *common, *extra], capture_output=True, timeout=60)
             ok = r.returncode == 0 and r.stdout == expected
             failed += not ok
