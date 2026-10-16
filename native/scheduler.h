@@ -312,6 +312,9 @@ static void task_save(ScheduledTask *t) {
     if(fd_table!=&t->fds)t->fds=*fd_table;
 }
 static void task_load(ScheduledTask *t) {
+    /* A threaded process's memory moves to a shared image without a task_save
+       (hvf_share_image), and exec drops it: where it lives is ps.shared's. */
+    t->image.shared=t->ps.shared;
     proc_now=&t->ps;image_home_scheduled=&t->image.memory;
     /* A vfork child of a threaded process: its memory is in place and in use (the
        owner's threads change it under the mm lock, not held here). */

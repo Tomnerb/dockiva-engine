@@ -80,6 +80,21 @@ void start(U *sp) {
     if(argc>2 && argv[1][0]=='f') {                                            /* final: after the waiting exec */
         char c=0;check(call(63,(U)(argv[2][0]-'0'),(U)&c,1,0,0,0)==1 && c=='A');
         int status=-1;check(call(260,(U)-1,(U)&status,0,0,0,0)>0 && status==0); /* the vfork child, ours now */
+        /* 5. A process still running when the run ends is freed from where its memory
+           is: it became threaded (moving its memory) after it last left a CPU whole,
+           and unmapped a segment it had then. */
+        int gate[2];check(call(59,(U)gate,0,0,0,0,0)==0);
+        long seg=call(222,0,65536,3,0x21,(U)-1,0);check(seg>0);              /* MAP_SHARED|MAP_ANONYMOUS: a segment, inherited */
+        ((volatile char *)seg)[0]=1;
+        long kid=call(220,17,0,0,0,0,0);check(kid>=0);
+        if(!kid) {
+            join_word[0]=1;spawn(THREAD,stacks[0]+sizeof(stacks[0]),&join_word[0],0,&join_word[0],ticker,0);
+            __atomic_store_n(&stop,1,__ATOMIC_RELEASE);join(&join_word[0]);
+            call(215,(U)seg,65536,0,0,0,0);
+            char x;call(63,(U)gate[0],(U)&x,1,0,0,0);                         /* blocks until the run ends */
+            call(94,0,0,0,0,0,0);
+        }
+        U nap[2]={0,50000000};call(101,(U)nap,0,0,0,0,0);
         out("vfork-threads PASS\n");call(94,0,0,0,0,0,0);
     }
     /* 1. The child shares memory with the running siblings; only the caller waits. */
