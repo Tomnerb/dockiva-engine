@@ -212,7 +212,7 @@ func (b *engine) refreshHosts(network string) {
 		name := str(m["name"])
 		p := b.container(name)
 		c := readObject(filepath.Join(p, "config.json"))
-		_ = safeRun(func() { writeGuestFile(noLinks(p, "rootfs"), "etc/hosts", hostsFile(b.Home, name, c, members)) })
+		_ = safeRun(func() { containerLayers(p, c).writeFile("etc/hosts", hostsFile(b.Home, name, c, members)) })
 	}
 }
 

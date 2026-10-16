@@ -46,7 +46,7 @@ const maxJSON = int64(1 << 20)
 var digestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 // image is an image's configuration and, in Root, its unpacked filesystem: the
-// cache's (read only) or a container's own clone of it.
+// cache's (read only), or a container's own files (with Lower: over the cache's).
 type image struct {
 	Digest           string
 	Entry, Args, Env []string
@@ -57,6 +57,7 @@ type image struct {
 	Exposed          []string // EXPOSE: "80/tcp", "53/udp"
 	Healthcheck      obj      // HEALTHCHECK, as Config.Healthcheck (Test, Interval, ...)
 	Root             string
+	Lower            string // beneath Root, a container's image files (layers); "" for none
 	layout           string
 	descriptor       obj
 	blobs            []string // manifest, config and layer digests
@@ -437,22 +438,20 @@ func cloneTree(src, dst string) {
 // guestFile is an executable file at an absolute guest path of the unpacked root,
 // following guest symlinks inside it, with its first bytes (for #! and ELF checks).
 func (im *image) guestFile(guest string) ([]byte, bool) {
-	rel := ""
+	host, ok := "", false
 	if safeRun(func() {
-		rel = resolveGuest(pathName(strings.TrimPrefix(guest, "/")), func(p string) (string, bool) { return readLink(filepath.Join(im.Root, p)) })
-	}) != nil || rel == "" {
+		r := im.files()
+		rel := resolveGuest(pathName(strings.TrimPrefix(guest, "/")), r.link)
+		host, ok = r.find(rel)
+		ok = ok && rel != ""
+	}) != nil || !ok {
 		return nil, false
 	}
-	parent, base := path.Split(rel)
-	dir, ok := "", false
-	if safeRun(func() { dir, ok = layerDir(im.Root, strings.TrimSuffix(parent, "/"), false) }) != nil || !ok {
-		return nil, false
-	}
-	fd, e := syscall.Open(filepath.Join(dir, base), syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	fd, e := syscall.Open(host, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if e != nil {
 		return nil, false
 	}
-	f := os.NewFile(uintptr(fd), base)
+	f := os.NewFile(uintptr(fd), filepath.Base(host))
 	defer f.Close()
 	st, e := f.Stat()
 	if e != nil || !st.Mode().IsRegular() || st.Mode()&0o111 == 0 {
@@ -467,12 +466,17 @@ func (im *image) guestFile(guest string) ([]byte, bool) {
 // following guest symlinks like the runtime does, and returns the path as given.
 func (im *image) ensureDir(guest string) string {
 	reject(strings.HasPrefix(guest, "/"), "Directory must be an absolute guest path: "+guest)
-	p := resolveGuest(pathName(guest[1:]), func(p string) (string, bool) { return readLink(filepath.Join(im.Root, p)) })
-	if p != "" {
-		layerDir(im.Root, p, true)
+	r := im.files()
+	if p := resolveGuest(pathName(guest[1:]), r.link); p != "" {
+		if host, ok := r.find(p); !ok || !isDir(host) {
+			r.upperDir(p, true)
+		}
 	}
 	return guest
 }
+
+// files are the image's files as a container sees them.
+func (im *image) files() layers { return layers{im.Root, im.Lower} }
 func validateEnv(env []string) {
 	reject(len(env) <= 64, "Too many environment values")
 	seen := map[string]bool{}
@@ -598,6 +602,7 @@ func (b *engine) commitTag(name, digest, layout string) string {
 	name = shortName(name)
 	target := filepath.Join(b.Cache, key(name))
 	if exists(target) && text(readObject(filepath.Join(target, "image.json"))["digest"]) != digest {
+		retainLowers(b.Home, b.State, target)
 		gone := filepath.Join(b.Cache, ".replaced-"+token()[:16])
 		check(os.Rename(target, gone))
 		go os.RemoveAll(gone)
@@ -624,6 +629,7 @@ func migrateNames(cache string) {
 			}
 			target := filepath.Join(cache, key(shortName(name)))
 			if exists(target) {
+				retainLowers(filepath.Dir(cache), filepath.Join(filepath.Dir(cache), "containers"), dir)
 				check(os.RemoveAll(dir))
 				return
 			}

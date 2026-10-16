@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/tar"
+	"cmp"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -23,6 +24,8 @@ import (
 type guestFile struct {
 	host, guest string // host path and the resolved guest path ("/a/b")
 	readonly    bool
+	files       *layers // the container's own files, unless in a mount: rel among them
+	rel         string
 }
 
 func (b *engine) guestFile(name, guest string) guestFile { return b.guestFiles(name)(guest, false) }
@@ -32,8 +35,8 @@ func (b *engine) guestFile(name, guest string) guestFile { return b.guestFiles(n
 func (b *engine) guestFiles(name string) func(guest string, create bool) guestFile {
 	p := b.container(name)
 	c := readObject(filepath.Join(p, "config.json"))
-	root := noLinks(p, "rootfs")
-	rootLink := func(g string) (string, bool) { return readLink(filepath.Join(root, g)) }
+	files := containerLayers(p, c)
+	root := files.upper
 	type mount struct {
 		guest, source string
 		readonly      bool
@@ -47,7 +50,7 @@ func (b *engine) guestFiles(name string) func(guest string, create bool) guestFi
 		if m["type"] == "volume" {
 			source = volumeData(b.Home, source)
 		}
-		mounts = append(mounts, mount{resolveGuest(pathName(str(m["target"])[1:]), rootLink), source, m["readonly"] == true})
+		mounts = append(mounts, mount{resolveGuest(pathName(str(m["target"])[1:]), files.link), source, m["readonly"] == true})
 	}
 	// at maps a resolved guest path to its base directory and the rest of the path.
 	at := func(g string) (string, string, bool) {
@@ -64,6 +67,9 @@ func (b *engine) guestFiles(name string) func(guest string, create bool) guestFi
 	}
 	link := func(g string) (string, bool) {
 		base, rest, _ := at(g)
+		if base == root {
+			return files.link(rest)
+		}
 		return readLink(filepath.Join(base, rest))
 	}
 	return func(guest string, create bool) guestFile {
@@ -72,17 +78,28 @@ func (b *engine) guestFiles(name string) func(guest string, create bool) guestFi
 		dir, leaf := path.Split(clean)
 		resolved := path.Join(resolveGuest(pathName(dir), link), leaf)
 		base, rest, readonly := at(resolved)
+		if base == root { // the container's own files, over its image's
+			f := guestFile{filepath.Join(root, filepath.FromSlash(rest)), "/" + resolved, readonly, &files, rest}
+			if host, ok := files.find(rest); ok {
+				f.host = host
+			} else if create && !readonly {
+				files.upperDir(path.Dir(rest), true)
+			} else if _, ok := files.find(path.Dir(rest)); !ok {
+				panic(apiError{404, "No such file or directory"})
+			}
+			return f
+		}
 		// Every directory above the file is now a real directory; noLinks re-checks that.
 		// ponytail: a process in the container can swap a directory for a symlink between
 		// this check and the copy; open with openat2-style beneath-checks if that matters.
 		if rest == "" {
-			return guestFile{base, "/" + resolved, readonly}
+			return guestFile{base, "/" + resolved, readonly, nil, ""}
 		}
 		parent, last := path.Split(rest)
 		if create && !readonly {
-			return guestFile{filepath.Join(makeParents(base, parent), last), "/" + resolved, readonly}
+			return guestFile{filepath.Join(makeParents(base, parent), last), "/" + resolved, readonly, nil, ""}
 		}
-		return guestFile{filepath.Join(noLinksOrMissing(base, parent), last), "/" + resolved, readonly}
+		return guestFile{filepath.Join(noLinksOrMissing(base, parent), last), "/" + resolved, readonly, nil, ""}
 	}
 }
 
@@ -161,12 +178,7 @@ func (b *engine) getArchive(w http.ResponseWriter, name, requested string, head 
 	w.WriteHeader(200)
 	out := tar.NewWriter(w)
 	prefix := archiveName(requested)
-	check(filepath.Walk(f.host, func(p string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, e := filepath.Rel(f.host, p)
-		check(e)
+	check(f.walk(func(p, rel string, info os.FileInfo) error {
 		target := ""
 		if info.Mode()&os.ModeSymlink != 0 {
 			target, _ = readLink(p)
@@ -237,7 +249,20 @@ func (b *engine) putArchive(name, requested string, body io.Reader, noOverwriteD
 			panic(apiError{400, "Cannot overwrite a directory with a non-directory (or the reverse): " + rel})
 		}
 		if exists && !(old.IsDir() && h.Typeflag == tar.TypeDir) {
-			check(os.RemoveAll(dest))
+			if to.files != nil {
+				to.files.remove(to.rel)
+			} else {
+				check(os.RemoveAll(dest))
+			}
+			exists = false
+		}
+		if to.files != nil { // made in the upper layer
+			if exists {
+				dest = to.files.upperDir(to.rel, false)
+			} else {
+				dest = to.files.writable(to.rel)
+			}
+			defer to.files.settle(to.rel, h.Typeflag == tar.TypeDir)
 		}
 		mode := tarMode(h)
 		switch h.Typeflag {
@@ -258,7 +283,11 @@ func (b *engine) putArchive(name, requested string, body io.Reader, noOverwriteD
 			check(os.Symlink(linkTarget(h.Linkname), dest))
 			continue
 		case tar.TypeLink:
-			source := resolve(path.Join(f.guest, pathName(h.Linkname)), false).host
+			from := resolve(path.Join(f.guest, pathName(h.Linkname)), false)
+			source := from.host
+			if from.files != nil {
+				source = from.files.copyUp(from.rel) // never a link to the image's file
+			}
 			check(os.Link(source, dest))
 		default:
 			panic(apiError{400, "Unsupported archive entry type for " + rel})
@@ -268,4 +297,23 @@ func (b *engine) putArchive(name, requested string, body io.Reader, noOverwriteD
 	for i := len(dirs) - 1; i >= 0; i-- { // after their contents, which change them
 		check(os.Chtimes(dirs[i].path, dirs[i].time, dirs[i].time))
 	}
+}
+
+// walk visits f and everything below it, as the container sees it: each entry's host
+// path, its path relative to f (".") and its lstat.
+func (f guestFile) walk(fn func(host, rel string, info os.FileInfo) error) error {
+	if f.files != nil {
+		base := path.Join(relParts(f.rel)...)
+		return f.files.walk(f.rel, func(rel, host string, info os.FileInfo) error {
+			return fn(host, cmp.Or(strings.TrimPrefix(strings.TrimPrefix(rel, base), "/"), "."), info)
+		})
+	}
+	return filepath.Walk(f.host, func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, e := filepath.Rel(f.host, p)
+		check(e)
+		return fn(p, filepath.ToSlash(rel), info)
+	})
 }

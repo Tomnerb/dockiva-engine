@@ -33,6 +33,7 @@ static _Thread_local FsTable *fs_table=&fs_table_first;
 static int fs_slot(uint64_t guest) { return fd_slot(guest,FD_FILE); }
 #define FS_FILE_LIMIT (16u*1024u*1024u)
 static int fs_root=-1, fs_writable;
+static int fs_lower=-1;                                        /* --lower: the image's files (overlay.h) */
 /* Process-wide state every thread of a process shares (workers running its
    threads all point proc_now at the same record): the working directory, the
    guest identity, the umask and a vfork child's shared image. The identity makes
@@ -50,9 +51,11 @@ static _Thread_local ProcShared *proc_now=&proc_first;
 #define guest_gid (proc_now->ids.gid)
 #define fs_umask (proc_now->umask)
 #define shared_image (proc_now->shared)
-typedef struct GuestDirectory { DIR *stream;unsigned refs,count;char path[1025]; } GuestDirectory;
+/* merged: the listing of a directory both image layers hold (overlay.h). */
+struct OvList;static void ov_list_free(struct OvList *list);
+typedef struct GuestDirectory { DIR *stream;unsigned refs,count;char path[1025];struct OvList *merged; } GuestDirectory;
 static void fs_directory_release(GuestDirectory *directory) {
-    if(directory && !--directory->refs) { if(directory->stream)closedir(directory->stream);free(directory); }
+    if(directory && !--directory->refs) { if(directory->stream)closedir(directory->stream);ov_list_free(directory->merged);free(directory); }
 }
 /* ponytail: the byte counters are updated atomically (file writes run without the
    runtime lock) but checked without it, so concurrent writers can overshoot a write or
@@ -239,6 +242,7 @@ static int fs_mount_plain(int i) {
         for(char *s=strrchr(prefix,'/');plain && s && s>prefix;s=strrchr(prefix,'/')) {
             *s=0;struct stat st;
             if(fs_mount_index(prefix)>=0 || (!fstatat(fs_root,prefix+1,&st,AT_SYMLINK_NOFOLLOW) && S_ISLNK(st.st_mode)))plain=0;
+            else if(fs_lower>=0 && fstatat(fs_root,prefix+1,&st,AT_SYMLINK_NOFOLLOW) && !fstatat(fs_lower,prefix+1,&st,AT_SYMLINK_NOFOLLOW) && S_ISLNK(st.st_mode))plain=0;
         }
         fs_mounts[i].plain=plain?1:2;
     }
@@ -396,6 +400,7 @@ static int fs_walk_fast(int base,const char *cur_start,const char *rest,int foll
 #define fs_renameat renameat
 #endif
 static int fs_walk(int base,const char *base_path,const char *input,int follow,char leaf[1025],char canon[1025]);
+static int ov_walk(int base,const char *base_path,const char *input,int follow,char leaf[1025],char canon[1025]); /* overlay.h */
 /* A guest directory by canonical path, as a descriptor (a mount's own, if it is one). */
 static int fs_open_dir(const char *path) {
     char leaf[1025];int parent=fs_walk(fs_root,"/",path,1,leaf,NULL);if(parent<0)return -1;
@@ -413,6 +418,7 @@ static int fs_leaf_stat(int parent,const char *leaf,struct stat *st) {
 }
 static int fs_walk(int base,const char *base_path,const char *input,int follow,char leaf[1025],char canon[1025]) {
     if(fs_root<0) { errno=EACCES;return -1; }
+    if(fs_lower>=0)return ov_walk(base,base_path,input,follow,leaf,canon);   /* image layers */
     int direct=follow&FS_DIRECT;follow&=1;(void)direct;
     fs_walk_leaf.known=0;
     char rest[4097],cur[1025];size_t length=strlen(input),pos=0;unsigned links=0;
@@ -509,6 +515,7 @@ static int fs_walk(int base,const char *base_path,const char *input,int follow,c
         if(fs_canon_push(cur,part)<0) { close(fd);return -1; }
     }
 }
+#include "overlay.h"
 /* Minimal /proc: /proc/self/exe and /proc/<pid>/exe name each process's executable
    (canonical guest paths, indexed by pid; PROCESS_LIMIT+1 processes). Path lookups
    resolve them to that file; readlink returns the path. */
@@ -618,7 +625,7 @@ static uint64_t fs_getcwd(void) {
         if(!*path)return linux_error(2);
         /* Walk the path again (through bind mounts) and check it still names the cwd. */
         char leaf[1025],canon[1025];int parent=fs_walk(fs_root,"/",path,1|FS_DIRECT,leaf,canon);
-        struct stat a,b;int same=parent>=0 && !fstatat(parent,leaf,&a,FS_NOFOLLOW_AT) && S_ISDIR(a.st_mode) && !fstat(fs_cwd->fd,&b) && a.st_dev==b.st_dev && a.st_ino==b.st_ino;
+        struct stat a,b;int same=parent>=0 && !fstatat(parent,leaf,&a,FS_NOFOLLOW_AT) && S_ISDIR(a.st_mode) && (fs_lower>=0 || (!fstat(fs_cwd->fd,&b) && a.st_dev==b.st_dev && a.st_ino==b.st_ino)); /* layers: a path (overlay.h) */
         if(parent>=0)close(parent);if(!same)return linux_error(2);
     }
     size_t size=strlen(path)+1;if(cpu->gpr[1]<size)return linux_error(34);
@@ -1213,6 +1220,13 @@ static uint64_t fs_open(void) {
     if(flags&4096) options|=O_DSYNC;
     if((flags&1052672)==1052672) options|=O_SYNC;
     if(flags&16384) options|=O_DIRECTORY;
+    OvLeaf layers=ov_leaf;int made=0;                       /* the root's image layers (overlay.h) */
+    if(fs_lower>=0 && layers.canon[0]) {
+        if((flags&(64|128))==(64|128) && layers.layer!=2) { close(parent);return linux_error(17); }
+        made=layers.layer==2 && (flags&64);
+        if((made || (flags&(3|512))) && ov_prepare(&layers,&parent,leaf,made?OV_CREATE:OV_MODIFY)) { uint64_t e=fs_error();close(parent);return e; }
+        if(layers.layer==1) { read_only=2;options&=~(O_CREAT|O_EXCL); }   /* a lower file, read: never written through */
+    }
     if((flags&64) && fs_count_full()) { close(parent);return linux_error(28); }
     /* Validate the existing leaf before a possible truncate; only regular files/dirs.
        An unfollowed symlink reaches openat, which fails with ELOOP or EEXIST as on Linux. */
@@ -1227,18 +1241,20 @@ static uint64_t fs_open(void) {
         if(!S_ISREG(before.st_mode) && !S_ISDIR(before.st_mode) && !S_ISLNK(before.st_mode)) { close(parent);return linux_error(13); }
         if(S_ISLNK(before.st_mode) && (flags&16384) && !(flags&64)) { close(parent);return linux_error(20); } /* as Linux, not ELOOP */
     }
-    int fd=openat(parent,leaf,options,(mode_t)(cpu->gpr[3]&0777&~fs_umask));int saved=errno;close(parent);errno=saved;
-    if(fd<0) return fs_error();
+    int fd=openat(parent,leaf,options,(mode_t)(cpu->gpr[3]&0777&~fs_umask));
+    if(fd<0) { uint64_t e=fs_error();close(parent);return e; }
     struct stat info;
     if(fstat(fd,&info)<0 || (!S_ISREG(info.st_mode) && !S_ISDIR(info.st_mode)) || (uint64_t)info.st_size>fs_file_limit) {
-        close(fd);return linux_error(13);
+        close(fd);close(parent);return linux_error(13);
     }
     GuestDirectory *directory=NULL;
     if(S_ISDIR(info.st_mode)) {
-        directory=calloc(1,sizeof(*directory));if(!directory) { close(fd);return linux_error(12); }
+        directory=calloc(1,sizeof(*directory));if(!directory) { close(fd);close(parent);return linux_error(12); }
         directory->refs=1;strcpy(directory->path,canon);
     }
     if(flags&64) { fs_count_created(); }
+    if(made)ov_created(&layers,parent,leaf,0);
+    close(parent);
     return fs_install(fd,flags,read_only,0,directory);
 }
 static void fs_pack(unsigned char *p,unsigned offset,uint64_t value,unsigned size) {
@@ -1421,12 +1437,13 @@ static uint64_t fs_call(uint64_t call) {
     if(call==166) { unsigned previous=fs_umask;fs_umask=(unsigned)cpu->gpr[0]&0777;return previous; }
     if(call==52 || call==53) {
         uint64_t mode=cpu->gpr[call==52?1:2]&UINT64_C(07777); /* Linux ignores other bits (libuv passes st_mode); setuid/setgid/sticky allowed */
-        int fd=fs_host(cpu->gpr[0]);
-        if(call==52 && fs_slot(cpu->gpr[0])>=0 && fs_ro[fs_slot(cpu->gpr[0])])return linux_error(30);
+        int fd=fs_host(cpu->gpr[0]),own=-1;
+        if(call==52 && fs_slot(cpu->gpr[0])>=0 && fs_ro[fs_slot(cpu->gpr[0])] && (fd=own=ov_fd_upper(fs_slot(cpu->gpr[0])))<0)return linux_error(30);
         if(call==53) {
             /* By path, never opening the file (an open costs ~12 us and needs read permission). */
             char leaf[1025];int parent=fs_lookup(cpu->gpr[0],cpu->gpr[1],leaf,1|FS_DIRECT,NULL);if(parent<0)return fs_error();
             if(!fs_path_writable()) { close(parent);return linux_error(30); }
+            { OvLeaf w=ov_leaf;if(ov_prepare(&w,&parent,leaf,OV_MODIFY)) { uint64_t e=fs_error();close(parent);return e; } }
             struct stat st;int result=fs_leaf_stat(parent,leaf,&st);
             if(!result && !S_ISREG(st.st_mode) && !S_ISDIR(st.st_mode) && !S_ISSOCK(st.st_mode)) { errno=EACCES;result=-1; }
             if(!result)result=fchmodat(parent,leaf,(mode_t)mode,FS_NOFOLLOW_AT);
@@ -1435,6 +1452,7 @@ static uint64_t fs_call(uint64_t call) {
         struct stat st;int result=fstat(fd,&st);
         if(!result && !S_ISREG(st.st_mode) && !S_ISDIR(st.st_mode)) { errno=EACCES;result=-1; }
         if(!result)result=fchmod(fd,(mode_t)mode);
+        if(own>=0) { int saved=errno;close(own);errno=saved; }
         return result<0?fs_error():0;
     }
     if(call==78) {
@@ -1461,7 +1479,10 @@ static uint64_t fs_call(uint64_t call) {
         char leaf[1025];int parent=fs_parent_nofollow(cpu->gpr[1],cpu->gpr[2],leaf);if(parent<0)return fs_error();
         if(!fs_path_writable()) { close(parent);return linux_error(30); }
         if(!strcmp(leaf,".")) { close(parent);return linux_error(17); }
-        int result=symlinkat(target,parent,leaf);int saved=errno;close(parent);errno=saved;
+        OvLeaf w=ov_leaf;if(ov_prepare(&w,&parent,leaf,OV_CREATE)) { uint64_t e=fs_error();close(parent);return e; }
+        int result=symlinkat(target,parent,leaf);int saved=errno;
+        if(!result)ov_created(&w,parent,leaf,0);
+        close(parent);errno=saved;
         if(result<0)return fs_error();
         fs_count_created();return 0;
     }
@@ -1469,13 +1490,16 @@ static uint64_t fs_call(uint64_t call) {
         uint64_t flags=cpu->gpr[4];if(flags&~UINT64_C(0x400))return linux_error(22);   /* AT_SYMLINK_FOLLOW */
         if(fs_count_full())return linux_error(28);
         char from[1025];int source=fs_lookup(cpu->gpr[0],cpu->gpr[1],from,(flags&0x400)!=0,NULL);if(source<0)return fs_error();
-        int where=fs_where;
+        int where=fs_where;OvLeaf old=ov_leaf;
         char leaf[1025];int parent=fs_parent_nofollow(cpu->gpr[2],cpu->gpr[3],leaf);if(parent<0) { uint64_t e=fs_error();close(source);return e; }
-        uint64_t error=0;
+        uint64_t error=0;OvLeaf w=ov_leaf;
         if(!fs_path_writable())error=linux_error(30);
         else if(where!=fs_where || where<0)error=linux_error(18);   /* EXDEV: never across a mount boundary */
         else if(!strcmp(from,".") || !strcmp(leaf,"."))error=linux_error(!strcmp(leaf,".")?17:1);
+        else if(old.layer==2)error=linux_error(2);
+        else if(ov_prepare(&w,&parent,leaf,OV_CREATE) || ov_prepare(&old,&source,from,OV_MODIFY))error=fs_error();  /* image layers: a lower file is copied up */
         else if(linkat(source,from,parent,leaf,0)<0)error=fs_error();
+        else ov_created(&w,parent,leaf,0);
         close(parent);close(source);
         if(!error) { fs_count_created(); }
         return error;
@@ -1493,12 +1517,14 @@ static uint64_t fs_call(uint64_t call) {
             else return linux_error(22);
         }
         if(!cpu->gpr[1]) {
-            int fd=fs_host(cpu->gpr[0]);if(fd<0)return linux_error(9);
-            if(fs_ro[fs_slot(cpu->gpr[0])])return linux_error(30);
-            return futimens(fd,times)<0?fs_error():0;
+            int fd=fs_host(cpu->gpr[0]),own=-1;if(fd<0)return linux_error(9);
+            if(fs_ro[fs_slot(cpu->gpr[0])] && (fd=own=ov_fd_upper(fs_slot(cpu->gpr[0])))<0)return linux_error(30);
+            int result=futimens(fd,times);if(own>=0) { int saved=errno;close(own);errno=saved; }
+            return result<0?fs_error():0;
         }
         char leaf[1025];int parent=fs_lookup(cpu->gpr[0],cpu->gpr[1],leaf,!(flags&0x100)|FS_DIRECT,NULL);if(parent<0)return fs_error();
         if(!fs_path_writable()) { close(parent);return linux_error(30); }
+        { OvLeaf w=ov_leaf;if(ov_prepare(&w,&parent,leaf,OV_MODIFY)) { uint64_t e=fs_error();close(parent);return e; } }
         /* The leaf is never followed by the host: a final symlink is followed by fs_lookup already. */
         int result=utimensat(parent,leaf,times,FS_NOFOLLOW_AT);int saved=errno;close(parent);errno=saved;
         return result<0?fs_error():0;
@@ -1509,6 +1535,7 @@ static uint64_t fs_call(uint64_t call) {
         if(length>fs_file_limit)return linux_error(27);
         char leaf[1025];int parent=fs_lookup((uint64_t)-100,cpu->gpr[0],leaf,1|FS_DIRECT,NULL);if(parent<0)return fs_error();
         if(!fs_path_writable()) { close(parent);return linux_error(30); }
+        { OvLeaf w=ov_leaf;if(ov_prepare(&w,&parent,leaf,OV_MODIFY)) { uint64_t e=fs_error();close(parent);return e; } }
         int fd=openat(parent,leaf,O_WRONLY|FS_NOFOLLOW_OPEN|O_NONBLOCK|O_CLOEXEC);int saved=errno;close(parent);errno=saved;
         if(fd<0)return fs_error();
         struct stat st;if(fstat(fd,&st)<0 || !S_ISREG(st.st_mode)) { saved=S_ISDIR(st.st_mode)?EISDIR:EINVAL;close(fd);errno=saved;return fs_error(); }
@@ -1601,10 +1628,11 @@ static uint64_t fs_call(uint64_t call) {
         if(fs_count_full())return linux_error(28);
         char leaf[1025];int parent=fs_parent_nofollow(cpu->gpr[0],cpu->gpr[1],leaf);if(parent<0)return fs_error();
         if(!fs_path_writable()) { close(parent);return linux_error(30); }
+        OvLeaf w=ov_leaf;if(ov_prepare(&w,&parent,leaf,OV_CREATE)) { uint64_t e=fs_error();close(parent);return e; }
         int result;
         if(type==0010000)result=mkfifoat(parent,leaf,mode);
         else { int fd=openat(parent,leaf,O_CREAT|O_EXCL|O_WRONLY|O_CLOEXEC,mode);result=fd<0?-1:close(fd); }
-        uint64_t e=result<0?fs_error():0;close(parent);if(!e)fs_count_created();return e;
+        uint64_t e=result<0?fs_error():0;if(!e)ov_created(&w,parent,leaf,0);close(parent);if(!e)fs_count_created();return e;
     }
     if(call==34 || call==35 || call==38) {
         if(call==35 && cpu->gpr[2]!=0 && cpu->gpr[2]!=512) return linux_error(22);
@@ -1614,21 +1642,27 @@ static uint64_t fs_call(uint64_t call) {
             struct stat st;
             if(!strcmp(leaf,".") || !fs_leaf_stat(parent,leaf,&st)) { close(parent);return linux_error(17); }
             if(fs_count_full()) { close(parent);return linux_error(28); }
-            if(strchr(leaf,'/')) {                              /* mkdirat refuses no symlink on the way: the real parent */
+            if(strchr(leaf,'/') && !(fs_lower>=0 && ov_leaf.canon[0])) {  /* mkdirat refuses no symlink on the way: the real parent */
                 close(parent);parent=fs_lookup(cpu->gpr[0],cpu->gpr[1],leaf,0,NULL);if(parent<0) return fs_error();
             }
         }
         if(!fs_path_writable()) { close(parent);return linux_error(30); }
         if(!strcmp(leaf,".")) { close(parent);return linux_error(fs_where>0?16:13); } /* a mount point is busy */
-        int result;
-        if(call==34) { result=mkdirat(parent,leaf,(mode_t)(cpu->gpr[2]&0777&~fs_umask));if(!result) { fs_count_created(); } }
-        else if(call==35) result=unlinkat(parent,leaf,(cpu->gpr[2]?AT_REMOVEDIR:0)|FS_ANY_AT);
+        int result;OvLeaf w=ov_leaf;int layers=fs_lower>=0 && w.canon[0]; /* the root's image layers (overlay.h) */
+        if(call==34) {
+            if(ov_prepare(&w,&parent,leaf,OV_CREATE)) { uint64_t e=fs_error();close(parent);return e; }
+            result=mkdirat(parent,leaf,(mode_t)(cpu->gpr[2]&0777&~fs_umask));if(!result) { fs_count_created();ov_created(&w,parent,leaf,1); }
+        }
+        else if(call==35) result=layers?ov_unlink(&w,parent,leaf,cpu->gpr[2]!=0):unlinkat(parent,leaf,(cpu->gpr[2]?AT_REMOVEDIR:0)|FS_ANY_AT);
         else {
             char target[1025];int other=fs_lookup(cpu->gpr[2],cpu->gpr[3],target,FS_DIRECT,NULL);
             if(other<0) { uint64_t e=fs_error();close(parent);return e; }
             if(!fs_path_writable()) { close(other);close(parent);return linux_error(30); }
             if(!strcmp(target,".")) { close(other);close(parent);return linux_error(fs_where>0?16:13); }
-            result=fs_renameat(parent,leaf,other,target);int saved=errno;close(other);errno=saved;
+            OvLeaf to=ov_leaf;
+            if(layers || (fs_lower>=0 && to.canon[0]))result=layers && to.canon[0]?ov_rename(&w,parent,leaf,&to,other,target):(errno=EXDEV,-1);
+            else result=fs_renameat(parent,leaf,other,target);
+            int saved=errno;close(other);errno=saved;
         }
         uint64_t e=result<0?fs_error():0;
         /* unlink of a directory: Darwin says EPERM, Linux EISDIR (glibc's remove(), and so
@@ -1659,25 +1693,40 @@ static uint64_t fs_call(uint64_t call) {
             struct stat st;if(fstat(fd,&st)<0)return fs_error();if(!S_ISDIR(st.st_mode))return linux_error(20);
             fs_dirs[slot]=calloc(1,sizeof(*fs_dirs[slot]));if(!fs_dirs[slot])return linux_error(12);fs_dirs[slot]->refs=1;
         }
-        if(!fs_dirs[slot]->stream) {
-            int copy=dup(fd);if(copy<0)return fs_error();
-            fs_dirs[slot]->stream=fdopendir(copy);if(!fs_dirs[slot]->stream) { int saved=errno;close(copy);errno=saved;return fs_error(); }
+        GuestDirectory *dir=fs_dirs[slot];
+        /* The root's image layers (overlay.h): a directory both hold lists them merged. */
+        int layers=fs_lower>=0 && dir->path[0] && !(fs_mount_count && fs_mount_of(dir->path));
+        if(!dir->stream && !dir->merged) {
+            if(layers)dir->merged=ov_list(dir->path);
+            if(!dir->merged) {
+                int copy=dup(fd);if(copy<0)return fs_error();
+                dir->stream=fdopendir(copy);if(!dir->stream) { int saved=errno;close(copy);errno=saved;return fs_error(); }
+            }
         }
         uint64_t used=0;
         for(;;) {
-            long position=telldir(fs_dirs[slot]->stream);errno=0;
-            struct dirent *entry=readdir(fs_dirs[slot]->stream);
-            if(!entry)return errno?(used?used:fs_error()):used;
-            size_t length=strlen(entry->d_name);
+            long position=0;const char *name;uint64_t ino;unsigned type;
+            if(dir->merged) {
+                if(dir->merged->at>=dir->merged->size)return used;
+                const char *at=dir->merged->data+dir->merged->at;memcpy(&ino,at,8);type=(unsigned char)at[8];name=at+9;
+            } else {
+                position=telldir(dir->stream);errno=0;
+                struct dirent *entry=readdir(dir->stream);
+                if(!entry)return errno?(used?used:fs_error()):used;
+                name=entry->d_name;ino=entry->d_ino;type=entry->d_type;
+                if(layers && ov_hidden(name))continue;
+            }
+            size_t length=strlen(name);
             if(length>255)return linux_error(36);
-            for(size_t i=0;i<length;i++)if((unsigned char)entry->d_name[i]<32 || entry->d_name[i]==127)return linux_error(13);
+            for(size_t i=0;i<length;i++)if((unsigned char)name[i]<32 || name[i]==127)return linux_error(13);
             unsigned reclen=(unsigned)((19+length+1+7)&~7u);
-            if(reclen>count-used) { seekdir(fs_dirs[slot]->stream,position);return used?used:linux_error(22); }
-            if(fs_dirs[slot]->count>=4096)return linux_error(75);
+            if(reclen>count-used) { if(!dir->merged)seekdir(dir->stream,position);return used?used:linux_error(22); }
+            if(dir->count>=4096)return linux_error(75);
+            if(dir->merged)dir->merged->at+=10+length;
             unsigned char *record=out+used;memset(record,0,reclen);
-            fs_pack(record,0,entry->d_ino,8);fs_pack(record,8,++fs_dirs[slot]->count,8);fs_pack(record,16,reclen,2);
-            record[18]=entry->d_type==DT_DIR?4:entry->d_type==DT_REG?8:entry->d_type==DT_LNK?10:0;
-            memcpy(record+19,entry->d_name,length);used+=reclen;
+            fs_pack(record,0,ino,8);fs_pack(record,8,++dir->count,8);fs_pack(record,16,reclen,2);
+            record[18]=type==DT_DIR?4:type==DT_REG?8:type==DT_LNK?10:0;
+            memcpy(record+19,name,length);used+=reclen;
         }
     }
     if(call==57) { struct stat closing;if(!fstat(fd,&closing)) { fs_locks_release(closing.st_dev,closing.st_ino,process_pid_now());fs_locks_release(closing.st_dev,closing.st_ino,FS_FLOCK_OWNER|(uint64_t)fd); }
@@ -1688,7 +1737,7 @@ static uint64_t fs_call(uint64_t call) {
         fs_stat_pack(out,&st);return 0;
     }
     if(call==62) {
-        if(fs_dirs[slot]) { if(cpu->gpr[1] || cpu->gpr[2])return linux_error(22);if(fs_dirs[slot]->stream)rewinddir(fs_dirs[slot]->stream);fs_dirs[slot]->count=0;return 0; }
+        if(fs_dirs[slot]) { if(cpu->gpr[1] || cpu->gpr[2])return linux_error(22);if(fs_dirs[slot]->stream)rewinddir(fs_dirs[slot]->stream);ov_list_free(fs_dirs[slot]->merged);fs_dirs[slot]->merged=NULL;fs_dirs[slot]->count=0;return 0; }
         if(cpu->gpr[2]>2) return linux_error(22);
         off_t result=lseek(fd,(off_t)(int64_t)cpu->gpr[1],(int)cpu->gpr[2]);
         return result<0?fs_error():(uint64_t)result;

@@ -93,7 +93,8 @@ func TestSystemDiskUsage(t *testing.T) {
 		t.Fatalf("create: %d %s", r.Code, r.Body.String())
 	}
 	check(os.WriteFile(filepath.Join(volumeData(b.Home, "data"), "f"), []byte("12345"), 0o600))
-	check(os.Symlink("/etc", filepath.Join(volumeData(b.Home, "data"), "link"))) // not followed
+	check(os.WriteFile(filepath.Join(b.container("user"), "rootfs", "own"), []byte("123"), 0o600)) // the container's own file
+	check(os.Symlink("/etc", filepath.Join(volumeData(b.Home, "data"), "link")))                   // not followed
 	// One image with two tags is one row.
 	if r := request(t, h, "POST", "/images/dockiva/shell:demo/tag?repo=test/other&tag=1", "", ""); r.Code != 201 {
 		t.Fatalf("tag: %d %s", r.Code, r.Body.String())
@@ -112,7 +113,7 @@ func TestSystemDiskUsage(t *testing.T) {
 		t.Fatalf("image row: %v", im)
 	}
 	c := containers[0].(obj)
-	if c["Names"].([]any)[0] != "/user" || c["State"] != "created" || c["SizeRw"].(float64) <= 0 || c["SizeRootFs"] != c["SizeRw"] {
+	if c["Names"].([]any)[0] != "/user" || c["State"] != "created" || c["SizeRw"] != 3.0 || c["SizeRootFs"] != 3.0+im["Size"].(float64) {
 		t.Fatalf("container row: %v", c)
 	}
 	v := volumes[0].(obj)
@@ -215,6 +216,7 @@ func TestPrune(t *testing.T) {
 			t.Fatalf("create: %d %s", r.Code, r.Body.String())
 		}
 	}
+	check(os.WriteFile(filepath.Join(b.container("gone"), "rootfs", "own"), []byte("own"), 0o600)) // what pruning reclaims
 	if r := request(t, h, "POST", "/containers/prune?filters=%7B%22status%22:%5B%22exited%22%5D%7D", "", ""); r.Code != 400 {
 		t.Fatalf("unsupported filter: %d %s", r.Code, r.Body.String())
 	}

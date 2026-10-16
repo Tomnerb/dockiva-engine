@@ -90,18 +90,20 @@ func diskSize(root string) int64 {
 }
 
 // diskUsage is GET /system/df. Images use their recorded size; each container root
-// and volume is walked once.
-// ponytail: a container's root is an APFS clone of its image, so SizeRw is the whole
-// root, image files included, not just what the container changed.
+// and volume is walked once. A layered container's SizeRw is its own files, and
+// SizeRootFs adds its image's (ponytail: a --rootfs copy one's are its whole clone).
 func (b *engine) diskUsage() obj {
 	users, mounts := map[string]int64{}, map[string]int64{} // containers per image digest, per volume
-	containers := []any{}
+	containers, layered := []any{}, map[string][]obj{}      // layered rows by image digest
 	for _, name := range b.names() {
 		_ = safeRun(func() {
 			item := b.inspect(name)
 			row := psRow(item)
 			size := diskSize(filepath.Join(b.container(name), "rootfs"))
 			row["SizeRw"], row["SizeRootFs"] = size, size
+			if item["Driver"] == "overlay2" {
+				layered[str(item["Image"])] = append(layered[str(item["Image"])], row)
+			}
 			users[str(item["Image"])]++
 			for _, m := range item["Mounts"].([]any) {
 				if v, ok := m.(obj)["Name"].(string); ok {
@@ -128,6 +130,13 @@ func (b *engine) diskUsage() obj {
 			row["RepoDigests"] = append(row["RepoDigests"].([]string), repository(c.name)+"@"+c.digest)
 		}
 		row["Created"] = min(row["Created"].(int64), c.created.Unix())
+	}
+	for digest, list := range layered {
+		for _, row := range list {
+			if image := rows[digest]; image != nil {
+				row["SizeRootFs"] = row["SizeRw"].(int64) + image["Size"].(int64)
+			}
+		}
 	}
 	volumes := []any{}
 	for _, name := range b.volumeNames() {
@@ -200,6 +209,7 @@ func (b *engine) pruneImages(danglingOnly bool, keep func(time.Time, obj) bool) 
 			if !keep(c.created, labels) {
 				continue
 			}
+			retainLowers(b.Home, b.State, c.dir)
 			check(os.RemoveAll(c.dir))
 			removed++
 			if !strings.HasPrefix(c.name, "<none>:") {

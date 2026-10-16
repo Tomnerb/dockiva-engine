@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -332,22 +333,14 @@ func (b *engine) inspectMounts(config obj) []any {
 // at its mount point unless nocopy is set. tmpfs: whether this run gets the tmpfs
 // mounts; only the container's own run does (an exec or healthcheck is a host
 // process of its own and cannot share the run's memory: it sees the mount point).
-func prepareMounts(home, root string, config obj, tmpfs bool) []string {
+func prepareMounts(home string, root layers, config obj, tmpfs bool) []string {
 	args := []string{}
-	link := func(p string) (string, bool) {
-		s, e := os.Lstat(filepath.Join(root, p))
-		if e != nil || s.Mode()&os.ModeSymlink == 0 {
-			return "", false
-		}
-		target, e := os.Readlink(filepath.Join(root, p))
-		check(e)
-		return target, true
-	}
+	link := root.link
 	for _, m := range savedMounts(config) {
 		if m["type"] == "tmpfs" {
 			guest := resolveGuest(pathName(mountTarget(str(m["target"]))[1:]), link)
 			reject(guest != "", "A mount cannot replace the container root")
-			mountPoint(root, guest, true)
+			root.mountPoint(guest, true)
 			if tmpfs {
 				args = append(args, "--tmpfs", "/"+guest+":"+str(m["options"]))
 			}
@@ -363,9 +356,9 @@ func prepareMounts(home, root string, config obj, tmpfs bool) []string {
 		}
 		guest := resolveGuest(pathName(mountTarget(str(m["target"]))[1:]), link)
 		reject(guest != "", "A mount cannot replace the container root")
-		mountPoint(root, guest, st.IsDir())
+		root.mountPoint(guest, st.IsDir())
 		if m["type"] == "volume" && m["nocopy"] != true {
-			populateVolume(home, str(m["source"]), filepath.Join(root, guest))
+			populateVolume(home, str(m["source"]), root, guest)
 		}
 		flag := "--bind"
 		if m["readonly"] == true {
@@ -393,33 +386,9 @@ func hasMount(config obj, target string) bool {
 	return false
 }
 
-// mountPoint creates a link-free directory (or empty file) at guest within root.
-func mountPoint(root, guest string, directory bool) {
-	parts := strings.Split(guest, "/")
-	p := root
-	for i, part := range parts {
-		p = filepath.Join(p, part)
-		last := i == len(parts)-1
-		st, e := os.Lstat(p)
-		if os.IsNotExist(e) {
-			if last && !directory {
-				f, e := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o644)
-				check(e)
-				f.Close()
-			} else {
-				check(mkdirGuest(p))
-			}
-			continue
-		}
-		check(e)
-		reject(st.Mode()&os.ModeSymlink == 0, "Mount point is a symlink: /"+guest)
-		reject(!last && st.IsDir() || last && st.IsDir() == directory, "Mount point type does not match its source: /"+guest)
-	}
-}
-
 // populateVolume copies the image's content at a mount point into a volume that
 // has never been used, as Docker does for a new named or anonymous volume.
-func populateVolume(home, name, from string) {
+func populateVolume(home, name string, root layers, guest string) {
 	meta := filepath.Join(volumesDir(home), name, "meta.json")
 	m := readObject(meta)
 	if m["populated"] == true {
@@ -428,23 +397,22 @@ func populateVolume(home, name, from string) {
 	data := volumeData(home, name)
 	entries, e := os.ReadDir(data)
 	check(e)
-	if st, e := os.Lstat(from); len(entries) == 0 && e == nil && st.IsDir() {
-		copyTree(from, data)
+	if from, ok := root.find(guest); len(entries) == 0 && ok && isDir(from) {
+		copyTree(root, guest, data)
 	}
 	m["populated"] = true
 	save(meta, m)
 }
 
-// copyTree copies files, directories and symlinks (as symlinks) from one tree to another.
-func copyTree(from, to string) {
-	check(filepath.Walk(from, func(p string, info os.FileInfo, err error) error {
-		check(err)
-		rel, e := filepath.Rel(from, p)
-		check(e)
-		if rel == "." {
+// copyTree copies files, directories and symlinks (as symlinks) from a directory
+// of a container's files to another tree.
+func copyTree(root layers, from, to string) {
+	check(root.walk(from, func(rel, p string, info os.FileInfo) error {
+		rel = strings.TrimPrefix(strings.TrimPrefix(rel, path.Join(relParts(from)...)), "/")
+		if rel == "" {
 			return nil
 		}
-		dest := filepath.Join(to, rel)
+		dest := filepath.Join(to, filepath.FromSlash(rel))
 		switch {
 		case info.Mode()&os.ModeSymlink != 0:
 			target, e := os.Readlink(p)

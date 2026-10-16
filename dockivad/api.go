@@ -143,6 +143,7 @@ func (b *engine) removeImage(ref string, force bool) []obj {
 	}
 	out := []obj{}
 	for p, name := range dirs {
+		retainLowers(b.Home, b.State, p) // containers keep running over its files
 		check(os.RemoveAll(p))
 		out = append(out, obj{"Untagged": name})
 		b.events.publish(imageEvent("untag", digest, digest)) // Docker names both by the image ID
@@ -259,7 +260,11 @@ func (b *engine) inspect(name string) obj {
 	if c["binds"] != nil {
 		binds = stringsOf(c["binds"])
 	}
-	return obj{"Id": b.idOf(name), "Name": "/" + name, "Created": timestamp(c["created_at"]), "Path": cmd[0], "Args": cmd[1:], "Image": c["image"], "State": obj{"Status": state, "Running": running, "Paused": paused, "Restarting": s["state"] == "restarting", "Health": health(p, c), "OOMKilled": exists(filepath.Join(p, "oom")), "Dead": state == "dead", "Pid": pid, "ExitCode": code, "Error": text(s["error"]), "StartedAt": timestamp(s["started_at"]), "FinishedAt": timestamp(s["finished_at"])}, "Config": obj{"Image": img, "Entrypoint": cmd[:1], "Cmd": cmd[1:], "Env": stringsOf(c["env"]), "Labels": labels, "User": text(c["user"]), "Tty": c["tty"] == true, "OpenStdin": c["open_stdin"] == true, "StdinOnce": c["stdin_once"] == true, "WorkingDir": workdir(c), "Hostname": hostname(name, c), "Healthcheck": healthConfig(c), "ExposedPorts": exposedPorts(c)}, "HostConfig": obj{"NetworkMode": inspectNetwork(c), "PortBindings": hostPortBindings(c), "PublishAllPorts": c["publish_all"] == true, "ReadonlyRootfs": c["writable"] != true, "AutoRemove": c["auto_remove"] == true, "Binds": binds, "Memory": memoryMiB(c) << 20, "NanoCpus": nanoCpus(c), "RestartPolicy": restartPolicy(c), "ExtraHosts": extraHostList(c), "LogConfig": obj{"Type": "json-file", "Config": obj{}}, "Tmpfs": inspectTmpfs(c)}, "NetworkSettings": obj{"Ports": networkPortBindings(p, c, running), "Networks": b.containerNetworks(name, c), "IPAddress": text(c["ip"]), "Gateway": gatewayOf(c)}, "Mounts": b.inspectMounts(c), "Driver": "dockiva-private-copy", "Platform": "linux", "RestartCount": restartCount(s), "DockivaCompatibility": profileInspection(c)}
+	driver, graph := "dockiva-private-copy", obj{"UpperDir": filepath.Join(p, "rootfs")} // layers: the image's files beneath
+	if c["lower"] != nil {
+		driver, graph["LowerDir"] = "overlay2", c["lower"]
+	}
+	return obj{"Id": b.idOf(name), "Name": "/" + name, "Created": timestamp(c["created_at"]), "Path": cmd[0], "Args": cmd[1:], "Image": c["image"], "State": obj{"Status": state, "Running": running, "Paused": paused, "Restarting": s["state"] == "restarting", "Health": health(p, c), "OOMKilled": exists(filepath.Join(p, "oom")), "Dead": state == "dead", "Pid": pid, "ExitCode": code, "Error": text(s["error"]), "StartedAt": timestamp(s["started_at"]), "FinishedAt": timestamp(s["finished_at"])}, "Config": obj{"Image": img, "Entrypoint": cmd[:1], "Cmd": cmd[1:], "Env": stringsOf(c["env"]), "Labels": labels, "User": text(c["user"]), "Tty": c["tty"] == true, "OpenStdin": c["open_stdin"] == true, "StdinOnce": c["stdin_once"] == true, "WorkingDir": workdir(c), "Hostname": hostname(name, c), "Healthcheck": healthConfig(c), "ExposedPorts": exposedPorts(c)}, "HostConfig": obj{"NetworkMode": inspectNetwork(c), "PortBindings": hostPortBindings(c), "PublishAllPorts": c["publish_all"] == true, "ReadonlyRootfs": c["writable"] != true, "AutoRemove": c["auto_remove"] == true, "Binds": binds, "Memory": memoryMiB(c) << 20, "NanoCpus": nanoCpus(c), "RestartPolicy": restartPolicy(c), "ExtraHosts": extraHostList(c), "LogConfig": obj{"Type": "json-file", "Config": obj{}}, "Tmpfs": inspectTmpfs(c)}, "NetworkSettings": obj{"Ports": networkPortBindings(p, c, running), "Networks": b.containerNetworks(name, c), "IPAddress": text(c["ip"]), "Gateway": gatewayOf(c)}, "Mounts": b.inspectMounts(c), "Driver": driver, "GraphDriver": obj{"Name": driver, "Data": graph}, "Platform": "linux", "RestartCount": restartCount(s), "DockivaCompatibility": profileInspection(c)}
 }
 func onlyKeys(m obj, allowed ...string) bool {
 	for k := range m {
@@ -519,7 +524,14 @@ func (b *engine) createWith(name string, body obj, prepared *image) obj {
 			_ = os.RemoveAll(stage)
 		}
 	}()
-	cloneTree(im.Root, filepath.Join(stage, "rootfs"))
+	// Its own files over its image's (layers), unless it runs a build step on the
+	// stage's files or the engine runs with --rootfs copy: then a clone of them.
+	if prepared == nil && os.Getenv("DOCKIVA_ROOTFS") != "copy" {
+		check(mkdirGuest(filepath.Join(stage, "rootfs")))
+		config["lower"], im.Lower = im.Root, im.Root
+	} else {
+		cloneTree(im.Root, filepath.Join(stage, "rootfs"))
+	}
 	im.Root = filepath.Join(stage, "rootfs")
 	for _, d := range append([]string{im.WorkingDir}, im.Volumes...) { // Docker creates them
 		im.ensureDir(d)

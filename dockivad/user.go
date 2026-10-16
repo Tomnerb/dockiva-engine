@@ -18,10 +18,14 @@ func validUser(u string) string {
 
 // passwdEntries reads name -> fields from a container's /etc/passwd or /etc/group
 // (a missing file has no entries). Lines are name:x:id:...
-func passwdEntries(root, file string) map[string][]string {
+func passwdEntries(root layers, file string) map[string][]string {
 	out := map[string][]string{}
 	var data []byte
-	if safeRun(func() { data = readBounded(root, file, 1<<20) }) != nil {
+	if safeRun(func() {
+		host, ok := root.find(file)
+		reject(ok, "missing")
+		data = readBounded(filepath.Dir(host), filepath.Base(host), 1<<20)
+	}) != nil {
 		return out
 	}
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
@@ -37,7 +41,7 @@ func passwdEntries(root, file string) map[string][]string {
 // resolveUser turns a USER into the uid, gid and home directory a process starts
 // with, from the container's own /etc/passwd and /etc/group, as Docker does. A
 // numeric uid not in passwd gets gid 0 and home "/".
-func resolveUser(root, user string) (uid, gid uint32, home string) {
+func resolveUser(root layers, user string) (uid, gid uint32, home string) {
 	if user == "" {
 		user = "0"
 	}
@@ -87,7 +91,7 @@ func resolveUser(root, user string) (uid, gid uint32, home string) {
 
 // userArgs, in the supervisor: --uid/--gid for a non-root USER, and HOME from
 // passwd when the environment does not set it.
-func userArgs(root string, config obj, env []string) []string {
+func userArgs(root layers, config obj, env []string) []string {
 	uid, gid, home := resolveUser(root, text(config["user"]))
 	args := []string{}
 	if uid != 0 || gid != 0 {

@@ -1096,7 +1096,7 @@ int main(int argc,char **argv) {
     if(signal(SIGPIPE,SIG_IGN)==SIG_ERR) fail("Cannot configure SIGPIPE");
     if(argc<3 || (strcmp(argv[1],"run") && strcmp(argv[1],"inspect"))) fail("Usage: dockiva-runtime run|inspect ELF [--trace] [--max-steps N] [--env KEY=VALUE] [--argv0 NAME] [-- ARGS...]");
     uint64_t steps=100000;
-    int use_hvf=0,signals_forwarded=0;const char *root_path=NULL;
+    int use_hvf=0,signals_forwarded=0;const char *root_path=NULL,*lower_path=NULL;
     static const char *guestargv[EXEC_ENTRIES], *guestenv[EXEC_ENTRIES]; guestargv[0]=argv[2]; int guestargc=1; unsigned envc=0;
     for(int i=3;i<argc;i++) {
         if(!strcmp(argv[i],"--")) {
@@ -1110,6 +1110,11 @@ int main(int argc,char **argv) {
             if(fs_root>=0) fail("Root specified twice");
             root_path=argv[++i];fs_root=open(root_path,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
             if(fs_root<0) fail("Cannot open guest root");
+        } else if(!strcmp(argv[i],"--lower") && i+1<argc) {
+            /* --lower DIR: the image's files beneath the root, shared and never written (overlay.h). */
+            if(fs_lower>=0) fail("Lower layer specified twice");
+            lower_path=argv[++i];fs_lower=open(lower_path,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
+            if(fs_lower<0) fail("Cannot open guest lower layer");
         } else if(!strcmp(argv[i],"--writable")) {
             fs_writable=1;
         } else if((!strcmp(argv[i],"--bind") || !strcmp(argv[i],"--bind-ro")) && i+2<argc) {
@@ -1221,6 +1226,7 @@ int main(int argc,char **argv) {
         backing_reaping=1;
 #endif
     }
+    if(fs_lower>=0 && fs_root<0)fail("A lower layer needs a root");
     if(fs_root>=0 && fs_storage_limit && fs_scan_budget(fs_root,0)<0)fail("Guest root exceeds storage, entry or traversal budget");
     if(start_cwd && fs_start_cwd(start_cwd)<0)fail("Cannot enter guest working directory");
     if(terminal_forwarded && !terminal_enabled)fail("Forwarded interrupts require interactive mode");
@@ -1238,8 +1244,10 @@ int main(int argc,char **argv) {
     load_stream(input);
     { /* /proc/1/exe: the ELF's path inside the root */
         char root_real[PATH_MAX],elf_real[PATH_MAX];size_t n;
-        if(root_path && realpath(root_path,root_real) && realpath(argv[2],elf_real) && !strncmp(elf_real,root_real,n=strlen(root_real)) && elf_real[n]=='/' && strlen(elf_real+n)<sizeof(proc_exe[0]))
-            strcpy(proc_exe[1],elf_real+n);
+        for(int layer=0;layer<2;layer++) {                                  /* the root, or its lower layer */
+            const char *base=layer?lower_path:root_path;
+            if(base && realpath(base,root_real) && realpath(argv[2],elf_real) && !strncmp(elf_real,root_real,n=strlen(root_real)) && elf_real[n]=='/' && strlen(elf_real+n)<sizeof(proc_exe[0])) { strcpy(proc_exe[1],elf_real+n);break; }
+        }
     }
     if(!strcmp(argv[1],"inspect")) { printf("ARM64 ELF64; entry=0x%" PRIx64 "; segments=%u\n",cpu->pc,address_space->nseg); return 0; }
     heap_init();

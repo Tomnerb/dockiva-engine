@@ -58,6 +58,7 @@ func run() {
 	maxContainers := flags.Int("max-containers", 64, "running containers at once")
 	bindIP := flags.String("default-bind-ip", "127.0.0.1", "host address of -p HOST:CONTAINER ports without one (Docker's --ip; 0.0.0.0 publishes on every address, as Docker does)")
 	tmp := flags.String("tmp", "disk", "containers' /tmp and /dev/shm: disk (the container's files, as Docker) or memory (a tmpfs the runtime keeps in memory, counted against the memory limit: no host file system calls, several times faster for many small files; not shared with docker exec)")
+	rootfs := flags.String("rootfs", "layered", "containers' files: layered (each container's own changes over its image's files, which all its containers share, as Docker's overlay2: they stay warm in the file cache) or copy (each container gets an APFS clone of its image's files)")
 	fsync := flags.String("fsync", "barrier", "containers' fsync: barrier (ordered writes, OrbStack-like), full (drains the drive cache; strictly durable, slower) or fast (plain macOS fsync)")
 	check(flags.Parse(os.Args[1:]))
 	reject(flags.NArg() == 0, "Unexpected arguments")
@@ -65,6 +66,8 @@ func run() {
 	check(os.Setenv("DOCKIVA_FSYNC", *fsync)) // read by runtimeCommand here and in supervisors, which inherit it
 	reject(*tmp == "disk" || *tmp == "memory", "--tmp must be disk or memory")
 	check(os.Setenv("DOCKIVA_TMP", *tmp))
+	reject(*rootfs == "layered" || *rootfs == "copy", "--rootfs must be layered or copy")
+	check(os.Setenv("DOCKIVA_ROOTFS", *rootfs))
 	reject(*maxContainers >= 1 && *maxContainers <= 1024, "--max-containers must be 1..1024")
 	reject(net.ParseIP(*bindIP) != nil, "--default-bind-ip must be an IP address")
 	b := &engine{Home: private(*home), Self: self, Assets: *assetRoot, MaxContainers: *maxContainers, Insecure: *insecure, BindIP: *bindIP, quit: make(chan struct{}, 1)}

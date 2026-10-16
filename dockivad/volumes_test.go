@@ -107,12 +107,12 @@ func TestMountPointsAndPopulation(t *testing.T) {
 		obj{"type": "bind", "source": file, "target": "/etc/app/conf", "readonly": true},
 		obj{"type": "tmpfs", "target": "/link/scratch", "options": "noexec,nosuid,nodev,size=1m", "readonly": false},
 	}}
-	args := prepareMounts(home, root, mounts, true)
+	args := prepareMounts(home, layers{upper: root}, mounts, true)
 	// The mount point is resolved through the image's symlink; the volume got the image's content.
 	if strings.Join(args, " ") != "--bind "+volumeData(home, "vol")+" /real/seed --bind-ro "+file+" /etc/app/conf --tmpfs /real/scratch:noexec,nosuid,nodev,size=1m" {
 		t.Fatalf("args: %v", args)
 	}
-	if args := prepareMounts(home, root, mounts, false); len(args) != 6 { // an exec run: no tmpfs
+	if args := prepareMounts(home, layers{upper: root}, mounts, false); len(args) != 6 { // an exec run: no tmpfs
 		t.Fatalf("exec args: %v", args)
 	}
 	if st, e := os.Stat(filepath.Join(root, "real", "scratch")); e != nil || !st.IsDir() {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
@@ -512,25 +513,32 @@ func (b *engine) remove(name string) {
 	defer f.Close()
 	s := readObject(filepath.Join(p, "status.json"))
 	reject(!workerAlive(s), "Previous worker is still alive")
-	network := text(readObject(filepath.Join(p, "config.json"))["net_name"])
+	c := readObject(filepath.Join(p, "config.json"))
+	network := text(c["net_name"])
 	// The name is free at once; the files (a whole root file system) go in the
 	// background. A removal cut short is finished at the next engine start.
 	gone := filepath.Join(b.State, ".removing-"+token()[:16])
 	check(os.Rename(p, gone))
 	notifyChanged()
 	go func() { _ = os.RemoveAll(gone) }()
+	releaseLower(b.Home, b.State, text(c["lower"])) // an image removed meanwhile: its files go now
 	b.refreshHosts(network)
 }
-func sandboxArgs(native string, args []string, root string, writable bool) []string {
+func sandboxArgs(native string, args []string, r layers, writable bool) []string {
+	root := r.upper
 	literal := func(s string) string {
 		for _, r := range s {
 			reject(r >= 32 && r < 127, "Sandbox paths must be printable ASCII")
 		}
 		return strconv.Quote(s)
 	}
-	policy := "(version 1)\n(deny default)\n(allow sysctl-read)\n(allow process-exec (literal " + literal(native) + "))\n(allow file-read* (subpath \"/usr/lib\") (subpath \"/System/Library\") (subpath \"/System/Volumes/Preboot/Cryptexes/OS\") (literal " + literal(native) + ") (subpath " + literal(root) + "))\n(allow file-read* file-write* (literal \"/dev/null\"))\n(allow network-outbound (remote tcp \"localhost:*\"))\n"
+	lowerRule := ""
+	if r.lower != "" {
+		lowerRule = " (subpath " + literal(r.lower) + ")"
+	}
+	policy := "(version 1)\n(deny default)\n(allow sysctl-read)\n(allow process-exec (literal " + literal(native) + "))\n(allow file-read* (subpath \"/usr/lib\") (subpath \"/System/Library\") (subpath \"/System/Volumes/Preboot/Cryptexes/OS\") (literal " + literal(native) + ") (subpath " + literal(root) + ")" + lowerRule + ")\n(allow file-read* file-write* (literal \"/dev/null\"))\n(allow network-outbound (remote tcp \"localhost:*\"))\n"
 	parents := map[string]bool{}
-	for _, p := range []string{native, root} {
+	for _, p := range []string{native, root, cmp.Or(r.lower, root)} {
 		for {
 			p = filepath.Dir(p)
 			parents[p] = true
@@ -558,17 +566,11 @@ func runtimeCommand(p, native string, c obj, command []string, argv0 string, env
 	validateLaunchProfile(c, native)
 	reject(len(command) > 0 && strings.HasPrefix(command[0], "/"), "Invalid guest command")
 	reject(c["cpu_backend"] == nil || c["cpu_backend"] == "interpreter" || c["cpu_backend"] == "hvf", "Unknown execution backend")
-	root := noLinks(p, "rootfs")
-	// Resolve guest symlinks inside root, then confirm the result is link-free.
-	guest := noLinks(root, resolveGuest(pathName(command[0][1:]), func(p string) (string, bool) {
-		s, e := os.Lstat(filepath.Join(root, p))
-		if e != nil || s.Mode()&os.ModeSymlink == 0 {
-			return "", false
-		}
-		target, e := os.Readlink(filepath.Join(root, p))
-		check(e)
-		return target, true
-	}))
+	r := containerLayers(p, c)
+	root := r.upper
+	// Resolve guest symlinks inside the container; find refuses a symlink on the way.
+	guest, found := r.find(resolveGuest(pathName(command[0][1:]), r.link))
+	reject(found, "Executable missing: "+command[0])
 	validateEnv(env)
 	steps := "10000000"
 	if c["max_steps"] != nil {
@@ -582,7 +584,11 @@ func runtimeCommand(p, native string, c obj, command []string, argv0 string, env
 	reject(memory >= 1 && memory <= 65536, "Invalid memory limit")
 	// The run creates the oom file when it kills a process over the memory limit
 	// (exec and healthchecks share the container's budget, as in a cgroup).
-	args := []string{"run", guest, "--root", root, "--argv0", argv0, "--max-steps", steps, "--memory-limit-mib", strconv.FormatInt(memory, 10), "--oom-file", filepath.Join(p, "oom")}
+	args := []string{"run", guest, "--root", root}
+	if r.lower != "" {
+		args = append(args, "--lower", r.lower)
+	}
+	args = append(args, "--argv0", argv0, "--max-steps", steps, "--memory-limit-mib", strconv.FormatInt(memory, 10), "--oom-file", filepath.Join(p, "oom"))
 	// Abstract Unix socket names live in one directory per container, shared by its execs.
 	abstract := filepath.Join(p, "abstract")
 	check(os.MkdirAll(abstract, 0o700))
@@ -622,9 +628,15 @@ func runtimeCommand(p, native string, c obj, command []string, argv0 string, env
 	// Docker gives every container /dev/shm (POSIX shared memory and semaphores) and
 	// /proc; these directories stand in (the runtime serves /proc/self/fd/N itself).
 	for _, d := range []string{"dev/shm", "proc/self/fd"} {
-		_ = safeRun(func() { mountPoint(root, d, true) })
+		_ = safeRun(func() { r.mountPoint(d, true) })
 	}
-	_ = os.Chmod(filepath.Join(root, "dev/shm"), os.ModeSticky|0o777)
+	_ = safeRun(func() {
+		if host, ok := r.find("dev/shm"); ok && isDir(host) {
+			if st, e := os.Lstat(host); e == nil && st.Mode()&(os.ModeSticky|os.ModePerm) != os.ModeSticky|0o777 {
+				check(os.Chmod(r.upperDir("dev/shm", true), os.ModeSticky|0o777))
+			}
+		}
+	})
 	home := filepath.Dir(filepath.Dir(p)) // <home>/containers/<name>
 	if c["network"] != "none" {
 		name := filepath.Base(p)
@@ -632,7 +644,7 @@ func runtimeCommand(p, native string, c obj, command []string, argv0 string, env
 		if n, ok := c["net_name"].(string); ok && n != "bridge" {
 			members = membersOn(home, n)
 		}
-		networkFiles(root, hostsFile(home, name, c, members))
+		networkFiles(r, hostsFile(home, name, c, members))
 		args = append(args, "--outbound")
 	}
 	args = append(args, "--hostname", hostname(filepath.Base(p), c))
@@ -640,13 +652,13 @@ func runtimeCommand(p, native string, c obj, command []string, argv0 string, env
 		args = append(args, "--network", networkPorts(home, str(c["net_name"])), "--ip", ip)
 	}
 	// <home>/containers/<name>: volumes are in <home>/volumes.
-	args = append(args, prepareMounts(filepath.Dir(filepath.Dir(p)), root, c, publish)...)
+	args = append(args, prepareMounts(filepath.Dir(filepath.Dir(p)), r, c, publish)...)
 	// dockiva-engine --tmp memory: /tmp (unless mounted) and /dev/shm in the runtime's
 	// memory (memfs), as tmpfs mounts; Docker keeps /tmp on the writable layer. Not for
 	// a build's RUN steps: their /tmp is part of the image (a later step reads it).
 	if os.Getenv("DOCKIVA_TMP") == "memory" && publish && !strings.HasPrefix(filepath.Base(p), "dockiva-build-") {
 		if !hasMount(c, "/tmp") {
-			_ = safeRun(func() { mountPoint(root, "tmp", true) })
+			_ = safeRun(func() { r.mountPoint("tmp", true) })
 			args = append(args, "--tmpfs", "/tmp:mode=1777")
 		}
 		if !hasMount(c, "/dev/shm") {
@@ -668,12 +680,12 @@ func runtimeCommand(p, native string, c obj, command []string, argv0 string, env
 	for _, v := range env {
 		args = append(args, "--env", v)
 	}
-	args = append(args, userArgs(root, c, env)...)
+	args = append(args, userArgs(r, c, env)...)
 	args = append(args, extra...)
 	args = append(args, "--")
 	args = append(args, command[1:]...)
 	if c["host_sandbox"] == true {
-		return sandboxArgs(native, args, root, c["writable"] == true)
+		return sandboxArgs(native, args, r, c["writable"] == true)
 	}
 	return append([]string{native}, args...)
 }
@@ -997,10 +1009,10 @@ func supervise(p, native, worker, generation string) (result error) {
 // networkFiles gives the container Docker's /etc/resolv.conf and /etc/hosts.
 // Guest sockets are host sockets, so the Mac's IPv4 nameservers (loopback ones
 // included) work unchanged, and host.docker.internal is the shared loopback.
-func networkFiles(root, hosts string) {
+func networkFiles(r layers, hosts string) {
 	host, _ := os.ReadFile("/etc/resolv.conf") // macOS keeps it current; missing means fallback
-	writeGuestFile(root, "etc/resolv.conf", resolvConf(host))
-	writeGuestFile(root, "etc/hosts", hosts)
+	r.writeFile("etc/resolv.conf", resolvConf(host))
+	r.writeFile("etc/hosts", hosts)
 }
 
 // resolvConf keeps the host's IPv4 nameservers and search domains. Without any,
@@ -1031,18 +1043,5 @@ func resolvConf(host []byte) string {
 }
 
 // writeGuestFile replaces a regular file (or a symlink, never followed) inside a
-// container root whose parent directories contain no symlinks.
-func writeGuestFile(root, relative, content string) {
-	dir := filepath.Dir(relative)
-	layerDir(root, dir, true)
-	p := filepath.Join(noLinks(root, dir), filepath.Base(relative))
-	if s, e := os.Lstat(p); e == nil {
-		reject(s.Mode().IsRegular() || s.Mode()&os.ModeSymlink != 0, "Cannot replace "+relative)
-		check(os.Remove(p))
-	}
-	f, e := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o644)
-	check(e)
-	defer f.Close()
-	_, e = f.WriteString(content)
-	check(e)
-}
+// root whose parent directories contain no symlinks.
+func writeGuestFile(root, relative, content string) { layers{upper: root}.writeFile(relative, content) }

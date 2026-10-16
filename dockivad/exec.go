@@ -58,7 +58,7 @@ func (b *engine) createExec(container string, body obj) obj {
 	p := b.container(container)
 	c := readObject(filepath.Join(p, "config.json"))
 	env := mergeEnv(stringsOf(c["env"]), j.Env)
-	j.Path = lookPath(noLinks(p, "rootfs"), env, cmp.Or(j.WorkingDir, workdir(c)), j.Cmd[0])
+	j.Path = lookPath(containerLayers(p, c), env, cmp.Or(j.WorkingDir, workdir(c)), j.Cmd[0])
 	count := 0
 	b.execs.Range(func(any, any) bool { count++; return true })
 	if count >= execLimit {
@@ -93,9 +93,9 @@ func (b *engine) inspectExec(id string) obj {
 // containerCommand resolves argv as docker run does for its entrypoint: the
 // command is found in the container's PATH, and a script runs under its #!
 // interpreter. argv0 is what the program sees as its name.
-func containerCommand(p, dir string, env, argv []string) (command []string, argv0 string) {
-	root := noLinks(p, "rootfs")
-	command = (&image{Root: root, Env: env}).command(append([]string{lookPath(root, env, dir, argv[0])}, argv[1:]...))
+func containerCommand(p string, c obj, dir string, env, argv []string) (command []string, argv0 string) {
+	root := containerLayers(p, c)
+	command = (&image{Root: root.upper, Lower: root.lower, Env: env}).command(append([]string{lookPath(root, env, dir, argv[0])}, argv[1:]...))
 	if argv0 = argv[0]; len(command) != len(argv) {
 		argv0 = command[0] // a script: its interpreter
 	}
@@ -104,7 +104,7 @@ func containerCommand(p, dir string, env, argv []string) (command []string, argv
 
 // lookPath finds a command in the container's PATH, as docker exec does.
 // A path with a slash is used as is, relative to the working directory dir.
-func lookPath(root string, env []string, dir, name string) string {
+func lookPath(root layers, env []string, dir, name string) string {
 	if strings.Contains(name, "/") {
 		return path.Join(dir, name)
 	}
@@ -114,14 +114,15 @@ func lookPath(root string, env []string, dir, name string) string {
 			search = p
 		}
 	}
-	link := func(g string) (string, bool) { return readLink(filepath.Join(root, g)) }
 	for _, dir := range strings.Split(search, ":") {
 		if !strings.HasPrefix(dir, "/") {
 			continue
 		}
 		candidate := path.Join(dir, name)
 		ok := safeRun(func() {
-			st, e := os.Stat(filepath.Join(root, resolveGuest(pathName(candidate[1:]), link)))
+			host, found := root.find(resolveGuest(pathName(candidate[1:]), root.link))
+			reject(found, "missing")
+			st, e := os.Lstat(host)
 			reject(e == nil && st.Mode().IsRegular() && st.Mode()&0o111 != 0, "not executable")
 		}) == nil
 		if ok {
@@ -274,7 +275,7 @@ func (b *engine) execCommand(j *execJob) (cmd *exec.Cmd, input, output, errput *
 		c["workdir"] = j.WorkingDir
 	}
 	env := mergeEnv(stringsOf(c["env"]), j.Env)
-	command, argv0 := containerCommand(p, workdir(c), env, j.Cmd)
+	command, argv0 := containerCommand(p, c, workdir(c), env, j.Cmd)
 	extra := []string{}
 	if j.Stdin || j.Tty {
 		extra = append(extra, "--stdin")

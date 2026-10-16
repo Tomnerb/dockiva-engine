@@ -328,6 +328,9 @@ static uint64_t net_unix_address(int fd,uint64_t address,uint64_t length,int bin
 }
 static uint64_t net_unix_host(int fd,int binding,struct NetDescription *d,int parent,const char *leaf,const char *canon,const char *guest) {
     if(binding && !fs_path_writable()) { close(parent);return linux_error(30); }
+    OvLeaf w=ov_leaf;char name[1025];snprintf(name,sizeof name,"%s",leaf);       /* image layers: made in the upper one (overlay.h) */
+    if(binding && ov_prepare(&w,&parent,name,OV_CREATE)) { uint64_t e=errno==EEXIST?linux_error(98):fs_error();close(parent);return e; }
+    leaf=name;
     if(!strcmp(leaf,".") || strlen(leaf)>=sizeof(((struct sockaddr_un *)0)->sun_path)) { close(parent);return linux_error(binding?22:111); }
     struct sockaddr_un host;memset(&host,0,sizeof(host));host.sun_family=AF_UNIX;strcpy(host.sun_path,leaf);
 #ifdef __APPLE__
@@ -343,7 +346,7 @@ static uint64_t net_unix_host(int fd,int binding,struct NetDescription *d,int pa
         if(!binding && (saved==EINPROGRESS || saved==EAGAIN))return linux_error(11);   /* full backlog */
         return fs_error();
     }
-    if(binding)fs_entries++;
+    if(binding) { fs_entries++;ov_created(&w,parent,leaf,0); }
     strcpy(d->path,canon[0] && strlen(canon)<108?canon:guest);d->abstract=0;
     return 0;
 }

@@ -346,7 +346,7 @@ static int guest_syscall_dispatch(void) {
                    identity), so a valid request by root succeeds without effect. */
                 int fd=-1;struct stat st;
                 int writable;
-                if(call==55) { fd=fs_host(cpu->gpr[0]);if(fd<0) { cpu->gpr[0]=linux_error(9);return -3; }writable=!fs_ro[fs_slot(cpu->gpr[0])]; }
+                if(call==55) { fd=fs_host(cpu->gpr[0]);if(fd<0) { cpu->gpr[0]=linux_error(9);return -3; }writable=fs_ro[fs_slot(cpu->gpr[0])]!=1; } /* 2: a lower file (overlay.h), no change to make */
                 else {
                     if(cpu->gpr[4]&~UINT64_C(256|4096)) { cpu->gpr[0]=linux_error(22);return -3; }
                     char leaf[1025];int parent=fs_lookup(cpu->gpr[0],cpu->gpr[1],leaf,!(cpu->gpr[4]&256)|FS_DIRECT,NULL);

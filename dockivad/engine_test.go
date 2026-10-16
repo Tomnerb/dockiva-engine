@@ -449,7 +449,7 @@ func TestNetworkModeAndDNSFiles(t *testing.T) {
 	check(os.WriteFile(outside, []byte("keep"), 0600))
 	check(os.MkdirAll(filepath.Join(root, "etc"), 0755))
 	check(os.Symlink(outside, filepath.Join(root, "etc", "hosts")))
-	networkFiles(root, hostsFile("", "web", obj{}, nil))
+	networkFiles(layers{upper: root}, hostsFile("", "web", obj{}, nil))
 	if data, _ := os.ReadFile(outside); string(data) != "keep" {
 		t.Fatal("symlink followed")
 	}
@@ -458,7 +458,7 @@ func TestNetworkModeAndDNSFiles(t *testing.T) {
 	}
 	link := t.TempDir()
 	check(os.Symlink(t.TempDir(), filepath.Join(link, "etc")))
-	mustReject(t, func() { networkFiles(link, "") }) // a symlinked /etc is refused
+	mustReject(t, func() { networkFiles(layers{upper: link}, "") }) // a symlinked /etc is refused
 }
 
 func TestShortName(t *testing.T) {
@@ -494,11 +494,11 @@ func TestContainerCommandScripts(t *testing.T) {
 	check(os.MkdirAll(filepath.Join(root, "bin"), 0o755))
 	check(os.WriteFile(filepath.Join(root, "bin", "sh"), append([]byte("\x7fELF\x02\x01\x01"), make([]byte, 57)...), 0o755))
 	check(os.WriteFile(filepath.Join(root, "bin", "tool.sh"), []byte("#!/bin/sh\necho hi\n"), 0o755))
-	cmd, argv0 := containerCommand(p, "/", []string{"PATH=/bin"}, []string{"tool.sh", "--list"})
+	cmd, argv0 := containerCommand(p, obj{}, "/", []string{"PATH=/bin"}, []string{"tool.sh", "--list"})
 	if strings.Join(cmd, " ") != "/bin/sh /bin/tool.sh --list" || argv0 != "/bin/sh" {
 		t.Fatalf("script: %v %q", cmd, argv0)
 	}
-	cmd, argv0 = containerCommand(p, "/", []string{"PATH=/bin"}, []string{"sh", "-c", "true"})
+	cmd, argv0 = containerCommand(p, obj{}, "/", []string{"PATH=/bin"}, []string{"sh", "-c", "true"})
 	if strings.Join(cmd, " ") != "/bin/sh -c true" || argv0 != "sh" {
 		t.Fatalf("binary: %v %q", cmd, argv0)
 	}

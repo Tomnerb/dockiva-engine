@@ -224,6 +224,12 @@ static uint64_t io_inotify(uint64_t call) {
     { int64_t r=mem_inotify_watch(in,cpu->gpr[1],mask,follow);if(r!=MEM_HOST_PATH)return r<0?linux_error((unsigned)-r):(uint64_t)r; } /* memfs.h */
     int parent=fs_lookup((uint64_t)-100,cpu->gpr[1],leaf,follow,NULL);                   /* relative to the working directory */
     if(parent<0)return fs_error();
+    {   /* image layers (overlay.h): a lower directory is watched in the upper layer, where its changes land */
+        struct stat d;
+        if(fs_lower>=0 && ov_leaf.layer==1 && ov_leaf.canon[0] && fs_writable && !fstatat(parent,*leaf?leaf:".",&d,AT_SYMLINK_NOFOLLOW) && S_ISDIR(d.st_mode)) {
+            int u=ov_upper(ov_leaf.canon);if(u>=0) { close(parent);parent=u;strcpy(leaf,"."); }
+        }
+    }
     int fd=openat(parent,*leaf?leaf:".",O_EVTONLY|O_CLOEXEC|(follow?0:O_NOFOLLOW));int saved=errno;close(parent);
     if(fd<0) { errno=saved;return fs_error(); }
     struct stat st;char host[1025]={0};
