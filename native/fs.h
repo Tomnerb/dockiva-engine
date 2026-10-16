@@ -1640,13 +1640,14 @@ static uint64_t fs_call(uint64_t call) {
     unsigned slot=(unsigned)fs_slot(cpu->gpr[0]);
     if(call==25) {
         if(cpu->gpr[1]==1)return fs_cloexec[slot];
-        if(cpu->gpr[1]==2) { if(cpu->gpr[2]>1)return linux_error(22);fs_cloexec[slot]=(unsigned char)cpu->gpr[2];return 0; }
+        if(cpu->gpr[1]==2) { if(cpu->gpr[2]>1)return linux_error(22);fs_cloexec[slot]=(unsigned char)cpu->gpr[2];fd_mirror(cpu->gpr[0]);return 0; }
         if(cpu->gpr[1]==3) { int flags=fcntl(fd,F_GETFL);if(flags<0)return fs_error();
             return (unsigned)(flags&O_ACCMODE)|((flags&O_APPEND)?1024:0)|131072;
         }
         if(cpu->gpr[1]==4) { /* F_SETFL: only O_APPEND changes for files (O_NONBLOCK has no effect on them) */
-            int flags=fcntl(fd,F_GETFL);if(flags<0)return fs_error();
-            return fcntl(fd,F_SETFL,(flags&~O_APPEND)|((cpu->gpr[2]&1024)?O_APPEND:0))<0?fs_error():0;
+            int flags=fcntl(fd,F_GETFL),append=(cpu->gpr[2]&1024)?O_APPEND:0;if(flags<0)return fs_error();
+            if((flags&O_APPEND)!=append && fd_mirror_append)__atomic_store_n(fd_mirror_append,1,__ATOMIC_SEQ_CST); /* before it changes */
+            return fcntl(fd,F_SETFL,(flags&~O_APPEND)|append)<0?fs_error():0;
         }
         if((cpu->gpr[1]>=5 && cpu->gpr[1]<=7) || (cpu->gpr[1]>=36 && cpu->gpr[1]<=38))return fs_fcntl_lock(fd,cpu->gpr[1]);
         if(cpu->gpr[1]==1033 || cpu->gpr[1]==1034)return 0; /* F_ADD_SEALS, F_GET_SEALS: accepted, not enforced */
