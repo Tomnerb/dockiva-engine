@@ -7,14 +7,18 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 )
 
-// Bind mounts and volumes. A container saves its mounts in config.json as
-// {"type": "bind" | "volume", "source": host path or volume name, "target": guest
-// path, "readonly", "anonymous", "nocopy"}. The supervisor creates their mount
-// points in the container root and passes them to the runtime as --bind/--bind-ro.
+// Bind mounts, volumes and tmpfs mounts. A container saves its mounts in config.json
+// as {"type": "bind" | "volume" | "tmpfs", "source": host path or volume name (none
+// for tmpfs), "target": guest path, "readonly", "anonymous", "nocopy", "options"
+// (tmpfs: its mount options), "flag" (tmpfs: from --tmpfs, shown as HostConfig.Tmpfs)}.
+// The supervisor creates their mount points in the container root and passes them to
+// the runtime as --bind/--bind-ro, or --tmpfs: a file system the runtime keeps in
+// memory (memfs), charged to the container's memory limit as Linux charges tmpfs.
 // Volumes live in <home>/volumes/<name>: meta.json and the data in _data.
 
 var volumeName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
@@ -176,10 +180,23 @@ func (b *engine) parseMounts(host, body obj, declared []string) []any {
 			add(m)
 		}
 	}
+	if host["Tmpfs"] != nil { // docker run --tmpfs TARGET[:OPTIONS]
+		tmpfs := object(host["Tmpfs"])
+		targets := []string{}
+		for t := range tmpfs {
+			targets = append(targets, t)
+		}
+		sort.Strings(targets)
+		for _, t := range targets {
+			value, isText := tmpfs[t].(string)
+			reject(isText, "Invalid tmpfs options for "+t)
+			add(obj{"type": "tmpfs", "target": t, "options": tmpfsOptions(value), "given": value, "readonly": false, "flag": true})
+		}
+	}
 	if host["Mounts"] != nil {
 		for _, raw := range array(host["Mounts"]) {
 			spec := object(raw)
-			reject(onlyKeys(spec, "Type", "Source", "Target", "ReadOnly", "Consistency", "BindOptions", "VolumeOptions"), "Unsupported mount option")
+			reject(onlyKeys(spec, "Type", "Source", "Target", "ReadOnly", "Consistency", "BindOptions", "VolumeOptions", "TmpfsOptions"), "Unsupported mount option")
 			m := obj{"target": str(spec["Target"]), "readonly": spec["ReadOnly"] == true}
 			switch spec["Type"] {
 			case "bind":
@@ -197,8 +214,31 @@ func (b *engine) parseMounts(host, body obj, declared []string) []any {
 				if options["NoCopy"] == true {
 					m["nocopy"] = true
 				}
+			case "tmpfs": // --mount type=tmpfs[,tmpfs-size=,tmpfs-mode=]
+				reject(idle(spec["Source"]), "A tmpfs mount has no source")
+				options := object(spec["TmpfsOptions"])
+				reject(onlyKeys(options, "SizeBytes", "Mode", "Options"), "Unsupported tmpfs option")
+				list := []string{}
+				if !idle(options["SizeBytes"]) {
+					reject(integer(options["SizeBytes"]) > 0, "Invalid tmpfs size")
+					list = append(list, "size="+strconv.FormatInt(integer(options["SizeBytes"]), 10))
+				}
+				if !idle(options["Mode"]) {
+					mode := integer(options["Mode"])
+					reject(mode >= 0 && mode <= 0o7777, "Invalid tmpfs mode")
+					list = append(list, "mode="+strconv.FormatInt(mode, 8))
+				}
+				for _, raw := range optionalArray(options["Options"]) { // [["exec"], ["nr_inodes", "1000"]]
+					parts := stringsOf(raw)
+					reject(len(parts) == 1 || len(parts) == 2, "Invalid tmpfs option")
+					list = append(list, strings.Join(parts, "="))
+				}
+				if m["readonly"] == true {
+					list = append(list, "ro")
+				}
+				m["type"], m["options"] = "tmpfs", tmpfsOptions(strings.Join(list, ","))
 			default:
-				panic(apiError{501, "Unsupported mount type: " + text(spec["Type"]) + " (bind and volume are supported)"})
+				panic(apiError{501, "Unsupported mount type: " + text(spec["Type"]) + " (bind, volume and tmpfs are supported)"})
 			}
 			add(m)
 		}
@@ -217,10 +257,61 @@ func (b *engine) parseMounts(host, body obj, declared []string) []any {
 	return mounts
 }
 
-// inspectMounts renders saved mounts as Docker's Mounts list.
+// tmpfsOptions validates tmpfs mount options (Docker's: size, mode, uid, gid,
+// nr_inodes, exec, noexec and flags without effect here) and puts Docker's defaults,
+// noexec, nosuid and nodev, first (later options win).
+func tmpfsOptions(value string) string {
+	out := []string{"noexec", "nosuid", "nodev"}
+	for _, option := range strings.Split(value, ",") {
+		if option == "" {
+			continue
+		}
+		key, v, hasValue := strings.Cut(option, "=")
+		switch key {
+		case "size":
+			reject(hasValue && tmpfsSize.MatchString(v), "Invalid tmpfs size: "+v)
+		case "mode":
+			n, e := strconv.ParseUint(v, 8, 32)
+			reject(hasValue && e == nil && n <= 0o7777, "Invalid tmpfs mode: "+v)
+		case "uid", "gid", "nr_inodes":
+			_, e := strconv.ParseUint(v, 10, 32)
+			reject(hasValue && e == nil, "Invalid tmpfs "+key+": "+v)
+		case "exec", "noexec", "suid", "nosuid", "dev", "nodev", "rw", "ro", "atime", "noatime", "relatime", "norelatime", "strictatime", "diratime", "nodiratime", "sync", "async", "mand", "nomand":
+			reject(!hasValue, "Invalid tmpfs option: "+option)
+		default:
+			panic(apiError{501, "Unsupported tmpfs option: " + option})
+		}
+		out = append(out, option)
+	}
+	return strings.Join(out, ",")
+}
+
+var tmpfsSize = regexp.MustCompile(`^[0-9]{1,15}[kKmMgG%]?$`)
+
+// inspectTmpfs: HostConfig.Tmpfs, the --tmpfs mounts and their options as given.
+func inspectTmpfs(config obj) obj {
+	out := obj{}
+	for _, m := range savedMounts(config) {
+		if m["type"] == "tmpfs" && m["flag"] == true {
+			out[str(m["target"])] = text(m["given"])
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// inspectMounts renders saved mounts as Docker's Mounts list (--tmpfs mounts are in HostConfig.Tmpfs).
 func (b *engine) inspectMounts(config obj) []any {
 	out := []any{}
 	for _, m := range savedMounts(config) {
+		if m["type"] == "tmpfs" {
+			if m["flag"] != true {
+				out = append(out, obj{"Type": "tmpfs", "Source": "", "Destination": m["target"], "Mode": "", "RW": m["readonly"] != true, "Propagation": ""})
+			}
+			continue
+		}
 		item := obj{"Type": m["type"], "Destination": m["target"], "Mode": "", "RW": m["readonly"] != true, "Propagation": "rprivate"}
 		if m["type"] == "volume" {
 			item["Name"], item["Driver"], item["Source"] = m["source"], "local", filepath.Join(b.Home, "volumes", str(m["source"]), "_data")
@@ -238,8 +329,10 @@ func (b *engine) inspectMounts(config obj) []any {
 // prepareMounts, in the supervisor: the runtime arguments for a container's
 // mounts. Mount points are created in the container root (resolving its
 // symlinks, as Docker does), and a new volume first receives what the image has
-// at its mount point unless nocopy is set.
-func prepareMounts(home, root string, config obj) []string {
+// at its mount point unless nocopy is set. tmpfs: whether this run gets the tmpfs
+// mounts; only the container's own run does (an exec or healthcheck is a host
+// process of its own and cannot share the run's memory: it sees the mount point).
+func prepareMounts(home, root string, config obj, tmpfs bool) []string {
 	args := []string{}
 	link := func(p string) (string, bool) {
 		s, e := os.Lstat(filepath.Join(root, p))
@@ -251,6 +344,15 @@ func prepareMounts(home, root string, config obj) []string {
 		return target, true
 	}
 	for _, m := range savedMounts(config) {
+		if m["type"] == "tmpfs" {
+			guest := resolveGuest(pathName(mountTarget(str(m["target"]))[1:]), link)
+			reject(guest != "", "A mount cannot replace the container root")
+			mountPoint(root, guest, true)
+			if tmpfs {
+				args = append(args, "--tmpfs", "/"+guest+":"+str(m["options"]))
+			}
+			continue
+		}
 		source := str(m["source"])
 		if m["type"] == "volume" {
 			source = volumeData(home, source)
@@ -272,6 +374,23 @@ func prepareMounts(home, root string, config obj) []string {
 		args = append(args, flag, source, "/"+guest)
 	}
 	return args
+}
+
+func optionalArray(v any) []any {
+	if idle(v) {
+		return nil
+	}
+	return array(v)
+}
+
+// hasMount: whether config mounts something at target.
+func hasMount(config obj, target string) bool {
+	for _, m := range savedMounts(config) {
+		if m["target"] == target {
+			return true
+		}
+	}
+	return false
 }
 
 // mountPoint creates a link-free directory (or empty file) at guest within root.

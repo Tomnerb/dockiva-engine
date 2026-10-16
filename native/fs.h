@@ -113,9 +113,11 @@ static int fs_scan_budget(int directory,unsigned depth) {
     if(errno)result=-1;
     int saved=errno;closedir(stream);errno=saved;return result;
 }
-typedef struct GuestCwd { int fd;unsigned refs;char path[1025]; } GuestCwd;
+/* mem: a memfs directory (memfs.h; fd is then the root's, for nothing). */
+typedef struct GuestCwd { int fd;unsigned refs;char path[1025];struct MemNode *mem; } GuestCwd;
+static void mem_node_put_locked(struct MemNode *n);
 static void fs_cwd_release(void) {
-    if(fs_cwd && !--fs_cwd->refs) { close(fs_cwd->fd);free(fs_cwd); }
+    if(fs_cwd && !--fs_cwd->refs) { if(fs_cwd->mem)mem_node_put_locked(fs_cwd->mem);close(fs_cwd->fd);free(fs_cwd); }
     fs_cwd=NULL;
 }
 static void fs_cleanup(void) {
@@ -155,9 +157,28 @@ static unsigned char *fs_memory(uint64_t address,uint64_t size,int mode) {
     for(unsigned i=0;i<2;i++)if(address==fs_detached.at[i] && fs_detached.path[i][0] && size<=strlen(fs_detached.path[i])+1)return (unsigned char *)fs_detached.path[i];
     return NULL;
 }
+/* Substitutes for a call's path arguments by guest address (memfs.h: a path that
+   leaves memfs for the host, rewritten). */
+static _Thread_local struct { uint64_t at[2];const char *path[2]; } fs_swap;
+/* memfs mounts (memfs.h). fs_walk fails with this redirect when it reaches one: the
+   mount's guest path and the rest of the path; memfs then serves the call. */
+static unsigned mem_mount_count;
+static pthread_mutex_t mem_lock=PTHREAD_MUTEX_INITIALIZER;   /* every memfs (memfs.h) */
+#define MEM_HOST_PATH (-1001)                                /* memfs.h: a path the host resolves */
+struct GuestInotify;static int64_t mem_inotify_watch(struct GuestInotify *in,uint64_t at,uint32_t mask,int follow);
+static int mem_mount_at(const char *canon);static int mem_mount_inside(const char *canon);
+static size_t mem_mount_line(unsigned i,char *out,size_t capacity,int mountinfo,unsigned id); /* a /proc/mounts line */
+static _Thread_local struct { int pending;char path[5200]; } mem_redirect;
+static int mem_redirect_set(const char *at,const char *rest) {
+    while(*rest=='/')rest++;
+    snprintf(mem_redirect.path,sizeof(mem_redirect.path),"%s%s%s",at,*rest?"/":"",rest);
+    mem_redirect.pending=1;errno=EXDEV;return -1;
+}
+static int mem_redirect_take(void) { int was=mem_redirect.pending;mem_redirect.pending=0;return was; }
 /* A guest path, read a page at a time (one lookup each), or a byte at a time where a
    segment ends within the page (the interpreter's ELF segments are not page-rounded). */
 static int fs_string(uint64_t ptr,char path[1025]) {
+    for(unsigned i=0;i<2;i++)if(fs_swap.path[i] && ptr==fs_swap.at[i]) { strcpy(path,fs_swap.path[i]);return 0; }
     if(fs_detached.on) {
         for(unsigned i=0;i<2;i++)if(ptr==fs_detached.at[i] && fs_detached.path[i][0]) { strcpy(path,fs_detached.path[i]);return 0; }
         errno=EFAULT;return -1;
@@ -327,6 +348,7 @@ static int fs_walk_fast(int base,const char *cur_start,const char *rest,int foll
         if(bad)return -1;
     }
     if(fs_canon_push(canon,name)<0)return -1;
+    if(mem_mount_count && mem_mount_inside(canon))return -2;   /* into memfs: the component walk redirects */
     /* A path into (or across) a mount resolves from the mount's own descriptor when
        the way to it is plain (bind mounts: an app's files, a database's data); else
        it needs the component walk, even where the root has nothing at the mount's path. */
@@ -404,6 +426,7 @@ static int fs_walk(int base,const char *base_path,const char *input,int follow,c
     } else if(fs_scope.resolve&8) { errno=EXDEV;return -1; }        /* RESOLVE_BENEATH: no absolute path */
     else base=FS_WALK_ROOT;
     strcpy(cur,rest[0]=='/'?(fs_scope.root>=0?fs_scope.path:"/"):base_path);
+    if(mem_mount_count && *cur && mem_mount_inside(cur))return mem_redirect_set(cur,rest);
 #ifdef O_NOFOLLOW_ANY
     {   /* The fast path stays in base's host directory tree: not across a mount. */
         char full[1025];int fast=fs_walk_fast(base,cur,rest,follow,direct,leaf,full);
@@ -438,6 +461,10 @@ static int fs_walk(int base,const char *base_path,const char *input,int follow,c
                 fs_canon_pop(cur);
             }
             continue;
+        }
+        if(mem_mount_count && *cur) {                       /* memfs: redirect */
+            char at[1025];strcpy(at,cur);
+            if(!fs_canon_push(at,part) && mem_mount_at(at)>=0) { close(fd);return mem_redirect_set(at,rest+pos); }
         }
         if(fs_mount_count && *cur) {                        /* a mount at this path replaces what the root has */
             char at[1025];strcpy(at,cur);
@@ -571,7 +598,9 @@ static uint64_t fs_chdir(void) {
     fs_cwd_release();fs_cwd=next;return 0;
 }
 /* Initial working directory from --cwd (an image WorkingDir), resolved inside the root. */
+static int mem_start_cwd(const char *path);
 static int fs_start_cwd(const char *path) {
+    { int m=path[0]=='/'?mem_start_cwd(path):0;if(m)return m>0?0:-1; }
     size_t length=strlen(path);
     if(fs_root<0 || path[0]!='/' || length>1024) { errno=EINVAL;return -1; }
     for(size_t i=0;i<length;i++)if((unsigned char)path[i]<32 || path[i]==127) { errno=EINVAL;return -1; }
@@ -1040,6 +1069,7 @@ static int proc_text(const char *path,char *text,size_t capacity,size_t *out) {
             {"tmpfs","/dev","tmpfs","rw,nosuid,size=65536k,mode=755"},{"shm","/dev/shm","tmpfs","rw,nosuid,nodev,noexec,relatime,size=65536k"},
             {"sysfs","/sys","sysfs","ro,nosuid,nodev,noexec,relatime"}};
         for(unsigned i=0;i<5+fs_mount_count && length<capacity-1200;i++) {
+            if(i==3 && mem_mount_count && mem_mount_at("/dev/shm")>=0)continue;   /* listed as a memfs mount below */
             char point[1100];const char *device=i<5?base[i][0]:"/dev/vda1",*type=i<5?base[i][2]:"ext4";
             const char *options=i<5?base[i][3]:fs_mounts[i-5].readonly?"ro,relatime":"rw,relatime";
             snprintf(point,sizeof point,"%s%s",i<5 || fs_mounts[i-5].path[0]=='/'?"":"/",i<5?base[i][1]:fs_mounts[i-5].path);
@@ -1047,6 +1077,7 @@ static int proc_text(const char *path,char *text,size_t capacity,size_t *out) {
                       :snprintf(text+length,capacity-length,"%s %s %s %s 0 0\n",device,point,type,options);
             if(n>0)length+=(size_t)n;
         }
+        for(unsigned i=0;i<mem_mount_count && length<capacity-1200;i++)length+=mem_mount_line(i,text+length,capacity-length,mountinfo,25+fs_mount_count+i);
     } else if(proc && !strcmp(rest,"cmdline") && proc_info(proc,tid,&info)) {
         memcpy(text,info.cmdline,info.size);length=info.size;
     } else if(proc && !strcmp(rest,"comm") && proc_info(proc,tid,&info)) {

@@ -89,7 +89,12 @@ and `label!` filters), `version`/`info`, and `build` and `compose build` (plain,
 buildx's `docker` driver, or with `DOCKER_BUILDKIT=0`). Builds run the
 Dockerfile on the engine's classic builder: linux/arm64 only, results go to the
 image store, and `--build-context`, `--output`, `--call`/`--check` are refused.
-Not supported: tmpfs mounts (`docker run --tmpfs`).
+tmpfs mounts (`docker run --tmpfs DIR[:size=,mode=,uid=,gid=,exec]`, `--mount
+type=tmpfs,target=DIR[,tmpfs-size=,tmpfs-mode=]`) are file systems the runtime keeps
+in memory, charged to the container's memory limit as Linux charges tmpfs, with
+Docker's defaults (`noexec,nosuid,nodev`, mode 1777). They belong to the container's
+own run: `docker exec`, healthchecks and `docker cp` see the empty mount point
+beneath them.
 
 Builds read the Dockerfile 1.x syntax (`# syntax=docker/dockerfile:1...` is
 accepted; other frontends are refused, and `# check=` is ignored):
@@ -153,6 +158,13 @@ comes back consistent after power loss, losing at most its last commits (OrbStac
 behaves the same). `dockiva-engine --fsync full` drains the drive's cache on every
 fsync (strictly durable, about 5x slower for databases); `--fsync fast` is plain
 macOS fsync (fastest; writes may reach the disk out of order).
+
+Scratch files: `dockiva-engine --tmp memory` puts every container's `/tmp` (unless
+something is mounted there) and `/dev/shm` (64 MiB) in such an in-memory tmpfs: no
+macOS file system calls, so creating and removing files there costs about 2 us
+instead of 50 us (an APFS create). It is off by default (`--tmp disk`): Docker keeps
+`/tmp` on the container's writable layer (it survives a restart and is visible to
+`docker exec`), and its contents count against the memory limit.
 
 Published ports: `-p 8080:80` listens on 127.0.0.1 only, so nothing is reachable
 from the network by default; with `--default-bind-ip 0.0.0.0` it listens on every

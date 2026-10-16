@@ -35,7 +35,9 @@ static int io_slot(uint64_t fd) { return fd_slot(fd,FD_IO); }
 #define IO_TIMERS 128
 #define IO_TEXT 11  /* procfs-like text (/proc/mounts...): read-only, seekable */
 #define IO_INOTIFY 12 /* inotify.h: host is the instance's notification pipe */
-struct GuestInotify;
+#define IO_MEM 13     /* memfs.h: a memfs file or directory; mem is the open description */
+struct GuestInotify;struct MemOpen;
+static void mem_release(struct MemOpen *o);static void mem_open_get(struct MemOpen *o);
 static void inotify_release(struct GuestInotify *in);
 static void inotify_retain(struct GuestInotify *in);
 static void epoll_ref(int slot,int change);
@@ -69,13 +71,13 @@ static struct GuestSignalfd { unsigned refs,nonblock;uint64_t mask; } io_signalf
 static struct GuestTimer { unsigned refs,nonblock;clockid_t clock;int kq;uint64_t deadline,interval; } io_timers[IO_TIMERS];
 /* A synthetic file's contents, shared by dup and fork, and the shared position. */
 struct GuestText { unsigned refs,directory;size_t size,position;unsigned char *data;char path[48]; }; /* directory: data is linux_dirent64 records; path: its /proc path */
-typedef struct { unsigned kind,cloexec;int host;struct GuestPipe *pipe;struct GuestSignalfd *signals;struct GuestTimer *timer;struct GuestText *text;struct GuestInotify *inotify; } GuestIO;
+typedef struct { unsigned kind,cloexec;int host;struct GuestPipe *pipe;struct GuestSignalfd *signals;struct GuestTimer *timer;struct GuestText *text;struct GuestInotify *inotify;struct MemOpen *mem; } GuestIO;
 static uint64_t io_signals_pending(void);            /* the calling process's pending signals */
 static unsigned io_signal_take(unsigned signal);     /* consume one; returns its sender's pid */
 static uint64_t terminal_ioctl(GuestIO *fd);
 /* The current process's I/O slots; guest: slot -> guest descriptor. */
 typedef struct { GuestIO fds[IO_END];unsigned short guest[IO_END]; } IoTable;
-static IoTable io_table_first={{[0]={IO_EOF,0,0,NULL,NULL,NULL,NULL,NULL},[1]={IO_OUTPUT,0,1,NULL,NULL,NULL,NULL,NULL},[2]={IO_OUTPUT,0,2,NULL,NULL,NULL,NULL,NULL}},{0,1,2}};
+static IoTable io_table_first={{[0]={IO_EOF,0,0,NULL,NULL,NULL,NULL,NULL,NULL},[1]={IO_OUTPUT,0,1,NULL,NULL,NULL,NULL,NULL,NULL},[2]={IO_OUTPUT,0,2,NULL,NULL,NULL,NULL,NULL,NULL}},{0,1,2}};
 static _Thread_local IoTable *io_table=&io_table_first;
 #define io_fds (io_table->fds)
 #define io_guest (io_table->guest)
@@ -93,6 +95,7 @@ static void io_release(GuestIO *f) {
     if(f->kind==IO_TIMER && !--f->timer->refs) { epoll_forget_socket(f->timer->kq);close(f->timer->kq);memset(f->timer,0,sizeof(*f->timer)); }
     if(f->kind==IO_TEXT && !--f->text->refs) { free(f->text->data);free(f->text); }
     if(f->kind==IO_INOTIFY)inotify_release(f->inotify);
+    if(f->kind==IO_MEM)mem_release(f->mem);
     if(f->kind==IO_READ || f->kind==IO_WRITE || f->kind==IO_EVENT) {
         struct GuestPipe *p=f->pipe;io_pipe_changed(p);
         if(f->kind!=IO_WRITE)p->readers--;else p->writers--;
@@ -112,6 +115,7 @@ static int io_copy(GuestIO *out,const GuestIO *source) {
     if(source->kind==IO_TIMER)source->timer->refs++;
     if(source->kind==IO_TEXT)source->text->refs++;
     if(source->kind==IO_INOTIFY)inotify_retain(source->inotify);
+    if(source->kind==IO_MEM)mem_open_get(source->mem);
     if(source->kind==IO_FILE) { out->host=dup(source->host);if(out->host<0) { memset(out,0,sizeof(*out));return -1; } }
     if(source->kind==IO_READ || source->kind==IO_EVENT)source->pipe->readers++;
     if(source->kind==IO_WRITE)source->pipe->writers++;
@@ -129,7 +133,7 @@ static int io_poll_ready(uint64_t guest,unsigned events) {
     if(!io_managed(guest) || !IO(guest).kind)return -1;
     const GuestIO *f=&IO(guest);
     switch(f->kind) {
-        case IO_FILE:case IO_TEXT:return (int)(in|out);
+        case IO_FILE:case IO_TEXT:case IO_MEM:return (int)(in|out);
         case IO_EOF:return (int)in;    /* reads return end of file at once */
         case IO_OUTPUT:return (int)out;
         case IO_READ:return (int)((f->pipe->used?in:0)|(pipe_hung_up(f->pipe)?16:0));
@@ -158,7 +162,7 @@ static uint64_t io_pipe(void) {
     struct GuestPipe *p=&io_pipes[i];p->data=malloc(PIPE_CAP);if(!p->data) { fd_unbind((uint64_t)r);fd_unbind((uint64_t)w);return linux_error(12); }
     p->used=0;p->readers=p->writers=1;p->read_nonblock=p->write_nonblock=(cpu->gpr[1]&2048)!=0;
     unsigned cloexec=(cpu->gpr[1]&524288)!=0;
-    IO(r)=(GuestIO){IO_READ,cloexec,-1,p,NULL,NULL,NULL,NULL};IO(w)=(GuestIO){IO_WRITE,cloexec,-1,p,NULL,NULL,NULL,NULL};
+    IO(r)=(GuestIO){IO_READ,cloexec,-1,p,NULL,NULL,NULL,NULL,NULL};IO(w)=(GuestIO){IO_WRITE,cloexec,-1,p,NULL,NULL,NULL,NULL,NULL};
     fs_pack(out,0,(unsigned)r,4);fs_pack(out,4,(unsigned)w,4);return 0;
 }
 /* eventfd2(initval, flags): EFD_SEMAPHORE 1, EFD_NONBLOCK, EFD_CLOEXEC. */
@@ -172,7 +176,7 @@ static uint64_t io_eventfd(void) {
     struct GuestPipe *p=&io_pipes[i];if(!(p->data=malloc(1))) { fd_unbind((uint64_t)fd);return linux_error(12); }
     p->used=(size_t)cpu->gpr[0];p->readers=1;p->writers=0;p->semaphore=(flags&1)!=0;
     p->read_nonblock=p->write_nonblock=(flags&2048)!=0;
-    IO(fd)=(GuestIO){IO_EVENT,(flags&524288)!=0,-1,p,NULL,NULL,NULL,NULL};
+    IO(fd)=(GuestIO){IO_EVENT,(flags&524288)!=0,-1,p,NULL,NULL,NULL,NULL,NULL};
     return (uint64_t)fd;
 }
 /* read/write of an eventfd: 8-byte counter values. */
@@ -227,7 +231,7 @@ static uint64_t io_fifo_open(dev_t dev,ino_t ino,uint64_t flags) {
     unsigned cloexec=(flags&524288)!=0,nonblock=(flags&2048)!=0;
     if(reading) { p->readers++;p->read_nonblock=nonblock; } else { p->writers++;p->write_nonblock=nonblock; }
     if(writing) { p->had_writer=1;if(reading)p->writers++; }
-    IO(fd)=(GuestIO){reading?IO_READ:IO_WRITE,cloexec,-1,p,NULL,NULL,NULL,NULL};
+    IO(fd)=(GuestIO){reading?IO_READ:IO_WRITE,cloexec,-1,p,NULL,NULL,NULL,NULL,NULL};
     io_pipe_changed(p);
     return (uint64_t)fd;
 }
@@ -240,7 +244,7 @@ static uint64_t io_text_open(const void *data,size_t size,int cloexec,int direct
     memcpy(t->data,data,size);t->size=size;t->refs=1;t->directory=(unsigned)directory;
     if(path && strlen(path)<sizeof(t->path))strcpy(t->path,path);
     int fd=io_free_slot(0);if(fd<0) { free(t->data);free(t);return linux_error(24); }
-    IO(fd)=(GuestIO){IO_TEXT,cloexec!=0,-1,NULL,NULL,NULL,t,NULL};
+    IO(fd)=(GuestIO){IO_TEXT,cloexec!=0,-1,NULL,NULL,NULL,t,NULL,NULL};
     return (uint64_t)fd;
 }
 /* The /proc path of one of our /proc directory descriptors, or NULL (openat relative to it). */
@@ -303,7 +307,7 @@ static uint64_t io_timerfd(uint64_t call) {
         fcntl(kq,F_SETFD,FD_CLOEXEC);
         int slot=io_free_slot(0);if(slot<0) { close(kq);return linux_error(24); }
         io_timers[i]=(struct GuestTimer){1,(flags&2048)!=0,clock==0?CLOCK_REALTIME:clock==1?CLOCK_UPTIME_RAW:CLOCK_MONOTONIC,kq,0,0};
-        IO(slot)=(GuestIO){IO_TIMER,(flags&524288)!=0,kq,NULL,NULL,&io_timers[i],NULL,NULL};
+        IO(slot)=(GuestIO){IO_TIMER,(flags&524288)!=0,kq,NULL,NULL,&io_timers[i],NULL,NULL,NULL};
         return (uint64_t)slot;
     }
     if(io_slot(cpu->gpr[0])<0 || !IO(cpu->gpr[0]).kind)return linux_error(9);
@@ -521,6 +525,6 @@ static uint64_t io_signalfd(void) {
     if(i==IO_SIGNALFDS)return linux_error(24);
     int slot=io_free_slot(0);if(slot<0)return linux_error(24);
     io_signalfds[i]=(struct GuestSignalfd){1,(flags&2048)!=0,mask};
-    IO(slot)=(GuestIO){IO_SIGNAL,(flags&524288)!=0,-1,NULL,&io_signalfds[i],NULL,NULL,NULL};
+    IO(slot)=(GuestIO){IO_SIGNAL,(flags&524288)!=0,-1,NULL,&io_signalfds[i],NULL,NULL,NULL,NULL};
     return (uint64_t)slot;
 }

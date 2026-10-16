@@ -286,6 +286,8 @@ static uint64_t net_abstract_address(int fd,const unsigned char *name,unsigned l
    bytes, so the host socket is bound or connected by its leaf name after a brief
    fchdir into the resolved parent; the syscall layer runs on one thread. A bind of
    the family alone (length 2) autobinds an abstract name of five hex digits. */
+static int64_t mem_unix_address(int fd,const char *guest,int binding,int probe,struct NetDescription *d,char rewrite[1025]); /* memfs.h */
+static uint64_t net_unix_host(int fd,int binding,struct NetDescription *d,int parent,const char *leaf,const char *canon,const char *guest);
 static uint64_t net_unix_address(int fd,uint64_t address,uint64_t length,int binding,struct NetDescription *d) {
     if(length==2 && binding) {
         const unsigned char *p=lookup(address,2,4);if(!p)return linux_error(14);
@@ -312,9 +314,19 @@ static uint64_t net_unix_address(int fd,uint64_t address,uint64_t length,int bin
     guest[n]=0;
     if(n>107)return linux_error(36);
     if(net_unix_home<0 && (net_unix_home=open(".",O_RDONLY|O_DIRECTORY|O_CLOEXEC))<0)return net_error();
-    int base=fs_cwd?fs_cwd->fd:fs_root;const char *base_path=fs_cwd?fs_cwd->path:"/";
-    char leaf[1025],canon[1025];
-    int parent=fs_walk(base,base_path,guest,!binding,leaf,canon);if(parent<0)return fs_error();
+    for(int probe=0;;probe++) {                                   /* memfs (memfs.h): a socket node naming an abstract socket */
+        char rewrite[1025];int64_t m=probe>1?MEM_HOST_PATH:mem_unix_address(fd,guest,binding,probe,d,rewrite);
+        if(m==1 && strlen(rewrite)<sizeof(guest))strcpy(guest,rewrite);   /* a host path after all */
+        else if(m!=MEM_HOST_PATH)return m<0?linux_error((unsigned)-m):0;
+        int base=fs_cwd?fs_cwd->fd:fs_root;const char *base_path=fs_cwd?fs_cwd->path:"/";
+        char leaf[1025],canon[1025];
+        int parent=fs_walk(base,base_path,guest,!binding,leaf,canon);
+        if(parent<0 && mem_redirect_take() && !probe)continue;        /* reached memfs through a link */
+        if(parent<0)return fs_error();
+        return net_unix_host(fd,binding,d,parent,leaf,canon,guest);
+    }
+}
+static uint64_t net_unix_host(int fd,int binding,struct NetDescription *d,int parent,const char *leaf,const char *canon,const char *guest) {
     if(binding && !fs_path_writable()) { close(parent);return linux_error(30); }
     if(!strcmp(leaf,".") || strlen(leaf)>=sizeof(((struct sockaddr_un *)0)->sun_path)) { close(parent);return linux_error(binding?22:111); }
     struct sockaddr_un host;memset(&host,0,sizeof(host));host.sun_family=AF_UNIX;strcpy(host.sun_path,leaf);

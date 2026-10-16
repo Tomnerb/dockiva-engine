@@ -147,27 +147,39 @@ static uint64_t shared_unmap(uint64_t address,uint64_t bytes) {
    ponytail: read() of the file does not see unflushed mapped changes (Linux's page
    cache unifies them); flush before reads if that ever matters. */
 #define FILE_SHARES 1024 /* .NET maps each assembly it loads MAP_SHARED */
-static struct FileShare { dev_t dev;ino_t ino;int fd;MemoryBacking *backing;size_t size;int writable; } file_shares[FILE_SHARES];
+/* mem: a memfs file (memfs.h), held; fd is then -1. */
+static struct FileShare { dev_t dev;ino_t ino;int fd;MemoryBacking *backing;size_t size;int writable;struct MemNode *mem; } file_shares[FILE_SHARES];
+struct MemNode;
+static int mem_map_file(uint64_t guestfd,uint64_t *dev,uint64_t *ino,uint64_t *size,int *writable,struct MemNode **node);
+static void mem_map_read(struct MemNode *n,unsigned char *out,size_t count,uint64_t offset);
+static void mem_map_write(struct MemNode *n,const unsigned char *data,size_t count);
 /* Guards the table against file writes, which also run without the runtime lock. */
 static pthread_mutex_t file_share_lock=PTHREAD_MUTEX_INITIALIZER;
-static void file_share_written(int fd,uint64_t at,const unsigned char *data,size_t bytes) {
-    struct stat st;if(fstat(fd,&st)<0)return;
+static void file_share_written_at(uint64_t dev,uint64_t ino,uint64_t at,const unsigned char *data,size_t bytes) {
     pthread_mutex_lock(&file_share_lock);
     for(unsigned i=0;i<FILE_SHARES;i++) {
         struct FileShare *f=&file_shares[i];
-        if(!f->backing || f->dev!=st.st_dev || f->ino!=st.st_ino || at>=f->size)continue;
+        if(!f->backing || (uint64_t)f->dev!=dev || (uint64_t)f->ino!=ino || at>=f->size)continue;
         memcpy(backing_data(f->backing)+at,data,bytes<f->size-at?bytes:(size_t)(f->size-at));
     }
     pthread_mutex_unlock(&file_share_lock);
 }
+static void file_share_written(int fd,uint64_t at,const unsigned char *data,size_t bytes) {
+    struct stat st;if(fstat(fd,&st)<0)return;
+    file_share_written_at((uint64_t)st.st_dev,(uint64_t)st.st_ino,at,data,bytes);
+}
 static void file_share_forget(struct FileShare *f) {
     pthread_mutex_lock(&file_share_lock);
-    close(f->fd);backing_release(f->backing);memset(f,0,sizeof(*f));
+    struct MemNode *mem=f->mem;
+    if(!mem)close(f->fd);
+    backing_release(f->backing);memset(f,0,sizeof(*f));
     pthread_mutex_unlock(&file_share_lock);
+    if(mem)mem_node_put_locked(mem);
     __atomic_fetch_sub(&file_shares_live,1,__ATOMIC_RELAXED);
 }
 static void file_share_flush(struct FileShare *f) {
     if(!f->writable)return;                             /* never written through a mapping */
+    if(f->mem) { mem_map_write(f->mem,backing_data(f->backing),f->size);return; }
     struct stat st;if(fstat(f->fd,&st)<0)return;
     size_t bytes=(size_t)st.st_size<f->size?(size_t)st.st_size:f->size;
     for(size_t done=0;done<bytes;) {
@@ -182,14 +194,26 @@ static void file_share_unmapped(MemoryBacking *backing) {
     }
 }
 static int file_share_find(uint64_t guestfd) {
-    int fd=fs_host(guestfd);struct stat st;if(fd<0 || fstat(fd,&st)<0)return 0;
-    for(unsigned i=0;i<FILE_SHARES;i++)if(file_shares[i].backing && file_shares[i].dev==st.st_dev && file_shares[i].ino==st.st_ino)return 1;
+    uint64_t dev,ino,size;int writable;
+    if(mem_map_file(guestfd,&dev,&ino,&size,&writable,NULL)<=0) {
+        int fd=fs_host(guestfd);struct stat st;if(fd<0 || fstat(fd,&st)<0)return 0;
+        dev=(uint64_t)st.st_dev;ino=(uint64_t)st.st_ino;
+    }
+    for(unsigned i=0;i<FILE_SHARES;i++)if(file_shares[i].backing && (uint64_t)file_shares[i].dev==dev && (uint64_t)file_shares[i].ino==ino)return 1;
     return 0;
 }
 static uint64_t file_share_map(uint64_t fixed,uint64_t length,uint64_t prot,uint64_t guestfd,uint64_t offset) {
-    int fd=fs_host(guestfd);if(fd<0)return linux_error(9);
-    if((prot&2) && fs_ro[fs_slot(guestfd)])return linux_error(13);
-    struct stat st;if(fstat(fd,&st)<0)return fs_error();if(!S_ISREG(st.st_mode))return linux_error(19);
+    struct stat st;struct MemNode *mem=NULL;int fd=-1;
+    uint64_t mdev,mino,msize;int mwritable;int memfs=mem_map_file(guestfd,&mdev,&mino,&msize,&mwritable,&mem);
+    if(memfs<0)return linux_error(19);
+    if(memfs) {                                          /* a memfs file: its identity, size and node (held) */
+        if((prot&2) && !mwritable) { mem_node_put_locked(mem);return linux_error(13); }
+        memset(&st,0,sizeof(st));st.st_dev=(dev_t)mdev;st.st_ino=(ino_t)mino;st.st_size=(off_t)msize;
+    } else {
+        fd=fs_host(guestfd);if(fd<0)return linux_error(9);
+        if((prot&2) && fs_ro[fs_slot(guestfd)])return linux_error(13);
+        if(fstat(fd,&st)<0)return fs_error();if(!S_ISREG(st.st_mode))return linux_error(19);
+    }
     size_t end=(size_t)page_up(offset+length);
     struct FileShare *f=NULL,*free_entry=NULL;
     for(unsigned i=0;i<FILE_SHARES;i++) {
@@ -197,21 +221,26 @@ static uint64_t file_share_map(uint64_t fixed,uint64_t length,uint64_t prot,uint
         else if(!file_shares[i].backing && !free_entry)free_entry=&file_shares[i];
     }
     if(f && end>f->size) {
-        if(f->backing->refs>1)return linux_error(12); /* mapped beyond what others share */
+        if(f->backing->refs>1) { if(mem)mem_node_put_locked(mem);return linux_error(12); } /* mapped beyond what others share */
         file_share_flush(f);file_share_forget(f);free_entry=f;f=NULL;
     }
+    if(f && mem) { mem_node_put_locked(mem);mem=NULL; }   /* the share holds it already */
     if(!f) {
-        if(!free_entry)return linux_error(23);
+        if(!free_entry) { if(mem)mem_node_put_locked(mem);return linux_error(23); }
         size_t size=end>(size_t)page_up((uint64_t)st.st_size)?end:(size_t)page_up((uint64_t)st.st_size);
-        MemoryBacking *backing=backing_alloc(size,1);if(!backing)return linux_error(12);
-        for(size_t done=0;done<(size_t)st.st_size && done<size;) {
-            ssize_t n=pread(fd,backing_data(backing)+done,size-done,(off_t)done);
-            if(n<=0)break;done+=(size_t)n;
+        MemoryBacking *backing=backing_alloc(size,1);if(!backing) { if(mem)mem_node_put_locked(mem);return linux_error(12); }
+        int keep=-1;
+        if(mem)mem_map_read(mem,backing_data(backing),(size_t)st.st_size<size?(size_t)st.st_size:size,0);
+        else {
+            for(size_t done=0;done<(size_t)st.st_size && done<size;) {
+                ssize_t n=pread(fd,backing_data(backing)+done,size-done,(off_t)done);
+                if(n<=0)break;done+=(size_t)n;
+            }
+            keep=dup(fd);if(keep<0) { backing_release(backing);return fs_error(); }
+            fcntl(keep,F_SETFD,FD_CLOEXEC);
         }
-        int keep=dup(fd);if(keep<0) { backing_release(backing);return fs_error(); }
-        fcntl(keep,F_SETFD,FD_CLOEXEC);
         pthread_mutex_lock(&file_share_lock);
-        f=free_entry;*f=(struct FileShare){st.st_dev,st.st_ino,keep,backing,size,0};
+        f=free_entry;*f=(struct FileShare){st.st_dev,st.st_ino,keep,backing,size,0,mem};
         pthread_mutex_unlock(&file_share_lock);
         __atomic_fetch_add(&file_shares_live,1,__ATOMIC_RELAXED);
     }
@@ -220,6 +249,28 @@ static uint64_t file_share_map(uint64_t fixed,uint64_t length,uint64_t prot,uint
     if((int64_t)result<0 && f->backing->refs==1)file_share_forget(f);
     return result;
 }
+/* A file's bytes for a mapping, zeros past its end (a host or memfs file): 0 or an error. */
+static uint64_t map_file_read(uint64_t guestfd,unsigned char *out,size_t length,uint64_t offset) {
+    uint64_t dev,ino,size;int writable;struct MemNode *n=NULL;int memfs=mem_map_file(guestfd,&dev,&ino,&size,&writable,&n);
+    if(memfs<0)return linux_error(19);
+    if(memfs) { mem_map_read(n,out,length,offset);mem_node_put_locked(n);return 0; }
+    int fd=fs_host(guestfd);if(fd<0)return linux_error(9);
+    struct stat st;if(fstat(fd,&st)<0)return fs_error();if(!S_ISREG(st.st_mode))return linux_error(19);
+    for(size_t done=0;done<length;) {
+        ssize_t n=pread(fd,out+done,length-done,(off_t)(offset+done));
+        if(n<0 && errno==EINTR)continue;
+        if(n<0)return fs_error();
+        if(!n)break;done+=(size_t)n;
+    }
+    return 0;
+}
+static int map_file_check(uint64_t guestfd) {          /* 0, or an error for a file that cannot be mapped */
+    uint64_t dev,ino,size;int writable;int memfs=mem_map_file(guestfd,&dev,&ino,&size,&writable,NULL);
+    if(memfs)return memfs<0?(int)linux_error(19):0;
+    int fd=fs_host(guestfd);if(fd<0)return (int)linux_error(9);
+    struct stat st;if(fstat(fd,&st)<0)return (int)fs_error();return S_ISREG(st.st_mode)?0:(int)linux_error(19);
+}
+static int map_mem_writable(uint64_t guestfd) { uint64_t d,i,s;int w;return mem_map_file(guestfd,&d,&i,&s,&w,NULL)>0 && w; }
 /* msync: write mapped files back (all of them; cheap at this scale). */
 static uint64_t guest_msync(void) {
     if(cpu->gpr[0]%4096 || cpu->gpr[2]&~UINT64_C(7))return linux_error(22);
@@ -495,7 +546,7 @@ static uint64_t guest_dynamic_mmap(void) {
            through, so a private copy is equivalent, unless the file is or can be mapped
            shared and writable: then it must see those writes. JITs map a memfd twice,
            asmjit (Erlang's BEAM) the executable view first. */
-        file_share_find(cpu->gpr[4]) || (fs_host(cpu->gpr[4])>=0 && !fs_ro[fs_slot(cpu->gpr[4])]));
+        file_share_find(cpu->gpr[4]) || (fs_host(cpu->gpr[4])>=0 && !fs_ro[fs_slot(cpu->gpr[4])]) || map_mem_writable(cpu->gpr[4]));
     if(shared && ((flags&32) || share_file) && fixed) {
         uint64_t e=outside?map_outside_clear(addr,bytes):map_in_arena(addr,bytes)?guest_munmap(addr,bytes):0;
         if(e)return e;
@@ -511,23 +562,16 @@ static uint64_t guest_dynamic_mmap(void) {
            Linux keeps such pages in its reclaimable page cache. ponytail: it is a shared
            segment, so a later mprotect to writable would share writes across fork; copy
            on such an mprotect if that ever matters. */
-        int fd=fs_host(cpu->gpr[4]);if(fd<0)return linux_error(9);
-        struct stat st;if(fstat(fd,&st)<0)return fs_error();if(!S_ISREG(st.st_mode))return linux_error(19);
+        int bad=map_file_check(cpu->gpr[4]);if(bad)return (uint64_t)(int64_t)bad;
         MemoryBacking *text=backing_alloc_text((size_t)bytes);if(!text)return linux_error(12);
-        for(size_t done=0;done<length;) {
-            ssize_t n=pread(fd,backing_data(text)+done,(size_t)(length-done),(off_t)(offset+done));
-            if(n<0 && errno==EINTR)continue;
-            if(n<0) { uint64_t e=fs_error();backing_release(text);return e; }
-            if(!n)break;done+=(size_t)n;
-        }
+        uint64_t e=map_file_read(cpu->gpr[4],backing_data(text),(size_t)length,offset);
+        if(e) { backing_release(text);return e; }
         uint64_t result=shared_map(0,length,prot,text,0);backing_release(text);
         for(unsigned i=0;(int64_t)result>0 && i<address_space->nseg;i++)if(address_space->seg[i].base==result)address_space->seg[i].flags|=SEG_FILE_COPY;
         return result;
     }
     int fd=-1;
-    if(!(flags&32)) { fd=fs_host(cpu->gpr[4]);if(fd<0)return linux_error(9);
-        struct stat st;if(fstat(fd,&st)<0)return fs_error();if(!S_ISREG(st.st_mode))return linux_error(19);
-    }
+    if(!(flags&32)) { int bad=map_file_check(cpu->gpr[4]);if(bad)return (uint64_t)(int64_t)bad;fd=0; }
     unsigned pages=(unsigned)(bytes/4096),start=0;
     if(flags&16) {
         if(!outside && (addr%4096 || !map_in_arena(addr,bytes)))return linux_error(22);
@@ -543,13 +587,8 @@ static uint64_t guest_dynamic_mmap(void) {
     unsigned char *data=NULL;
     if(fd>=0) {
         if(!(data=calloc(pages,4096)))return linux_error(12);
-        size_t done=0;
-        while(done<length) {
-            ssize_t n=pread(fd,data+done,(size_t)(length-done),(off_t)(offset+done));
-            if(n<0 && errno==EINTR)continue;
-            if(n<0) { uint64_t e=fs_error();free(data);return e; }
-            if(!n)break;done+=(size_t)n;
-        }
+        uint64_t e=map_file_read(cpu->gpr[4],data,(size_t)length,offset);
+        if(e) { free(data);return e; }
     }
     if(outside) {                                    /* a reservation, committed unless PROT_NONE */
         uint64_t e=map_outside_clear(addr,bytes);
