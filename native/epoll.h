@@ -57,7 +57,7 @@ static uint64_t epoll_suspend(struct GuestEpoll *e,unsigned high,unsigned count,
     if(result==IO_BLOCK && !syscall_unlocked)
         for(unsigned i=0;i<high;i++) {
             EpollWatch *w=&e->watch[i];
-            if(w->active && (w->kind==IO_READ || w->kind==IO_WRITE || w->kind==IO_EVENT))w->pipe->waiters|=PROCESS_BIT(process_pid);
+            if(w->active && (w->kind==IO_READ || w->kind==IO_WRITE || w->kind==IO_EVENT))io_wait_on(w->pipe);
         }
     return result==IO_BLOCK?IO_BLOCK:0; /* deadline passed: no events */
 }
@@ -139,17 +139,18 @@ static uint64_t guest_epoll(uint64_t call) {
     }
     epoll_prepared.valid=0;
     for(int pass=0;;pass++) {
+        unsigned hosts=0;
         for(unsigned i=0;i<high;i++) {
             EpollWatch *w=&e->watch[i];polls[i]=(struct pollfd){-1,0,0};
             if(!w->active || w->kind)continue;
-            polls[i].fd=w->host;
+            polls[i].fd=w->host;hosts++;
             if(w->events&(1|EPOLL_RDHUP))polls[i].events|=POLLIN;
             if(w->events&2)polls[i].events|=POLLPRI;
             if(w->events&4)polls[i].events|=POLLOUT;
         }
         /* Unscheduled callers may block in the host poll on the second pass. */
         int wait_ms=pass && !scheduled?timeout:0;
-        if(poll(polls,high,wait_ms)<0)return net_error();
+        if((wait_ms?poll(polls,high,wait_ms):hosts?poll_now(polls,high):0)<0)return net_error(); /* only pipes and eventfds (libuv's loops): no host call */
         unsigned any=0,unread_edge=0;
         for(unsigned i=0;i<high;i++) {
             EpollWatch *w=&e->watch[i];level[i]=deliver[i]=0;avail[i]=0;reads[i]=writes[i]=0;

@@ -59,10 +59,16 @@ static int process_set_others(const uint64_t set[PROCESS_WORDS],uint64_t pid) {
 static void process_set_mark(uint64_t set[PROCESS_WORDS],uint64_t pid,int on) {
     uint64_t bit=UINT64_C(1)<<((pid-1)%64);if(on)set[(pid-1)/64]|=bit;else set[(pid-1)/64]&=~bit;
 }
-static void schedule_wake_mask(uint64_t mask);
+static void schedule_wake_mask(uint64_t mask);static void schedule_wake_pipe(uint64_t mask,const struct GuestPipe *p);
 static void io_pipe_changed(struct GuestPipe *p) {
     io_epoch++;
-    if(p->waiters) { uint64_t mask=p->waiters;p->waiters=0;schedule_wake_mask(mask); }
+    if(p->waiters) { uint64_t mask=p->waiters;p->waiters=0;schedule_wake_pipe(mask,p); }
+}
+/* The current (targeted) wait also ends on a change of p. */
+static void io_wait_on(struct GuestPipe *p) {
+    p->waiters|=PROCESS_BIT(process_pid);
+    if(net_wait.pipe_count<NET_WAIT_PIPES)net_wait.pipes[net_wait.pipe_count]=p;
+    if(net_wait.pipe_count<=NET_WAIT_PIPES)net_wait.pipe_count++;
 }
 /* A signalfd's open description: the signals it reports, shared by dup and fork. */
 static struct GuestSignalfd { unsigned refs,nonblock;uint64_t mask; } io_signalfds[IO_SIGNALFDS];
@@ -144,9 +150,21 @@ static int io_poll_ready(uint64_t guest,unsigned events) {
     }
 }
 static unsigned io_nonblocking(const GuestIO *f) { return f->kind==IO_READ?f->pipe->read_nonblock:f->pipe->write_nonblock; }
+/* A blocking pipe or eventfd call waits for a change of that pipe alone. */
+static uint64_t io_block_on(struct GuestPipe *p) {
+    uint64_t r=net_suspend(NULL,0,NET_FOREVER);
+    if(r==IO_BLOCK)io_wait_on(p);
+    return r;
+}
 static uint64_t io_would_block(const GuestIO *f) {
-    if(schedule_active && !io_nonblocking(f)) { if(f->kind==IO_READ)io_read_blocks++;else io_write_blocks++;return IO_BLOCK; }
+    if(schedule_active && !io_nonblocking(f)) { if(f->kind==IO_READ)io_read_blocks++;else io_write_blocks++;return io_block_on(f->pipe); }
     return linux_error(11);
+}
+static int io_wait_pipe(uint64_t guest) {
+    if(!io_managed(guest))return 0;
+    GuestIO *f=&IO(guest);
+    if(f->kind!=IO_READ && f->kind!=IO_WRITE && f->kind!=IO_EVENT)return 0;
+    io_wait_on(f->pipe);return 1;
 }
 static uint64_t io_pipe(void) {
     if(cpu->gpr[1] & ~(UINT64_C(2048)|524288))return linux_error(22);
@@ -186,10 +204,10 @@ static uint64_t io_event_transfer(GuestIO *f,int writing) {
     struct GuestPipe *e=f->pipe;
     if(writing) {
         uint64_t value=le(p,8);if(value==UINT64_MAX)return linux_error(22);
-        if(value>UINT64_MAX-1-e->used)return e->write_nonblock || !schedule_active?linux_error(11):IO_BLOCK;
+        if(value>UINT64_MAX-1-e->used)return e->write_nonblock || !schedule_active?linux_error(11):io_block_on(e);
         e->used+=value;e->writes++;io_pipe_changed(e);return 8;
     }
-    if(!e->used)return e->write_nonblock || !schedule_active?linux_error(11):IO_BLOCK;
+    if(!e->used)return e->write_nonblock || !schedule_active?linux_error(11):io_block_on(e);
     uint64_t value=e->semaphore?1:e->used;e->used-=value;fs_pack(p,0,value,8);
     e->reads++;io_pipe_changed(e);return 8;
 }

@@ -92,11 +92,26 @@ static uint64_t task_signals_blocked(ScheduledTask *t) {
     for(unsigned i=0;i<t->threads->top;i++)if(t->threads->thread[i].state)all&=t->threads->thread[i].signal_mask;
     return all;
 }
+/* The worker running th of t (or t) must leave its guest code or wait: the run or
+   the process is ending, the process stops, the thread was ended, or a signal
+   awaits delivery. Read without the runtime lock: whoever sets these interrupts the
+   workers running the process (and its in-place waiters). */
+static unsigned schedule_done;
+static int task_must_stop(ScheduledTask *t,Thread *th) {
+    if(schedule_done || t->exit_pending || t->terminate_signal || t->stop_signal || t->state==3)return 1;
+    if(th && !th->state)return 1;
+    if(!job_control_enabled)return 0;
+    uint64_t mask=th?th->signal_mask:t->signal_mask;
+    return ((t->signal_pending|(th?th->signal_pending:0))&~mask&~t->signal_ignored)!=0;
+}
+static void schedule_inplace_check(int evict);
+static unsigned schedule_inplace_count;
 /* Workers running t's code leave it soon (a signal, the process stopping or ending). */
 static void schedule_interrupt(ScheduledTask *t) {
     int index=(int)(t-schedule_tasks);
     atomic_thread_fence(memory_order_seq_cst);     /* the request is visible before in_guest is read */
     for(unsigned i=0;worker_interrupt && i<worker_count;i++)if(workers[i]!=worker && workers[i]->task==index)worker_interrupt(workers[i]);
+    if(__atomic_load_n(&schedule_inplace_count,__ATOMIC_RELAXED))schedule_inplace_check(0);
 }
 /* Threads of a process take its mm lock around every exit and hold it for
    microseconds: spin briefly before sleeping in the kernel, where a wakeup takes far
@@ -189,6 +204,29 @@ static void schedule_wake(ScheduledTask *task) {
 }
 static void schedule_wake_mask(uint64_t mask) {
     for(unsigned i=0;i<=process_count;i++)if(mask&PROCESS_BIT(i+1))schedule_wake(&schedule_tasks[i]);
+}
+/* A pipe the processes in mask wait on changed: in a threaded process only the
+   threads whose wait names it retry (a thread that runs counts it as an event, as
+   schedule_wake does). Waking them all made every eventfd write of a worker_threads
+   ping-pong retry each sibling's epoll_wait under the lock. */
+static int net_wait_names(const NetWait *w,const void *pipe) {
+    if(w->pipe_count>NET_WAIT_PIPES)return 1;
+    for(unsigned k=0;k<w->pipe_count;k++)if(w->pipes[k]==pipe)return 1;
+    return 0;
+}
+static void schedule_wake_pipe(uint64_t mask,const struct GuestPipe *pipe) {
+    for(unsigned i=0;i<=process_count;i++) {
+        ScheduledTask *task=&schedule_tasks[i];
+        if(!(mask&PROCESS_BIT(i+1)))continue;
+        if(!task->threads) { schedule_wake(task);continue; }
+        task->wakeups++;
+        for(unsigned j=0;j<task->threads->top;j++) {
+            Thread *th=&task->threads->thread[j];
+            if(!th->state || !net_wait_names(&th->network,pipe))continue;
+            th->wakeups++;if(th->state==3)th->state=1;
+        }
+        schedule_events++;
+    }
 }
 static void schedule_signal(ScheduledTask *task,unsigned signal);
 static void schedule_signal_apply(ScheduledTask *task,unsigned signal) {
@@ -387,7 +425,7 @@ static void host_signal_pump(void) {
    on the blocked tasks' sockets and the poke pipe instead. Whoever makes work
    runnable wakes them as it releases the lock (schedule_notify). */
 static pthread_cond_t schedule_idle_cond=PTHREAD_COND_INITIALIZER;
-static unsigned schedule_idle,schedule_polling,schedule_done,schedule_parked;
+static unsigned schedule_idle,schedule_polling,schedule_parked;
 static uint64_t schedule_notified_events,schedule_notified_epoch;
 static int schedule_poke[2]={-1,-1},schedule_result;
 static void schedule_kick(void) {
@@ -395,15 +433,137 @@ static void schedule_kick(void) {
     if(schedule_polling && schedule_poke[1]>=0) { char c=0;(void)!write(schedule_poke[1],&c,1); }
 }
 static int schedule_waiting_runnable(void);
+/* In-place waits: a thread whose call blocked (a targeted wait on pipes, eventfds or
+   sockets, or a futex) while no thread waits for a worker waits on its own worker,
+   holding no lock, instead of a round trip through the scheduler: its waker signals
+   it directly and it retries the call at once. state: 0 none, 1 waiting, 2 woken
+   (retry), 3 leave (evicted, stopped, signalled): back to the scheduler. A waiter is
+   evicted when a thread can run and no worker is idle to take it. Changes of state
+   from 1 hold lock. */
+typedef struct { pthread_mutex_t lock;pthread_cond_t cond;ScheduledTask *task;Thread *thread;uint64_t seen;int state,futex,poke[2];unsigned polling; } InplaceWait;
+/* futex: hvf_futex_unlocked's (its waker is a futex wake). polling: it waits in poll()
+   on its sockets and poke[0] (written to wake it) rather than on cond. */
+static InplaceWait schedule_inplace[WORKER_LIMIT];
+static _Thread_local uint64_t schedule_wakeups_seen; /* the running thread's wakeups when its slice (or last in-place wait) began */
+static void schedule_inplace_init(void) {
+    static int ready;if(ready)return;ready=1;
+    for(unsigned i=0;i<WORKER_LIMIT;i++) { pthread_mutex_init(&schedule_inplace[i].lock,NULL);pthread_cond_init(&schedule_inplace[i].cond,NULL);schedule_inplace[i].poke[0]=schedule_inplace[i].poke[1]=-1; }
+}
+/* End waiter w's wait with state (2 or 3) if it still waits. */
+static int schedule_inplace_end(InplaceWait *w,int state) {
+    pthread_mutex_lock(&w->lock);
+    int waiting=w->state==1;
+    if(waiting) { __atomic_store_n(&w->state,state,__ATOMIC_RELEASE);pthread_cond_signal(&w->cond);if(w->polling) { char c=0;(void)!write(w->poke[1],&c,1); } }
+    pthread_mutex_unlock(&w->lock);
+    return waiting;
+}
+/* Under the runtime lock: end the waits whose thread had an event, must stop, or (evict)
+   one wait whose worker a runnable thread needs. */
+static void schedule_inplace_check(int evict) {
+    for(unsigned i=0;i<worker_count;i++) {
+        InplaceWait *w=&schedule_inplace[i];
+        if(__atomic_load_n(&w->state,__ATOMIC_ACQUIRE)!=1)continue;
+        int woken=!w->futex && (w->thread?w->thread->wakeups:w->task->wakeups)!=w->seen,leave=task_must_stop(w->task,w->thread) || evict;
+        if((woken || leave) && schedule_inplace_end(w,leave?3:2) && leave && evict)evict=0;   /* one worker for the thread that can run */
+    }
+}
 static void schedule_notify(void) {
     if(schedule_events==schedule_notified_events && io_epoch==schedule_notified_epoch)return;
     schedule_notified_events=schedule_events;schedule_notified_epoch=io_epoch;
     /* Only wake an idle worker for a task that can now run: every pipe transfer moves
        io_epoch, and a futile wake costs the lock and a sleep (1.6M of them per 512 MiB
        through a shell pipe). */
-    if(schedule_idle && !schedule_done && !schedule_waiting_runnable())return;
+    int runnable=-1;
+    if(__atomic_load_n(&schedule_inplace_count,__ATOMIC_RELAXED))schedule_inplace_check(!schedule_idle && !schedule_polling && !schedule_done && (runnable=schedule_waiting_runnable()));
+    if(schedule_idle && !schedule_done && !(runnable>=0?runnable:schedule_waiting_runnable()))return;
     schedule_kick();
 }
+#define SCHEDULE_INPLACE_NS 1000000u
+#define SCHEDULE_INPLACE_SPIN_NS 20000u
+#ifdef VMFREE_HVF
+static void mm_lock(ScheduledTask *t);static void mm_unlock(ScheduledTask *t);
+/* Whether a thread may wait in place now: no thread waits for a worker. Without the
+   runtime lock (locked: 0) that is known only while it is free. */
+static int schedule_inplace_allowed(int locked) {
+    if(schedule_idle || schedule_polling)return 1;     /* an idle worker takes whatever becomes runnable */
+    if(locked)return !schedule_waiting_runnable();
+    if(pthread_mutex_trylock(&runtime_mutex))return 0;
+    int backlog=schedule_waiting_runnable();pthread_mutex_unlock(&runtime_mutex);   /* nothing changed: nothing to notify */
+    return !backlog;
+}
+/* Wait as this worker's in-place waiter of t (thread th) for up to budget_ns: on
+   sockets (the first count of fds; one more entry is free for the poke pipe) or, with
+   none, on its condition. Called with the mm lock held (and the runtime lock if
+   locked: both are released); returns with neither held, 1 if woken (an event of its
+   thread, or a socket became ready). */
+static int schedule_inplace_block(ScheduledTask *t,Thread *th,struct pollfd *fds,unsigned count,uint64_t budget_ns,int locked) {
+    InplaceWait *w=&schedule_inplace[worker->index];
+    if(count && w->poke[0]<0 && (pipe(w->poke) || fcntl(w->poke[0],F_SETFL,O_NONBLOCK) || fcntl(w->poke[1],F_SETFL,O_NONBLOCK))) {
+        if(w->poke[0]>=0)close(w->poke[0]);
+        if(w->poke[1]>=0)close(w->poke[1]);
+        w->poke[0]=w->poke[1]=-1;
+        mm_unlock(t);if(locked)runtime_unlock();return 0;
+    }
+    if(count) { char drain[64];while(read(w->poke[0],drain,sizeof(drain))==(ssize_t)sizeof(drain)) {} } /* a late poke of an earlier wait */
+    pthread_mutex_lock(&w->lock);
+    w->task=t;w->thread=th;w->seen=__atomic_load_n(th?&th->wakeups:&t->wakeups,__ATOMIC_RELAXED);w->polling=count!=0;w->futex=0;
+    __atomic_store_n(&w->state,1,__ATOMIC_RELEASE);
+    pthread_mutex_unlock(&w->lock);
+    __atomic_add_fetch(&schedule_inplace_count,1,__ATOMIC_RELAXED);
+    mm_unlock(t);if(locked)runtime_unlock();
+    uint64_t since=profile_now_ns();
+    if(count) {                         /* its sockets and the poke pipe: a socket that becomes ready is its wake */
+        fds[count]=(struct pollfd){w->poke[0],POLLIN,0};
+        if(poll(fds,count+1,(int)((budget_ns+999999)/1000000))>0)
+            for(unsigned k=0;k<count;k++)if(fds[k].revents) { (void)schedule_inplace_end(w,2);break; }
+    } else {
+        uint64_t spin_end=since+(budget_ns<SCHEDULE_INPLACE_SPIN_NS?budget_ns:SCHEDULE_INPLACE_SPIN_NS);
+        while(__atomic_load_n(&w->state,__ATOMIC_ACQUIRE)==1 && profile_now_ns()<spin_end) {
+#if defined(__aarch64__)
+            __asm__ volatile("yield");
+#endif
+        }
+        pthread_mutex_lock(&w->lock);
+        struct timespec pause={0,(long)(budget_ns>SCHEDULE_INPLACE_SPIN_NS?budget_ns-SCHEDULE_INPLACE_SPIN_NS:1000)};
+        if(w->state==1)(void)pthread_cond_timedwait_relative_np(&w->cond,&w->lock,&pause);
+        pthread_mutex_unlock(&w->lock);
+    }
+    pthread_mutex_lock(&w->lock);
+    int state=w->state;__atomic_store_n(&w->state,0,__ATOMIC_RELEASE);w->polling=0;
+    pthread_mutex_unlock(&w->lock);
+    __atomic_sub_fetch(&schedule_inplace_count,1,__ATOMIC_RELAXED);
+    profile_wait(count?3:1,since);PROFILE_ADD(profile_inplace_waits,1);
+    if(state==2)PROFILE_ADD(profile_inplace_woken,1);
+    return state==2;
+}
+/* After a call returned -2 (blocked) with the runtime and mm locks held: wait for it
+   in place when that is worth it. Returns 1 when it was woken (only the mm lock is
+   held again: the call is to be retried now, in guest code), else 0 (both locks held:
+   it parks; a wake meanwhile shows in its wakeups, and it retries). */
+static int schedule_inplace_wait(ScheduledTask *t) {
+    if(!worker_threads || !schedule_active || schedule_done)return 0;
+    Thread *th=task_thread(t);
+    if(th && th->state!=1)return 0;                                          /* a futex wait */
+    const NetWait *nw=&net_wait;
+    if(!nw->active || !nw->targeted || nw->at_pc!=cpu->pc+4)return 0;
+    static _Thread_local struct pollfd fds[NET_FD_LIMIT+1];unsigned sockets=0;
+    for(unsigned k=0;k<nw->count;k++)if(nw->fds[k].fd>=0) { fds[sockets]=nw->fds[k];fds[sockets++].revents=0; }
+    uint64_t *wakeups=th?&th->wakeups:&t->wakeups,now=net_now();
+    if(*wakeups!=schedule_wakeups_seen || nw->deadline<=now || task_must_stop(t,th))return 0; /* an event meanwhile: it retries */
+    /* Timers and the sockets of parked threads: idle workers pump them, else slice ends
+       and a waiter's own timeout. */
+    if(!schedule_inplace_allowed(1))return 0;
+    uint64_t budget=SCHEDULE_INPLACE_NS;
+    if(nw->deadline-now<budget/1000000)budget=(nw->deadline-now)*1000000;
+    Worker *self=worker;
+    if(schedule_inplace_block(t,th,fds,sockets,budget,1)) {
+        /* Woken: back to guest code without the runtime lock (its waker may hold it). */
+        schedule_wakeups_seen=__atomic_load_n(wakeups,__ATOMIC_RELAXED);mm_lock(t);return 1;
+    }
+    runtime_lock(self);mm_lock(t);
+    return 0;
+}
+#endif
 /* Attach this worker to thread i of t: the process's state is shared in place;
    the registers and the wait are the thread's. Detach stores the registers. */
 static void thread_attach(ScheduledTask *t,int i) {
@@ -478,7 +638,7 @@ static int network_pump(int wait) {
     if(wait && worker_threads)fds[watched++]=(struct pollfd){schedule_poke[0],POLLIN,0};
     Worker *self=worker;
     if(wait) { schedule_polling=1;runtime_unlock(); }
-    int result=poll(fds,watched,timeout);
+    int result=timeout?poll(fds,watched,timeout):poll_now(fds,watched);
     if(wait) {
         runtime_lock(self);schedule_polling=0;
         if(worker_threads && fds[count].revents) { char drain[64];while(read(schedule_poke[0],drain,sizeof(drain))==(ssize_t)sizeof(drain)) {} }
@@ -606,7 +766,7 @@ static int schedule_finish(int current,int result,unsigned terminating) {
     /* This worker's wait still names the freed thread table's: point it back at the task's. */
     net_wait_now=&t->network_wait;free(t->threads);t->threads=NULL;thread_now=-1;
     if(!current) {                                       /* the root exited: every worker stops */
-        schedule_result=result;schedule_done=1;schedule_kick();
+        schedule_result=result;schedule_done=1;schedule_kick();schedule_inplace_check(0);
         for(unsigned i=0;i<worker_count;i++)if(workers[i]!=worker && worker_interrupt)worker_interrupt(workers[i]);
         worker->task=-1;return 1;
     }
@@ -666,7 +826,7 @@ static int schedule_loop(int current) {
         if(th)th->child_wait=0;else t->child_wait=0;              /* set again if it blocks in wait4 once more */
         /* Events for this task while it runs (other workers act meanwhile) count as
            having happened after it blocks: it retries rather than miss them. */
-        uint64_t epoch_seen=io_epoch,wakeups_seen=th?th->wakeups:t->wakeups;
+        uint64_t epoch_seen=io_epoch;schedule_wakeups_seen=th?th->wakeups:t->wakeups;
         proc_cpu_begin(worker->index,(uint64_t)current+1,th?th->cpu_ns:NULL);
         int result=t->exit_pending?-1:t->terminate_signal?128+(int)t->terminate_signal:t->stop_signal?-3:run(0);
         if(profiling && result==-2)__atomic_fetch_add(&profile_blocks,1,__ATOMIC_RELAXED);
@@ -694,16 +854,16 @@ static int schedule_loop(int current) {
         }
         if(th) {
             if(result==-3)th->state=1;
-            else if(result==-2)th->state=th->state==2?2:th->wakeups==wakeups_seen?3:1;
+            else if(result==-2)th->state=th->state==2?2:th->wakeups==schedule_wakeups_seen?3:1;
             else th->state=1;
             th->input_wait=terminal_waiting;th->blocked=result==-2 && th->state!=2;th->preempted=result==-1;
             th->epoch=worker_threads?epoch_seen:io_epoch;
             if(result==-3)t->state=3;
-            if(result==-2 && th->network.active)schedule_kick();  /* a sleeping poller adds its sockets */
+            if(result==-2 && th->network.active && (th->network.count || th->network.deadline!=UINT64_MAX))schedule_kick();  /* a sleeping poller adds its sockets */
         } else {
-            t->state=result==-3?3:result==-2 && t->wakeups==wakeups_seen?2:1;t->input_wait=terminal_waiting;t->blocked=(unsigned)blocked;t->preempted=result==-1;
+            t->state=result==-3?3:result==-2 && t->wakeups==schedule_wakeups_seen?2:1;t->input_wait=terminal_waiting;t->blocked=(unsigned)blocked;t->preempted=result==-1;
             t->epoch=worker_threads?epoch_seen:io_epoch;
-            if(result==-2 && t->network_wait.active)schedule_kick();
+            if(result==-2 && t->network_wait.active && (t->network_wait.count || t->network_wait.deadline!=UINT64_MAX))schedule_kick();
         }
         if(result==-3) {
             if(current) {
@@ -736,7 +896,7 @@ static void *schedule_worker(void *argument) {
     return NULL;
 }
 static int schedule_run(uint64_t steps) {
-    schedule_active=1;process_steps=steps;schedule_done=0;schedule_parked=0;
+    schedule_active=1;process_steps=steps;schedule_done=0;schedule_parked=0;schedule_inplace_init();
     for(unsigned i=0;i<=process_count;i++)pthread_mutex_init(&schedule_tasks[i].mm,NULL); /* later slots: schedule_child */
     task_save(&schedule_tasks[0]);task_load(&schedule_tasks[0]);    /* the first process now lives in its task */
     schedule_tasks[0].state=1;schedule_tasks[0].pgid=schedule_tasks[0].sid=1;

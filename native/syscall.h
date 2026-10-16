@@ -782,6 +782,14 @@ static int guest_syscall_unlocked(void) {
         fs_fd[slot]=0;fs_cloexec[slot]=0;fd_unbind(fd);
         cpu->gpr[0]=close(host)<0?fs_error():0;return 1;
     }
+    /* ppoll of sockets alone (libpq, pgbench): the host's readiness and the thread's own
+       wait; a wait goes to the backend's direct wait, then the locked path. */
+    if(call==73 && schedule_active && net_poll_unlocked()) {
+        cpu->exclusive_valid=0;syscall_unlocked=1;syscall_abort=0;net_unlocked_wait.count=0;
+        uint64_t result=net_poll_wait();syscall_unlocked=0;
+        if(syscall_abort || result==IO_BLOCK)return 0;
+        cpu->gpr[0]=result;return 1;
+    }
     /* epoll_ctl of a file (Go offers every file it opens to its poller): EPERM, as Linux
        answers for files that cannot be polled, after the epoll descriptor's checks. */
     if(call==21 && fs_host(cpu->gpr[2])>=0 && io_managed(fd) && IO(fd).kind==IO_EPOLL) {
@@ -825,6 +833,7 @@ static int guest_syscall(void) {
     if(clamp)cpu->gpr[2]=1024*1024;
     net_wait.targeted=0; /* set again only by this call's own net_suspend */
     int result=guest_syscall_dispatch();
+    if(result==-3 && net_wait.active && net_wait.at_pc==cpu->pc)net_wait.active=0; /* a wait it retried is over */
     if(clamp)cpu->gpr[2]=count;
     if(trace && result==-3 && cpu->gpr[0]>=(uint64_t)-4095)                /* failures, with what they were given */
         fprintf(stderr,"pid %" PRIu64 " syscall %" PRIu64 " failed: %" PRId64 "\n",process_pid,call,(int64_t)cpu->gpr[0]);

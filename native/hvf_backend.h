@@ -946,24 +946,31 @@ static MemoryBacking *hvf_futex_shared(uint64_t address,size_t *offset) {
     }
     return NULL;
 }
-/* Futex waits served in place: a thread whose futex wait is likely short while
-   workers are idle waits on its own worker, holding no lock, instead of going back
-   to the scheduler (hvf_futex_unlocked). It is queued in a bucket by (process,
-   image, address); wakers take only the bucket's lock. Private futexes only. */
-typedef struct HvfFutexWaiter { struct HvfFutexWaiter *next;uint64_t pid,epoch,address;uint32_t bits;int woken;pthread_cond_t cond; } HvfFutexWaiter;
+/* Futex waits served in place: a thread whose futex wait is likely short waits on
+   its own worker, holding no lock, instead of going back to the scheduler
+   (hvf_futex_unlocked). It is queued in a bucket by its key: (process, image,
+   address), or (memory, offset) for a futex in shared memory; wakers take only the
+   bucket's lock. */
+typedef struct HvfFutexWaiter { struct HvfFutexWaiter *next;uint64_t pid,epoch,address;const MemoryBacking *backing;size_t offset;uint32_t bits;int woken;InplaceWait *wait; } HvfFutexWaiter; /* wait: its worker's (scheduler.h) */
 #define HVF_FUTEX_BUCKETS 256u
 static struct { pthread_mutex_t lock;HvfFutexWaiter *head; } hvf_futex_buckets[HVF_FUTEX_BUCKETS];
 static void hvf_futex_init(void) { for(unsigned i=0;i<HVF_FUTEX_BUCKETS;i++)pthread_mutex_init(&hvf_futex_buckets[i].lock,NULL); }
-static unsigned hvf_futex_bucket(uint64_t pid,uint64_t address) { return (unsigned)((address>>2)^(address>>12)^(pid*0x9e37u))%HVF_FUTEX_BUCKETS; }
-/* Wake up to count of this process's (this image's) in-place waiters on address. */
-static unsigned hvf_futex_wake_inplace(uint64_t address,unsigned count,uint32_t bits) {
+static unsigned hvf_futex_bucket(uint64_t pid,uint64_t address,const MemoryBacking *backing,size_t offset) {
+    if(backing) { uint64_t k=(uint64_t)(uintptr_t)backing^((uint64_t)offset*0x9e3779b1u);return (unsigned)((k>>4)^(k>>12)^(k>>20))%HVF_FUTEX_BUCKETS; }
+    return (unsigned)((address>>2)^(address>>12)^(pid*0x9e37u))%HVF_FUTEX_BUCKETS;
+}
+/* Wake up to count in-place waiters on address: this process's (this image's), or
+   any process's for a futex in shared memory (shared, offset). */
+static unsigned hvf_futex_wake_inplace(uint64_t address,const MemoryBacking *shared,size_t offset,unsigned count,uint32_t bits) {
     if(!count || !schedule_active)return 0;
-    uint64_t pid=process_pid,epoch=hvf_task()->futex_epoch;unsigned woken=0,b=hvf_futex_bucket(pid,address);
+    uint64_t pid=process_pid,epoch=hvf_task()->futex_epoch;unsigned woken=0,b=hvf_futex_bucket(pid,address,shared,offset);
     pthread_mutex_lock(&hvf_futex_buckets[b].lock);
     for(HvfFutexWaiter **link=&hvf_futex_buckets[b].head;*link && woken<count;) {
         HvfFutexWaiter *w=*link;
-        if(w->pid!=pid || w->epoch!=epoch || w->address!=address || !(w->bits&bits)) { link=&w->next;continue; }
-        *link=w->next;w->woken=1;pthread_cond_signal(&w->cond);woken++;
+        int match=shared?w->backing==shared && w->offset==offset:!w->backing && w->pid==pid && w->epoch==epoch && w->address==address;
+        if(!match || !(w->bits&bits)) { link=&w->next;continue; }
+        InplaceWait *iw=w->wait;                       /* w is gone once it sees woken */
+        *link=w->next;pthread_mutex_lock(&iw->lock);__atomic_store_n(&w->woken,1,__ATOMIC_RELEASE);pthread_cond_signal(&iw->cond);pthread_mutex_unlock(&iw->lock);woken++;
     }
     pthread_mutex_unlock(&hvf_futex_buckets[b].lock);
     return woken;
@@ -973,7 +980,7 @@ static unsigned hvf_futex_wake_inplace(uint64_t address,unsigned count,uint32_t 
    FUTEX_PRIVATE wait. A futex in shared memory has waiters in any process. */
 static unsigned hvf_futex_wake(uint64_t address,unsigned count,uint32_t bits) {
     unsigned woken=0;size_t offset=0;MemoryBacking *shared=hvf_futex_shared(address,&offset);
-    if(!shared)woken=hvf_futex_wake_inplace(address,count,bits);
+    woken=hvf_futex_wake_inplace(address,shared,offset,count,bits);
     for(unsigned i=0;i<=process_count && woken<count;i++) {
         ScheduledTask *t=&schedule_tasks[i];
         if(!t->threads || (!shared && t!=hvf_task()))continue;
@@ -995,7 +1002,7 @@ static unsigned hvf_futex_requeue(uint64_t address,unsigned wake,unsigned move,u
     unsigned woken=hvf_futex_wake(address,wake,UINT32_MAX),moved=0;
     size_t offset=0,target_offset=0;
     MemoryBacking *shared=hvf_futex_shared(address,&offset),*target_shared=hvf_futex_shared(target,&target_offset);
-    if(!shared)moved=hvf_futex_wake_inplace(address,move,UINT32_MAX); /* woken rather than moved: they retry */
+    moved=hvf_futex_wake_inplace(address,shared,offset,move,UINT32_MAX); /* woken rather than moved: they retry */
     for(unsigned i=0;i<=process_count && moved<move;i++) {
         ScheduledTask *t=&schedule_tasks[i];
         if(!t->threads || (!shared && t!=hvf_task()))continue;
@@ -1204,15 +1211,17 @@ static int hvf_short_sleep(uint64_t call) {
     mm_unlock(task);(void)nanosleep(&pause,NULL);mm_lock(task);profile_wait(2,since);
     hvf_frame[0]=0;hvf_resume_el0(hvf_frame[HF_ELR],hvf_frame[HF_SPSR]);return 1;
 }
-/* futex without the runtime lock (the process's mm lock is held), for private
-   futexes of a threaded process: WAKE when no thread of the process is parked in
-   the scheduler on the address (parking takes this mm lock too, so none appears
-   meanwhile), and WAIT in place while workers are idle, for up to
-   HVF_FUTEX_INPLACE_NS (or its own timeout). Returns 0 for the locked path (which
+/* futex without the runtime lock (the process's mm lock is held), for a process
+   with a thread table: WAKE of a private futex when no thread of the process is
+   parked in the scheduler on the address (parking takes this mm lock too, so none
+   appears meanwhile; a shared one takes the runtime lock if it is free), and WAIT
+   in place while no thread waits for a worker, for up to
+   SCHEDULE_INPLACE_NS (or its own timeout). The waiter is registered as its
+   worker's in-place wait: a thread that becomes runnable with no worker free evicts
+   it, a signal or the process's end ends it. Returns 0 for the locked path (which
    rereads the call): anything else, or a wait that did not end in time (it parks
-   then, after reading the word again). A signal for an in-place waiter is taken
-   when that wait ends. */
-#define HVF_FUTEX_INPLACE_NS 200000u
+   then, after reading the word again). */
+static int runtime_trylock(void);
 static int hvf_futex_unlocked(void) {
     if(!schedule_active || trace)return 0;
     ScheduledTask *task=hvf_task();ThreadTable *p=task->threads;
@@ -1220,16 +1229,23 @@ static int hvf_futex_unlocked(void) {
     if(!p || (op&~255u) || (command!=0 && command!=1 && command!=9 && command!=10) || (address&3))return 0; /* not FUTEX_CLOCK_REALTIME */
     uint32_t bits=command>=9?(uint32_t)cpu->gpr[5]:UINT32_MAX;
     const unsigned char *word=lookup(address,4,4);
-    if(!bits || !word || hvf_futex_shared(address,&offset))return 0;
+    if(!bits || !word)return 0;
+    const MemoryBacking *shared=hvf_futex_shared(address,&offset);
     if(command==1 || command==10) {
         if((int32_t)cpu->gpr[2]<0)return 0;
+        /* In shared memory its waiters may be parked in any process: the full wake,
+           under the runtime lock if that is free now (PostgreSQL's semaphores). */
+        if(shared) {
+            if(!runtime_trylock())return 0;
+            cpu->gpr[0]=hvf_futex_wake(address,(unsigned)cpu->gpr[2],bits);runtime_unlock();return 1;
+        }
         for(unsigned j=0;j<p->top;j++) {
             const Thread *th=&p->thread[j];
             if(th->state==2 && !th->futex_backing && th->futex_address==address && (th->bitset&bits))return 0;
         }
-        cpu->gpr[0]=hvf_futex_wake_inplace(address,(unsigned)cpu->gpr[2],bits);return 1;
+        cpu->gpr[0]=hvf_futex_wake_inplace(address,NULL,0,(unsigned)cpu->gpr[2],bits);return 1;
     }
-    uint64_t now=thread_time_ns(0),deadline=0,wait=HVF_FUTEX_INPLACE_NS;
+    uint64_t now=thread_time_ns(0),deadline=0,wait=SCHEDULE_INPLACE_NS;
     if(cpu->gpr[3]) {
         const unsigned char *ts=lookup(cpu->gpr[3],16,4);if(!ts)return 0;
         uint64_t sec=le(ts,8),ns=le(ts+8,8);
@@ -1238,23 +1254,47 @@ static int hvf_futex_unlocked(void) {
         if(deadline<=now)return 0;
         if(deadline-now<wait)wait=deadline-now;
     }
-    if(!(schedule_idle || schedule_polling) || hvf_must_stop(task))return 0;
+    if(hvf_must_stop(task) || !schedule_inplace_allowed(0))return 0;
+    InplaceWait *iw=&schedule_inplace[worker->index];
     HvfFutexWaiter w;memset(&w,0,sizeof(w));
-    w.pid=process_pid;w.epoch=task->futex_epoch;w.address=address;w.bits=bits;
-    if(pthread_cond_init(&w.cond,NULL))return 0;
-    unsigned b=hvf_futex_bucket(w.pid,address);
+    w.pid=process_pid;w.epoch=task->futex_epoch;w.address=address;w.backing=shared;w.offset=offset;w.bits=bits;w.wait=iw;
+    unsigned b=hvf_futex_bucket(w.pid,address,shared,offset);
     pthread_mutex_lock(&hvf_futex_buckets[b].lock);
     if(__atomic_load_n((const uint32_t *)word,__ATOMIC_SEQ_CST)!=(uint32_t)cpu->gpr[2]) {
-        pthread_mutex_unlock(&hvf_futex_buckets[b].lock);pthread_cond_destroy(&w.cond);
+        pthread_mutex_unlock(&hvf_futex_buckets[b].lock);
         cpu->gpr[0]=linux_error(11);return 1;
     }
     w.next=hvf_futex_buckets[b].head;hvf_futex_buckets[b].head=&w;
-    mm_unlock(task);
-    struct timespec pause={0,(long)wait};uint64_t since=profiling?profile_now_ns():0;
-    (void)pthread_cond_timedwait_relative_np(&w.cond,&hvf_futex_buckets[b].lock,&pause);profile_wait(1,since);
-    if(!w.woken)for(HvfFutexWaiter **link=&hvf_futex_buckets[b].head;*link;link=&(*link)->next)if(*link==&w) { *link=w.next;break; }
+    pthread_mutex_lock(&iw->lock);iw->task=task;iw->thread=task_thread(task);iw->futex=1;iw->polling=0;__atomic_store_n(&iw->state,1,__ATOMIC_RELEASE);pthread_mutex_unlock(&iw->lock);
+    __atomic_add_fetch(&schedule_inplace_count,1,__ATOMIC_RELAXED);
     pthread_mutex_unlock(&hvf_futex_buckets[b].lock);
-    mm_lock(task);pthread_cond_destroy(&w.cond);
+    mm_unlock(task);
+    uint64_t since=profiling?profile_now_ns():0;
+    /* A wake usually follows within microseconds (a lock hand-off, a channel ping-pong):
+       spin briefly before sleeping, as a condition variable's wake costs several. */
+    uint64_t start=thread_time_ns(0),spin_end=start+(wait<SCHEDULE_INPLACE_SPIN_NS?wait:SCHEDULE_INPLACE_SPIN_NS);
+    while(!__atomic_load_n(&w.woken,__ATOMIC_ACQUIRE) && __atomic_load_n(&iw->state,__ATOMIC_ACQUIRE)==1 && thread_time_ns(0)<spin_end) {
+#if defined(__aarch64__)
+        __asm__ volatile("yield");
+#endif
+    }
+    pthread_mutex_lock(&iw->lock);
+    for(;;) {
+        if(__atomic_load_n(&w.woken,__ATOMIC_ACQUIRE) || __atomic_load_n(&iw->state,__ATOMIC_ACQUIRE)!=1)break;
+        uint64_t at=thread_time_ns(0);if(at-start>=wait)break;
+        struct timespec pause={(time_t)((wait-(at-start))/1000000000),(long)((wait-(at-start))%1000000000)};
+        (void)pthread_cond_timedwait_relative_np(&iw->cond,&iw->lock,&pause);
+    }
+    pthread_mutex_unlock(&iw->lock);
+    profile_wait(1,since);
+    if(!__atomic_load_n(&w.woken,__ATOMIC_ACQUIRE)) {      /* evicted, ended or timed out: leave the bucket unless a wake came meanwhile */
+        pthread_mutex_lock(&hvf_futex_buckets[b].lock);
+        if(!w.woken)for(HvfFutexWaiter **link=&hvf_futex_buckets[b].head;*link;link=&(*link)->next)if(*link==&w) { *link=w.next;break; }
+        pthread_mutex_unlock(&hvf_futex_buckets[b].lock);
+    }
+    pthread_mutex_lock(&iw->lock);__atomic_store_n(&iw->state,0,__ATOMIC_RELEASE);iw->futex=0;pthread_mutex_unlock(&iw->lock);
+    __atomic_sub_fetch(&schedule_inplace_count,1,__ATOMIC_RELAXED);
+    mm_lock(task);
     PROFILE_ADD(profile_futex_inplace,1);
     if(w.woken) { PROFILE_ADD(profile_futex_inplace_woken,1);cpu->gpr[0]=0;return 1; }
     if(deadline && thread_time_ns(0)>=deadline) { cpu->gpr[0]=linux_error(110);return 1; }
@@ -1298,7 +1338,7 @@ static int hvf_unlocked_exit(void) {
         hvf_put_regs();return 1;
     }
     int memory=call==222 || call==215 || call==226 || call==233 || call==214;
-    if(!memory && call!=21 && call!=22 && call!=25 && call!=57 && call!=56 && call!=34 && call!=35 && call!=38 && call!=48 && call!=439 && call!=78 && call!=88 && call!=132 && call!=134 && call!=135 && call!=172 && call!=178 && call!=79 && call!=80 && (call<62 || call>68) && call!=82 && call!=83 && call!=206 && call!=207 && call!=291 && call!=221 && call!=166 &&
+    if(!memory && call!=21 && call!=22 && call!=73 && call!=25 && call!=57 && call!=56 && call!=34 && call!=35 && call!=38 && call!=48 && call!=439 && call!=78 && call!=88 && call!=132 && call!=134 && call!=135 && call!=172 && call!=178 && call!=79 && call!=80 && (call<62 || call>68) && call!=82 && call!=83 && call!=206 && call!=207 && call!=291 && call!=221 && call!=166 &&
        !(mem_mount_count && (call==61 || call==36 || call==37 || call==33 || call==52 || call==53 || call==54 || call==55 || call==46 || call==47 ||
                              call==45 || call==276 || call==69 || call==70 || call==286 || call==287 || call==71 || call==285 || call==43 || call==44)))return 0; /* 221: execve builds its image (exec_build); the rest: memfs */
     hvf_get_regs(1,elr,spsr);
@@ -1316,25 +1356,20 @@ static int hvf_unlocked_exit(void) {
 static int hvf_must_stop(ScheduledTask *t);
 static int hvf_direct_wait(ScheduledTask *task) {
     unsigned count=net_unlocked_wait.count;net_unlocked_wait.count=0;
-    if(!count || !net_unlocked_wait.timeout || !(schedule_idle || schedule_polling) || hvf_must_stop(task))return 0;
-    int budget=net_unlocked_wait.timeout<HVF_DIRECT_WAIT_MS?(int)net_unlocked_wait.timeout:HVF_DIRECT_WAIT_MS;
-    mm_unlock(task);uint64_t since=profiling?profile_now_ns():0;
-    int ready=poll(net_unlocked_wait.fds,count,budget);profile_wait(3,since);
+    if(!count || !net_unlocked_wait.timeout || hvf_must_stop(task) || !schedule_inplace_allowed(0))return 0;
+    unsigned budget=net_unlocked_wait.timeout<HVF_DIRECT_WAIT_MS?net_unlocked_wait.timeout:HVF_DIRECT_WAIT_MS;
+    /* As an in-place waiter: a signal, the process's end or a thread that needs this
+       worker end the wait at once; so does an event of the thread (it retries). */
+    static _Thread_local struct pollfd fds[NET_FD_LIMIT+1];
+    memcpy(fds,net_unlocked_wait.fds,count*sizeof(*fds));
+    int woken=schedule_inplace_block(task,task_thread(task),fds,count,(uint64_t)budget*1000000,0);
     mm_lock(task);
-    return ready>0 && !hvf_must_stop(task);
+    return woken && !hvf_must_stop(task);
 }
 /* The worker must leave guest code: the run or the process is ending, the process
    stops, this thread was ended, or a signal awaits delivery. Read without the
    runtime lock: whoever sets these interrupts workers that are in guest code. */
-static int hvf_must_stop(ScheduledTask *t) {
-    if(!t)return 0;
-    if(schedule_done || t->exit_pending || t->terminate_signal || t->stop_signal || t->state==3)return 1;
-    Thread *th=task_thread(t);
-    if(th && !th->state)return 1;
-    if(!job_control_enabled)return 0;
-    uint64_t mask=th?th->signal_mask:t->signal_mask;
-    return ((t->signal_pending|(th?th->signal_pending:0))&~mask&~t->signal_ignored)!=0;
-}
+static int hvf_must_stop(ScheduledTask *t) { return t && task_must_stop(t,task_thread(t)); }
 /* Take the runtime lock if it is free now (never blocks, so it may be tried with an mm lock held). */
 static int runtime_trylock(void) {
     if(!worker_threads)return 1;
@@ -1355,9 +1390,9 @@ static int hvf_slice_run(void) {
     /* fast: the vCPU was resumed in place (write fault, EL1 preemption); cpu is not
        current, so signal delivery waits for the next full exit. in_vector: it must
        first run on into its HVC exit. */
-    int fast=0,in_vector=0,mm_held=0;
+    int fast=0,in_vector=0,mm_held=0,resumed=0; /* resumed: woken from an in-place wait, holding only the mm lock */
     for(;;) {
-        if(job_control_enabled && schedule_active && !fast && signal_deliverable()) {
+        if(!resumed && job_control_enabled && schedule_active && !fast && signal_deliverable()) {
             if(!mm_held) { mm_lock(task);mm_held=1; }
             hvf_fp_pull(); /* a signal frame saves and restores the whole CPU state */
             signal_deliver(0);
@@ -1367,9 +1402,12 @@ static int hvf_slice_run(void) {
         fast=0;
         Worker *self=worker;hv_vcpu_t vcpu=hvf_vcpu;
         hv_return_t ran=HV_SUCCESS;int stopped=0;
-        if(mm_held)mm_unlock(task);
-        runtime_unlock();                              /* guest code runs in parallel with other workers */
-        mm_lock(task);mm_held=1;
+        if(!resumed) {
+            if(mm_held)mm_unlock(task);
+            runtime_unlock();                          /* guest code runs in parallel with other workers */
+            mm_lock(task);mm_held=1;
+        }
+        resumed=0;
         for(;;) {
             /* in_guest is set under the mm lock, so a sibling holding it sees every
                worker of this process that may enter guest code. */
@@ -1470,6 +1508,7 @@ static int hvf_slice_run(void) {
             }
             if(result!=-3) {
                 if(result==-2 && !schedule_active)fail("Blocking syscalls need the scheduler (--process-tree)");
+                if(result==-2 && schedule_inplace_wait(task)) { hvf_put_regs();resumed=1;continue; }  /* woken in place: the call again */
                 return result;
             }
             /* The scheduler asked for a switch (vfork parent, sched_yield): yield now,
