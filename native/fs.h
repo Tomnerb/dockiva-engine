@@ -163,6 +163,9 @@ static _Thread_local struct { uint64_t at[2];const char *path[2]; } fs_swap;
 /* memfs mounts (memfs.h). fs_walk fails with this redirect when it reaches one: the
    mount's guest path and the rest of the path; memfs then serves the call. */
 static unsigned mem_mount_count;
+static pthread_mutex_t mem_lock=PTHREAD_MUTEX_INITIALIZER;   /* every memfs (memfs.h) */
+#define MEM_HOST_PATH (-1001)                                /* memfs.h: a path the host resolves */
+struct GuestInotify;static int64_t mem_inotify_watch(struct GuestInotify *in,uint64_t at,uint32_t mask,int follow);
 static int mem_mount_at(const char *canon);static int mem_mount_inside(const char *canon);
 static size_t mem_mount_line(unsigned i,char *out,size_t capacity,int mountinfo,unsigned id); /* a /proc/mounts line */
 static _Thread_local struct { int pending;char path[5200]; } mem_redirect;
@@ -171,6 +174,7 @@ static int mem_redirect_set(const char *at,const char *rest) {
     snprintf(mem_redirect.path,sizeof(mem_redirect.path),"%s%s%s",at,*rest?"/":"",rest);
     mem_redirect.pending=1;errno=EXDEV;return -1;
 }
+static int mem_redirect_take(void) { int was=mem_redirect.pending;mem_redirect.pending=0;return was; }
 /* A guest path, read a page at a time (one lookup each), or a byte at a time where a
    segment ends within the page (the interpreter's ELF segments are not page-rounded). */
 static int fs_string(uint64_t ptr,char path[1025]) {
@@ -1065,6 +1069,7 @@ static int proc_text(const char *path,char *text,size_t capacity,size_t *out) {
             {"tmpfs","/dev","tmpfs","rw,nosuid,size=65536k,mode=755"},{"shm","/dev/shm","tmpfs","rw,nosuid,nodev,noexec,relatime,size=65536k"},
             {"sysfs","/sys","sysfs","ro,nosuid,nodev,noexec,relatime"}};
         for(unsigned i=0;i<5+fs_mount_count && length<capacity-1200;i++) {
+            if(i==3 && mem_mount_count && mem_mount_at("/dev/shm")>=0)continue;   /* listed as a memfs mount below */
             char point[1100];const char *device=i<5?base[i][0]:"/dev/vda1",*type=i<5?base[i][2]:"ext4";
             const char *options=i<5?base[i][3]:fs_mounts[i-5].readonly?"ro,relatime":"rw,relatime";
             snprintf(point,sizeof point,"%s%s",i<5 || fs_mounts[i-5].path[0]=='/'?"":"/",i<5?base[i][1]:fs_mounts[i-5].path);

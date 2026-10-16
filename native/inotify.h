@@ -28,11 +28,12 @@
 #define IN_ISDIR 0x40000000u
 #define IN_ONESHOT 0x80000000u
 #define IN_ALL_EVENTS 0xfffu
-struct GuestInotifyWatch { int wd,dir;uint32_t mask;char host[1025]; };
+struct MemNode;
+struct GuestInotifyWatch { int wd,dir;uint32_t mask;char host[1025];struct MemNode *mem; }; /* mem: a memfs file or directory (memfs.h emits its events) */
 struct GuestInotify {
     unsigned refs,nonblock;int pipe_read,pipe_write;
     pthread_mutex_t lock;                 /* queue and watches, against the FSEvents callback */
-    unsigned char *queue;size_t used;int signaled,overflowed;
+    unsigned char *queue;size_t used,last;int signaled,overflowed; /* last: where the newest event starts (SIZE_MAX: none) */
     struct GuestInotifyWatch *watch;unsigned nwatch;int next_wd;
     void *stream;                         /* FSEventStreamRef */
     uint64_t seen[1024],seen_mtime[1024],seen_ctime[1024]; /* paths reported as existing, and their times (FSEvents flags accumulate) */
@@ -78,9 +79,12 @@ static void inotify_emit(struct GuestInotify *in,int wd,uint32_t mask,const char
     unsigned char *e=in->queue+in->used;memset(e,0,size);
     fs_pack(e,0,(uint64_t)(uint32_t)wd,4);fs_pack(e,4,mask,4);fs_pack(e,12,name_size,4);
     if(name)memcpy(e+16,name,strlen(name));
-    in->used+=size;
+    if(in->last!=SIZE_MAX && in->last+size==in->used && !memcmp(in->queue+in->last,e,size))return; /* the same as the newest: coalesced, as Linux */
+    in->last=in->used;in->used+=size;
 }
+static unsigned mem_watching;                                                  /* memfs watches, any instance (atomic) */
 static void inotify_drop(struct GuestInotify *in,unsigned index) {
+    if(in->watch[index].mem)__atomic_fetch_sub(&mem_watching,1,__ATOMIC_RELAXED);
     inotify_emit(in,in->watch[index].wd,IN_IGNORED,NULL);
     in->watch[index]=in->watch[--in->nwatch];
 }
@@ -101,6 +105,7 @@ static int inotify_seen(struct GuestInotify *in,const char *path,int set,const s
 /* One watch's events for one FSEvents path; returns 1 when the watch is gone. */
 static int inotify_match(struct GuestInotify *in,unsigned index,const char *path,uint32_t flags) {
     struct GuestInotifyWatch *w=&in->watch[index];
+    if(w->mem)return 0;                                                         /* memfs.h's */
     size_t length=strlen(w->host);const char *name=NULL;
     int self=!strcmp(path,w->host);
     if(!self) {                                                                 /* a directory's direct child */
@@ -157,10 +162,12 @@ static void inotify_restream(struct GuestInotify *in) {
     const void **strings=calloc(in->nwatch,sizeof(void *));if(!strings)return;
     long n=0;
     for(unsigned i=0;i<in->nwatch;i++) {
+        if(in->watch[i].mem)continue;
         char directory[1025];strcpy(directory,in->watch[i].host);
         if(!in->watch[i].dir) { char *slash=strrchr(directory,'/');if(slash)*(slash==directory?slash+1:slash)=0; }
         if((strings[n]=fse.string(NULL,directory,0x08000100u)))n++;                 /* kCFStringEncodingUTF8 */
     }
+    if(!n) { free(strings);return; }                                             /* memfs watches only */
     const void *array=fse.array(NULL,strings,n,fse.array_callbacks);
     for(long i=0;i<n;i++)fse.cf_release(strings[i]);
     free(strings);if(!array)return;
@@ -174,7 +181,10 @@ static void inotify_release(struct GuestInotify *in) {
     if(--in->refs)return;
     if(in->stream) { fse.stop(in->stream);fse.invalidate(in->stream);fse.release(in->stream);fse.sync(fse.queue,NULL,inotify_nothing); }
     epoll_forget_socket(in->pipe_read);close(in->pipe_read);close(in->pipe_write);
+    pthread_mutex_lock(&mem_lock);                                              /* memfs emits under it */
     for(unsigned i=0;i<IO_INOTIFYS;i++)if(io_inotifies[i]==in)io_inotifies[i]=NULL;
+    for(unsigned i=0;i<in->nwatch;i++)if(in->watch[i].mem)__atomic_fetch_sub(&mem_watching,1,__ATOMIC_RELAXED);
+    pthread_mutex_unlock(&mem_lock);
     pthread_mutex_destroy(&in->lock);free(in->queue);free(in->watch);free(in);
 }
 /* inotify_init1 (26), inotify_add_watch (27), inotify_rm_watch (28). */
@@ -191,7 +201,7 @@ static uint64_t io_inotify(uint64_t call) {
         }
         for(unsigned i=0;i<2;i++) { fcntl(ends[i],F_SETFL,O_NONBLOCK);fcntl(ends[i],F_SETFD,FD_CLOEXEC); }
         int fd=io_free_slot(0);if(fd<0) { close(ends[0]);close(ends[1]);free(in->queue);free(in->watch);free(in);return linux_error(24); }
-        pthread_mutex_init(&in->lock,NULL);in->refs=1;in->nonblock=(flags&2048)!=0;in->pipe_read=ends[0];in->pipe_write=ends[1];
+        pthread_mutex_init(&in->lock,NULL);in->refs=1;in->last=SIZE_MAX;in->nonblock=(flags&2048)!=0;in->pipe_read=ends[0];in->pipe_write=ends[1];
         io_inotifies[slot]=in;
         IO(fd)=(GuestIO){IO_INOTIFY,(flags&524288)!=0,ends[0],NULL,NULL,NULL,NULL,in,NULL};
         return (uint64_t)fd;
@@ -211,6 +221,7 @@ static uint64_t io_inotify(uint64_t call) {
     uint32_t mask=(uint32_t)cpu->gpr[2];
     if(!(mask&IN_ALL_EVENTS))return linux_error(22);
     char leaf[1025];int follow=!(mask&IN_DONT_FOLLOW);
+    { int64_t r=mem_inotify_watch(in,cpu->gpr[1],mask,follow);if(r!=MEM_HOST_PATH)return r<0?linux_error((unsigned)-r):(uint64_t)r; } /* memfs.h */
     int parent=fs_lookup((uint64_t)-100,cpu->gpr[1],leaf,follow,NULL);                   /* relative to the working directory */
     if(parent<0)return fs_error();
     int fd=openat(parent,*leaf?leaf:".",O_EVTONLY|O_CLOEXEC|(follow?0:O_NOFOLLOW));int saved=errno;close(parent);
@@ -253,7 +264,7 @@ static uint64_t inotify_read(struct GuestInotify *in) {
     if(!take) { pthread_mutex_unlock(&in->lock);return linux_error(22); }
     unsigned char *out=lookup(cpu->gpr[1],take,2);
     if(!out) { pthread_mutex_unlock(&in->lock);return linux_error(14); }
-    memcpy(out,in->queue,take);memmove(in->queue,in->queue+take,in->used-take);in->used-=take;
+    memcpy(out,in->queue,take);memmove(in->queue,in->queue+take,in->used-take);in->used-=take;in->last=SIZE_MAX;
     if(!in->used) { in->overflowed=0;char drain[64];while(read(in->pipe_read,drain,sizeof(drain))>0) {} in->signaled=0; }
     pthread_mutex_unlock(&in->lock);
     net_wait.active=0;

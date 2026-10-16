@@ -640,7 +640,18 @@ func runtimeCommand(p, native string, c obj, command []string, argv0 string, env
 		args = append(args, "--network", networkPorts(home, str(c["net_name"])), "--ip", ip)
 	}
 	// <home>/containers/<name>: volumes are in <home>/volumes.
-	args = append(args, prepareMounts(filepath.Dir(filepath.Dir(p)), root, c)...)
+	args = append(args, prepareMounts(filepath.Dir(filepath.Dir(p)), root, c, publish)...)
+	// dockiva-engine --tmp memory: /tmp (unless mounted) and /dev/shm in the runtime's
+	// memory (memfs), as tmpfs mounts; Docker keeps /tmp on the writable layer.
+	if os.Getenv("DOCKIVA_TMP") == "memory" && publish {
+		if !hasMount(c, "/tmp") {
+			_ = safeRun(func() { mountPoint(root, "tmp", true) })
+			args = append(args, "--tmpfs", "/tmp:mode=1777")
+		}
+		if !hasMount(c, "/dev/shm") {
+			args = append(args, "--tmpfs", "/dev/shm:mode=1777,size=64m,noexec,nosuid,nodev")
+		}
+	}
 	for _, pair := range [][2]string{{"schedule", "--schedule"}, {"process_tree", "--process-tree"}, {"scheduled_network", "--scheduled-network"}, {"dynamic", "--dynamic"}, {"job_control", "--job-control"}, {"writable", "--writable"}} {
 		v := c[pair[0]]
 		reject(v == nil || v == true || v == false, "Invalid runtime flag")

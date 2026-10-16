@@ -771,6 +771,9 @@ static int guest_syscall_unlocked(void) {
         if(locked || syscall_abort)return 0;
         cpu->gpr[0]=result;return 1;
     }
+    if(call==166 && schedule_active) {                                       /* umask: the process's own (tar asks twice per file) */
+        unsigned previous=fs_umask;fs_umask=(unsigned)cpu->gpr[0]&0777;cpu->gpr[0]=previous;return 1;
+    }
     /* close of a file (not a directory) while no record lock exists to release: only
        this process's tables, which its threads change under its mm lock. */
     if(call==57 && file && !__atomic_load_n(&fs_locks_taken,__ATOMIC_ACQUIRE)) {

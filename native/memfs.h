@@ -40,9 +40,9 @@ struct MemNode {
         char *target;
     };
 };
-typedef struct MemOpen { MemNode *node;uint64_t position;unsigned refs,flags; } MemOpen; /* flags: open(2)'s access mode, O_APPEND, O_NONBLOCK, O_PATH */
+/* flags: open(2)'s access mode, O_APPEND, O_NONBLOCK, O_PATH; dir and name: where it was opened (held), for inotify. */
+typedef struct MemOpen { MemNode *node,*dir;uint64_t position;unsigned refs,flags,written;char *name; } MemOpen;
 static MemFs *mem_mounts[MEM_MOUNTS];
-static pthread_mutex_t mem_lock=PTHREAD_MUTEX_INITIALIZER;
 /* ponytail: one lock for every memfs (lookups, data copies); per-inode locks if threads of a build contend on it. */
 static MemEntry **mem_table;static size_t mem_table_size,mem_table_used;
 static uint64_t mem_next_ino=2;
@@ -81,14 +81,47 @@ static MemNode *mem_node_new(MemFs *fs,uint32_t mode) {
     return n;
 }
 static void mem_pages_free(MemNode *n,uint64_t first);
+static void mem_notify(MemNode *watched,uint32_t mask,const char *name,uint32_t cookie);
+#define IN_ACCESS 0x1u
+#define IN_CLOSE_NOWRITE 0x10u
+#define IN_OPEN 0x20u
 static void mem_node_free(MemNode *n) {
     if(mem_is(n,MEM_REG)) { mem_pages_free(n,0);free(n->f.leaf); }
     else if(mem_is(n,MEM_DIR)) { for(uint32_t i=0;i<n->d.count;i++)free(n->d.list[i]);free(n->d.list); }
     else if(mem_is(n,MEM_LNK))free(n->target);
     for(MemXattr *x=n->xattrs,*next;x;x=next) { next=x->next;free(x->name);free(x); }
+    mem_notify(n,IN_IGNORED,NULL,0);                                            /* its watches go */
     n->fs->inodes--;free(n);
 }
 static void mem_node_put(MemNode *n) { if(n && !--n->refs && !n->nlink)mem_node_free(n); }
+/* inotify: events on memfs watches (inotify.h keeps them; mem_lock held). IN_ISDIR
+   in mask when the subject is a directory; cookie pairs MOVED_FROM with MOVED_TO. */
+static uint32_t mem_cookie;
+static void mem_notify(MemNode *watched,uint32_t mask,const char *name,uint32_t cookie) {
+    if(!watched || !__atomic_load_n(&mem_watching,__ATOMIC_RELAXED))return;
+    for(unsigned i=0;i<IO_INOTIFYS;i++) {
+        struct GuestInotify *in=io_inotifies[i];if(!in)continue;
+        pthread_mutex_lock(&in->lock);int any=0;
+        for(unsigned k=0;k<in->nwatch;) {
+            struct GuestInotifyWatch *w=&in->watch[k];
+            if(w->mem!=watched || (mask!=IN_IGNORED && !(w->mask&mask&IN_ALL_EVENTS))) { k++;continue; }
+            if(mask==IN_IGNORED) { inotify_drop(in,k);any=1;continue; }            /* the node is gone */
+            size_t at=in->used;inotify_emit(in,w->wd,mask,name);any=1;
+            if(cookie && in->used>at)fs_pack(in->queue+at,8,cookie,4);
+            if(w->mask&IN_ONESHOT) { inotify_drop(in,k);continue; }
+            k++;
+        }
+        if(any && !in->signaled) { char c=1;in->signaled=write(in->pipe_write,&c,1)==1; }
+        pthread_mutex_unlock(&in->lock);
+    }
+}
+/* An event on node and, under name, on the directory it is in. */
+static void mem_notify_child(MemNode *dir,const char *name,MemNode *node,uint32_t mask) {
+    if(!__atomic_load_n(&mem_watching,__ATOMIC_RELAXED))return;
+    uint32_t isdir=mem_is(node,MEM_DIR)?IN_ISDIR:0;
+    mem_notify(node,mask|isdir,NULL,0);
+    if(dir && name && *name)mem_notify(dir,mask|isdir,name,0);
+}
 static void mem_node_put_locked(MemNode *n) { pthread_mutex_lock(&mem_lock);mem_node_put(n);pthread_mutex_unlock(&mem_lock); }
 /* Names: one hash table over every directory, keyed by (directory, name). */
 static uint32_t mem_hash(const MemNode *dir,const char *name) {
@@ -270,7 +303,10 @@ static int mem_add_mount(const char *spec) {
 static MemOpen *mem_fd(uint64_t fd) { return io_managed(fd) && IO(fd).kind==IO_MEM?IO(fd).mem:NULL; }
 static void mem_open_put(MemOpen *o) {
     pthread_mutex_lock(&mem_lock);
-    if(!--o->refs) { mem_node_put(o->node);free(o); }
+    if(!--o->refs) {
+        if(!(o->flags&0x200000))mem_notify_child(o->dir,o->name,o->node,(o->flags&3)?IN_CLOSE_WRITE:IN_CLOSE_NOWRITE);
+        mem_node_put(o->node);mem_node_put(o->dir);free(o->name);free(o);
+    }
     pthread_mutex_unlock(&mem_lock);
 }
 static void mem_open_get(MemOpen *o) { pthread_mutex_lock(&mem_lock);o->refs++;pthread_mutex_unlock(&mem_lock); }
@@ -283,7 +319,6 @@ typedef struct {
     char canon[1025];                 /* the leaf's canonical guest path ("" if unknown) */
 } MemPath;
 /* fs_walk's redirect (fs.h): it reached a memfs mount; path is that mount's guest path and the rest. */
-static int mem_redirect_take(void) { int was=mem_redirect.pending;mem_redirect.pending=0;return was; }
 /* The guest path of a memfs directory: its mount's and its names up to the root ("" when removed). */
 static void mem_dir_path(const MemNode *n,char out[1025]) {
     char tail[1025];size_t used=0;tail[0]=0;
@@ -418,9 +453,11 @@ static void mem_statfs_pack(unsigned char *out,const MemFs *fs) {
     fs_pack(out,64,255,8);fs_pack(out,72,MEM_PAGE,8);fs_pack(out,80,(fs->readonly?1:0)|2|4|(fs->noexec?8:0)|1024,8); /* ST_RDONLY, NOSUID, NODEV, NOEXEC, RELATIME */
 }
 /* A new description of n as the lowest free descriptor (fd: one io_free_slot claimed). */
-static int64_t mem_install(int fd,MemNode *n,unsigned flags,int cloexec) {
+static int64_t mem_install(int fd,MemNode *n,unsigned flags,int cloexec,MemNode *dir,const char *name) {
     MemOpen *o=calloc(1,sizeof(*o));if(!o) { fd_unbind((uint64_t)fd);return -12; }
     o->node=n;o->refs=1;o->flags=flags;n->refs++;
+    if(dir && name && *name && (o->name=malloc(strlen(name)+1))) { strcpy(o->name,name);o->dir=dir;dir->refs++; }
+    if(!(flags&0x200000))mem_notify_child(dir,name,n,IN_OPEN);
     IO(fd)=(GuestIO){.kind=IO_MEM,.cloexec=(unsigned)(cloexec!=0),.host=-1,.mem=o};
     return fd;
 }
@@ -435,6 +472,7 @@ static MemNode *mem_create(MemPath *w,uint32_t mode,int *error) {
     if(dir->mode&02000) { n->gid=dir->gid;if(mem_is(n,MEM_DIR))n->mode|=02000; }  /* set-group-ID directories pass their group on */
     if(!mem_link(dir,w->name,n)) { mem_node_free(n);*error=-12;return NULL; }
     dir->mtime=dir->ctime=n->mtime;w->node=n;
+    mem_notify(dir,IN_CREATE|(mem_is(n,MEM_DIR)?IN_ISDIR:0),w->name,0);
     return n;
 }
 static int64_t mem_open(MemPath *w,uint64_t flags,uint64_t mode) {
@@ -451,7 +489,7 @@ static int64_t mem_open(MemPath *w,uint64_t flags,uint64_t mode) {
         int fd=io_free_slot(0);if(fd<0)return -24;
         MemNode *f=mem_node_new(n->fs,MEM_REG|((uint32_t)mode&07777&~fs_umask));if(!f) { fd_unbind((uint64_t)fd);return -28; }
         if(n->mode&02000)f->gid=n->gid;
-        int64_t r=mem_install(fd,f,(unsigned)(flags&(3|1024|2048)),(flags&524288)!=0);if(r<0)mem_node_free(f);
+        int64_t r=mem_install(fd,f,(unsigned)(flags&(3|1024|2048)),(flags&524288)!=0,NULL,NULL);if(r<0)mem_node_free(f);
         return r;
     }
     if(!n && (flags&0x400000))return -2;
@@ -470,8 +508,8 @@ static int64_t mem_open(MemPath *w,uint64_t flags,uint64_t mode) {
     else if(w->slash)return -21;                                               /* "name/" names a directory */
     int fd=io_free_slot(0);if(fd<0)return -24;
     if(!n) { int error;if(!(n=mem_create(w,MEM_REG|((uint32_t)mode&07777&~fs_umask),&error))) { fd_unbind((uint64_t)fd);return error; } }
-    else if((flags&512) && mem_is(n,MEM_REG) && !path)mem_resize(n,0);
-    return mem_install(fd,n,(unsigned)(flags&(3|1024|2048|0x200000)),(flags&524288)!=0);
+    else if((flags&512) && mem_is(n,MEM_REG) && !path) { mem_resize(n,0);mem_notify_child(w->dir,w->name,n,IN_MODIFY); }
+    return mem_install(fd,n,(unsigned)(flags&(3|1024|2048|0x200000)),(flags&524288)!=0,w->dir,w->name);
 }
 /* The record of one directory entry for getdents64; 0 when it does not fit. */
 static size_t mem_dirent(unsigned char *out,size_t room,uint64_t ino,uint64_t offset,const char *name,unsigned type) {
@@ -512,6 +550,10 @@ static int mem_unlink(MemPath *w,uint64_t flags) {
     else { if(mem_is(n,MEM_DIR))return -21;if(w->slash)return -20; }
     int e=mem_writable_dir(w,n);if(e)return e;
     struct timespec now=mem_now();w->dir->mtime=w->dir->ctime=now;n->ctime=now;
+    uint32_t isdir=mem_is(n,MEM_DIR)?IN_ISDIR:0;
+    mem_notify(w->dir,IN_DELETE|isdir,w->name,0);
+    if(isdir || n->nlink==1) { mem_notify(n,IN_DELETE_SELF|isdir,NULL,0);mem_notify(n,IN_IGNORED,NULL,0); }
+    else mem_notify(n,IN_ATTRIB,NULL,0);
     mem_unlink_entry(w->entry);return 0;
 }
 /* Whether dir is node or lies inside it. */
@@ -541,6 +583,10 @@ static int mem_rename(MemPath *a,MemPath *b,uint64_t flags) {
         if(n==t)return 0;
         if((mem_is(n,MEM_DIR) && mem_inside_of(b->dir,n)) || (mem_is(t,MEM_DIR) && mem_inside_of(a->dir,t)))return -22;
         MemEntry *x=a->entry,*y=b->entry;x->node=t;y->node=n;
+        uint32_t c1=++mem_cookie,c2=++mem_cookie,dn=mem_is(n,MEM_DIR)?IN_ISDIR:0,dt=mem_is(t,MEM_DIR)?IN_ISDIR:0;
+        mem_notify(a->dir,IN_MOVED_FROM|dn,a->name,c1);mem_notify(b->dir,IN_MOVED_TO|dn,b->name,c1);
+        mem_notify(b->dir,IN_MOVED_FROM|dt,b->name,c2);mem_notify(a->dir,IN_MOVED_TO|dt,a->name,c2);
+        mem_notify(n,IN_MOVE_SELF|dn,NULL,0);mem_notify(t,IN_MOVE_SELF|dt,NULL,0);
         if(mem_is(n,MEM_DIR)) { n->parent=b->dir;n->entry=y;a->dir->nlink--;b->dir->nlink++; }
         if(mem_is(t,MEM_DIR)) { t->parent=a->dir;t->entry=x;b->dir->nlink--;a->dir->nlink++; }
         a->dir->mtime=a->dir->ctime=b->dir->mtime=b->dir->ctime=n->ctime=t->ctime=now;return 0;
@@ -552,8 +598,15 @@ static int mem_rename(MemPath *a,MemPath *b,uint64_t flags) {
         if(t && t->d.live)return -39;
         if(mem_inside_of(b->dir,n))return -22;
     } else if(t && mem_is(t,MEM_DIR))return -21;
-    if(t) { t->ctime=now;mem_unlink_entry(b->entry); }
+    if(t) {
+        t->ctime=now;
+        if(mem_is(t,MEM_DIR) || t->nlink==1) { mem_notify(t,IN_DELETE_SELF|(mem_is(t,MEM_DIR)?IN_ISDIR:0),NULL,0);mem_notify(t,IN_IGNORED,NULL,0); }
+        mem_unlink_entry(b->entry);
+    }
+    uint32_t cookie=++mem_cookie,isdir=mem_is(n,MEM_DIR)?IN_ISDIR:0;
+    mem_notify(a->dir,IN_MOVED_FROM|isdir,a->name,cookie);
     if((e=mem_move(a->entry,b->dir,b->name)))return e;
+    mem_notify(b->dir,IN_MOVED_TO|isdir,b->name,cookie);mem_notify(n,IN_MOVE_SELF|isdir,NULL,0);
     a->dir->mtime=a->dir->ctime=b->dir->mtime=b->dir->ctime=n->ctime=now;return 0;
 }
 static int mem_hardlink(MemNode *n,MemPath *b) {
@@ -564,7 +617,8 @@ static int mem_hardlink(MemNode *n,MemPath *b) {
     if(!mem_may(b->dir,3))return -13;
     if(n->fs->readonly)return -30;
     if(!mem_link(b->dir,b->name,n))return -12;
-    struct timespec now=mem_now();n->ctime=b->dir->mtime=b->dir->ctime=now;return 0;
+    struct timespec now=mem_now();n->ctime=b->dir->mtime=b->dir->ctime=now;
+    mem_notify(b->dir,IN_CREATE,b->name,0);mem_notify(n,IN_ATTRIB,NULL,0);return 0;
 }
 static int mem_symlink(const char *target,MemPath *w) {
     size_t n=strlen(target);if(!n)return -2;
@@ -667,6 +721,7 @@ static uint64_t mem_transfer(MemOpen *o,int writing,uint64_t address,uint64_t co
         if(!writing && r>0 && (n->atime.tv_sec<n->mtime.tv_sec || n->atime.tv_sec<n->ctime.tv_sec || n->atime.tv_sec+86400<mem_now().tv_sec))
             n->atime=mem_now();                                                  /* relatime */
         if(r>0 && at<0)o->position=pos+(uint64_t)r;
+        if(r>0)mem_notify_child(o->dir,o->name,n,writing?IN_MODIFY:IN_ACCESS);
         uint64_t dev=MEM_DEV(n->fs),ino=n->ino;
         pthread_mutex_unlock(&mem_lock);
         if(r<0) { if(!done)return linux_error((unsigned)-r);break; }
@@ -786,11 +841,12 @@ static uint64_t mem_copy(uint64_t in_fd,uint64_t in_at,uint64_t out_fd,uint64_t 
     if((in_at && !pin) || (out_at && !pout))return linux_error(14);
     if(count>1024*1024)count=1024*1024;
     if(!count)return 0;
-    unsigned char *buffer=malloc((size_t)count);if(!buffer)return linux_error(12);
+    static _Thread_local unsigned char *buffer;                                 /* per worker, kept: sendfile runs per file */
+    if(!buffer && !(buffer=malloc(1024*1024)))return linux_error(12);
     int64_t from=pin?(int64_t)le(pin,8):-1,got;
     if(in) { pthread_mutex_lock(&mem_lock);if(from<0)from=(int64_t)in->position;got=(int64_t)mem_read_at(in->node,(uint64_t)from,buffer,count);if(!pin)in->position+=(uint64_t)got;pthread_mutex_unlock(&mem_lock); }
-    else { if(from<0 && (from=lseek(in_host,0,SEEK_CUR))<0) { free(buffer);return fs_error(); }
-           got=pread(in_host,buffer,(size_t)count,from);if(got<0) { uint64_t e=fs_error();free(buffer);return e; }if(!pin)lseek(in_host,from+got,SEEK_SET); }
+    else { if(from<0 && (from=lseek(in_host,0,SEEK_CUR))<0)return fs_error();
+           got=pread(in_host,buffer,(size_t)count,from);if(got<0)return fs_error();if(!pin)lseek(in_host,from+got,SEEK_SET); }
     int64_t put=0;
     if(got>0) {
         if(out) {
@@ -812,7 +868,6 @@ static uint64_t mem_copy(uint64_t in_fd,uint64_t in_at,uint64_t out_fd,uint64_t 
             }
         }
     }
-    free(buffer);
     if(pin && got>0 && put>0)fs_pack(pin,0,(uint64_t)from+(uint64_t)put,8);
     if(put<0)return (uint64_t)put;
     return got<=0?0:(uint64_t)put;
@@ -933,6 +988,8 @@ static int mem_fd_call(uint64_t call,MemOpen *o) {
     else if(call==52)r=(o->flags&0x200000)?linux_error(9):mem_result(mem_chmod(n,x[1]&07777));
     else if(call==55)r=mem_result(mem_chown(n,(uint32_t)x[1],(uint32_t)x[2]));
     else r=linux_error(38);
+    if((call==52 || call==55) && !r)mem_notify_child(o->dir,o->name,n,IN_ATTRIB);
+    if((call==46 || call==47) && !r)mem_notify_child(o->dir,o->name,n,IN_MODIFY);
     pthread_mutex_unlock(&mem_lock);
     return mem_answer(r);
 }
@@ -962,7 +1019,7 @@ static int mem_path_call(uint64_t call) {
             MemOpen *o=mem_fd(x[0]);if(!o)return MEM_PASS;
             const unsigned char *in=x[2]?lookup(x[2],32,4):NULL;if(x[2] && !in)return mem_answer(linux_error(14));
             if(x[3])return mem_answer(linux_error(22));
-            pthread_mutex_lock(&mem_lock);uint64_t r=mem_result(mem_utimens(o->node,in));pthread_mutex_unlock(&mem_lock);
+            pthread_mutex_lock(&mem_lock);uint64_t r=mem_result(mem_utimens(o->node,in));if(!r)mem_notify_child(o->dir,o->name,o->node,IN_ATTRIB);pthread_mutex_unlock(&mem_lock);
             return mem_answer(r);
         }
         a[0]=(MemArg){x[0],x[1],!(x[3]&256),(x[3]&4096)!=0};break;
@@ -1094,6 +1151,8 @@ static int64_t mem_path_op(uint64_t call,MemPath *w,const int *res,uint64_t *fif
     }
     default: r=-38;
     }
+    if(!r && n && (call==53 || call==54 || call==88 || (call>=5 && call<=7) || (call>=14 && call<=16)))mem_notify_child(w[0].dir,w[0].name,n,IN_ATTRIB);
+    if(!r && n && call==45)mem_notify_child(w[0].dir,w[0].name,n,IN_MODIFY);
 done:
     pthread_mutex_unlock(&mem_lock);
     return r;
@@ -1137,7 +1196,6 @@ static int mem_route_unlocked(uint64_t call) {
 /* exec of a memfs file: a host copy for the loader (exe: its guest path). Returns the
    descriptor, MEM_HOST_PATH when the host resolves the path (fs_swap may hold a
    rewritten one; mem_exec_done clears it), or -errno. probe: after fs_walk redirected. */
-#define MEM_HOST_PATH (-1001)
 static int mem_exec_open(uint64_t dir,uint64_t at,char exe[1025],int probe) {
     if(!mem_mount_count)return MEM_HOST_PATH;
     char text[1025];if(fs_string(at,text)<0)return MEM_HOST_PATH;
@@ -1199,4 +1257,56 @@ static size_t mem_mount_line(unsigned i,char *out,size_t capacity,int mountinfo,
     int n=mountinfo?snprintf(out,capacity,"%u 20 0:%u / %s %s - tmpfs tmpfs %s\n",id,(unsigned)MEM_DEV(fs),fs->path,options,options)
                    :snprintf(out,capacity,"tmpfs %s tmpfs %s 0 0\n",fs->path,options);
     return n>0 && (size_t)n<capacity?(size_t)n:0;
+}
+/* inotify_add_watch on a memfs path: the watch descriptor, MEM_HOST_PATH, or -errno. */
+static int64_t mem_inotify_watch(struct GuestInotify *in,uint64_t at,uint32_t mask,int follow) {
+    if(!mem_mount_count)return MEM_HOST_PATH;
+    char text[1025];if(fs_string(at,text)<0)return MEM_HOST_PATH;
+    MemPath w;int rewritten;char rewrite[1025];
+    pthread_mutex_lock(&mem_lock);
+    int r=mem_resolve((uint64_t)-100,text,follow,0,&w,&rewritten,rewrite);
+    if(r<=0 || !w.node) { pthread_mutex_unlock(&mem_lock);return r<0?r:r?MEM_HOST_PATH:-2; }
+    if((mask&IN_ONLYDIR) && !mem_is(w.node,MEM_DIR)) { pthread_mutex_unlock(&mem_lock);return -20; }
+    pthread_mutex_lock(&in->lock);
+    int64_t wd=-1;
+    for(unsigned i=0;i<in->nwatch;i++)if(in->watch[i].mem==w.node) { in->watch[i].mask=(mask&IN_MASK_ADD)?in->watch[i].mask|mask:mask;wd=in->watch[i].wd; }
+    if(wd<0) {
+        if(in->nwatch==INOTIFY_WATCHES)wd=-28;
+        else {
+            struct GuestInotifyWatch *x=&in->watch[in->nwatch++];
+            x->wd=(int)(wd=++in->next_wd);x->dir=mem_is(w.node,MEM_DIR);x->mask=mask;x->host[0]=0;x->mem=w.node;
+            __atomic_fetch_add(&mem_watching,1,__ATOMIC_RELAXED);
+        }
+    }
+    pthread_mutex_unlock(&in->lock);pthread_mutex_unlock(&mem_lock);
+    return wd;
+}
+/* bind/connect of an AF_UNIX path in memfs: a socket node whose identity names the
+   abstract socket the host binds (compat.h). 0, -errno, MEM_HOST_PATH, or 1 with the
+   host path to use in rewrite. ponytail: getsockname reports that abstract name, not
+   the path; keep the path in the description if a program checks it. */
+static int64_t mem_unix_address(int fd,const char *guest,int binding,int probe,struct NetDescription *d,char rewrite[1025]) {
+    if(!mem_mount_count)return MEM_HOST_PATH;
+    MemPath w;int rewritten;int64_t e=0;
+    pthread_mutex_lock(&mem_lock);
+    int r=mem_resolve((uint64_t)-100,guest,!binding,probe,&w,&rewritten,rewrite);
+    if(r<=0) { pthread_mutex_unlock(&mem_lock);return r<0?r:rewritten?1:MEM_HOST_PATH; }
+    MemNode *n=w.node;int created=0;
+    if(binding) { int error;if(n)e=-98;else if(!mem_create(&w,0140000|(0777&~fs_umask),&error))e=error;else { n=w.node;created=1; } }
+    else if(!n)e=-2;
+    else if((n->mode&0170000)!=0140000)e=-111;
+    else if(!mem_may(n,2))e=-13;
+    unsigned char name[48];unsigned length=0;MemNode *dir=w.dir;uint64_t ino=n?n->ino:0;
+    if(!e) { name[0]=0;length=1+(unsigned)snprintf((char *)name+1,sizeof(name)-1,"dockiva-memfs-%llx-%llx",(unsigned long long)MEM_DEV(n->fs),(unsigned long long)ino); }
+    if(dir)dir->refs++;
+    pthread_mutex_unlock(&mem_lock);
+    if(!e) {
+        uint64_t result=net_abstract_address(fd,name,length,binding,d);
+        e=(int64_t)result<0?(int64_t)result:0;
+    }
+    pthread_mutex_lock(&mem_lock);
+    if(e && created && dir) { MemEntry *x=mem_find(dir,w.name);if(x && x->node->ino==ino)mem_unlink_entry(x); } /* the bind failed: no node */
+    mem_node_put(dir);
+    pthread_mutex_unlock(&mem_lock);
+    return e;
 }

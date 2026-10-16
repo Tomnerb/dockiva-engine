@@ -204,6 +204,24 @@ void _start(void) {
     fd=open3("/s/f",0101,0644);CHECK(fd>=0);fill(big,1,sizeof big);
     long total=0;for(;;) { long n=C3(64,fd,big,sizeof big);if(n<0) { CHECK(n==-28);break; }CHECK(n>0);total+=n; }
     CHECK(total==65536 && C1(57,fd)==0 && C3(35,AT,"/s/f",0)==0 && put("/s/g","ok")==2);
+    /* inotify on a memfs directory */
+    { CHECK(C3(34,AT,"/m/w",0755)==0);long in=C1(26,04000);CHECK(in>=0);
+      long wd=C3(27,in,"/m/w",0x100|0x200|0x2|0x8|0x40|0x80);CHECK(wd>=0);   /* CREATE DELETE MODIFY CLOSE_WRITE MOVED_FROM MOVED_TO */
+      CHECK(put("/m/w/f","data")==4 && C4(38,AT,"/m/w/f",AT,"/m/w/g")==0 && C3(35,AT,"/m/w/g",0)==0);
+      unsigned char ev[1024];long n=C3(63,in,ev,sizeof ev);CHECK(n>0);
+      static const unsigned masks[]={0x100,0x2,0x8,0x40,0x80,0x200};static const char names[]="ffffgg";unsigned k=0,cookie=0;
+      for(long at=0;at<n;k++) { CHECK(k<6 && u32(ev+at)==(unsigned)wd && u32(ev+at+4)==masks[k] && ev[at+16]==names[k] && !ev[at+17]);
+          if(k==3)cookie=u32(ev+at+8);if(k==4)CHECK(cookie && u32(ev+at+8)==cookie);
+          at+=16+u32(ev+at+12); }
+      CHECK(k==6 && C3(63,in,ev,sizeof ev)==-11 && C2(28,in,wd)==0 && C1(57,in)==0); }
+    /* AF_UNIX sockets bound in memfs */
+    { struct { unsigned short family;char path[108]; } addr={1,"/m/sock"};
+      long s=C3(198,1,1,0),c=C3(198,1,1,0);CHECK(s>=0 && c>=0 && C3(200,s,&addr,10)==0 && C2(201,s,4)==0);
+      CHECK(stat_of("/m/sock")==0 && (ST_MODE&0170000)==0140000);
+      long t=C3(198,1,1,0);CHECK(C3(200,t,&addr,10)==-98 && C1(57,t)==0);   /* EADDRINUSE */
+      CHECK(C3(203,c,&addr,10)==0);long a=C3(202,s,0,0);CHECK(a>=0 && C3(64,c,"u",1)==1 && C3(63,a,buffer,1)==1 && buffer[0]=='u');
+      CHECK(C3(35,AT,"/m/sock",0)==0);t=C3(198,1,1,0);CHECK(C3(203,t,&addr,10)==-2);
+      C1(57,t);C1(57,a);C1(57,c);C1(57,s); }
     /* permissions as uid 1000: modes, the sticky bit */
     CHECK(put("/m/root-only","secret")==6 && C3(53,AT,"/m/root-only",0600)==0 && C3(34,AT,"/m/mine",0700)==0);
     CHECK(C3(149,1000,1000,1000)==0 && C3(147,1000,1000,1000)==0);           /* setresgid, setresuid */

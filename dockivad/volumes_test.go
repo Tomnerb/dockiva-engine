@@ -86,13 +86,21 @@ func TestMountPointsAndPopulation(t *testing.T) {
 	b.createVolume("vol", obj{}, false)
 	file := filepath.Join(t.TempDir(), "conf")
 	check(os.WriteFile(file, []byte("x"), 0o644))
-	args := prepareMounts(home, root, obj{"mounts": []any{
+	mounts := obj{"mounts": []any{
 		obj{"type": "volume", "source": "vol", "target": "/link/seed", "readonly": false},
 		obj{"type": "bind", "source": file, "target": "/etc/app/conf", "readonly": true},
-	}})
+		obj{"type": "tmpfs", "target": "/link/scratch", "options": "noexec,nosuid,nodev,size=1m", "readonly": false},
+	}}
+	args := prepareMounts(home, root, mounts, true)
 	// The mount point is resolved through the image's symlink; the volume got the image's content.
-	if strings.Join(args, " ") != "--bind "+volumeData(home, "vol")+" /real/seed --bind-ro "+file+" /etc/app/conf" {
+	if strings.Join(args, " ") != "--bind "+volumeData(home, "vol")+" /real/seed --bind-ro "+file+" /etc/app/conf --tmpfs /real/scratch:noexec,nosuid,nodev,size=1m" {
 		t.Fatalf("args: %v", args)
+	}
+	if args := prepareMounts(home, root, mounts, false); len(args) != 6 { // an exec run: no tmpfs
+		t.Fatalf("exec args: %v", args)
+	}
+	if st, e := os.Stat(filepath.Join(root, "real", "scratch")); e != nil || !st.IsDir() {
+		t.Fatal("tmpfs mount point not made")
 	}
 	if b, e := os.ReadFile(filepath.Join(volumeData(home, "vol"), "file")); e != nil || string(b) != "from image" {
 		t.Fatal("volume not populated from the image")

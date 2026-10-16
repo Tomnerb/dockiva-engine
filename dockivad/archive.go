@@ -40,6 +40,9 @@ func (b *engine) guestFiles(name string) func(guest string, create bool) guestFi
 	}
 	mounts := []mount{}
 	for _, m := range savedMounts(c) {
+		if m["type"] == "tmpfs" { // in the runtime's memory: docker cp sees the mount point beneath it
+			continue
+		}
 		source := str(m["source"])
 		if m["type"] == "volume" {
 			source = volumeData(b.Home, source)
