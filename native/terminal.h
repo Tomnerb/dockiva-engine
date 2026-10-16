@@ -40,7 +40,7 @@ static void terminal_init(void) {
         terminal_install(SIGCONT,terminal_signal);
         if(terminal_forwarded)terminal_install(SIGURG,terminal_signal);
     }
-    atexit(terminal_restore);io_fds[0]=(GuestIO){IO_INPUT,0,0,NULL,NULL,NULL,NULL,NULL};
+    atexit(terminal_restore);io_fds[0]=(GuestIO){IO_INPUT,0,0,NULL,NULL,NULL,NULL,NULL,NULL};
 }
 static void terminal_pump(int wait) {
     if(!terminal_enabled)return;

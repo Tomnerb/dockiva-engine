@@ -96,6 +96,7 @@ static void epoll_forget_socket(int host);
 #include "fadvise.h"
 #include "epoll.h"
 #include "compat.h"
+#include "memfs.h"
 #include "vdso.h"
 /* Read-only segments of programs run recently, shared by later execs of the same
    file (Linux serves them from its page cache): an exec reuses their bytes instead of
@@ -1116,6 +1117,9 @@ int main(int argc,char **argv) {
             int readonly=!strcmp(argv[i],"--bind-ro");
             if(fs_add_mount(argv[i+1],argv[i+2],readonly)<0) { fprintf(stderr,"dockiva: --bind %s %s: %s\n",argv[i+1],argv[i+2],strerror(errno));fail("Invalid bind mount"); }
             i+=2;
+        } else if(!strcmp(argv[i],"--tmpfs") && i+1<argc) {
+            /* --tmpfs GUEST[:size=..,mode=..,uid=..,gid=..,noexec]: a memfs mount (memfs.h). */
+            if(mem_add_mount(argv[++i])<0) { fprintf(stderr,"dockiva: --tmpfs %s: %s\n",argv[i],strerror(errno));fail("Invalid tmpfs mount"); }
         } else if(!strcmp(argv[i],"--argv0") && i+1<argc) {
             guestargv[0]=argv[++i];
         } else if(!strcmp(argv[i],"--env") && i+1<argc) {
@@ -1246,7 +1250,7 @@ int main(int argc,char **argv) {
     if(stdin_host && !terminal_enabled) {
         int flags=fcntl(0,F_GETFL);
         if(flags<0 || fcntl(0,F_SETFL,flags|O_NONBLOCK)<0)fail("--stdin needs an open standard input");
-        io_fds[0]=(GuestIO){IO_INPUT,0,0,NULL,NULL,NULL,NULL,NULL};
+        io_fds[0]=(GuestIO){IO_INPUT,0,0,NULL,NULL,NULL,NULL,NULL,NULL};
     }
 #ifdef VMFREE_HVF
     if(use_hvf)return hvf_run(steps);

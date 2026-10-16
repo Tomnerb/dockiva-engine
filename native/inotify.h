@@ -193,7 +193,7 @@ static uint64_t io_inotify(uint64_t call) {
         int fd=io_free_slot(0);if(fd<0) { close(ends[0]);close(ends[1]);free(in->queue);free(in->watch);free(in);return linux_error(24); }
         pthread_mutex_init(&in->lock,NULL);in->refs=1;in->nonblock=(flags&2048)!=0;in->pipe_read=ends[0];in->pipe_write=ends[1];
         io_inotifies[slot]=in;
-        IO(fd)=(GuestIO){IO_INOTIFY,(flags&524288)!=0,ends[0],NULL,NULL,NULL,NULL,in};
+        IO(fd)=(GuestIO){IO_INOTIFY,(flags&524288)!=0,ends[0],NULL,NULL,NULL,NULL,in,NULL};
         return (uint64_t)fd;
     }
     if(io_slot(cpu->gpr[0])<0 || !IO(cpu->gpr[0]).kind)return linux_error(9);

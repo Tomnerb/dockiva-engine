@@ -100,12 +100,20 @@ static void exec_discard(void) {
    whose path may be relative to dirfd: the new image into exec_stage. 0 or an error. */
 static _Thread_local int exec_unlocked;               /* exec_build runs without the runtime lock */
 static uint64_t exec_build_held(uint64_t dir,unsigned r) {
-    char leaf[1025],exe[1025];
-    syscall_unlocked=exec_unlocked;syscall_abort=0;int parent=fs_lookup(dir,cpu->gpr[r],leaf,1|FS_DIRECT,exe);syscall_unlocked=0;
-    if(syscall_abort) { if(parent>=0)close(parent);return linux_error(11); } /* needs the lock: the locked redo builds it */
-    if(parent<0)return fs_error();
-    int fd=openat(parent,leaf,O_RDONLY|FS_NOFOLLOW_OPEN|O_NONBLOCK|O_CLOEXEC);
-    int saved=errno;close(parent);errno=saved;if(fd<0)return fs_error();
+    char leaf[1025],exe[1025];int saved,fd=mem_exec_open(dir,cpu->gpr[r],exe,0);   /* memfs: a host copy */
+    if(fd==MEM_HOST_PATH) {
+        syscall_unlocked=exec_unlocked;syscall_abort=0;int parent=fs_lookup(dir,cpu->gpr[r],leaf,1|FS_DIRECT,exe);syscall_unlocked=0;
+        if(parent<0 && mem_redirect_take()) { mem_exec_done();fd=mem_exec_open(dir,cpu->gpr[r],exe,1); } /* reached memfs through a link */
+        else {
+            mem_exec_done();
+            if(syscall_abort) { if(parent>=0)close(parent);return linux_error(11); } /* needs the lock: the locked redo builds it */
+            if(parent<0)return fs_error();
+            fd=openat(parent,leaf,O_RDONLY|FS_NOFOLLOW_OPEN|O_NONBLOCK|O_CLOEXEC);
+            saved=errno;close(parent);errno=saved;if(fd<0)return fs_error();
+        }
+        if(fd==MEM_HOST_PATH)return linux_error(2);
+    }
+    if(fd<0)return linux_error((unsigned)-fd);
     struct stat st;
     if(fstat(fd,&st)<0 || !S_ISREG(st.st_mode) || !(st.st_mode&0111)) { close(fd);return linux_error(13); }
     /* Each worker's own (execs build in parallel): anonymous memory, not charged. */
