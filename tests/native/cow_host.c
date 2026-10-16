@@ -87,7 +87,7 @@ int main(int argc,char **argv) {
     store_le(0x20010,0x22100,8);store_le(0x20018,3,8);
     assert(address_space_fork_private(&child,&parent));activate(&child);
     FILE *input=tmpfile();assert(input);assert(fwrite("abcdef",1,6,input)==6);rewind(input);
-    int fd=io_free_slot(0);assert(fd>=0);IO(fd)=(GuestIO){IO_FILE,0,dup(fileno(input)),NULL,NULL,NULL,NULL,NULL};assert(IO(fd).host>=0);
+    int fd=io_free_slot(0);assert(fd>=0);IO(fd)=(GuestIO){IO_FILE,0,dup(fileno(input)),NULL,NULL,NULL,NULL,NULL,NULL};assert(IO(fd).host>=0);
     cpu->gpr[0]=(uint64_t)fd;cpu->gpr[1]=0x20000;cpu->gpr[2]=2;assert(guest_readv()==6);
     io_release(&IO(fd));fd_unbind((uint64_t)fd);fclose(input);
     assert(!memcmp(lookup(0x20100,3,4),"abc",3) && !memcmp(lookup(0x22100,3,4),"def",3));
