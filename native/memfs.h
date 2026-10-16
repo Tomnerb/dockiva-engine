@@ -180,8 +180,9 @@ static uint32_t mem_dir_index(const MemNode *dir,uint64_t position) {
 static unsigned char *mem_page_at(const MemNode *n,uint64_t index) {
     uint64_t l=index/MEM_LEAF;return l<n->f.leaves && n->f.leaf[l]?n->f.leaf[l]->page[index%MEM_LEAF]:NULL;
 }
-/* A new zeroed page at index, charged to the memory budget and the mount's size. */
-static unsigned char *mem_page_new(MemNode *n,uint64_t index) {
+/* A new page at index (zeroed unless the caller fills it whole), charged to the
+   memory budget and the mount's size. */
+static unsigned char *mem_page_new_as(MemNode *n,uint64_t index,int whole) {
     uint64_t l=index/MEM_LEAF;
     if(l>=n->f.leaves) {
         uint64_t leaves=n->f.leaves?n->f.leaves:4;while(leaves<=l)leaves*=2;
@@ -193,9 +194,11 @@ static unsigned char *mem_page_new(MemNode *n,uint64_t index) {
     MemFs *fs=n->fs;
     if((fs->limit && fs->used+MEM_PAGE>fs->limit) || !resource_charge(MEM_PAGE))return NULL;
     unsigned char *p=mem_page_alloc();if(!p) { resource_uncharge(MEM_PAGE);return NULL; }
-    memset(p,0,MEM_PAGE);fs->used+=MEM_PAGE;n->f.pages++;
+    if(!whole)memset(p,0,MEM_PAGE);
+    fs->used+=MEM_PAGE;n->f.pages++;
     return n->f.leaf[l]->page[index%MEM_LEAF]=p;
 }
+static unsigned char *mem_page_new(MemNode *n,uint64_t index) { return mem_page_new_as(n,index,0); }
 static void mem_pages_free(MemNode *n,uint64_t first) {
     for(uint64_t l=first/MEM_LEAF;l<n->f.leaves;l++) {
         MemLeaf *leaf=n->f.leaf[l];if(!leaf)continue;
@@ -225,7 +228,7 @@ static int64_t mem_write_at(MemNode *n,uint64_t at,const unsigned char *data,uin
     while(done<count) {
         uint64_t pos=at+done,offset=pos%MEM_PAGE,take=MEM_PAGE-offset<count-done?MEM_PAGE-offset:count-done;
         unsigned char *p=mem_page_at(n,pos/MEM_PAGE);
-        if(!p && !(p=mem_page_new(n,pos/MEM_PAGE)))break;
+        if(!p && !(p=mem_page_new_as(n,pos/MEM_PAGE,take==MEM_PAGE)))break;
         memcpy(p+offset,data+done,(size_t)take);done+=take;
     }
     if(!done && count)return -28;                                               /* ENOSPC */

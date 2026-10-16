@@ -642,8 +642,9 @@ func runtimeCommand(p, native string, c obj, command []string, argv0 string, env
 	// <home>/containers/<name>: volumes are in <home>/volumes.
 	args = append(args, prepareMounts(filepath.Dir(filepath.Dir(p)), root, c, publish)...)
 	// dockiva-engine --tmp memory: /tmp (unless mounted) and /dev/shm in the runtime's
-	// memory (memfs), as tmpfs mounts; Docker keeps /tmp on the writable layer.
-	if os.Getenv("DOCKIVA_TMP") == "memory" && publish {
+	// memory (memfs), as tmpfs mounts; Docker keeps /tmp on the writable layer. Not for
+	// a build's RUN steps: their /tmp is part of the image (a later step reads it).
+	if os.Getenv("DOCKIVA_TMP") == "memory" && publish && !strings.HasPrefix(filepath.Base(p), "dockiva-build-") {
 		if !hasMount(c, "/tmp") {
 			_ = safeRun(func() { mountPoint(root, "tmp", true) })
 			args = append(args, "--tmpfs", "/tmp:mode=1777")
