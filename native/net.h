@@ -12,6 +12,34 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <time.h>
+#include <sys/select.h>
+/* poll(fds, n, 0). Darwin's poll costs about 10 us when nothing is ready (select:
+   0.2 us), and readiness checks mostly find nothing: select first, and poll only
+   when something is ready, for its exact revents. A descriptor with no events (poll
+   still reports its hang-up) or past POLL_NOW_FDS takes poll at once. */
+#define POLL_NOW_FDS 16384
+static int poll_now(struct pollfd *fds,unsigned n) {
+    static _Thread_local uint32_t sets[3][POLL_NOW_FDS/32];
+    int top=-1;
+    for(unsigned i=0;i<n;i++) {
+        if(fds[i].fd<0)continue;
+        if(fds[i].fd>=POLL_NOW_FDS || !(fds[i].events&(POLLIN|POLLOUT|POLLPRI)))return poll(fds,n,0);
+        if(fds[i].fd>top)top=fds[i].fd;
+    }
+    for(unsigned i=0;i<n;i++)fds[i].revents=0;
+    if(top<0)return 0;
+    size_t bytes=((size_t)top/32+1)*4;
+    for(unsigned k=0;k<3;k++)memset(sets[k],0,bytes);
+    for(unsigned i=0;i<n;i++) {
+        int fd=fds[i].fd;if(fd<0)continue;uint32_t bit=UINT32_C(1)<<(fd%32);
+        if(fds[i].events&POLLIN)sets[0][fd/32]|=bit;
+        if(fds[i].events&POLLOUT)sets[1][fd/32]|=bit;
+        if(fds[i].events&POLLPRI)sets[2][fd/32]|=bit;
+    }
+    struct timeval zero={0,0};
+    if(!select(top+1,(fd_set *)(void *)sets[0],(fd_set *)(void *)sets[1],(fd_set *)(void *)sets[2],&zero))return 0;
+    return poll(fds,n,0);   /* ready (or an error such as a closed descriptor): poll says exactly what */
+}
 /* One descriptor table per process: each guest number names a socket, file or
    pipe-like (I/O) slot of its layer. New descriptors take the lowest free number,
    as POSIX requires (shells, daemons and PostgreSQL rely on it). The map and the
@@ -130,11 +158,17 @@ static int net_outbound; /* --outbound: connect/sendto may reach any IPv4 addres
 #define NET_RAW_ICMP (1u<<26) /* with NET_PING: a raw IPv4 ICMP socket */
 static uint64_t net_wait_blocks;
 static int io_poll_host(uint64_t guest); /* --stdin's host descriptor or a timerfd's kqueue, polled like a socket */
+static int io_wait_pipe(uint64_t guest);  /* io.h: a pipe or eventfd the current wait now targets */
 static int io_managed(uint64_t fd);static int fs_host(uint64_t n); /* io.h and fs.h, for select */
 /* targeted: only these sockets, the deadline, a signal, a futex wake or a pipe that
    recorded the task in its waiters can end the wait, so the scheduler wakes the task
-   for those alone; other blocked calls retry after any I/O event (io_epoch). */
-typedef struct { struct pollfd fds[NET_FD_LIMIT];unsigned count,active,targeted;uint64_t deadline,at_pc; } NetWait;
+   for those alone; other blocked calls retry after any I/O event (io_epoch).
+   pipes: the pipes (and eventfds) it waits on, so a change of one wakes only the
+   threads waiting on it, not every thread of the process; more than NET_WAIT_PIPES:
+   any of the process's pipes. */
+#define NET_WAIT_PIPES 8
+struct GuestPipe;
+typedef struct { struct pollfd fds[NET_FD_LIMIT];unsigned count,active,targeted;uint64_t deadline,at_pc;const struct GuestPipe *pipes[NET_WAIT_PIPES];unsigned pipe_count; } NetWait;
 static NetWait net_wait_first;
 static _Thread_local NetWait *net_wait_now=&net_wait_first;
 #define net_wait (*net_wait_now)
@@ -158,7 +192,7 @@ static uint64_t net_suspend(const struct pollfd *fds,unsigned count,unsigned tim
     if(net_wait.active && net_wait.at_pc==cpu->pc && now>=net_wait.deadline) { net_wait.active=0;return linux_error(11); }
     /* +1: now is truncated to the millisecond, and a wait must last at least timeout. */
     if(!net_wait.active || net_wait.at_pc!=cpu->pc)net_wait.deadline=timeout==NET_FOREVER?UINT64_MAX:now+timeout+1;
-    net_wait_blocks++;net_wait.active=1;net_wait.targeted=1;net_wait.at_pc=cpu->pc;net_wait.count=count;
+    net_wait_blocks++;net_wait.active=1;net_wait.targeted=1;net_wait.at_pc=cpu->pc;net_wait.count=count;net_wait.pipe_count=0;
     if(count)memcpy(net_wait.fds,fds,count*sizeof(*fds));
     return IO_BLOCK;
 }
@@ -952,20 +986,21 @@ static uint64_t net_poll_wait(void) {
         uint64_t ms=sec>UINT32_MAX/1000?NET_FOREVER:sec*1000+(ns+999999)/1000000;
         timeout=ms>=NET_FOREVER?NET_FOREVER:(unsigned)ms;
     }
-    static struct pollfd fds[NET_FD_LIMIT];static int other[NET_FD_LIMIT];unsigned ready_other=0;
+    static _Thread_local struct pollfd fds[NET_FD_LIMIT];static _Thread_local int other[NET_FD_LIMIT];unsigned ready_other=0,hosts=0; /* per worker: also served unlocked */
     for(unsigned i=0;i<count;i++) {
         int32_t guest=(int32_t)le(in+i*8,4);unsigned events=(unsigned)le(in+i*8+4,2);
         fds[i].fd=guest<0?-1:net_host((uint64_t)guest);
         if(fds[i].fd<0 && guest>=0)fds[i].fd=io_poll_host((uint64_t)guest);
+        hosts+=fds[i].fd>=0;
         fds[i].events=(short)(((events&1)?POLLIN:0)|((events&4)?POLLOUT:0));fds[i].revents=0;
         other[i]=0;
         if(guest>=0 && fds[i].fd<0) { other[i]=io_poll_ready((uint64_t)guest,events);if(other[i]<0)other[i]=32;if(other[i])ready_other++; }
     }
     int wait_ms=ready_other || net_scheduled?0:timeout==NET_FOREVER?-1:timeout>INT32_MAX?INT32_MAX:(int)timeout;
-    int result=poll(fds,count,wait_ms);
+    int result=wait_ms?poll(fds,count,wait_ms):hosts?poll_now(fds,count):0;   /* pipes alone: no host call */
     if(result==0 && !ready_other && timeout && net_scheduled) {
         uint64_t wait=net_suspend(fds,count,(unsigned)timeout);
-        for(unsigned i=0;i<count;i++)if(fds[i].fd<0 && (int32_t)le(in+i*8,4)>=0)net_wait.targeted=0; /* a pipe or stdio */
+        for(unsigned i=0;i<count;i++)if(fds[i].fd<0 && (int32_t)le(in+i*8,4)>=0 && !io_wait_pipe((uint64_t)(int32_t)le(in+i*8,4)))net_wait.targeted=0; /* stdio, a signalfd */
         if(wait==IO_BLOCK)return wait;
     }
     net_wait.active=0;
@@ -1016,10 +1051,10 @@ static uint64_t net_select_wait(void) {
         count++;
     }
     int wait_ms=ready_other || net_scheduled?0:timeout==NET_FOREVER?-1:timeout>INT32_MAX?INT32_MAX:(int)timeout;
-    int result=count?poll(fds,count,wait_ms):0;
+    int result=wait_ms?poll(fds,count,wait_ms):count?poll_now(fds,count):0;
     if(result==0 && !ready_other && timeout && net_scheduled) {
         uint64_t wait=net_suspend(fds,count,timeout);
-        for(unsigned i=0;i<count;i++)if(fds[i].fd<0)net_wait.targeted=0;
+        for(unsigned i=0;i<count;i++)if(fds[i].fd<0 && !io_wait_pipe(guest[i]))net_wait.targeted=0;
         if(wait==IO_BLOCK)return wait;
     }
     net_wait.active=0;
@@ -1050,6 +1085,16 @@ static uint64_t net_masked_wait(uint64_t (*wait)(void),uint64_t pointer) {
     if(pointer && result!=IO_BLOCK)signal_wait_unmask();
     return result;
 }
+#ifdef VMFREE_HVF
+/* A ppoll that guest_syscall_unlocked may serve: no signal mask, sockets alone. */
+static int net_poll_unlocked(void) {
+    if(cpu->gpr[3] || cpu->gpr[1]>NET_FD_LIMIT)return 0;
+    unsigned count=(unsigned)cpu->gpr[1];
+    const unsigned char *in=count?lookup(cpu->gpr[0],count*8,4):NULL;if(count && !in)return 0;
+    for(unsigned i=0;i<count;i++) { int32_t guest=(int32_t)le(in+i*8,4);if(guest>=0 && net_host((uint64_t)guest)<0)return 0; }
+    return 1;
+}
+#endif
 static uint64_t net_poll(void) {
     if(cpu->gpr[3] && cpu->gpr[4]!=8)return linux_error(22);
     return net_masked_wait(net_poll_wait,cpu->gpr[3]);
