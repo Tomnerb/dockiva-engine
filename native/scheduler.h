@@ -382,7 +382,8 @@ static void schedule_cleanup(void) {
 static void schedule_child(uint64_t pid) {
     ScheduledTask *t=&schedule_tasks[pid-1];memset(t,0,sizeof(*t)); /* a reused slot starts clean */
     pthread_mutex_init(&t->mm,NULL);t->futex_epoch=__atomic_add_fetch(&schedule_futex_epochs,1,__ATOMIC_RELAXED);
-    task_save(t);t->state=1;t->pgid=schedule_tasks[process_pid-1].pgid;t->sid=schedule_tasks[process_pid-1].sid;
+    task_save(t);if(fd_mirror_base)memcpy(fd_mirror_base+pid*4096,fd_mirror_base+process_pid*4096,4096); /* the same descriptors */
+    t->state=1;t->pgid=schedule_tasks[process_pid-1].pgid;t->sid=schedule_tasks[process_pid-1].sid;
     ScheduledTask *parent=&schedule_tasks[process_pid-1];
     t->signal_mask=*signal_mask_now();t->signal_ignored=parent->signal_ignored; /* the forking thread's mask */
     memcpy(t->signal_flags,parent->signal_flags,sizeof(t->signal_flags));

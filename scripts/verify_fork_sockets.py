@@ -46,6 +46,7 @@ def main():
     shutil.copy(stress_leaf, stress_root/'leaf')
     (stress_root/'data').write_bytes(b'x'*4096)
     fastcall = build('fastcall_guest', folder, linker)  # hvf: syscalls answered in the EL1 vector, registers through its frame
+    fd_fast = build('fd_fast_guest', folder, linker)  # hvf: fcntl and epoll_ctl of files answered in the vector, as the host would
     sleeper = build('sleeper_guest', folder, linker)  # hvf: a sleeping thread gets the CPU from siblings looping on system calls
     wake_latency, wake_race = (build(n, folder, linker) for n in ('wake_latency_guest', 'wake_race_guest'))  # hvf: futex/eventfd/pipe wake-ups
     lazy_root = folder/'lazy-root'  # lazy_charge_guest execs /leaf
@@ -90,8 +91,9 @@ def main():
                                      (fs_stress, ['--root', str(shared), '--writable', '--dynamic', '--storage-limit-mib', '0'], b'fs-stress PASS\n'),
                                      (stress, ['--root', str(stress_root), '--signals'], b'fork-exec-stress PASS\n'),
                                      (vfork_threads, ['--root', str(shared), '--writable'], b'vfork-threads PASS\n'),
-                                     (mmap_probe, ['--mmap-limit-mib', '2048', '--dynamic'], b'mmap-probe PASS\n')):
-            if backend == 'interpreter' and elf in (vfork_threads, threads, fork_threads, thread_group, futex, thread_limit, fp_preserve, sleep, vdso, sigmask, cow_stress, smp_atomic, fork_churn, thread_smp, out_edge, around, oom_kill, fastcall):
+                                     (mmap_probe, ['--mmap-limit-mib', '2048', '--dynamic'], b'mmap-probe PASS\n'),
+                                     (fd_fast, ['--root', str(shared), '--writable'], b'fd-fast PASS\n')):
+            if backend == 'interpreter' and elf in (vfork_threads, threads, fork_threads, thread_group, futex, thread_limit, fp_preserve, sleep, vdso, sigmask, cow_stress, smp_atomic, fork_churn, thread_smp, out_edge, around, oom_kill, fastcall, fd_fast):
                 continue  # the interpreter has no CLONE_THREAD support (nor these SIMD instructions); its OOM kill ends the run
             shutil.rmtree(shared, ignore_errors=True)
             shared.mkdir()
@@ -99,6 +101,8 @@ def main():
                 shutil.copy(elf, shared/'fs_stress')
             if elf == vfork_threads:
                 shutil.copy(elf, shared/'vfork_threads')
+            if elf == fd_fast:  # it execs itself
+                shutil.copy(elf, shared/'fd_fast')
             r = subprocess.run([str(runtime), 'run', str(elf), *args, *common, *extra], capture_output=True, timeout=60)
             ok = r.returncode == 0 and r.stdout == expected
             failed += not ok

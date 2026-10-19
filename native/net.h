@@ -58,8 +58,21 @@ static _Thread_local FdTable *fd_table=&fd_table_first; /* 0..2: standard I/O sl
 #define fd_index (fd_table->index)
 static int fd_lowest(uint64_t min) { for(uint64_t fd=min;fd<GUEST_FD_LIMIT;fd++)if(!fd_kind[fd])return (int)fd;return -1; }
 static int fd_slot(uint64_t fd,unsigned kind) { return fd<GUEST_FD_LIMIT && fd_kind[fd]==kind?fd_index[fd]:-1; }
-static void fd_bind(uint64_t fd,unsigned kind,unsigned index) { fd_kind[fd]=(unsigned char)kind;fd_index[fd]=(unsigned short)index; }
-static void fd_unbind(uint64_t fd) { if(fd<GUEST_FD_LIMIT) { fd_kind[fd]=0;fd_index[fd]=0; } }
+/* Hypervisor: every process's descriptors as the EL1 vector reads them to answer
+   fcntl F_GETFD/F_SETFD/F_GETFL/F_SETFL and epoll_ctl of a file without an exit
+   (hvf_backend.h), a page per pid and a byte per number: FD_MIRROR_FILE (bits 0-1
+   its access mode, bit 2 O_APPEND), or FD_MIRROR_EPOLL; 0 sends the call to the host.
+   fd_mirror rewrites a number's byte wherever its kind or close-on-exec changes, under
+   the process's mm lock; fork copies the parent's page. A zero is always safe.
+   fd_mirror_append: set once an F_SETFL changed O_APPEND (descriptions are shared, so
+   other bytes may be stale): the vector stops answering F_GETFL and F_SETFL. */
+#define FD_MIRROR_FILE 0x80u
+#define FD_MIRROR_EPOLL 0x40u
+#define FD_MIRROR_CLOEXEC 0x20u
+static unsigned char *fd_mirror_base;static uint32_t *fd_mirror_append;
+static void fd_mirror(uint64_t fd);
+static void fd_bind(uint64_t fd,unsigned kind,unsigned index) { fd_kind[fd]=(unsigned char)kind;fd_index[fd]=(unsigned short)index;fd_mirror(fd); }
+static void fd_unbind(uint64_t fd) { if(fd<GUEST_FD_LIMIT) { fd_kind[fd]=0;fd_index[fd]=0;fd_mirror(fd); } }
 #define NET_FD_LIMIT 1024u /* sockets one wait can cover */
 #define NET_SLOTS 1024u
 /* fd: zero means unused, else host descriptor + 1; flags: descriptor-local CLOEXEC

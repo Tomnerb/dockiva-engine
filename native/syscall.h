@@ -111,6 +111,15 @@ static uint64_t io_signals_pending(void) { return schedule_active?schedule_tasks
 static unsigned io_signal_take(unsigned signal) {
     ScheduledTask *t=&schedule_tasks[process_pid-1];t->signal_pending&=~(UINT64_C(1)<<(signal-1));return t->signal_sender[signal-1];
 }
+static void fd_mirror(uint64_t fd) {
+    if(!fd_mirror_base || fd>=GUEST_FD_LIMIT || !process_pid || process_pid>PROCESS_LIMIT+1)return;
+    unsigned slot=fd_index[fd],m=0;
+    if(fd_kind[fd]==FD_FILE && fs_fd[slot]) {
+        int flags=fcntl(fs_fd[slot]-1,F_GETFL);
+        if(flags>=0)m=FD_MIRROR_FILE|(unsigned)(flags&O_ACCMODE)|((flags&O_APPEND)?4u:0)|(fs_cloexec[slot]?FD_MIRROR_CLOEXEC:0);
+    } else if(fd_kind[fd]==FD_IO && io_fds[slot].kind==IO_EPOLL)m=FD_MIRROR_EPOLL;
+    __atomic_store_n(&fd_mirror_base[process_pid*4096+fd],(unsigned char)m,__ATOMIC_RELEASE);
+}
 /* close() for any kind of descriptor. */
 static uint64_t guest_close(uint64_t fd) {
     int slot=fd<GUEST_FD_LIMIT?(int)fd_index[fd]:-1;
@@ -307,7 +316,7 @@ static int guest_syscall_dispatch(void) {
                     unsigned slot=fd_index[fd];
                     if(flags&4) {
                         if(fd_kind[fd]==FD_FILE)fs_cloexec[slot]=1;else if(fd_kind[fd]==FD_NET)net_flags[slot]|=524288;else io_fds[slot].cloexec=1;
-                        continue;
+                        fd_mirror(fd);continue;
                     }
                     struct stat closing;
                     if(fd_kind[fd]==FD_FILE && !fstat(fs_fd[slot]-1,&closing)) { fs_locks_release(closing.st_dev,closing.st_ino,process_pid_now());fs_locks_release(closing.st_dev,closing.st_ino,FS_FLOCK_OWNER|fd); }
@@ -462,7 +471,7 @@ static int guest_syscall_dispatch(void) {
             if(call==29) { /* ioctl: sockets; close-on-exec and nonblocking (no effect) on files */
                 uint64_t fd=cpu->gpr[0],request=cpu->gpr[1];
                 if(net_host(fd)>=0)cpu->gpr[0]=net_ioctl();
-                else if(fs_host(fd)>=0 && (request==0x5451 || request==0x5450)) { fs_cloexec[fs_slot(fd)]=request==0x5451;cpu->gpr[0]=0; }
+                else if(fs_host(fd)>=0 && (request==0x5451 || request==0x5450)) { fs_cloexec[fs_slot(fd)]=request==0x5451;fd_mirror(fd);cpu->gpr[0]=0; }
                 else if(fs_host(fd)>=0 && request==0x5421)cpu->gpr[0]=0;
                 else cpu->gpr[0]=(fd<=2 || fs_host(fd)>=0)?linux_error(25):linux_error(9);
                 return -3;
@@ -633,6 +642,8 @@ static int guest_syscall_dispatch(void) {
    epoll_pwait on an epoll no other process shares. Returns 1 when done (result in
    x0), 0 when the call must run under the lock; an aborted attempt changed nothing. */
 #ifdef VMFREE_HVF
+static _Thread_local int fs_close_later=-1;
+static void fs_close_pending(void) { if(fs_close_later>=0) { close(fs_close_later);fs_close_later=-1; } }
 static int fs_unlocked_path(uint64_t address,char path[1025]) {
     return fs_string(address,path)==0 && strncmp(path,"/proc",5) && strncmp(path,"/dev/",5) && !(path[0]!='/' && fs_cwd && !strncmp(fs_cwd->path,"/proc",5));
 }
@@ -695,10 +706,10 @@ static int fs_call_detached(uint64_t call,const char *path,uint64_t *result,int 
     mm_unlock(task);
     uint64_t r=!transfer?fs_call(call):sync?(fs_sync(fd)<0?fs_error():0):call==63 || call==64?fs_transfer(fd,call):fs_transfer_at(fd,call==67?63:64,(int64_t)cpu->gpr[3]);
     if(!transfer && call==79 && statx && (int64_t)r>=0) { statx_from_stat(buffer);r=0; }
-    mm_lock(task);
     fs_detached.on=0;
-    if(fd>=0)close(fd);
+    if(fd>=0)close(fd);                                                     /* the call's own copies: no lock needed */
     for(int i=0;i<2;i++)if(fs_detached.base[i]>=0)close(fs_detached.base[i]);
+    mm_lock(task);
     Thread *th=task_thread(task);
     if(syscall_abort || task->exit_pending || (th && !th->state)) {          /* nothing changed, or no one to tell */
         if(fs_detached.fd>=0) { close(fs_detached.fd);fs_directory_release(fs_detached.directory);fs_detached.fd=-1; }
@@ -776,11 +787,14 @@ static int guest_syscall_unlocked(void) {
         unsigned previous=fs_umask;fs_umask=(unsigned)cpu->gpr[0]&0777;cpu->gpr[0]=previous;return 1;
     }
     /* close of a file (not a directory) while no record lock exists to release: only
-       this process's tables, which its threads change under its mm lock. */
+       this process's tables, which its threads change under its mm lock. The host
+       descriptor closes once that lock is released (fs_close_pending), as Linux
+       drops the last reference after the number is free; a local file's close
+       cannot fail. */
     if(call==57 && file && !__atomic_load_n(&fs_locks_taken,__ATOMIC_ACQUIRE)) {
         int slot=fs_slot(fd),host=fs_fd[slot]-1;
         fs_fd[slot]=0;fs_cloexec[slot]=0;fd_unbind(fd);
-        cpu->gpr[0]=close(host)<0?fs_error():0;return 1;
+        fs_close_pending();fs_close_later=host;cpu->gpr[0]=0;return 1;
     }
     /* ppoll of sockets alone (libpq, pgbench): the host's readiness and the thread's own
        wait; a wait goes to the backend's direct wait, then the locked path. */
