@@ -25,14 +25,21 @@
 #define HVF_SYSTEM_BYTES (HVF_CODE_BYTES+WORKER_LIMIT*HVF_FRAME_BYTES) /* code (read, execute), then frames (read, write) */
 #define HVF_SYSTEM_VA UINT64_C(0xffffffff0000)      /* top of the 48-bit user range; EL1-only */
 #define HVF_FRAME_VA (HVF_SYSTEM_VA+HVF_CODE_BYTES)
+/* Each process's descriptor page (fd_mirror, net.h), mapped EL1-only at HVF_FDS_VA in
+   its own tables; guest-physical space right after the system pages. */
+#define HVF_FDS_VA (HVF_FRAME_VA+WORKER_LIMIT*HVF_FRAME_BYTES)
+#define HVF_FDS_BYTES ((((PROCESS_LIMIT+2)*4096u)+16383u)&~16383u)
+#define HVF_FIXED_IPA (HVF_IPA_BASE+HVF_TABLE_BYTES+HVF_SYSTEM_BYTES+HVF_FDS_BYTES) /* backings go above */
+#define HVF_APPEND_OFFSET 0xbfcu                   /* fd_mirror_append, read by the vector */
 #define HVF_FLUSH_OFFSET 0x800u
 #define HVF_SAVE_OFFSET 0x900u
 #define HVF_RESTORE_OFFSET 0x968u
 #define HVF_INVALIDATE_OFFSET 0x9c4u
 #define HVF_FLUSH_RESTORE_OFFSET 0xa00u
 /* Frame words (SP_EL1 points at the vCPU's frame): x0..x30, then these. HF_FAST:
-   the EL1 vector's own answers to syscalls 172..178 (hvf_fast_publish). */
-enum { HF_SP=31,HF_TLS,HF_ELR,HF_SPSR,HF_ESR,HF_FAR,HF_TLBI_VA,HF_TLBI_PAGES,HF_FLUSH,HF_FAST };
+   the EL1 vector's own answers to syscalls 172..178, then HF_FDS: HVF_FDS_VA while it
+   answers fcntl and epoll_ctl from the process's descriptor page, else 0 (hvf_fast_publish). */
+enum { HF_SP=31,HF_TLS,HF_ELR,HF_SPSR,HF_ESR,HF_FAR,HF_TLBI_VA,HF_TLBI_PAGES,HF_FLUSH,HF_FAST,HF_FDS=HF_FAST+7 };
 #define HVF_BLOCKS 16384                           /* stage-2 blocks: a few backings for each of up to 1024 processes */
 #define HVF_VIEWS (PROCESS_LIMIT+2)                 /* indexed by pid */
 static unsigned char *hvf_tables,*hvf_system;static unsigned hvf_frames_used;
@@ -119,9 +126,9 @@ static uint64_t hvf_chunk_ipa_locked(MemoryBacking *backing,size_t chunk) {
     for(unsigned i=0;i<hvf_nblocks;i++)if(hvf_blocks[i].host==host) { hvf_block_last=i;return hvf_blocks[i].ipa; }
     uint64_t size=backing->mapped_size<=HVF_CHUNK?backing->mapped_size:backing->mapped_size-chunk*HVF_CHUNK;
     if(size>HVF_CHUNK && backing->mapped_size>HVF_CHUNK)size=HVF_CHUNK;
-    uint64_t ipa=hvf_ipa_top?hvf_ipa_top:HVF_IPA_BASE+HVF_TABLE_BYTES+HVF_SYSTEM_BYTES;
+    uint64_t ipa=hvf_ipa_top?hvf_ipa_top:HVF_FIXED_IPA;
     if(ipa+size>hvf_ipa_limit) {                                            /* then first fit */
-        ipa=HVF_IPA_BASE+HVF_TABLE_BYTES+HVF_SYSTEM_BYTES;
+        ipa=HVF_FIXED_IPA;
         for(unsigned i=0;i<hvf_nblocks;i++)
             if(ipa<hvf_blocks[i].ipa+hvf_blocks[i].size && hvf_blocks[i].ipa<ipa+size) { ipa=hvf_blocks[i].ipa+hvf_blocks[i].size;i=UINT_MAX; }
     }
@@ -233,7 +240,7 @@ static uint64_t *hvf_leaf(HvfView *v,uint64_t va,int create) {
 /* A page descriptor's bits besides the address. */
 static uint64_t hvf_descriptor_bits(unsigned flags,int system) {
     uint64_t descriptor=3|(UINT64_C(3)<<8)|(UINT64_C(1)<<10);
-    if(system)return descriptor|UINT64_C(1)<<54;                            /* EL1 only, never EL0-executable */
+    if(system)return descriptor|UINT64_C(1)<<54|(system==2?UINT64_C(1)<<11:0); /* EL1 only, never EL0-executable; 2: per process (nG) */
     descriptor|=(UINT64_C(1)<<6)|(UINT64_C(1)<<11)|(UINT64_C(1)<<53);       /* EL0 access; nG; PXN */
     if(!(flags&2))descriptor|=UINT64_C(1)<<7;                               /* read-only */
     if(!(flags&1))descriptor|=UINT64_C(1)<<54;                              /* UXN */
@@ -435,6 +442,7 @@ static void hvf_build(GuestAddressSpace *space) {
     if(!(hvf_view->root=hvf_table()))return;
     hvf_map_page(HVF_SYSTEM_VA,HVF_IPA_BASE+HVF_TABLE_BYTES,0,1);
     for(unsigned i=0;i<WORKER_LIMIT*HVF_FRAME_BYTES/4096;i++)hvf_map_page(HVF_FRAME_VA+i*4096,HVF_IPA_BASE+HVF_TABLE_BYTES+HVF_CODE_BYTES+i*4096,0,1);
+    hvf_map_page(HVF_FDS_VA,HVF_IPA_BASE+HVF_TABLE_BYTES+HVF_SYSTEM_BYTES+(uint64_t)(hvf_view-hvf_views)*4096,0,2); /* the view's own process */
     for(unsigned i=0;i<space->nseg;i++)hvf_map_range(space,space->seg[i].base,space->seg[i].size,space->seg[i].flags,space->seg[i].backing,space->seg[i].offset);
     hvf_map_range(space,space->brk_base,space->brk_pages,6,space->brk_backing,0);
     hvf_map_arena_all(space);
@@ -653,11 +661,14 @@ static void hvf_fp_pull(void) {
    getuid, geteuid, getgid, getegid and gettid without an exit: frame words
    HF_FAST+call-172, -1 for "ask the host". Written on every resume, and pushed to
    the frames of the process's other running threads when its IDs change (they
-   share them). Off while syscalls are traced, counted or filtered. */
+   share them). Off while syscalls are traced, counted or filtered. Descriptor
+   answers (HF_FDS) need the process's own tables: not for a vfork child running on
+   its parent's (its page is the parent's). */
 static void hvf_fast_publish(uint64_t *frame,uint64_t tid) {
     int on=!trace && !profiling && !seccomp_active();
     const uint64_t answers[7]={process_pid,UINT64_MAX,guest_ids.ruid,guest_uid,guest_ids.rgid,guest_gid,tid};
     for(unsigned i=0;i<7;i++)frame[HF_FAST+i]=on?answers[i]:UINT64_MAX;
+    frame[HF_FDS]=on && schedule_active && fd_mirror_base && hvf_view_pid()==process_pid?HVF_FDS_VA:0;
 }
 static void hvf_fast_push(void) {
     for(unsigned w=0;w<worker_count;w++) {
@@ -815,10 +826,12 @@ static void hvf_init(void) {
     if(hv_vm_get_max_vcpu_count(&vcpus)==HV_SUCCESS && vcpus && worker_count>vcpus)worker_count=vcpus;
     backing_release_hook=hvf_backing_gone;worker_interrupt=hvf_interrupt;workers_supported=1;
     hvf_futex_init();
-    hvf_tables=hvf_host_pages(HVF_TABLE_BYTES);hvf_system=hvf_host_pages(HVF_SYSTEM_BYTES);
+    hvf_tables=hvf_host_pages(HVF_TABLE_BYTES);hvf_system=hvf_host_pages(HVF_SYSTEM_BYTES);fd_mirror_base=hvf_host_pages(HVF_FDS_BYTES);
     hvf_check(hv_vm_map(hvf_tables,HVF_IPA_BASE,HVF_TABLE_BYTES,HV_MEMORY_READ|HV_MEMORY_WRITE),"hv_vm_map tables");
     hvf_check(hv_vm_map(hvf_system,HVF_IPA_BASE+HVF_TABLE_BYTES,HVF_CODE_BYTES,HV_MEMORY_READ|HV_MEMORY_EXEC),"hv_vm_map system");
     hvf_check(hv_vm_map(hvf_system+HVF_CODE_BYTES,HVF_IPA_BASE+HVF_TABLE_BYTES+HVF_CODE_BYTES,HVF_SYSTEM_BYTES-HVF_CODE_BYTES,HV_MEMORY_READ|HV_MEMORY_WRITE),"hv_vm_map frames");
+    hvf_check(hv_vm_map(fd_mirror_base,HVF_IPA_BASE+HVF_TABLE_BYTES+HVF_SYSTEM_BYTES,HVF_FDS_BYTES,HV_MEMORY_READ),"hv_vm_map descriptors");
+    fd_mirror_append=(uint32_t *)(void *)(hvf_system+HVF_APPEND_OFFSET);
     /* Each HVC is followed by "b .-4": under load Hypervisor.framework can resume a
        vCPU past an HVC without reporting its exit (the next instruction, zeros, then
        faulted at EL1 and the guest saw SIGILL at the vector). Looping back takes the
@@ -836,8 +849,10 @@ static void hvf_init(void) {
        and exit with "hvc #4" (0x900); the routine at 0x968 resumes the guest from the
        frame, the one at 0x9c4 invalidates hvf_fault_resume's pages first. Getpid,
        gettid and the uid/gid getters are answered at 0x400 from the frame, without
-       an exit. Assembled with clang --target=aarch64-linux-gnu, rust-objcopy -O binary:
+       an exit; fcntl and epoll_ctl of files at 0xb00 from the descriptor page.
+       Assembled with clang --target=aarch64-linux-gnu, rust-objcopy -O binary:
        0x400: stp x0, x1, [sp]; mrs x0, esr_el1; lsr x0, x0, #26; cmp x0, #0x15; b.ne save
+              cmp x8, #25; b.eq fds; cmp x8, #21; b.eq fds
               sub x0, x8, #172; cmp x0, #6; b.hi save; add x1, sp, #320 (HF_FAST)
               ldr x0, [x1, x0, lsl #3]; tbnz x0, #63, save; ldr x1, [sp, #8]; eret
        save:  stp x2, x3, [sp, #16] ... stp x28, x29, [sp, #224]
@@ -848,7 +863,8 @@ static void hvf_init(void) {
               ldp x0, x1, [sp, #264]; msr elr_el1, x0; msr spsr_el1, x1
               ldp x0, x1, [sp] ... ldp x28, x29, [sp, #224]; ldr x30, [sp, #240]; eret
        invalidate: ldp x0, x1, [sp, #296]; 1: tlbi vale1is, x0; add x0, x0, #1; subs x1, x1, #1; b.ne 1b; dsb ish; b restore */
-    static const uint32_t lower_sync[]={0xa90007e0,0xd5385200,0xd35afc00,0xf100541f,0x54002781,0xd102b100,0xf100181f,0x54002728,0x910503e1,0xf8607820,0xb7f826c0,0xf94007e1,0xd69f03e0};
+    static const uint32_t lower_sync[]={0xa90007e0,0xd5385200,0xd35afc00,0xf100541f,0x54002781,0xf100651f,0x54003740,0xf100551f,0x54003700,
+        0xd102b100,0xf100181f,0x540026a8,0x910503e1,0xf8607820,0xb7f82640,0xf94007e1,0xd69f03e0};
     static const uint32_t frame_code[]={
         0xa9010fe2,0xa90217e4,0xa9031fe6,0xa90427e8,0xa9052fea,0xa90637ec,0xa9073fee,0xa90847f0,0xa9094ff2,0xa90a57f4,0xa90b5ff6,0xa90c67f8,0xa90d6ffa,0xa90e77fc,
         0xd5384100,0xa90f03fe,0xd53bd040,0xd5384021,0xa91007e0,0xd5384000,0xd5385201,0xa91107e0,0xd5386000,0xf90093e0,0xd4000082,0x17ffffff,
@@ -861,6 +877,27 @@ static void hvf_init(void) {
        tlbi vmalle1is; b 3f; 2: and x1, x0, #0xffff000000000000; tlbi aside1is, x1; 3: dsb ish; isb; b restore */
     static const uint32_t flush_restore[]={0xf9409fe0,0x36000040,0xd508711f,0x36080060,0xd508831f,0x14000003,0x92503c01,0xd5088341,0xd5033b9f,0xd5033fdf,0x17ffffd0};
     memcpy(hvf_system+HVF_FLUSH_RESTORE_OFFSET,flush_restore,sizeof(flush_restore));
+    /* 0xb00, fcntl (x8 25) and epoll_ctl (21) answered from the byte fd_mirror keeps for
+       each descriptor (net.h), the host's answers exactly; anything else goes to save:
+       fds:   ldr x0, [sp, #376] (HF_FDS); cbz x0, save; ldr x1, [sp]; cmp x1, #4095; b.hi save
+              ldrb w0, [x0, x1]; cmp x8, #21; b.eq epoll; tbz w0, #7, save (a file); ldr x1, [sp, #8]
+              cmp x1, #1; b.ne 1f; ubfx x0, x0, #5, #1; b done                      F_GETFD: close-on-exec
+       1:     cmp x1, #2; b.ne 2f; ubfx x1, x0, #5, #1; cmp x1, x2; b.ne save; mov x0, #0; b done  F_SETFD: unchanged
+       2:     ldr w1, appended (0xbfc); cbnz w1, save; ldr x1, [sp, #8]; cmp x1, #3; b.ne 3f
+              and x1, x0, #3; tst x0, #4; orr x0, x1, #0x20000; b.eq done; orr x0, x0, #0x400; b done
+       3:     cmp x1, #4; b.ne save; ubfx x1, x2, #10, #1; ubfx x0, x0, #2, #1; cmp x0, x1; b.ne save
+              mov x0, #0                                                      F_SETFL: O_APPEND unchanged
+       done:  ldr x1, [sp, #8]; eret
+       epoll: tbz w0, #6, save; cmp x2, #4095; b.hi save; ldr x0, [sp, #376]; ldrb w0, [x0, x2]
+              tbz w0, #7, save; ldr x1, [sp, #8]; sub w1, w1, #1; cmp w1, #2
+              mov x0, #-1 (EPERM); mov x1, #-22 (EINVAL); csel x0, x0, x1, ls; b done */
+    static const uint32_t fds[]={
+        0xf940bfe0,0xb4ffefe0,0xf94003e1,0xf13ffc3f,0x54ffef88,0x38616800,0xf100551f,0x54000440,0x363fef00,0xf94007e1,
+        0xf100043f,0x54000061,0xd3451400,0x1400001a,0xf100083f,0x540000c1,0xd3451401,0xeb02003f,0x54ffedc1,0xd2800000,0x14000013,
+        0x18000541,0x35ffed41,0xf94007e1,0xf1000c3f,0x540000e1,0x92400401,0xf27e001f,0xb26f0020,0x54000140,0xb2760000,0x14000008,
+        0xf100103f,0x54ffebe1,0xd34a2841,0xd3420800,0xeb01001f,0x54ffeb61,0xd2800000,0xf94007e1,0xd69f03e0,
+        0x3637eae0,0xf13ffc5f,0x54ffeaa8,0xf940bfe0,0x38626800,0x363fea40,0xf94007e1,0x51000421,0x7100083f,0x92800000,0x928002a1,0x9a819000,0x17fffff2};
+    memcpy(hvf_system+0xb00,fds,sizeof(fds));
     const uint32_t flush[]={UINT32_C(0xd508711f),UINT32_C(0xd508831f),UINT32_C(0xd5033b9f),UINT32_C(0xd5033fdf),UINT32_C(0xd4000022),UINT32_C(0x17ffffff)};
     memcpy(hvf_system+HVF_FLUSH_OFFSET,flush,sizeof(flush));
     worker->backend=hvf_cpu_new(1);
@@ -1382,6 +1419,7 @@ static int hvf_slice_run(void) {
             in_vector=0;
             hvf_sync_memory(address_space);
             mm_unlock(task);
+            fs_close_pending();
             profile_exit_done();
             uint64_t entered=profiling?profile_now_ns():0;
             ran=hv_vcpu_run(vcpu);
@@ -1526,7 +1564,7 @@ static int hvf_slice(void) {
         profile_waited_ns=0;__atomic_fetch_add(&profile_slices,1,__ATOMIC_RELAXED);
     }
     int result=hvf_slice_run();
-    hvf_fp_pull();mm_unlock(task);
+    hvf_fp_pull();mm_unlock(task);fs_close_pending();
     if(profiling) { profile_locked=1;profile_exit_done();profile_slice_end=profile_now_ns();profile_waited_ns=0; }
     return result;
 }
