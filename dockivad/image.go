@@ -335,9 +335,9 @@ func applyLayer(root string, r io.Reader, members *int) int64 {
 			check(errors.Join(e, f.Close()))
 			reject(n == h.Size, "Truncated layer file")
 			size += n
-			if mode&^os.ModePerm != 0 { // after the write, which clears setuid and setgid
-				check(setMode(p, mode|0o600))
-			}
+			// After the write, which clears setuid and setgid; the engine's umask (077) also
+			// took the group and other bits at create (an image's /etc/passwd is 0644).
+			check(setMode(p, mode|0o600))
 			_ = os.Chtimes(p, h.ModTime, h.ModTime)
 		case tar.TypeSymlink:
 			check(os.Symlink(linkTarget(h.Linkname), p))

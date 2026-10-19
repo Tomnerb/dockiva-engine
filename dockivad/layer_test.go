@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strconv"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -283,5 +284,18 @@ func TestCloneKeepsSetuid(t *testing.T) {
 	cloneTree(src, dst)
 	if st, e := os.Lstat(filepath.Join(dst, "bin/sudo")); e != nil || st.Mode() != 0o755|fs.ModeSetuid|fs.ModeSetgid {
 		t.Fatalf("clone: %v %v", st.Mode(), e)
+	}
+}
+
+// Under the engine's umask (077) an image's ordinary files keep their mode.
+func TestUnpackModesUnderEngineUmask(t *testing.T) {
+	old := syscall.Umask(0o077)
+	defer syscall.Umask(old)
+	root := t.TempDir()
+	applyBlob(root, layer(t, []tar.Header{{Name: "etc/passwd", Size: 5, Mode: 0o644}, {Name: "bin/sh", Size: 3, Mode: 0o755}}, []string{"root:", "ELF"}))
+	for name, want := range map[string]fs.FileMode{"etc/passwd": 0o644, "bin/sh": 0o755} {
+		if st, e := os.Lstat(filepath.Join(root, name)); e != nil || st.Mode() != want {
+			t.Fatalf("%s: %v, want %v (%v)", name, st.Mode(), want, e)
+		}
 	}
 }
