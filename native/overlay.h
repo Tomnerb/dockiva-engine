@@ -312,7 +312,7 @@ static int ov_walk_fast(const char *start,const char *rest,int follow,int direct
     const char *rel=full+1,*last=strrchr(full,'/')+1;
     char dirs[1025];size_t d=(size_t)(last-1-rel);if(last-1<rel)d=0;
     memcpy(dirs,rel,d);dirs[d]=0;
-    struct stat st;int layer=2,top=0;size_t k=0;                     /* k: bytes of dirs the upper layer has */
+    struct stat st,low_probe;int layer=2,top=0,hide=0;size_t k=0;    /* k: bytes of dirs the upper layer has */
     {   /* the first component: most paths of an image have nothing above them */
         char first[256];const char *p=rel;ov_part(&p,first);
         if(fstatat(fs_root,first,&st,AT_SYMLINK_NOFOLLOW)) {
@@ -325,24 +325,33 @@ static int ov_walk_fast(const char *start,const char *rest,int follow,int direct
         else if(errno==ENOTDIR)return -1;
         else if(errno!=ENOENT)return -2;
         else {
-            for(const char *p=dirs;;) {                              /* how far the upper layer goes */
+            /* How far the upper layer goes: most often all the way (a file being made
+               in the container's own directory) or the first component alone. */
+            if(!d)return -2;
+            if(!fstatat(fs_root,dirs,&st,FS_NOFOLLOW_AT) && S_ISDIR(st.st_mode))k=d;
+            else for(const char *p=dirs;;) {
                 char part[256];if(!ov_part(&p,part))break;
-                char prefix[1025];size_t m=(size_t)(p-dirs);memcpy(prefix,dirs,m);prefix[m]=0;
+                size_t m=(size_t)(p-dirs);char prefix[1025];memcpy(prefix,dirs,m);prefix[m]=0;
                 if(fstatat(fs_root,prefix,&st,FS_NOFOLLOW_AT)) { if(errno!=ENOENT)return -2;break; }
                 if(!S_ISDIR(st.st_mode))return -2;
-                int dir=openat(fs_root,prefix,O_RDONLY|O_DIRECTORY|FS_NOFOLLOW_OPEN|O_CLOEXEC);if(dir<0)return -2;
-                const char *next=p;char after[256];int more=ov_part(&next,after);
-                int hidden=ov_marker(dir,NULL) || ov_marker(dir,more?after:last);close(dir);
-                if(hidden)return -2;
                 k=m;
             }
-            if(!d && ov_marker(fs_root,last))return -2;
+            hide=1;
         }
     }
     if(layer==2) {
         if(!fstatat(fs_lower,rel,&st,FS_NOFOLLOW_AT)) { if(follow && S_ISLNK(st.st_mode))return -2;layer=1; }
         else if(errno==ELOOP)return -2;
         else if(errno!=ENOENT && errno!=ENOTDIR)return -2;
+    }
+    /* A lower entry beneath upper directories shows unless one of them is opaque or
+       holds a whiteout for the next name (then the component walk decides). */
+    for(const char *p=dirs;layer==1 && hide && (size_t)(p-dirs)<k;) {
+        char part[256];if(!ov_part(&p,part))break;
+        size_t m=(size_t)(p-dirs);const char *q=rel+m;char after[256],probe[1100];
+        if(!ov_part(&q,after))break;
+        snprintf(probe,sizeof probe,"%.*s/" OV_OPQ,(int)m,dirs);if(!fstatat(fs_root,probe,&low_probe,AT_SYMLINK_NOFOLLOW))return -2;
+        if(snprintf(probe,sizeof probe,"%.*s/" OV_WH "%s",(int)m,dirs,after)<(int)sizeof probe && !fstatat(fs_root,probe,&low_probe,AT_SYMLINK_NOFOLLOW))return -2;
     }
     int base;
     if(layer==2) {                                                   /* missing: does its directory exist? */
