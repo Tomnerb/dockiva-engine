@@ -1253,11 +1253,13 @@ static int hvf_short_sleep(uint64_t call) {
    parked in the scheduler on the address (parking takes this mm lock too, so none
    appears meanwhile; a shared one takes the runtime lock if it is free), and WAIT
    in place while no thread waits for a worker, for up to
-   SCHEDULE_INPLACE_NS (or its own timeout). The waiter is registered as its
+   HVF_FUTEX_INPLACE_NS (or its own timeout; longer waits held workers a Go build
+   wanted, measured: 1 ms was no better). The waiter is registered as its
    worker's in-place wait: a thread that becomes runnable with no worker free evicts
    it, a signal or the process's end ends it. Returns 0 for the locked path (which
    rereads the call): anything else, or a wait that did not end in time (it parks
    then, after reading the word again). */
+#define HVF_FUTEX_INPLACE_NS 200000u
 static int runtime_trylock(void);
 static int hvf_futex_unlocked(void) {
     if(!schedule_active || trace)return 0;
@@ -1282,7 +1284,7 @@ static int hvf_futex_unlocked(void) {
         }
         cpu->gpr[0]=hvf_futex_wake_inplace(address,NULL,0,(unsigned)cpu->gpr[2],bits);return 1;
     }
-    uint64_t now=thread_time_ns(0),deadline=0,wait=SCHEDULE_INPLACE_NS;
+    uint64_t now=thread_time_ns(0),deadline=0,wait=HVF_FUTEX_INPLACE_NS;
     if(cpu->gpr[3]) {
         const unsigned char *ts=lookup(cpu->gpr[3],16,4);if(!ts)return 0;
         uint64_t sec=le(ts,8),ns=le(ts+8,8);
