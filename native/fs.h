@@ -53,7 +53,7 @@ static _Thread_local ProcShared *proc_now=&proc_first;
 #define shared_image (proc_now->shared)
 /* merged: the listing of a directory both image layers hold (overlay.h). */
 struct OvList;static void ov_list_free(struct OvList *list);
-typedef struct GuestDirectory { DIR *stream;unsigned refs,count;char path[1025];struct OvList *merged; } GuestDirectory;
+typedef struct GuestDirectory { DIR *stream;unsigned refs,count;char path[1025];struct OvList *merged;int lower; } GuestDirectory; /* lower: opened there only */
 static void fs_directory_release(GuestDirectory *directory) {
     if(directory && !--directory->refs) { if(directory->stream)closedir(directory->stream);ov_list_free(directory->merged);free(directory); }
 }
@@ -1250,7 +1250,7 @@ static uint64_t fs_open(void) {
     GuestDirectory *directory=NULL;
     if(S_ISDIR(info.st_mode)) {
         directory=calloc(1,sizeof(*directory));if(!directory) { close(fd);close(parent);return linux_error(12); }
-        directory->refs=1;strcpy(directory->path,canon);
+        directory->refs=1;strcpy(directory->path,canon);directory->lower=layers.layer==1 && layers.canon[0];
     }
     if(flags&64) { fs_count_created(); }
     if(made)ov_created(&layers,parent,leaf,0);
@@ -1698,7 +1698,8 @@ static uint64_t fs_call(uint64_t call) {
         /* The root's image layers (overlay.h): a directory both hold lists them merged. */
         int layers=fs_lower>=0 && dir->path[0] && !(fs_mount_count && fs_mount_of(dir->path));
         if(!dir->stream && !dir->merged) {
-            if(layers)dir->merged=ov_list(dir->path);
+            struct stat below;   /* only a directory both layers hold merges: a lower-only one (most of an image's) streams as it is */
+            if(layers && !dir->lower && !fstatat(fs_lower,dir->path[1]?dir->path+1:".",&below,FS_NOFOLLOW_AT) && S_ISDIR(below.st_mode))dir->merged=ov_list(dir->path);
             if(!dir->merged) {
                 int copy=dup(fd);if(copy<0)return fs_error();
                 dir->stream=fdopendir(copy);if(!dir->stream) { int saved=errno;close(copy);errno=saved;return fs_error(); }
