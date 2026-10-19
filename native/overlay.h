@@ -65,6 +65,13 @@ static int ov_pair(const char *canon,int *upper,int *lower,int *mount) {
         if(!fs_mounts[m-1].directory) { errno=ENOTDIR;return -1; }
         *mount=m-1;p+=strlen(fs_mounts[m-1].path);*upper=dup(fs_mounts[m-1].fd);if(*upper<0)return -1;
     } else {
+        /* Most directories are in one layer only: a path the lower layer lacks is
+           the upper one's, found in one call (and the reverse needs the walk). */
+        struct stat st;
+        if(canon[1] && fstatat(fs_lower,canon+1,&st,FS_NOFOLLOW_AT) && (errno==ENOENT || errno==ENOTDIR)) {
+            *upper=openat(fs_root,canon+1,O_RDONLY|O_DIRECTORY|FS_NOFOLLOW_OPEN|O_CLOEXEC);
+            if(*upper>=0 || errno!=ELOOP)return *upper<0?-1:0;
+        }
         *upper=dup(fs_root);*lower=dup(fs_lower);
         if(*upper<0 || *lower<0) { ov_close2(*upper,*lower);return -1; }
     }
@@ -88,6 +95,7 @@ static int ov_chmod(int dir,const char *name,mode_t mode) {
 /* A canonical guest directory of the root's layers in the upper layer: it and those
    above it are made from the lower ones where missing. Returns its descriptor. */
 static int ov_upper(const char *canon) {
+    if(canon[1]) { int d=openat(fs_root,canon+1,O_RDONLY|O_DIRECTORY|FS_NOFOLLOW_OPEN|O_CLOEXEC);if(d>=0)return d; } /* there already */
     int u=dup(fs_root),l=dup(fs_lower);const char *p=canon;char part[256];
     if(u<0 || l<0) { ov_close2(u,l);return -1; }
     while(ov_part(&p,part)) {
