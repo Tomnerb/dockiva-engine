@@ -494,8 +494,8 @@ static int schedule_inplace_allowed(int locked) {
 /* Wait as this worker's in-place waiter of t (thread th) for up to budget_ns: on
    sockets (the first count of fds; one more entry is free for the poke pipe) or, with
    none, on its condition. Called with the mm lock held (and the runtime lock if
-   locked: both are released); returns with neither held, 1 if woken (an event of its
-   thread, or a socket became ready). */
+   locked: both are released); returns with neither held: 2 if woken (an event of its
+   thread, or a socket became ready), 3 if it must leave, 1 if the time ran out. */
 static int schedule_inplace_block(ScheduledTask *t,Thread *th,struct pollfd *fds,unsigned count,uint64_t budget_ns,int locked) {
     InplaceWait *w=&schedule_inplace[worker->index];
     if(count && w->poke[0]<0 && (pipe(w->poke) || fcntl(w->poke[0],F_SETFL,O_NONBLOCK) || fcntl(w->poke[1],F_SETFL,O_NONBLOCK))) {
@@ -534,7 +534,7 @@ static int schedule_inplace_block(ScheduledTask *t,Thread *th,struct pollfd *fds
     __atomic_sub_fetch(&schedule_inplace_count,1,__ATOMIC_RELAXED);
     profile_wait(count?3:1,since);PROFILE_ADD(profile_inplace_waits,1);
     if(state==2)PROFILE_ADD(profile_inplace_woken,1);
-    return state==2;
+    return state;
 }
 /* After a call returned -2 (blocked) with the runtime and mm locks held: wait for it
    in place when that is worth it. Returns 1 when it was woken (only the mm lock is
@@ -548,16 +548,20 @@ static int schedule_inplace_wait(ScheduledTask *t) {
     if(!nw->active || !nw->targeted || nw->at_pc!=cpu->pc+4)return 0;
     static _Thread_local struct pollfd fds[NET_FD_LIMIT+1];unsigned sockets=0;
     for(unsigned k=0;k<nw->count;k++)if(nw->fds[k].fd>=0) { fds[sockets]=nw->fds[k];fds[sockets++].revents=0; }
-    uint64_t *wakeups=th?&th->wakeups:&t->wakeups,now=net_now();
-    if(*wakeups!=schedule_wakeups_seen || nw->deadline<=now || task_must_stop(t,th))return 0; /* an event meanwhile: it retries */
+    uint64_t *wakeups=th?&th->wakeups:&t->wakeups,now=net_now(),deadline=nw->deadline;
+    if(*wakeups!=schedule_wakeups_seen || deadline<=now || task_must_stop(t,th))return 0; /* an event meanwhile: it retries */
+    /* Only its deadline (or a signal) ends a sleep: one that ends later than the budget parks. */
+    if(!sockets && !nw->pipe_count && deadline-now>SCHEDULE_INPLACE_NS/1000000)return 0;
     /* Timers and the sockets of parked threads: idle workers pump them, else slice ends
        and a waiter's own timeout. */
     if(!schedule_inplace_allowed(1))return 0;
     uint64_t budget=SCHEDULE_INPLACE_NS;
-    if(nw->deadline-now<budget/1000000)budget=(nw->deadline-now)*1000000;
+    if(deadline-now<=budget/1000000)budget=(deadline-now)*1000000;
     Worker *self=worker;
-    if(schedule_inplace_block(t,th,fds,sockets,budget,1)) {
-        /* Woken: back to guest code without the runtime lock (its waker may hold it). */
+    int state=schedule_inplace_block(t,th,fds,sockets,budget,1);
+    /* Woken, or its deadline passed (the call then returns its timeout at once): back
+       to guest code without the runtime lock (its waker may hold it). */
+    if(state==2 || (state==1 && net_now()>=deadline)) {
         schedule_wakeups_seen=__atomic_load_n(wakeups,__ATOMIC_RELAXED);mm_lock(t);return 1;
     }
     runtime_lock(self);mm_lock(t);

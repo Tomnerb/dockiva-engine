@@ -1072,6 +1072,7 @@ static uint64_t net_masked_wait(uint64_t (*wait)(void),uint64_t pointer) {
     if(pointer && result!=IO_BLOCK)signal_wait_unmask();
     return result;
 }
+#ifdef VMFREE_HVF
 /* A ppoll that guest_syscall_unlocked may serve: no signal mask, sockets alone. */
 static int net_poll_unlocked(void) {
     if(cpu->gpr[3] || cpu->gpr[1]>NET_FD_LIMIT)return 0;
@@ -1080,6 +1081,7 @@ static int net_poll_unlocked(void) {
     for(unsigned i=0;i<count;i++) { int32_t guest=(int32_t)le(in+i*8,4);if(guest>=0 && net_host((uint64_t)guest)<0)return 0; }
     return 1;
 }
+#endif
 static uint64_t net_poll(void) {
     if(cpu->gpr[3] && cpu->gpr[4]!=8)return linux_error(22);
     return net_masked_wait(net_poll_wait,cpu->gpr[3]);

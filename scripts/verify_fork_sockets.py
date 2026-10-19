@@ -47,6 +47,7 @@ def main():
     (stress_root/'data').write_bytes(b'x'*4096)
     fastcall = build('fastcall_guest', folder, linker)  # hvf: syscalls answered in the EL1 vector, registers through its frame
     sleeper = build('sleeper_guest', folder, linker)  # hvf: a sleeping thread gets the CPU from siblings looping on system calls
+    wake_latency, wake_race = (build(n, folder, linker) for n in ('wake_latency_guest', 'wake_race_guest'))  # hvf: futex/eventfd/pipe wake-ups
     lazy_root = folder/'lazy-root'  # lazy_charge_guest execs /leaf
     shutil.rmtree(lazy_root, ignore_errors=True)
     lazy_root.mkdir()
@@ -120,7 +121,20 @@ def main():
                     ok, out = False, 'timed out (the sleeper starved)'
                 failed += not ok
                 print(f'hvf sleeper_guest --cpus {n}: {"PASS" if ok else "FAIL"} {out}')
+            # Thread wake-ups at --cpus: median futex, eventfd/epoll and pipe/ppoll round trips
+            # under WAKE_BUDGET_US (main took 40-110 us), then lost or late wake-ups under load.
+            for elf, args, expected in ((wake_race, ['--signals'], b'wake-race PASS\n'), (wake_latency, ['--', str(WAKE_BUDGET_US)], b'wake-latency PASS\n')):
+                try:
+                    r = subprocess.run([str(runtime), 'run', str(elf), *common, *extra, *args], capture_output=True, timeout=60)
+                    ok, out = r.returncode == 0 and r.stdout.endswith(expected), ' '.join(r.stdout.decode().split()) + ' ' + r.stderr.decode().strip()
+                except subprocess.TimeoutExpired:
+                    ok, out = False, 'timed out (a lost wake-up)'
+                failed += not ok
+                print(f'hvf {elf.stem} --cpus {cpus}: {"PASS" if ok else "FAIL"} {out}')
     return 1 if failed else 0
+
+
+WAKE_BUDGET_US = 30
 
 
 if __name__ == '__main__':

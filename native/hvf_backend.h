@@ -1362,7 +1362,7 @@ static int hvf_direct_wait(ScheduledTask *task) {
        worker end the wait at once; so does an event of the thread (it retries). */
     static _Thread_local struct pollfd fds[NET_FD_LIMIT+1];
     memcpy(fds,net_unlocked_wait.fds,count*sizeof(*fds));
-    int woken=schedule_inplace_block(task,task_thread(task),fds,count,(uint64_t)budget*1000000,0);
+    int woken=schedule_inplace_block(task,task_thread(task),fds,count,(uint64_t)budget*1000000,0)==2;
     mm_lock(task);
     return woken && !hvf_must_stop(task);
 }
