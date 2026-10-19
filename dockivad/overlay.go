@@ -1,8 +1,10 @@
 package main
 
 import (
+	"cmp"
 	"errors"
 	"io/fs"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -108,6 +110,7 @@ func (r layers) link(rel string) (string, bool) {
 func (r layers) upperDir(rel string, create bool) string {
 	p, sofar := r.upper, ""
 	for _, part := range relParts(rel) {
+		reject(r.lower == "" || !strings.HasPrefix(part, whiteoutPrefix), "Reserved name: "+part)
 		sofar = path.Join(sofar, part)
 		next := filepath.Join(p, part)
 		st, e := os.Lstat(next)
@@ -371,4 +374,79 @@ func releaseLower(home, state, lower string) {
 	if os.Rename(lower, gone) == nil {
 		go os.RemoveAll(gone)
 	}
+}
+
+// commitContainer is docker commit: the container's image plus one layer of the
+// container's own files, with its command, environment, user and working directory
+// (build's commit writes it: the merged files against the image's).
+func (b *engine) commitContainer(name string, q url.Values) obj {
+	reject(q.Get("changes") == "", "docker commit --change is not supported")
+	p := b.container(name)
+	c := readObject(filepath.Join(p, "config.json"))
+	r := containerLayers(p, c)
+	reject(r.lower != "", "docker commit needs the layered layout (this container was made with --rootfs copy)")
+	reject(exists(filepath.Join(filepath.Dir(r.lower), "layout")), "The container's image was removed")
+	im := loadImage(noLinks(filepath.Dir(r.lower), "layout"))
+	manifest, config := imageDocs(im.layout)
+	settings := cloneObj(object(config["config"]))
+	settings["Env"], settings["WorkingDir"], settings["User"] = c["env"], workdir(c), text(c["user"])
+	if c["cmd"] != nil {
+		settings["Entrypoint"], settings["Cmd"] = c["entrypoint"], c["cmd"]
+	}
+	if labels := object(c["labels"]); len(labels) > 0 {
+		settings["Labels"] = labels
+	}
+	work, e := os.MkdirTemp(b.Home, ".commit-")
+	check(e)
+	defer os.RemoveAll(work)
+	merged := filepath.Join(work, "rootfs")
+	cloneTree(r.lower, merged)
+	applyUpper(r.upper, merged)
+	st := &buildStage{root: merged, config: settings, digest: im.Digest, baseRoot: r.lower, baseLayout: im.layout,
+		baseLayers: array(manifest["layers"]), baseDiffs: array(object(config["rootfs"])["diff_ids"]), baseHistory: anyList(config["history"])}
+	tags := []string{}
+	if q.Get("repo") != "" {
+		tags = append(tags, q.Get("repo")+":"+cmp.Or(q.Get("tag"), "latest"))
+	}
+	return obj{"Id": (&builder{b: b, work: work}).commit(st, tags)}
+}
+
+// applyUpper lays an upper layer over a copy of its lower one: whiteouts remove,
+// opaque directories empty, the rest replaces (APFS clones). The engine's own files
+// (engineFiles) stay out.
+func applyUpper(upper, merged string) {
+	check(filepath.WalkDir(upper, func(p string, d fs.DirEntry, err error) error {
+		check(err)
+		rel, e := filepath.Rel(upper, p)
+		check(e)
+		name, dest := d.Name(), filepath.Join(merged, rel)
+		switch {
+		case rel == ".":
+		case engineFiles[filepath.ToSlash(rel)]:
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+		case strings.HasPrefix(name, whiteoutPrefix+whiteoutPrefix): // the opaque marker (seen at its directory), a copy-up in flight
+		case strings.HasPrefix(name, whiteoutPrefix):
+			check(os.RemoveAll(filepath.Join(filepath.Dir(dest), strings.TrimPrefix(name, whiteoutPrefix))))
+		default:
+			info, e := d.Info()
+			check(e)
+			if old, e := os.Lstat(dest); e == nil && !(old.IsDir() && d.IsDir()) || e == nil && exists(filepath.Join(p, opaqueMarker)) {
+				check(os.RemoveAll(dest))
+			}
+			if !d.IsDir() {
+				cloneTree(p, dest)
+				if info.Mode().IsRegular() {
+					check(setMode(dest, info.Mode()&permBits))
+				}
+				return nil
+			}
+			if e := os.Mkdir(dest, 0o700); e != nil && !errors.Is(e, fs.ErrExist) {
+				check(e)
+			}
+			check(setMode(dest, info.Mode()&permBits))
+		}
+		return nil
+	}))
 }

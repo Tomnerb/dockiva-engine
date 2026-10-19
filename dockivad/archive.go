@@ -12,6 +12,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -179,36 +180,109 @@ func (b *engine) getArchive(w http.ResponseWriter, name, requested string, head 
 	out := tar.NewWriter(w)
 	prefix := archiveName(requested)
 	check(f.walk(func(p, rel string, info os.FileInfo) error {
-		target := ""
-		if info.Mode()&os.ModeSymlink != 0 {
-			target, _ = readLink(p)
-		}
-		h, e := tar.FileInfoHeader(info, target)
-		check(e)
-		h.Name = prefix // "./x" keeps its "./": the docker CLI rebases on that prefix
+		name := prefix // "./x" keeps its "./": the docker CLI rebases on that prefix
 		if rel != "." {
-			h.Name += "/" + filepath.ToSlash(rel)
+			name += "/" + filepath.ToSlash(rel)
 		}
-		if info.IsDir() {
-			h.Name += "/"
-		}
-		h.Uid, h.Gid, h.Uname, h.Gname = 0, 0, "", ""
-		if !info.Mode().IsRegular() && !info.IsDir() && target == "" {
-			return nil // sockets, FIFOs and devices are not copied
-		}
-		if e := out.WriteHeader(h); e != nil {
-			return e
-		}
-		if info.Mode().IsRegular() {
-			src, e := os.OpenFile(p, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
-			check(e)
-			defer src.Close()
-			_, e = io.CopyN(out, src, h.Size)
-			return e
-		}
-		return nil
+		return tarEntry(out, name, p, info)
 	}))
 	check(out.Close())
+}
+
+// tarEntry writes host file p (lstat info) into a tar as name, owned by root. Sockets,
+// FIFOs and devices are left out.
+func tarEntry(out *tar.Writer, name, p string, info os.FileInfo) error {
+	target := ""
+	if info.Mode()&os.ModeSymlink != 0 {
+		target, _ = readLink(p)
+	}
+	h, e := tar.FileInfoHeader(info, target)
+	check(e)
+	h.Name = name
+	if info.IsDir() {
+		h.Name += "/"
+	}
+	h.Uid, h.Gid, h.Uname, h.Gname = 0, 0, "", ""
+	if !info.Mode().IsRegular() && !info.IsDir() && target == "" {
+		return nil
+	}
+	if e := out.WriteHeader(h); e != nil {
+		return e
+	}
+	if info.Mode().IsRegular() {
+		src, e := os.OpenFile(p, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+		check(e)
+		defer src.Close()
+		_, e = io.CopyN(out, src, h.Size)
+		return e
+	}
+	return nil
+}
+
+// export is docker export: the container's files as its guest sees them, as a tar
+// (mounts left out, as Docker does).
+func (b *engine) export(w http.ResponseWriter, name string) {
+	p := b.container(name)
+	r := containerLayers(p, readObject(filepath.Join(p, "config.json")))
+	w.Header().Set("Content-Type", "application/x-tar")
+	w.WriteHeader(200)
+	out := tar.NewWriter(w)
+	check(r.walk("", func(rel, host string, info os.FileInfo) error {
+		if rel == "" {
+			return nil
+		}
+		return tarEntry(out, rel, host, info)
+	}))
+	check(out.Close())
+}
+
+// engineFiles are what the engine writes into every container (Docker bind-mounts
+// them) and the mount points it makes: docker diff leaves them out.
+var engineFiles = map[string]bool{"etc/hosts": true, "etc/resolv.conf": true, "etc/hostname": true, "dev": true, "proc": true, "sys": true}
+
+// changes is docker diff: a layered container's own files (its upper layer) against
+// its image's: Kind 1 added, 0 changed, 2 deleted (a whiteout). A directory of the
+// image shows as changed when something beneath it did, or it was emptied (opaque);
+// one the engine made (for its files, or a mount point) only for what is in it.
+func (b *engine) changes(name string) []obj {
+	p := b.container(name)
+	c := readObject(filepath.Join(p, "config.json"))
+	reject(c["lower"] != nil, "docker diff needs the layered layout (this container was made with --rootfs copy)")
+	r := containerLayers(p, c)
+	image := layers{upper: r.lower}
+	out, quiet := []obj{}, map[string]bool{"etc": true, "tmp": os.Getenv("DOCKIVA_TMP") == "memory"}
+	for _, m := range savedMounts(c) {
+		quiet[pathName(mountTarget(str(m["target"]))[1:])] = true
+	}
+	var visit func(rel string) bool
+	visit = func(rel string) bool {
+		entries, e := os.ReadDir(filepath.Join(r.upper, filepath.FromSlash(rel)))
+		check(e)
+		changed := false
+		for _, entry := range entries {
+			name, child := entry.Name(), path.Join(rel, entry.Name())
+			switch {
+			case name == opaqueMarker || strings.HasPrefix(name, whiteoutPrefix+whiteoutPrefix):
+			case strings.HasPrefix(name, whiteoutPrefix):
+				out, changed = append(out, obj{"Path": "/" + path.Join(rel, strings.TrimPrefix(name, whiteoutPrefix)), "Kind": 2}), true
+			case engineFiles[child]:
+			default:
+				_, old := image.find(child)
+				below := entry.IsDir() && visit(child)
+				if !old && !(entry.IsDir() && quiet[child]) || !entry.IsDir() || below || exists(filepath.Join(r.upper, filepath.FromSlash(child), opaqueMarker)) {
+					kind := 1
+					if old {
+						kind = 0
+					}
+					out, changed = append(out, obj{"Path": "/" + child, "Kind": kind}), true
+				}
+			}
+		}
+		return changed
+	}
+	visit("")
+	sort.Slice(out, func(i, j int) bool { return str(out[i]["Path"]) < str(out[j]["Path"]) })
+	return out
 }
 
 // putArchive extracts a tar into a container directory (docker cp - CONTAINER:PATH).

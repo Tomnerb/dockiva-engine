@@ -438,7 +438,11 @@ func (b *engine) createWith(name string, body obj, prepared *image) obj {
 	if host["PublishAllPorts"] == true { // docker run -P
 		ports = publishAll(ports, exposedList)
 	}
-	config := obj{"image": im.Digest, "image_name": imageName, "command": command, "env": im.Env, "writable": host["ReadonlyRootfs"] != true, "cpu_backend": "interpreter", "schedule": false, "process_tree": false, "scheduled_network": false, "dynamic": false, "job_control": false, "memory_limit_mib": 256, "host_sandbox": false, "max_steps": 10000000, "labels": labels, "ports": ports, "exposed": exposedList, "workdir": im.WorkingDir, "network": networkMode(host), "stop_signal": im.StopSignal, "created_at": now()}
+	cmd := im.Args // as docker commit keeps them
+	if override != nil {
+		cmd = override
+	}
+	config := obj{"image": im.Digest, "image_name": imageName, "command": command, "entrypoint": im.Entry, "cmd": cmd, "env": im.Env, "writable": host["ReadonlyRootfs"] != true, "cpu_backend": "interpreter", "schedule": false, "process_tree": false, "scheduled_network": false, "dynamic": false, "job_control": false, "memory_limit_mib": 256, "host_sandbox": false, "max_steps": 10000000, "labels": labels, "ports": ports, "exposed": exposedList, "workdir": im.WorkingDir, "network": networkMode(host), "stop_signal": im.StopSignal, "created_at": now()}
 	// The default bridge or a user network: a private address and ports. "host" shares
 	// the Mac's network; "none" keeps the container to its own loopback.
 	mode := text(host["NetworkMode"])
@@ -545,7 +549,7 @@ func (b *engine) createWith(name string, body obj, prepared *image) obj {
 }
 
 var versionPath = regexp.MustCompile(`^/v([0-9]+)\.([0-9]+)(/.*)$`)
-var containerPath = regexp.MustCompile(`^/containers/([^/]+)(?:/(json|start|stop|restart|logs|wait|attach|kill|archive|stats|exec|resize|top|pause|unpause|rename|update))?$`)
+var containerPath = regexp.MustCompile(`^/containers/([^/]+)(?:/(json|start|stop|restart|logs|wait|attach|kill|archive|stats|exec|resize|top|pause|unpause|rename|update|changes|export))?$`)
 var execPath = regexp.MustCompile(`^/exec/([0-9a-f]+)/(start|json|resize)$`)
 
 func send(w http.ResponseWriter, status int, v any) {
@@ -829,6 +833,11 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 		case strings.HasPrefix(path, "/distribution/") && strings.HasSuffix(path, "/json") && method == "GET":
 			send(w, 200, b.distributionInspect(strings.TrimSuffix(strings.TrimPrefix(path, "/distribution/"), "/json"), registryCredentials(r.Header.Get("X-Registry-Auth"))))
 			return
+		case path == "/commit" && method == "POST":
+			b.Mu.Lock()
+			defer b.Mu.Unlock()
+			send(w, 201, b.commitContainer(b.resolve(q.Get("container")), q))
+			return
 		case strings.HasPrefix(path, "/images/") && method == "DELETE":
 			b.Mu.Lock()
 			defer b.Mu.Unlock()
@@ -1030,6 +1039,14 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 					defer endStream()
 				}
 				b.stats(w, r, name, streaming, yes("one-shot"))
+				return
+			case action == "changes" && method == "GET":
+				send(w, 200, b.changes(name))
+				return
+			case action == "export" && method == "GET":
+				stream()
+				defer endStream()
+				b.export(w, name)
 				return
 			case action == "top" && method == "GET":
 				send(w, 200, b.top(name))

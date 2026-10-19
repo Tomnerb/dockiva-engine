@@ -4,6 +4,7 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import http.client
+import io
 import json
 import os
 from pathlib import Path
@@ -12,6 +13,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 
@@ -145,6 +147,31 @@ def main():
             expect('POST', '/containers/shell/wait', 200)
             expect('DELETE', '/containers/shell', 204)
             check('20 immediate restarts and removal tolerate natural exit and supervisor cleanup')
+            # Image layers: each container's changes stay in its own directory, over the image's
+            # files, which all its containers share and none changes; diff, export and commit read them.
+            image_root = next(p.parent for p in (home/'images').glob('*/image.json') if json.loads(p.read_text())['name'] == 'dockiva/shell:demo')/'rootfs'
+            def image_files():
+                return sorted((str(p.relative_to(image_root)), p.lstat().st_mode, p.lstat().st_mtime_ns, p.lstat().st_size, p.lstat().st_ino) for p in image_root.rglob('*'))
+            before = image_files()
+            def run(name, image, script):
+                expect('POST', f'/containers/create?name={name}', 201, {'Image':image, 'Entrypoint':['/bin/busybox'], 'Cmd':['sh', '-c', script]})
+                expect('POST', f'/containers/{name}/start', 204)
+                return json.loads(expect('POST', f'/containers/{name}/wait', 200))['StatusCode'], expect('GET', f'/containers/{name}/logs?stdout=1', 200)
+            code, _ = run('layered', 'dockiva/shell:demo', 'busybox mkdir /new && busybox echo hi > /new/f && busybox echo changed > /hello.txt')
+            changes = {(c['Path'], c['Kind']) for c in json.loads(expect('GET', '/containers/layered/changes', 200))}
+            check('layered container: docker diff shows its new and changed files (deletions: verify_overlay)', code == 0 and
+                  changes == {('/hello.txt', 0), ('/new', 1), ('/new/f', 1)})
+            exported = tarfile.open(fileobj=io.BytesIO(expect('GET', '/containers/layered/export', 200)))
+            check('docker export: the files as the container sees them', 'new/f' in exported.getnames() and 'bin/busybox' in exported.getnames() and
+                  exported.extractfile('hello.txt').read() == b'changed\n')
+            expect('POST', '/commit?container=layered&repo=layered-commit&tag=1', 201)
+            code, out = run('committed', 'layered-commit:1', 'busybox cat /new/f /hello.txt')
+            check('docker commit: the new image holds the changes', code == 0 and b'hi' in out and b'changed' in out)
+            code, out = run('pristine', 'dockiva/shell:demo', 'busybox cat /hello.txt; busybox ls /new 2>&1')
+            check('the image files are unchanged, and another container sees them', b'Hello from' in out and b'No such file' in out and image_files() == before)
+            for n in ('layered', 'committed', 'pristine'):
+                expect('DELETE', f'/containers/{n}', 204)
+            expect('DELETE', '/images/layered-commit:1', 200)
             # docker run --rm, as the docker CLI issues it: create (an engine-made name), wait
             # for removal, start. A new executable path per container once cost each start
             # an online macOS malware scan (~280 ms) whenever the last one was not recent.
