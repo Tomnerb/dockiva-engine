@@ -19,15 +19,15 @@ def rss_mib(pattern):
     """Resident memory of the engine's host processes, in MiB (ps RSS)."""
     out=subprocess.run(['ps','-axo','rss=,command='],capture_output=True,text=True).stdout
     return sum(int(l.split(None,1)[0]) for l in out.splitlines() if re.search(pattern,l))/1024
-PATTERN={'vmfree':r'vmfree-engine|vmfree-worker|vmfree-c-hvf','orbstack':r'OrbStack|orbstack|/orb |vmgr|com\.apple\.Virtualization'}[ENGINE]
+PATTERN={'vmfree':r'/(dockiva-engine|dockivad|dockiva-worker|dockiva-hvf|dockiva-runtime)( |$)','orbstack':r'OrbStack|orbstack|/orb |vmgr|com\.apple\.Virtualization'}[ENGINE]
 def stop_engine():
     if ENGINE=='orbstack': subprocess.run('orb stop',shell=True,capture_output=True)
-    else: subprocess.run(['pkill','-f','^'+S+'/eb/vmfree-engine/'],capture_output=True)
+    else: subprocess.run(['pkill','-f','^'+S+'/eb/dockiva-engine/'],capture_output=True)
     time.sleep(3)
 def start_engine():
     t=time.time()
     if ENGINE=='orbstack': subprocess.Popen('orb start',shell=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
-    else: subprocess.Popen([S+'/eb/vmfree-engine/vmfree-engine','--home',os.path.expanduser('~/.vmfree-clitest')],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
+    else: subprocess.Popen([S+'/eb/dockiva-engine/dockiva-engine','--home',os.path.expanduser('~/.vmfree-clitest')],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
     while subprocess.run('docker info',shell=True,env=ENV,capture_output=True).returncode:
         if time.time()-t>120: raise RuntimeError('engine did not start')
         time.sleep(0.05)
