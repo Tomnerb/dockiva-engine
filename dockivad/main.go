@@ -84,7 +84,7 @@ func run() {
 		return
 	}
 	if *pull != "" {
-		fmt.Println(pullImage(*pull, b.Cache, *insecure, os.Getenv(*tokenEnv)))
+		fmt.Println(pullWith(*pull, b.Cache, *insecure, credentials{RegistryToken: os.Getenv(*tokenEnv)}, b.commitPulled))
 		return
 	}
 	b.Native = regularExecutable(*native)

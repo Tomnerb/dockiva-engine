@@ -193,13 +193,16 @@ func authorize(ctx context.Context, client *http.Client, challenge string, scope
 	return "Bearer " + token
 }
 
+// pullImage pulls a name not cached yet (a build's FROM). A name cached with another
+// digest is refused; docker pull moves it instead (engine.commitPulled).
 func pullImage(reference, cache string, insecure bool, bearer string) string {
-	return pullWith(reference, cache, insecure, credentials{RegistryToken: bearer})
+	return pullWith(reference, cache, insecure, credentials{RegistryToken: bearer}, func(name, layout string) string { return commitImage(cache, name, layout) })
 }
 
-// pullWith pulls with docker login's credentials. insecure (--insecure-local) lets
-// a loopback registry (127.0.0.1, localhost) use plain HTTP; others are HTTPS.
-func pullWith(reference, cache string, insecure bool, creds credentials) string {
+// pullWith pulls with docker login's credentials and caches the image with commit.
+// insecure (--insecure-local) lets a loopback registry (127.0.0.1, localhost) use
+// plain HTTP; others are HTTPS.
+func pullWith(reference, cache string, insecure bool, creds credentials, commit func(name, layout string) string) string {
 	host, repo, ref, name := parseReference(reference)
 	reject(creds.RegistryToken == "" || validToken(creds.RegistryToken), "Invalid registry token")
 	plain := insecure && loopback(host)
@@ -332,7 +335,7 @@ func pullWith(reference, cache string, insecure bool, creds credentials) string 
 	}
 	save(filepath.Join(tmp, "oci-layout"), obj{"imageLayoutVersion": "1.0.0"})
 	save(filepath.Join(tmp, "index.json"), obj{"schemaVersion": 2, "manifests": []any{descriptor}})
-	return commitImage(cache, name, tmp)
+	return commit(name, tmp)
 }
 
 // progress pushes back a stall timer on every read that returns data.

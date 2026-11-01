@@ -286,6 +286,68 @@ func TestRegistryVerificationAndRedirect(t *testing.T) {
 	})
 }
 
+// docker pull of a tag the registry has moved to another image (alpine:latest after
+// an update) moves the cached name, as docker tag does; a container on the old image
+// keeps its files.
+func TestPullMovesUpdatedTag(t *testing.T) {
+	roots := []string{"../examples/m19/shell-image", "../examples/m11_17/http-image"}
+	digests := []string{}
+	for _, root := range roots {
+		digests = append(digests, str(object(array(readObject(filepath.Join(root, "index.json"))["manifests"])[0])["digest"]))
+	}
+	current := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/manifests/") {
+			_, _ = w.Write(readBounded(roots[current], "blobs/sha256/"+digests[current][7:], maxJSON))
+			return
+		}
+		d := filepath.Base(r.URL.Path)
+		if !digestPattern.MatchString(d) {
+			http.Error(w, "bad", 400)
+			return
+		}
+		for _, root := range roots {
+			if exists(filepath.Join(root, "blobs/sha256", d[7:])) {
+				_, _ = w.Write(readBounded(root, "blobs/sha256/"+d[7:], maxBlob))
+				return
+			}
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	b := testEngine(t)
+	b.Insecure = true
+	h := b.handler("secret")
+	name := strings.TrimPrefix(server.URL, "http://") + "/test/app:v1"
+	pull := func(want string) {
+		t.Helper()
+		if r := request(t, h, "POST", "/images/create?fromImage="+strings.TrimSuffix(name, ":v1")+"&tag=v1", "", "secret"); r.Code != 200 {
+			t.Fatalf("pull: %d %s", r.Code, r.Body.String())
+		}
+		if got := text(readObject(filepath.Join(b.imagePath(name), "image.json"))["digest"]); got != want {
+			t.Fatalf("%s is %s, want %s", name, got, want)
+		}
+	}
+	pull(digests[0])
+	if r := request(t, h, "POST", "/containers/create?name=old", `{"Image":"`+name+`"}`, "secret"); r.Code != 201 {
+		t.Fatalf("create: %d %s", r.Code, r.Body.String())
+	}
+	pull(digests[0]) // unchanged: a no-op
+	current = 1
+	pull(digests[1])
+	lower := text(readObject(filepath.Join(b.State, b.resolve("old"), "config.json"))["lower"])
+	if lower == "" || !exists(lower) {
+		t.Fatalf("the old image's files went with its tag: %q", lower)
+	}
+	// docker tag onto a taken name moves it too.
+	if r := request(t, h, "POST", "/images/dockiva/shell:demo/tag?repo="+strings.TrimSuffix(name, ":v1")+"&tag=v1", "", "secret"); r.Code != 201 {
+		t.Fatalf("tag: %d %s", r.Code, r.Body.String())
+	}
+	if got := text(readObject(filepath.Join(b.imagePath(name), "image.json"))["digest"]); got != digests[0] {
+		t.Fatalf("tag did not move %s: %s", name, got)
+	}
+}
+
 func TestParseReference(t *testing.T) {
 	for in, want := range map[string][4]string{
 		"alpine":                         {"registry-1.docker.io", "library/alpine", "latest", "alpine:latest"},

@@ -208,7 +208,7 @@ func TestPushToRegistry(t *testing.T) {
 
 	// Pulled back (with the same credentials), the image keeps its ID.
 	cache := filepath.Join(t.TempDir(), "cache")
-	if got := loadImage(pullWith(host+"/other/app:2", cache, true, credentials{Username: "alice", Password: "secret"})).Digest; got != want {
+	if got := loadImage(pullWith(host+"/other/app:2", cache, true, credentials{Username: "alice", Password: "secret"}, func(name, layout string) string { return commitImage(cache, name, layout) })).Digest; got != want {
 		t.Fatalf("pulled %s, pushed %s", got, want)
 	}
 

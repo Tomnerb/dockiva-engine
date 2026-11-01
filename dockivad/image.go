@@ -610,6 +610,21 @@ func (b *engine) commitTag(name, digest, layout string) string {
 	return commitImage(b.Cache, name, layout)
 }
 
+// commitPulled is commitImage for docker pull: a tag the registry has moved to
+// another image (alpine:latest after an update) moves to it, as in Docker. The move
+// holds the engine lock, so a container being created sees the old image or the new
+// one; containers already on the old one keep its files (commitTag).
+// ponytail: the lock covers unpacking the moved tag's new image; stage it unlocked
+// first if pulls of updated tags stall other requests.
+func (b *engine) commitPulled(name, layout string) string {
+	if !exists(filepath.Join(b.Cache, key(shortName(name)))) {
+		return commitImage(b.Cache, name, layout) // no lock: staged, then renamed in
+	}
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+	return b.commitTag(name, loadImage(layout).Digest, layout)
+}
+
 // migrateNames moves images cached under a docker.io/ name (docker tag did, before
 // commitImage shortened names) to the familiar name imagePath looks up. One whose
 // familiar name is taken was unreachable anyway, and goes.

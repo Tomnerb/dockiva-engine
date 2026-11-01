@@ -825,7 +825,8 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 			source := strings.TrimSuffix(strings.TrimPrefix(path, "/images/"), "/tag")
 			target := q.Get("repo") + ":" + cmp.Or(q.Get("tag"), "latest")
 			reject(q.Get("repo") != "" && len(target) <= 512 && !strings.Contains(target, "@"), "Invalid tag")
-			commitImage(b.Cache, target, noLinks(b.imagePath(source), "layout"))
+			src := b.imagePath(source) // a tag another image has moves to this one
+			b.commitTag(target, str(readObject(filepath.Join(src, "image.json"))["digest"]), noLinks(src, "layout"))
 			digest := str(readObject(filepath.Join(b.imagePath(target), "image.json"))["digest"])
 			b.events.publish(imageEvent("tag", digest, shortName(target)))
 			send(w, 201, nil)
@@ -866,7 +867,7 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 			// No engine lock (a pull is staged, then renamed in) and no write deadline:
 			// a large image takes minutes, and other requests go on meanwhile.
 			unbounded(w)
-			pullWith(reference, b.Cache, b.Insecure, registryCredentials(r.Header.Get("X-Registry-Auth")))
+			pullWith(reference, b.Cache, b.Insecure, registryCredentials(r.Header.Get("X-Registry-Auth")), b.commitPulled)
 			pulled := shortName(reference)
 			if !strings.Contains(pulled, "@") && !strings.Contains(pulled[strings.LastIndex(pulled, "/")+1:], ":") {
 				pulled += ":latest"
