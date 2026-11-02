@@ -118,7 +118,7 @@ static uint64_t guest_writev(void) {
         if(total<=4096 && total>PIPE_CAP-pipe->used)return io_would_block(&IO(guestfd));
     }
     if(file<0 && !managed) {
-        if(network>=0)net_description((unsigned)net_slot(guestfd))->writes++;
+        if(network>=0)__atomic_fetch_add(&net_description((unsigned)net_slot(guestfd))->writes,1,__ATOMIC_RELAXED); /* also without the lock */
         ssize_t n=writev(network>=0?network:(int)guestfd,vec,(int)count);
         if(n<0 && net_scheduled && !(net_description((unsigned)net_slot(guestfd))->flags&2048) && (errno==EAGAIN || errno==EWOULDBLOCK))
             return net_suspend_one(network,POLLOUT,net_description((unsigned)net_slot(guestfd))->write_timeout);

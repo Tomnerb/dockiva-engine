@@ -232,7 +232,7 @@ static uint64_t guest_sendfile(void) {
     off_t offset=at?(off_t)le(at,8):lseek(in,0,SEEK_CUR);if(offset<0)return at?linux_error(22):fs_error();
     uint64_t count=cpu->gpr[3]>0x7ffff000?0x7ffff000:cpu->gpr[3];
     if(!count)return 0;                                         /* Darwin's 0 means "to the end" */
-    off_t sent=(off_t)count;net_description(slot)->writes++;
+    off_t sent=(off_t)count;__atomic_fetch_add(&net_description(slot)->writes,1,__ATOMIC_RELAXED); /* also without the lock */
     if(sendfile(in,out,offset,&sent,NULL,0)<0 && !(errno==EAGAIN && sent>0)) {
         if(errno==EAGAIN && net_scheduled && !(net_description(slot)->flags&2048))
             return net_suspend_one(out,POLLOUT,net_description(slot)->write_timeout);
@@ -816,7 +816,16 @@ static int guest_syscall_unlocked(void) {
         if(syscall_abort)return 0;
         cpu->gpr[0]=result;return 1;
     }
-    if(!epoll && !named && !((call==62 || call==63 || call==64 || call==65 || call==66 || call==67 || call==68 || call==80 || call==82 || call==83 || (call==88 && !cpu->gpr[1])) && file) && !((call==63 || call==64 || call==65 || call==206 || call==207) && socket))return 0;
+    /* sendfile of a file at a given offset to a socket (nginx, per response): the
+       host's sendfile on this process's descriptors; no file offset moves. */
+    if(call==71 && socket && cpu->gpr[2] && fs_host(cpu->gpr[1])>=0) {
+        cpu->exclusive_valid=0;syscall_unlocked=1;syscall_abort=0;net_unlocked_wait.count=0;
+        uint64_t result=guest_sendfile();syscall_unlocked=0;
+        if(syscall_abort || result==IO_BLOCK)return 0;
+        cpu->gpr[0]=result;return 1;
+    }
+    if(!epoll && !named && !((call==62 || call==63 || call==64 || call==65 || call==66 || call==67 || call==68 || call==80 || call==82 || call==83 || (call==88 && !cpu->gpr[1])) && file) &&
+       !((call==63 || call==64 || call==65 || call==206 || call==207 || (call==66 && !io_managed(fd))) && socket))return 0;
     cpu->exclusive_valid=0;
     int clamp=(call==63 || call==64 || call==206 || call==207) && count>1024*1024 && fs_host(cpu->gpr[0])<0; /* files: fs_transfer_at */
     if(clamp)cpu->gpr[2]=1024*1024;
