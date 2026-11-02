@@ -1298,7 +1298,11 @@ static uint64_t fs_transfer_chunk(int fd,uint64_t call,int64_t offset) {
             /* The size only for an append or the storage budget (fstat was a third of a
                small write's host time); the engine sets no storage budget. */
             int append=offset<0 && (fcntl(fd,F_GETFL)&O_APPEND);
-            struct stat st;st.st_size=0;if((append || fs_storage_limit) && fstat(fd,&st)<0) return fs_error();
+            /* An append's position matters only to a 1 TiB file limit and to mappings of
+               the file: dockivad's runs (Docker: no limit) skip that fstat, which 12 nginx
+               workers logging to one file queue on. */
+            int unsized=append && !fs_storage_limit && fs_file_limit>=(UINT64_C(1)<<40) && !__atomic_load_n(&file_shares_live,__ATOMIC_RELAXED);
+            struct stat st;st.st_size=0;if((append || fs_storage_limit) && !unsized && fstat(fd,&st)<0) return fs_error();
             off_t position=offset>=0?(off_t)offset:append?st.st_size:lseek(fd,0,SEEK_CUR);if(position<0) return fs_error();
             if((uint64_t)position>fs_file_limit || count>fs_file_limit-(uint64_t)position || (fs_write_limit && count>fs_write_limit-fs_written)) return linux_error(27);
             previous_size=(uint64_t)st.st_size;write_position=(uint64_t)position;
