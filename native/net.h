@@ -819,9 +819,18 @@ static uint64_t net_call(uint64_t number) {
             for(unsigned i=0;g && i<size;i++)if(g[at+i])wildcard=0;
             net_description(slot)->wildcard=g && wildcard;
         }
-        if(!result && number==200 && net_ip && net_binding_port && !net_description(slot)->udp) {
+        /* A private network's TCP bind: its guest port names the host port. An
+           ephemeral one (port 0, a test server's listen(0)) takes the host's number as
+           its guest port, as Linux hands out a free one: getsockname reports it and
+           the container's own connects reach it.
+           ponytail: a guest port another listener of the container took explicitly
+           can come back from the host as an ephemeral one; retry the bind if that bites. */
+        if(!result && number==200 && net_ip && !net_description(slot)->udp) {
             struct sockaddr_in bound;socklen_t size=sizeof(bound);
-            if(!getsockname(fd,(struct sockaddr *)&bound,&size)) { net_private_record(net_binding_port,bound.sin_port);net_description(slot)->private_port=net_binding_port; }
+            if(!getsockname(fd,(struct sockaddr *)&bound,&size)) {
+                uint16_t guest=net_binding_port?net_binding_port:bound.sin_port;
+                net_private_record(guest,bound.sin_port);net_description(slot)->private_port=guest;
+            }
         }
         if(result<0 && number==203 && net_scheduled && (errno==EINPROGRESS || errno==EALREADY)) {
             net_description(slot)->connecting=1;
