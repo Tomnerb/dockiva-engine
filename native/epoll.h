@@ -53,6 +53,14 @@ static _Thread_local struct { int valid;uint64_t pc,fd;unsigned count,limit; } e
 static _Thread_local struct pollfd epoll_wait_fds[EPOLL_WATCHES];
 /* Block on the sockets in epoll_wait_fds; pipes record the task as a waiter. */
 static uint64_t epoll_suspend(struct GuestEpoll *e,unsigned high,unsigned count,unsigned limit) {
+    /* A pipe's writer wakes the waiters io_wait_on recorded, which needs the lock: the
+       backend's direct wait on the sockets alone slept through every eventfd write
+       (libuv's thread pool completions, 2 ms each while a socket was open). */
+    if(syscall_unlocked)
+        for(unsigned i=0;i<high;i++) {
+            const EpollWatch *w=&e->watch[i];
+            if(w->active && (w->kind==IO_READ || w->kind==IO_WRITE || w->kind==IO_EVENT)) { syscall_abort=1;return IO_BLOCK; }
+        }
     uint64_t result=net_suspend(epoll_wait_fds,count,limit);
     if(result==IO_BLOCK && !syscall_unlocked)
         for(unsigned i=0;i<high;i++) {
