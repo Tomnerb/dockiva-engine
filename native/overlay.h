@@ -159,7 +159,23 @@ static int ov_copy_file(int u,int l,const char *name) {
    missing one is left for the call to report). Returns -1 with errno, 0 otherwise. */
 #define OV_CREATE 0
 #define OV_MODIFY 1
+#define OV_DIRECT 2   /* with OV_CREATE: the caller passes leaf only to host calls refusing symlinks on the way (FS_NOFOLLOW_*) */
+/* A canonical directory the upper layer already has, as the path of dir/name below
+   fs_root, for host calls that refuse symlinks on the way: one stat (about 2 us)
+   instead of ov_upper's open (about 10). 0 when it is not there (ov_upper makes it). */
+static int ov_upper_known(const char *dir,const char *name,char path[1025]) {
+    struct stat st;size_t d=strlen(dir+1),n=strlen(name);
+    if(!FS_DIRECT || d+1+n>1024 || (d && (fstatat(fs_root,dir+1,&st,FS_NOFOLLOW_AT) || !S_ISDIR(st.st_mode))))return 0;
+    memcpy(path,dir+1,d);if(d)path[d++]='/';memcpy(path+d,name,n+1);return 1;
+}
+/* ov_marker of name in canonical directory dir, by path below fs_root. */
+static int ov_marker_at(const char *dir,const char *name) {
+    char wh[1400];struct stat st;
+    if(snprintf(wh,sizeof wh,"%s%s" OV_WH "%s",dir+1,dir[1]?"/":"",name)>=(int)sizeof wh || strlen(name)>251)return 1; /* too long: the caller's slow way decides */
+    return !fstatat(fs_root,wh,&st,FS_NOFOLLOW_AT);
+}
 static int ov_prepare(OvLeaf *w,int *parent,char leaf[1025],int how) {
+    int direct=how&OV_DIRECT;how&=~OV_DIRECT;
     w->whiteout=0;
     if(fs_lower<0 || !w->canon[0])return 0;                          /* no layers, or a bind mount */
     if(how==OV_CREATE && w->layer!=2) { errno=EEXIST;return -1; }
@@ -167,6 +183,11 @@ static int ov_prepare(OvLeaf *w,int *parent,char leaf[1025],int how) {
     char dir[1025],name[256];
     if(!strcmp(w->canon,"/")) { strcpy(dir,"/");strcpy(name,"."); }
     else ov_split(w->canon,dir,name);
+    char path[1025];
+    if(direct && how==OV_CREATE && strcmp(name,".") && ov_upper_known(dir,name,path) && !ov_marker_at(dir,name)) {
+        int u=dup(fs_root);if(u<0)return -1;                         /* most files are made where the upper layer has the directory */
+        close(*parent);*parent=u;strcpy(leaf,path);fs_walk_leaf.known=0;return 0;
+    }
     if(how==OV_MODIFY) {                                             /* a lower leaf */
         struct stat st;int l=ov_lower_dir(dir);if(l<0)return -1;
         int r=fstatat(l,strcmp(name,".")?name:".",&st,AT_SYMLINK_NOFOLLOW);
@@ -209,6 +230,9 @@ static int ov_empty(const char *canon,int clean) {
 }
 /* Whether the lower layer shows a canonical leaf (a whiteout made for it must stay). */
 static int ov_lower_has(const char *canon,struct stat *st) {
+    /* Most leaves (a container's own files) are not in the image at all: one stat says
+       so, where the walk opens every directory on the way (a symlink there: the walk). */
+    if(canon[1] && fstatat(fs_lower,canon+1,st,FS_NOFOLLOW_AT) && (errno==ENOENT || errno==ENOTDIR))return 0;
     char dir[1025],name[256];ov_split(canon,dir,name);
     int u,l,m;if(ov_pair(dir,&u,&l,&m))return 0;
     int has=l>=0 && !(u>=0 && ov_marker(u,name)) && !fstatat(l,name,st,AT_SYMLINK_NOFOLLOW);
@@ -254,7 +278,13 @@ static int ov_rename(OvLeaf *w,int parent,char leaf[1025],OvLeaf *to,int other,c
     int lower=ov_lower_has(w->canon,&low),below=ov_lower_has(to->canon,&low) && S_ISDIR(low.st_mode);
     OvLeaf from=*w;int sp=dup(parent);char sl[1025];strcpy(sl,leaf);
     if(sp<0 || ov_prepare(&from,&sp,sl,OV_MODIFY)) { ov_close2(sp,-1);return -1; }   /* the source, copied up */
-    close(sp);if((sp=ov_upper(sdir))<0)return -1;
+    close(sp);
+    /* Nothing below either name and both directories in the upper layer (a file the
+       container made, renamed into place): the rename alone, by path. */
+    char spath[1025],dpath[1025];
+    if(!lower && !below && ov_upper_known(sdir,sname,spath) && ov_upper_known(ddir,dname,dpath) && !ov_marker_at(ddir,dname))
+        return fs_renameat(fs_root,spath,fs_root,dpath);
+    if((sp=ov_upper(sdir))<0)return -1;
     int dp=ov_upper(ddir);if(dp<0) { ov_close2(sp,-1);return -1; }
     int had=ov_marker(dp,dname);
     if(lower && ov_mark(sp,sname)) { ov_close2(sp,dp);return -1; }

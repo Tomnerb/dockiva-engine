@@ -1224,7 +1224,7 @@ static uint64_t fs_open(void) {
     if(fs_lower>=0 && layers.canon[0]) {
         if((flags&(64|128))==(64|128) && layers.layer!=2) { close(parent);return linux_error(17); }
         made=layers.layer==2 && (flags&64);
-        if((made || (flags&(3|512))) && ov_prepare(&layers,&parent,leaf,made?OV_CREATE:OV_MODIFY)) { uint64_t e=fs_error();close(parent);return e; }
+        if((made || (flags&(3|512))) && ov_prepare(&layers,&parent,leaf,made?OV_CREATE|OV_DIRECT:OV_MODIFY)) { uint64_t e=fs_error();close(parent);return e; }
         if(layers.layer==1) { read_only=2;options&=~(O_CREAT|O_EXCL); }   /* a lower file, read: never written through */
     }
     if((flags&64) && fs_count_full()) { close(parent);return linux_error(28); }
