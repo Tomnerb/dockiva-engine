@@ -1381,7 +1381,9 @@ static int hvf_unlocked_exit(void) {
        !(mem_mount_count && (call==61 || call==36 || call==37 || call==33 || call==52 || call==53 || call==54 || call==55 || call==46 || call==47 ||
                              call==45 || call==276 || call==69 || call==70 || call==286 || call==287 || call==71 || call==285 || call==43 || call==44)))return 0; /* 221: execve builds its image (exec_build); the rest: memfs */
     hvf_get_regs(1,elr,spsr);
-    if(!(memory?guest_memory_unlocked():guest_syscall_unlocked()))return 0;   /* the locked path rereads the same exit */
+    int served=memory?guest_memory_unlocked():guest_syscall_unlocked();
+    ov_changed();                                                              /* overlay.h: whether served or retried locked */
+    if(!served)return 0;   /* the locked path rereads the same exit */
     PROFILE_ADD(profile_unlocked_calls,1);
     if(profiling && call<512)__atomic_fetch_add(&profile_syscalls[call],1,__ATOMIC_RELAXED);
     hvf_put_regs();return 1;

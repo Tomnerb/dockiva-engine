@@ -856,6 +856,7 @@ static int guest_syscall(void) {
     if(clamp)cpu->gpr[2]=1024*1024;
     net_wait.targeted=0; /* set again only by this call's own net_suspend */
     int result=guest_syscall_dispatch();
+    ov_changed();                                                      /* after the change, so a lookup cannot keep what it saw before */
     if(result==-3 && net_wait.active && net_wait.at_pc==cpu->pc)net_wait.active=0; /* a wait it retried is over */
     if(clamp)cpu->gpr[2]=count;
     if(trace && result==-3 && cpu->gpr[0]>=(uint64_t)-4095)                /* failures, with what they were given */

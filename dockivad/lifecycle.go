@@ -532,11 +532,12 @@ func sandboxArgs(native string, args []string, r layers, writable bool) []string
 		}
 		return strconv.Quote(s)
 	}
-	lowerRule := ""
+	lowerRule, genRule := "", ""
 	if r.lower != "" {
 		lowerRule = " (subpath " + literal(r.lower) + ")"
+		genRule = "(allow file-read* file-write* (literal " + literal(r.gen) + "))\n" // the layers' change count (overlay.go)
 	}
-	policy := "(version 1)\n(deny default)\n(allow sysctl-read)\n(allow process-exec (literal " + literal(native) + "))\n(allow file-read* (subpath \"/usr/lib\") (subpath \"/System/Library\") (subpath \"/System/Volumes/Preboot/Cryptexes/OS\") (literal " + literal(native) + ") (subpath " + literal(root) + ")" + lowerRule + ")\n(allow file-read* file-write* (literal \"/dev/null\"))\n(allow network-outbound (remote tcp \"localhost:*\"))\n"
+	policy := "(version 1)\n(deny default)\n(allow sysctl-read)\n(allow process-exec (literal " + literal(native) + "))\n(allow file-read* (subpath \"/usr/lib\") (subpath \"/System/Library\") (subpath \"/System/Volumes/Preboot/Cryptexes/OS\") (literal " + literal(native) + ") (subpath " + literal(root) + ")" + lowerRule + ")\n(allow file-read* file-write* (literal \"/dev/null\"))\n(allow network-outbound (remote tcp \"localhost:*\"))\n" + genRule
 	parents := map[string]bool{}
 	for _, p := range []string{native, root, cmp.Or(r.lower, root)} {
 		for {
@@ -586,7 +587,7 @@ func runtimeCommand(p, native string, c obj, command []string, argv0 string, env
 	// (exec and healthchecks share the container's budget, as in a cgroup).
 	args := []string{"run", guest, "--root", root}
 	if r.lower != "" {
-		args = append(args, "--lower", r.lower)
+		args = append(args, "--lower", r.lower, "--layers-gen", r.gen)
 	}
 	args = append(args, "--argv0", argv0, "--max-steps", steps, "--memory-limit-mib", strconv.FormatInt(memory, 10), "--oom-file", filepath.Join(p, "oom"))
 	// Abstract Unix socket names live in one directory per container, shared by its execs.

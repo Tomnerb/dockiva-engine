@@ -28,6 +28,48 @@ static int clonefileat(int a,const char *b,int c,const char *d,int e) { (void)a;
    outside the layers (a bind mount); whiteout: ov_prepare found ".wh.NAME" for it. */
 typedef struct { int layer,whiteout;char canon[1025]; } OvLeaf;
 static _Thread_local OvLeaf ov_leaf;
+/* What ov_walk_fast found for a path in the lower layer or in neither, by canonical
+   guest path, so a repeated lookup (nginx's index.html per request, a compiler's
+   headers, node's module search) makes no host call: macOS serializes path lookups
+   machine-wide (about 100k opens and 1M stats a second, whatever the thread count).
+   The lower layer never changes; the upper one only through ov_prepare, ov_unlink and
+   ov_rename (each marks its call, ov_changed counts it when the call ends) and
+   dockivad, which count each change in --layers-gen, a counter every run of the
+   container maps. An entry holds for the count it was made under. Upper files are not
+   kept: their stat changes with every write. Entries are seqlocked: no lock is taken. */
+#define OV_CACHE_SLOTS 2048
+#define OV_CACHE_PATH 192
+typedef struct { uint64_t seq,gen;unsigned char layer,lower,follow;char path[OV_CACHE_PATH];struct stat st; } OvCached;
+static uint64_t *ov_gen;static OvCached *ov_cache;
+static _Thread_local int ov_dirty;
+static void ov_changed(void) { if(ov_dirty) { ov_dirty=0;if(ov_gen)__atomic_fetch_add(ov_gen,1,__ATOMIC_RELEASE); } }
+static int ov_cache_open(const char *file) {
+    int fd=open(file,O_RDWR|O_CREAT|O_NOFOLLOW|O_CLOEXEC,0600);if(fd<0)return -1;
+    struct stat st;void *p=fstat(fd,&st) || (st.st_size<(off_t)sizeof(uint64_t) && ftruncate(fd,sizeof(uint64_t)))?MAP_FAILED:mmap(NULL,sizeof(uint64_t),PROT_READ|PROT_WRITE,MAP_SHARED,fd,0);
+    close(fd);
+    if(p==MAP_FAILED || !(ov_cache=calloc(OV_CACHE_SLOTS,sizeof(OvCached))))return -1;
+    ov_gen=p;return 0;
+}
+static OvCached *ov_slot(const char *path,int follow) {
+    uint32_t h=2166136261u^(unsigned)follow;for(const char *p=path;*p;p++)h=(h^(unsigned char)*p)*16777619u;
+    return &ov_cache[h&(OV_CACHE_SLOTS-1)];
+}
+static int ov_cache_get(const char *path,int follow,uint64_t gen,OvCached *out) {
+    OvCached *e=ov_slot(path,follow);uint64_t s=__atomic_load_n(&e->seq,__ATOMIC_ACQUIRE);
+    if(!s || (s&1))return 0;
+    memcpy(out,e,sizeof(*out));
+    __atomic_thread_fence(__ATOMIC_ACQUIRE);
+    return __atomic_load_n(&e->seq,__ATOMIC_RELAXED)==s && out->gen==gen && out->follow==follow && !strncmp(out->path,path,OV_CACHE_PATH);
+}
+static void ov_cache_put(const char *path,int follow,uint64_t gen,int layer,int lower,const struct stat *st) {
+    size_t n=strlen(path);if(n>=OV_CACHE_PATH)return;
+    OvCached *e=ov_slot(path,follow);uint64_t s=__atomic_load_n(&e->seq,__ATOMIC_RELAXED);
+    if((s&1) || !__atomic_compare_exchange_n(&e->seq,&s,s+1,0,__ATOMIC_ACQUIRE,__ATOMIC_RELAXED))return;   /* another writer has it */
+    __atomic_thread_fence(__ATOMIC_RELEASE);
+    e->gen=gen;e->layer=(unsigned char)layer;e->lower=(unsigned char)lower;e->follow=(unsigned char)follow;memcpy(e->path,path,n+1);
+    if(st)e->st=*st;
+    __atomic_store_n(&e->seq,s+2,__ATOMIC_RELEASE);
+}
 static int ov_hidden(const char *name) { return !strncmp(name,OV_WH,4); }
 static int ov_marker(int dir,const char *name) {                  /* ".wh.NAME" (name NULL: the opaque marker) exists */
     char wh[300];struct stat st;
@@ -175,6 +217,7 @@ static int ov_marker_at(const char *dir,const char *name) {
     return !fstatat(fs_root,wh,&st,FS_NOFOLLOW_AT);
 }
 static int ov_prepare(OvLeaf *w,int *parent,char leaf[1025],int how) {
+    ov_dirty=1;                                                        /* the upper layer may change: ov_changed */
     int direct=how&OV_DIRECT;how&=~OV_DIRECT;
     w->whiteout=0;
     if(fs_lower<0 || !w->canon[0])return 0;                          /* no layers, or a bind mount */
@@ -241,6 +284,7 @@ static int ov_lower_has(const char *canon,struct stat *st) {
 /* unlinkat of the walk's leaf (w) in the root's layers: the upper entry goes and a
    whiteout hides a lower one. */
 static int ov_unlink(OvLeaf *w,int parent,const char *leaf,int directory) {
+    ov_dirty=1;
     struct stat st,low;
     if(w->layer==2 || fstatat(parent,leaf,&st,FS_NOFOLLOW_AT)) { errno=ENOENT;return -1; }
     if(!strcmp(w->canon,"/")) { errno=EBUSY;return -1; }
@@ -261,6 +305,7 @@ static int ov_unlink(OvLeaf *w,int parent,const char *leaf,int directory) {
    A lower file is copied up first; a directory with lower files cannot move (EXDEV, as
    overlayfs without redirect_dir: mv copies it). */
 static int ov_rename(OvLeaf *w,int parent,char leaf[1025],OvLeaf *to,int other,char target[1025]) {
+    ov_dirty=1;
     struct stat st,dst,low;
     if(w->layer==2 || fstatat(parent,leaf,&st,FS_NOFOLLOW_AT)) { errno=ENOENT;return -1; }
     if(!strcmp(w->canon,to->canon))return 0;
@@ -350,7 +395,13 @@ static int ov_walk_fast(const char *start,const char *rest,int follow,int direct
     const char *rel=full+1,*last=strrchr(full,'/')+1;
     char dirs[1025];size_t d=(size_t)(last-1-rel);if(last-1<rel)d=0;
     memcpy(dirs,rel,d);dirs[d]=0;
-    struct stat st,low_probe;int layer=2,top=0,hide=0;size_t k=0;    /* k: bytes of dirs the upper layer has */
+    struct stat st,low_probe;int layer=2,top=0,hide=0,base;size_t k=0;    /* k: bytes of dirs the upper layer has */
+    uint64_t gen=ov_gen?__atomic_load_n(ov_gen,__ATOMIC_ACQUIRE):0;       /* before any host call (ov_cache_put) */
+    OvCached hit;
+    if(ov_gen && ov_cache_get(full,follow,gen,&hit)) {
+        if(hit.layer==3) { errno=hit.lower?ENOTDIR:ENOENT;return -1; }   /* its directory is missing too */
+        layer=hit.layer;st=hit.st;base=hit.lower?fs_lower:fs_root;goto found;
+    }
     {   /* the first component: most paths of an image have nothing above them */
         char first[256];const char *p=rel;ov_part(&p,first);
         if(fstatat(fs_root,first,&st,AT_SYMLINK_NOFOLLOW)) {
@@ -391,15 +442,20 @@ static int ov_walk_fast(const char *start,const char *rest,int follow,int direct
         snprintf(probe,sizeof probe,"%.*s/" OV_OPQ,(int)m,dirs);if(!fstatat(fs_root,probe,&low_probe,AT_SYMLINK_NOFOLLOW))return -2;
         if(snprintf(probe,sizeof probe,"%.*s/" OV_WH "%s",(int)m,dirs,after)<(int)sizeof probe && !fstatat(fs_root,probe,&low_probe,AT_SYMLINK_NOFOLLOW))return -2;
     }
-    int base;
     if(layer==2) {                                                   /* missing: does its directory exist? */
         if(d && k<d) {
-            struct stat low;
-            if(fstatat(fs_lower,dirs,&low,FS_NOFOLLOW_AT))return errno==ENOENT || errno==ENOTDIR?-1:-2;
-            if(!S_ISDIR(low.st_mode)) { errno=ENOTDIR;return -1; }
+            struct stat low;int notdir=-1;                           /* -1: the directory is there */
+            if(fstatat(fs_lower,dirs,&low,FS_NOFOLLOW_AT)) { if(errno!=ENOENT && errno!=ENOTDIR)return -2;notdir=errno==ENOTDIR; }
+            else if(!S_ISDIR(low.st_mode))notdir=1;
+            if(notdir>=0) {
+                if(ov_gen)ov_cache_put(full,follow,gen,3,notdir,NULL);
+                errno=notdir?ENOTDIR:ENOENT;return -1;
+            }
             base=fs_lower;
         } else base=fs_root;
     } else base=layer?fs_lower:fs_root;
+    if(ov_gen && layer)ov_cache_put(full,follow,gen,layer,base==fs_lower,layer==1?&st:NULL);
+  found:;
     int fd;
     if(direct) { fd=dup(base);if(fd<0)return -1;strcpy(leaf,rel);fs_walk_leaf.known=layer==2?2:1;if(layer!=2)fs_walk_leaf.st=st; }
     else {

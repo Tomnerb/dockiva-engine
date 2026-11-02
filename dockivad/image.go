@@ -476,7 +476,7 @@ func (im *image) ensureDir(guest string) string {
 }
 
 // files are the image's files as a container sees them.
-func (im *image) files() layers { return layers{im.Root, im.Lower} }
+func (im *image) files() layers { return layers{upper: im.Root, lower: im.Lower} }
 func validateEnv(env []string) {
 	reject(len(env) <= 64, "Too many environment values")
 	seen := map[string]bool{}

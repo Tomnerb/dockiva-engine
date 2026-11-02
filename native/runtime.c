@@ -1118,6 +1118,9 @@ int main(int argc,char **argv) {
             if(fs_lower>=0) fail("Lower layer specified twice");
             lower_path=argv[++i];fs_lower=open(lower_path,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
             if(fs_lower<0) fail("Cannot open guest lower layer");
+        } else if(!strcmp(argv[i],"--layers-gen") && i+1<argc) {
+            /* --layers-gen FILE: the container's count of upper-layer changes, shared by its runs (overlay.h's lookup cache). */
+            if(ov_cache_open(argv[++i])) fail("Cannot map the layers' change count");
         } else if(!strcmp(argv[i],"--writable")) {
             fs_writable=1;
         } else if((!strcmp(argv[i],"--bind") || !strcmp(argv[i],"--bind-ro")) && i+2<argc) {

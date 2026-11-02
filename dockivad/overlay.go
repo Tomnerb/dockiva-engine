@@ -10,7 +10,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"syscall"
+	"unsafe"
 )
 
 // Image layers (native/overlay.h). A container made with the layered layout keeps
@@ -22,7 +24,7 @@ import (
 // in a layer tar. layers is the engine's view of a container's files as its guest
 // sees them; rel paths are root-relative and link-free (resolveGuest them first).
 // The engine changes only the upper layer, and never links to a lower file.
-type layers struct{ upper, lower string } // lower "": a container with its own copy, or an image
+type layers struct{ upper, lower, gen string } // lower "": a container with its own copy, or an image; gen: see changed
 
 const whiteoutPrefix, opaqueMarker = ".wh.", ".wh..wh..opq"
 
@@ -31,8 +33,29 @@ func containerLayers(p string, c obj) layers {
 	r := layers{upper: noLinks(p, "rootfs")}
 	if l := text(c["lower"]); l != "" {
 		r.lower = noLinks(filepath.Dir(l), filepath.Base(l))
+		r.gen = filepath.Join(p, "layers-gen")
 	}
 	return r
+}
+
+// changed counts a change to the upper layer in <container>/layers-gen, the counter
+// the container's runs map (--layers-gen): their lookup caches (native/overlay.h)
+// drop what they found before it. Called after the change; nothing to do before the
+// container's first run made the file.
+func (r layers) changed() {
+	if r.gen == "" {
+		return
+	}
+	f, e := os.OpenFile(r.gen, os.O_RDWR|syscall.O_NOFOLLOW, 0)
+	if errors.Is(e, fs.ErrNotExist) {
+		return
+	}
+	check(e)
+	defer f.Close()
+	m, e := syscall.Mmap(int(f.Fd()), 0, 8, syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
+	check(e)
+	atomic.AddUint64((*uint64)(unsafe.Pointer(&m[0])), 1)
+	check(syscall.Munmap(m))
 }
 
 func relParts(rel string) []string {
@@ -108,6 +131,7 @@ func (r layers) link(rel string) (string, bool) {
 // directory (its mode and times) if the guest sees one, else (create) a new 0755
 // one, which hides a deleted lower one; a file or symlink in the way is refused.
 func (r layers) upperDir(rel string, create bool) string {
+	defer r.changed()
 	p, sofar := r.upper, ""
 	for _, part := range relParts(rel) {
 		reject(r.lower == "" || !strings.HasPrefix(part, whiteoutPrefix), "Reserved name: "+part)
@@ -161,6 +185,7 @@ func (r layers) writable(rel string) string {
 // settle follows the making of upper entry rel: its whiteout goes, and a directory
 // made where a lower one was deleted hides that one's files.
 func (r layers) settle(rel string, directory bool) {
+	defer r.changed()
 	if r.lower == "" {
 		return
 	}
@@ -180,6 +205,7 @@ func (r layers) settle(rel string, directory bool) {
 // remove removes rel as the guest's rm -rf would: a whiteout hides the lower entry,
 // and the upper one goes.
 func (r layers) remove(rel string) {
+	defer r.changed()
 	dir, name := path.Split(path.Join(relParts(rel)...))
 	reject(name != "", "Cannot remove the container root")
 	up, low := r.lookup(rel)
@@ -196,6 +222,7 @@ func (r layers) remove(rel string) {
 // copyUp makes a lower file rel the container's own (an APFS clone), so it may be
 // changed or linked to; a file already in the upper layer stays.
 func (r layers) copyUp(rel string) string {
+	defer r.changed()
 	host, ok := r.find(rel)
 	reject(ok, "No such file: /"+rel)
 	up := filepath.Join(r.upper, filepath.FromSlash(path.Join(relParts(rel)...)))
@@ -287,6 +314,7 @@ func (r layers) walkFrom(rel, host string, info os.FileInfo, fn func(rel, host s
 
 // writeFile replaces a regular file (or a symlink, never followed) with content.
 func (r layers) writeFile(rel, content string) {
+	defer r.changed()
 	if host, ok := r.find(rel); ok {
 		s, e := os.Lstat(host)
 		check(e)
@@ -306,6 +334,7 @@ func (r layers) writeFile(rel, content string) {
 
 // mountPoint makes a link-free directory (or empty file) at guest, where missing.
 func (r layers) mountPoint(guest string, directory bool) {
+	defer r.changed()
 	parts := relParts(guest)
 	for i := range parts {
 		sofar := path.Join(parts[:i+1]...)
