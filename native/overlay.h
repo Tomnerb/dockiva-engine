@@ -34,39 +34,67 @@ static _Thread_local OvLeaf ov_leaf;
    machine-wide (about 100k opens and 1M stats a second, whatever the thread count).
    The lower layer never changes; the upper one only through ov_prepare, ov_unlink and
    ov_rename (each marks its call, ov_changed counts it when the call ends) and
-   dockivad, which count each change in --layers-gen, a counter every run of the
-   container maps. An entry holds for the count it was made under. Upper files are not
-   kept: their stat changes with every write. Entries are seqlocked: no lock is taken. */
-#define OV_CACHE_SLOTS 2048
+   dockivad, which count changes in --layers-gen, counters every run of the container
+   maps: [0] any change; [1] a file made where the upper layer has its directory (a
+   build's outputs and cache entries, hundreds a second), which changes the answer for
+   its own path and for paths below it, in [2+bucket of its path] too. An entry holds
+   for the counts it was made under: [0] and its path's bucket, and [1] for a missing
+   directory. Upper files are not kept: their stat changes with every write. Removing
+   an upper file with nothing below it changes no entry. Entries are seqlocked: no lock
+   is taken. */
+#define OV_CACHE_SLOTS 32768
 #define OV_CACHE_PATH 192
-typedef struct { uint64_t seq,gen;unsigned char layer,lower,follow;char path[OV_CACHE_PATH];struct stat st; } OvCached;
+#define OV_BUCKETS 4096
+typedef struct { uint64_t gen,made,bucket; } OvStamp;
+typedef struct { uint64_t seq;OvStamp at;unsigned char layer,lower,follow;char path[OV_CACHE_PATH];struct stat st; } OvCached;
 static uint64_t *ov_gen;static OvCached *ov_cache;
 static _Thread_local int ov_dirty;
-static void ov_changed(void) { if(ov_dirty) { ov_dirty=0;if(ov_gen)__atomic_fetch_add(ov_gen,1,__ATOMIC_RELEASE); } }
+static _Thread_local char ov_made[1025];                              /* the call's file made (ov_prepare's fast way) */
+static uint32_t ov_hash(const char *path) { uint32_t h=2166136261u;for(const char *p=path;*p;p++)h=(h^(unsigned char)*p)*16777619u;return h; }
+static uint64_t *ov_bucket(uint32_t h) { return &ov_gen[2+((h>>16)&(OV_BUCKETS-1))]; }
+static void ov_changed(void) {
+    if(ov_made[0]) {
+        if(ov_gen && !ov_dirty) { __atomic_fetch_add(&ov_gen[1],1,__ATOMIC_RELEASE);__atomic_fetch_add(ov_bucket(ov_hash(ov_made)),1,__ATOMIC_RELEASE); }
+        ov_made[0]=0;
+    }
+    if(ov_dirty) { ov_dirty=0;if(ov_gen)__atomic_fetch_add(ov_gen,1,__ATOMIC_RELEASE); }
+}
 static int ov_cache_open(const char *file) {
+    size_t size=(2+OV_BUCKETS)*sizeof(uint64_t);
     int fd=open(file,O_RDWR|O_CREAT|O_NOFOLLOW|O_CLOEXEC,0600);if(fd<0)return -1;
-    struct stat st;void *p=fstat(fd,&st) || (st.st_size<(off_t)sizeof(uint64_t) && ftruncate(fd,sizeof(uint64_t)))?MAP_FAILED:mmap(NULL,sizeof(uint64_t),PROT_READ|PROT_WRITE,MAP_SHARED,fd,0);
+    struct stat st;void *p=fstat(fd,&st) || (st.st_size<(off_t)size && ftruncate(fd,(off_t)size))?MAP_FAILED:mmap(NULL,size,PROT_READ|PROT_WRITE,MAP_SHARED,fd,0);
     close(fd);
     if(p==MAP_FAILED || !(ov_cache=calloc(OV_CACHE_SLOTS,sizeof(OvCached))))return -1;
     ov_gen=p;return 0;
 }
-static OvCached *ov_slot(const char *path,int follow) {
-    uint32_t h=2166136261u^(unsigned)follow;for(const char *p=path;*p;p++)h=(h^(unsigned char)*p)*16777619u;
-    return &ov_cache[h&(OV_CACHE_SLOTS-1)];
+/* The counts a lookup of path starts under: read before any host call (ov_cache_put). */
+static void ov_stamp(const char *path,OvStamp *at) {
+    at->gen=__atomic_load_n(&ov_gen[0],__ATOMIC_ACQUIRE);at->made=__atomic_load_n(&ov_gen[1],__ATOMIC_ACQUIRE);
+    at->bucket=__atomic_load_n(ov_bucket(ov_hash(path)),__ATOMIC_ACQUIRE);
 }
-static int ov_cache_get(const char *path,int follow,uint64_t gen,OvCached *out) {
-    OvCached *e=ov_slot(path,follow);uint64_t s=__atomic_load_n(&e->seq,__ATOMIC_ACQUIRE);
+/* A path's two slots (a std library's files outnumber a direct-mapped table's). */
+static OvCached *ov_slot(const char *path,int follow,int way) { return &ov_cache[((ov_hash(path)*2u+(unsigned)follow)^(unsigned)(way*2))&(OV_CACHE_SLOTS-1)]; }
+static int ov_cache_read(OvCached *e,const char *path,int follow,OvCached *out) {
+    uint64_t s=__atomic_load_n(&e->seq,__ATOMIC_ACQUIRE);
     if(!s || (s&1))return 0;
     memcpy(out,e,sizeof(*out));
     __atomic_thread_fence(__ATOMIC_ACQUIRE);
-    return __atomic_load_n(&e->seq,__ATOMIC_RELAXED)==s && out->gen==gen && out->follow==follow && !strncmp(out->path,path,OV_CACHE_PATH);
+    return __atomic_load_n(&e->seq,__ATOMIC_RELAXED)==s && out->follow==follow && !strncmp(out->path,path,OV_CACHE_PATH);
 }
-static void ov_cache_put(const char *path,int follow,uint64_t gen,int layer,int lower,const struct stat *st) {
+static int ov_cache_get(const char *path,int follow,const OvStamp *at,OvCached *out) {
+    for(int way=0;way<2;way++)if(ov_cache_read(ov_slot(path,follow,way),path,follow,out))
+        return out->at.gen==at->gen && out->at.bucket==at->bucket && (out->layer!=3 || out->at.made==at->made);
+    return 0;
+}
+static void ov_cache_put(const char *path,int follow,const OvStamp *at,int layer,int lower,const struct stat *st) {
     size_t n=strlen(path);if(n>=OV_CACHE_PATH)return;
-    OvCached *e=ov_slot(path,follow);uint64_t s=__atomic_load_n(&e->seq,__ATOMIC_RELAXED);
+    OvCached *e=ov_slot(path,follow,0),*other=ov_slot(path,follow,1),copy;   /* its own slot, else an empty one, else by the hash */
+    if(!ov_cache_read(e,path,follow,&copy) && (ov_cache_read(other,path,follow,&copy) ||
+       (__atomic_load_n(&e->seq,__ATOMIC_RELAXED) && (!__atomic_load_n(&other->seq,__ATOMIC_RELAXED) || ov_hash(path)>>31))))e=other;
+    uint64_t s=__atomic_load_n(&e->seq,__ATOMIC_RELAXED);
     if((s&1) || !__atomic_compare_exchange_n(&e->seq,&s,s+1,0,__ATOMIC_ACQUIRE,__ATOMIC_RELAXED))return;   /* another writer has it */
     __atomic_thread_fence(__ATOMIC_RELEASE);
-    e->gen=gen;e->layer=(unsigned char)layer;e->lower=(unsigned char)lower;e->follow=(unsigned char)follow;memcpy(e->path,path,n+1);
+    e->at=*at;e->layer=(unsigned char)layer;e->lower=(unsigned char)lower;e->follow=(unsigned char)follow;memcpy(e->path,path,n+1);
     if(st)e->st=*st;
     __atomic_store_n(&e->seq,s+2,__ATOMIC_RELEASE);
 }
@@ -217,20 +245,21 @@ static int ov_marker_at(const char *dir,const char *name) {
     return !fstatat(fs_root,wh,&st,FS_NOFOLLOW_AT);
 }
 static int ov_prepare(OvLeaf *w,int *parent,char leaf[1025],int how) {
-    ov_dirty=1;                                                        /* the upper layer may change: ov_changed */
     int direct=how&OV_DIRECT;how&=~OV_DIRECT;
     w->whiteout=0;
     if(fs_lower<0 || !w->canon[0])return 0;                          /* no layers, or a bind mount */
     if(how==OV_CREATE && w->layer!=2) { errno=EEXIST;return -1; }
-    if(w->layer==0 || (how==OV_MODIFY && w->layer==2))return 0;
+    if(w->layer==0 || (how==OV_MODIFY && w->layer==2))return 0;      /* no layer changes (Go touches its cache files' times) */
     char dir[1025],name[256];
     if(!strcmp(w->canon,"/")) { strcpy(dir,"/");strcpy(name,"."); }
     else ov_split(w->canon,dir,name);
     char path[1025];
     if(direct && how==OV_CREATE && strcmp(name,".") && ov_upper_known(dir,name,path) && !ov_marker_at(dir,name)) {
         int u=dup(fs_root);if(u<0)return -1;                         /* most files are made where the upper layer has the directory */
+        if(ov_made[0])ov_dirty=1;else strcpy(ov_made,w->canon);       /* the upper layer changes at this path alone: ov_changed */
         close(*parent);*parent=u;strcpy(leaf,path);fs_walk_leaf.known=0;return 0;
     }
+    ov_dirty=1;                                                        /* the upper layer may change: ov_changed */
     if(how==OV_MODIFY) {                                             /* a lower leaf */
         struct stat st;int l=ov_lower_dir(dir);if(l<0)return -1;
         int r=fstatat(l,strcmp(name,".")?name:".",&st,AT_SYMLINK_NOFOLLOW);
@@ -284,7 +313,6 @@ static int ov_lower_has(const char *canon,struct stat *st) {
 /* unlinkat of the walk's leaf (w) in the root's layers: the upper entry goes and a
    whiteout hides a lower one. */
 static int ov_unlink(OvLeaf *w,int parent,const char *leaf,int directory) {
-    ov_dirty=1;
     struct stat st,low;
     if(w->layer==2 || fstatat(parent,leaf,&st,FS_NOFOLLOW_AT)) { errno=ENOENT;return -1; }
     if(!strcmp(w->canon,"/")) { errno=EBUSY;return -1; }
@@ -292,6 +320,7 @@ static int ov_unlink(OvLeaf *w,int parent,const char *leaf,int directory) {
     if(!directory && S_ISDIR(st.st_mode)) { errno=EPERM;return -1; }   /* the caller reports EISDIR, as Linux */
     char dir[1025],name[256];ov_split(w->canon,dir,name);
     int lower=ov_lower_has(w->canon,&low);
+    if(lower || directory)ov_dirty=1;                                  /* the upper layer's change shows (ov_changed) */
     if(directory && !ov_empty(w->canon,w->layer==0)) { errno=ENOTEMPTY;return -1; }
     int u=lower?ov_upper(dir):-1;
     if(lower && (u<0 || ov_mark(u,name))) { ov_close2(u,-1);return -1; }   /* first: the name never shows the lower entry */
@@ -396,9 +425,9 @@ static int ov_walk_fast(const char *start,const char *rest,int follow,int direct
     char dirs[1025];size_t d=(size_t)(last-1-rel);if(last-1<rel)d=0;
     memcpy(dirs,rel,d);dirs[d]=0;
     struct stat st,low_probe;int layer=2,top=0,hide=0,base;size_t k=0;    /* k: bytes of dirs the upper layer has */
-    uint64_t gen=ov_gen?__atomic_load_n(ov_gen,__ATOMIC_ACQUIRE):0;       /* before any host call (ov_cache_put) */
+    OvStamp at;if(ov_gen)ov_stamp(full,&at);
     OvCached hit;
-    if(ov_gen && ov_cache_get(full,follow,gen,&hit)) {
+    if(ov_gen && ov_cache_get(full,follow,&at,&hit)) {
         if(hit.layer==3) { errno=hit.lower?ENOTDIR:ENOENT;return -1; }   /* its directory is missing too */
         layer=hit.layer;st=hit.st;base=hit.lower?fs_lower:fs_root;goto found;
     }
@@ -448,13 +477,13 @@ static int ov_walk_fast(const char *start,const char *rest,int follow,int direct
             if(fstatat(fs_lower,dirs,&low,FS_NOFOLLOW_AT)) { if(errno!=ENOENT && errno!=ENOTDIR)return -2;notdir=errno==ENOTDIR; }
             else if(!S_ISDIR(low.st_mode))notdir=1;
             if(notdir>=0) {
-                if(ov_gen)ov_cache_put(full,follow,gen,3,notdir,NULL);
+                if(ov_gen)ov_cache_put(full,follow,&at,3,notdir,NULL);
                 errno=notdir?ENOTDIR:ENOENT;return -1;
             }
             base=fs_lower;
         } else base=fs_root;
     } else base=layer?fs_lower:fs_root;
-    if(ov_gen && layer)ov_cache_put(full,follow,gen,layer,base==fs_lower,layer==1?&st:NULL);
+    if(ov_gen && layer)ov_cache_put(full,follow,&at,layer,base==fs_lower,layer==1?&st:NULL);
   found:;
     int fd;
     if(direct) { fd=dup(base);if(fd<0)return -1;strcpy(leaf,rel);fs_walk_leaf.known=layer==2?2:1;if(layer!=2)fs_walk_leaf.st=st; }

@@ -725,6 +725,32 @@ static int fs_call_detached(uint64_t call,const char *path,uint64_t *result,int 
     if(fs_detached.fd>=0) { r=fs_install(fs_detached.fd,fs_detached.flags,fs_detached.opened_ro,fs_detached.opened_device,fs_detached.directory);fs_detached.fd=-1; }
     *result=r;return 1;
 }
+/* newfstatat of an image path the lookup cache knows (ov_walk_fast's checks): the
+   answer under the mm lock alone, with no host call, instead of a detached walk (a
+   dup, a close and the lock taken twice; the go command stats 17k paths listing the
+   standard library, from a dozen threads). 1 with st or *error, 0: the walk decides. */
+static int fs_stat_cached(const char *path,int follow,struct stat *st,uint64_t *error) {
+    if(fs_root<0 || fs_lower<0 || !ov_gen || fs_scope.root>=0)return 0;
+    size_t n=strlen(path);if(!n || n>1024 || path[n-1]=='/')return 0;
+    const char *slash=strrchr(path,'/');if(!strcmp(slash?slash+1:path,"."))return 0;
+    char full[1025];strcpy(full,path[0]=='/'?"/":fs_cwd?fs_cwd->path:"/");
+    if(!full[0])return 0;
+    for(const char *p=path;*p;) {
+        while(*p=='/')p++;
+        const char *q=p;while(*q && *q!='/')q++;
+        size_t m=(size_t)(q-p);char part[256];
+        if(m>255 || (m==2 && p[0]=='.' && p[1]=='.') || (m>=4 && ov_hidden(p)))return 0;
+        memcpy(part,p,m);part[m]=0;
+        if(m && strcmp(part,".") && fs_canon_push(full,part)<0)return 0;
+        p=q;
+    }
+    if(!strcmp(full,"/") || (mem_mount_count && mem_mount_inside(full)) || !strncmp(full,"/proc",5) || !strncmp(full,"/dev",4) || !strncmp(full,"/sys",4) || (fs_mount_count && fs_mount_of(full)) || fs_device(full))return 0;
+    OvStamp at;ov_stamp(full,&at);OvCached hit;
+    if(!ov_cache_get(full,follow,&at,&hit))return 0;
+    if(hit.layer!=1) { *error=linux_error(hit.layer==3 && hit.lower?20:2);return 1; }
+    *st=hit.st;*error=0;
+    return S_ISREG(st->st_mode) || S_ISDIR(st->st_mode) || S_ISLNK(st->st_mode) || S_ISSOCK(st->st_mode) || S_ISFIFO(st->st_mode);
+}
 static int guest_syscall_unlocked(void) {
     uint64_t call=cpu->gpr[8],fd=cpu->gpr[0],count=cpu->gpr[2];
     if(trace)return 0;
@@ -743,6 +769,17 @@ static int guest_syscall_unlocked(void) {
     }
     int named=(call==56 || call==79 || call==291 || call==48 || call==439 || call==78 || call==34 || call==35 || call==38 || (call==88 && cpu->gpr[1])) && fs_unlocked_path(cpu->gpr[1],path);
     if(named && call==38)named=fs_unlocked_path(cpu->gpr[3],path);
+    if(named && (call==79 || call==291) && ((int32_t)cpu->gpr[0]==-100 || path[0]=='/')) {   /* stat and statx from the lookup cache */
+        uint64_t flags=cpu->gpr[call==79?3:2],buffer=cpu->gpr[call==79?2:4],error;struct stat st;
+        if(!(flags&~(call==79?UINT64_C(0x100|0x800|0x1000):UINT64_C(0x100|0x800|0x6000))) && fs_stat_cached(path,!(flags&0x100),&st,&error)) {
+            cpu->exclusive_valid=0;
+            unsigned char *out=error?NULL:lookup(buffer,call==79?128:256,2);
+            if(error || out) {
+                if(out) { fs_stat_pack(out,&st);if(call==291)statx_from_stat(out); }
+                cpu->gpr[0]=error;return 1;
+            }
+        }
+    }
     if(call==291) {
         /* statx of a path (npm stats thousands): newfstatat without the lock, rewritten. */
         uint64_t flags=cpu->gpr[2],buffer=cpu->gpr[4];
