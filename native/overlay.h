@@ -48,6 +48,11 @@ static _Thread_local OvLeaf ov_leaf;
 typedef struct { uint64_t gen,made,bucket; } OvStamp;
 typedef struct { uint64_t seq;OvStamp at;unsigned char layer,lower,follow;char path[OV_CACHE_PATH];struct stat st; } OvCached;
 static uint64_t *ov_gen;static OvCached *ov_cache;
+typedef struct OvLink OvLink;static OvLink *ov_links;   /* ov_link_get */
+#define OV_LINK_SLOTS 4096
+#define OV_LINK_KEY 256
+#define OV_LINK_PATHS 24
+struct OvLink { uint64_t seq,gen,sum;unsigned mounts;unsigned short from,length,count;unsigned char follow;unsigned short bucket[OV_LINK_PATHS];char key[OV_LINK_KEY],to[OV_LINK_KEY]; };
 static _Thread_local int ov_dirty;
 static _Thread_local char ov_made[1025];                              /* the call's file made (ov_prepare's fast way) */
 static uint32_t ov_hash(const char *path) { uint32_t h=2166136261u;for(const char *p=path;*p;p++)h=(h^(unsigned char)*p)*16777619u;return h; }
@@ -65,6 +70,7 @@ static int ov_cache_open(const char *file) {
     struct stat st;void *p=fstat(fd,&st) || (st.st_size<(off_t)size && ftruncate(fd,(off_t)size))?MAP_FAILED:mmap(NULL,size,PROT_READ|PROT_WRITE,MAP_SHARED,fd,0);
     close(fd);
     if(p==MAP_FAILED || !(ov_cache=calloc(OV_CACHE_SLOTS,sizeof(OvCached))))return -1;
+    ov_links=calloc(OV_LINK_SLOTS,sizeof(OvLink));                     /* none: every symlinked path walks */
     ov_gen=p;return 0;
 }
 /* The counts a lookup of path starts under: read before any host call (ov_cache_put). */
@@ -96,6 +102,48 @@ static void ov_cache_put(const char *path,int follow,const OvStamp *at,int layer
     __atomic_thread_fence(__ATOMIC_RELEASE);
     e->at=*at;e->layer=(unsigned char)layer;e->lower=(unsigned char)lower;e->follow=(unsigned char)follow;memcpy(e->path,path,n+1);
     if(st)e->st=*st;
+    __atomic_store_n(&e->seq,s+2,__ATOMIC_RELEASE);
+}
+/* Where the component walk took a path with symlinks on the way (by its start
+   directory, the path and follow), so the next lookup is ov_walk_fast of the result:
+   the walk opens every directory (30 to 60 us; Debian's /lib and /bin are links, so
+   is every node_modules/.bin entry). An entry holds while [0] and the buckets of every
+   path the walk passed hold: a link or a directory on the way changes by a rename or
+   a lower entry's removal ([0]), or a removal and a new entry there (its bucket; an
+   upper symlink's removal counts in its bucket too, ov_unlink). Seqlocked as ov_cache. */
+typedef struct { uint64_t gen,sum;unsigned mounts,count;int ok;unsigned short bucket[OV_LINK_PATHS]; } OvLinkWalk;
+static unsigned ov_link_mounts(void) { return fs_mount_count*1024u+mem_mount_count; }
+static OvLink *ov_link_slot(const char *from,const char *path,int follow) { return &ov_links[(ov_hash(from)*31u^ov_hash(path)^(unsigned)follow)&(OV_LINK_SLOTS-1)]; }
+/* A path the walk passes: its bucket's count now, before any host call about it. */
+static void ov_link_pass(OvLinkWalk *k,const char *path) {
+    if(k->count==OV_LINK_PATHS) { k->ok=0;return; }
+    unsigned b=(ov_hash(path)>>16)&(OV_BUCKETS-1);k->bucket[k->count++]=(unsigned short)b;
+    k->sum+=__atomic_load_n(&ov_gen[2+b],__ATOMIC_ACQUIRE);
+}
+static int ov_link_get(const char *from,const char *path,int follow,char to[1025]) {
+    if(!ov_links)return 0;
+    OvLink *e=ov_link_slot(from,path,follow),c;size_t f=strlen(from),n=f+1+strlen(path);
+    if(n>=OV_LINK_KEY)return 0;
+    uint64_t s=__atomic_load_n(&e->seq,__ATOMIC_ACQUIRE);
+    if(!s || (s&1))return 0;
+    memcpy(&c,e,sizeof(c));
+    __atomic_thread_fence(__ATOMIC_ACQUIRE);
+    if(__atomic_load_n(&e->seq,__ATOMIC_RELAXED)!=s || c.follow!=follow || c.from!=f || c.length!=n || c.count>OV_LINK_PATHS ||
+       memcmp(c.key,from,f+1) || memcmp(c.key+f+1,path,n-f) || c.mounts!=ov_link_mounts() || c.gen!=__atomic_load_n(&ov_gen[0],__ATOMIC_ACQUIRE))return 0;
+    uint64_t sum=0;for(unsigned i=0;i<c.count;i++)sum+=__atomic_load_n(&ov_gen[2+c.bucket[i]],__ATOMIC_ACQUIRE);
+    if(sum!=c.sum)return 0;
+    c.to[OV_LINK_KEY-1]=0;strcpy(to,c.to);return 1;
+}
+static void ov_link_put(const char *from,const char *path,int follow,const OvLinkWalk *k,const char *to) {
+    size_t f=strlen(from),n=f+1+strlen(path),t=strlen(to);
+    if(!ov_links || !k->ok || n>=OV_LINK_KEY || t>=OV_LINK_KEY)return;
+    OvLink *e=ov_link_slot(from,path,follow);
+    uint64_t s=__atomic_load_n(&e->seq,__ATOMIC_RELAXED);
+    if((s&1) || !__atomic_compare_exchange_n(&e->seq,&s,s+1,0,__ATOMIC_ACQUIRE,__ATOMIC_RELAXED))return;
+    __atomic_thread_fence(__ATOMIC_RELEASE);
+    e->gen=k->gen;e->sum=k->sum;e->mounts=k->mounts;e->count=(unsigned short)k->count;memcpy(e->bucket,k->bucket,k->count*sizeof(*k->bucket));
+    e->from=(unsigned short)f;e->length=(unsigned short)n;e->follow=(unsigned char)follow;
+    memcpy(e->key,from,f+1);memcpy(e->key+f+1,path,n-f);memcpy(e->to,to,t+1);
     __atomic_store_n(&e->seq,s+2,__ATOMIC_RELEASE);
 }
 static int ov_hidden(const char *name) { return !strncmp(name,OV_WH,4); }
@@ -321,6 +369,7 @@ static int ov_unlink(OvLeaf *w,int parent,const char *leaf,int directory) {
     char dir[1025],name[256];ov_split(w->canon,dir,name);
     int lower=ov_lower_has(w->canon,&low);
     if(lower || directory)ov_dirty=1;                                  /* the upper layer's change shows (ov_changed) */
+    else if(S_ISLNK(st.st_mode)) { if(ov_made[0])ov_dirty=1;else strcpy(ov_made,w->canon); }   /* ov_link_get: its bucket */
     if(directory && !ov_empty(w->canon,w->layer==0)) { errno=ENOTEMPTY;return -1; }
     int u=lower?ov_upper(dir):-1;
     if(lower && (u<0 || ov_mark(u,name))) { ov_close2(u,-1);return -1; }   /* first: the name never shows the lower entry */
@@ -513,7 +562,13 @@ static int ov_walk(int base,const char *base_path,const char *input,int follow,c
     if(!*cur || !*floor) { errno=ENOENT;return -1; }                    /* a directory whose path is unknown */
     memcpy(rest,input,length+1);
     if(mem_mount_count && mem_mount_inside(cur))return mem_redirect_set(cur,rest);
-    if(fs_scope.root<0) { int fast=ov_walk_fast(cur,rest,follow,direct,leaf,canon);if(fast!=-2)return fast; }
+    OvLinkWalk passed={0};char from[1025];
+    if(fs_scope.root<0) {
+        char to[1025];int fast;
+        if(ov_link_get(cur,rest,follow,to) && (fast=ov_walk_fast("/",to,follow,direct,leaf,canon))!=-2)return fast;
+        if((fast=ov_walk_fast(cur,rest,follow,direct,leaf,canon))!=-2)return fast;
+        if(ov_gen && ov_links) { passed.ok=1;passed.gen=__atomic_load_n(&ov_gen[0],__ATOMIC_ACQUIRE);passed.mounts=ov_link_mounts();strcpy(from,cur); }
+    }
     int u,l,mount;unsigned links=0;size_t pos=0;
     if(ov_pair(cur,&u,&l,&mount))return -1;
     for(;;) {
@@ -538,6 +593,7 @@ static int ov_walk(int base,const char *base_path,const char *input,int follow,c
             continue;
         }
         char at[1025];strcpy(at,cur);if(fs_canon_push(at,part)<0) { ov_close2(u,l);return -1; }
+        if(passed.ok)ov_link_pass(&passed,at);
         if(mem_mount_count && mem_mount_at(at)>=0) { ov_close2(u,l);return mem_redirect_set(at,rest+pos); }
         if(fs_mount_count) {                                         /* a mount at this path replaces what the root has */
             int i=fs_mount_index(at);
@@ -577,6 +633,7 @@ static int ov_walk(int base,const char *base_path,const char *input,int follow,c
             fs_where=mount>=0?mount+1:0;
             int fd=layer==1?l:u>=0?u:l;ov_close2(fd==u?l:u,-1);
             if(mount<0) { ov_leaf.layer=layer<0?2:layer;strcpy(ov_leaf.canon,at); }
+            if(mount<0 && links && passed.ok)ov_link_put(from,input,follow,&passed,at);
             return fd;
         }
         if(layer<0) { ov_close2(u,l);errno=ENOENT;return -1; }
