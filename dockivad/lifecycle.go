@@ -587,7 +587,8 @@ func runtimeCommand(p, native string, c obj, command []string, argv0 string, env
 	// (exec and healthchecks share the container's budget, as in a cgroup).
 	args := []string{"run", guest, "--root", root}
 	if r.lower != "" {
-		args = append(args, "--lower", r.lower, "--layers-gen", r.gen)
+		// The image's small files from one mapping, built beside its root by the first run.
+		args = append(args, "--lower", r.lower, "--layers-gen", r.gen, "--lower-pack", r.lower+".pack")
 	}
 	args = append(args, "--argv0", argv0, "--max-steps", steps, "--memory-limit-mib", strconv.FormatInt(memory, 10), "--oom-file", filepath.Join(p, "oom"))
 	// Abstract Unix socket names live in one directory per container, shared by its execs.

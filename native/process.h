@@ -220,7 +220,7 @@ static uint64_t process_exec_at(uint64_t dir,unsigned r) {
     /* M19 preserves regular guest descriptors. CLOEXEC is tracked by the FS adapter. */
     for(unsigned i=0;i<FS_SLOTS;i++)if(fs_fd[i] && fs_cloexec[i]) {
         if(fs_dirs[i]) { fs_directory_release(fs_dirs[i]);fs_dirs[i]=NULL; }
-        close(fs_fd[i]-1);fs_fd[i]=0;fs_cloexec[i]=0;fd_unbind(fs_guest[i]);
+        fs_pack_drop(i);close(fs_fd[i]-1);fs_fd[i]=0;fs_cloexec[i]=0;fd_unbind(fs_guest[i]);
     }
     if(guest_uid)cap_held[0]=cap_held[1]=0; /* no file capabilities: a non-root exec loses them */
     else if(caller.uid) { cap_held[0]=UINT32_MAX;cap_held[1]=0x1ffu; } /* a set-user-ID-root exec gains them all */
@@ -296,7 +296,7 @@ static uint64_t process_clone(void) {
     }
     if(schedule_active)net_retain_all();
     if(fs_cwd)fs_cwd->refs++;
-    for(unsigned i=0;i<FS_SLOTS;i++)if(fs_dirs[i])fs_dirs[i]->refs++;
+    for(unsigned i=0;i<FS_SLOTS;i++) { if(fs_dirs[i])fs_dirs[i]->refs++;if(fs_packed[i])pack_ref(fs_packed[i]); }   /* the child shares each description */
     image_restore(&child);
     if(vfork && child_stack)cpu->sp=child_stack;
     memset(address_space->lookup_cache,0,sizeof(address_space->lookup_cache));memcpy(fs_fd,child_fds,sizeof(fs_fd));
@@ -328,7 +328,7 @@ static uint64_t process_clone(void) {
     net_cleanup();memset(net_fd,0,sizeof(net_fd));
     for(unsigned i=0;i<FS_SLOTS;i++) {
         if(fs_dirs[i]) { fs_directory_release(fs_dirs[i]);fs_dirs[i]=NULL; }
-        if(fs_fd[i])close(fs_fd[i]-1);
+        fs_pack_drop(i);if(fs_fd[i])close(fs_fd[i]-1);
 
     }
     memcpy(fs_fd,parent_fds,sizeof(fs_fd));memcpy(fs_cloexec,parent_cloexec,sizeof(fs_cloexec));memcpy(fs_dirs,parent_dirs,sizeof(fs_dirs));

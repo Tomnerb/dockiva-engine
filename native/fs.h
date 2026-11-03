@@ -23,8 +23,9 @@
 #define FS_DEV_WRITE 8u
 /* sole: the host descriptor is the slot's alone (an image file opened read, never
    duplicated), so its close can keep it for the next open (fs_spare_put); transfers:
-   detached reads and writes in flight, each on a duplicate of a slot's descriptor. */
-typedef struct { int fd[FS_SLOTS];unsigned char cloexec[FS_SLOTS],ro[FS_SLOTS],dev[FS_SLOTS],sole[FS_SLOTS];struct GuestDirectory *dirs[FS_SLOTS];unsigned short guest[FS_SLOTS];int transfers; } FsTable;
+   detached reads and writes in flight, each on a duplicate of a slot's descriptor.
+   pack: an image file served from the image's pack (pack.h), its fd a placeholder. */
+typedef struct { int fd[FS_SLOTS];unsigned char cloexec[FS_SLOTS],ro[FS_SLOTS],dev[FS_SLOTS],sole[FS_SLOTS];struct GuestDirectory *dirs[FS_SLOTS];unsigned short guest[FS_SLOTS];int transfers;struct PackOpen *pack[FS_SLOTS]; } FsTable;
 static FsTable fs_table_first;
 static _Thread_local FsTable *fs_table=&fs_table_first;
 #define fs_fd (fs_table->fd)
@@ -34,10 +35,12 @@ static _Thread_local FsTable *fs_table=&fs_table_first;
 #define fs_dev (fs_table->dev)
 #define fs_sole (fs_table->sole)
 #define fs_guest (fs_table->guest)
+#define fs_packed (fs_table->pack)
 static int fs_slot(uint64_t guest) { return fd_slot(guest,FD_FILE); }
 #define FS_FILE_LIMIT (16u*1024u*1024u)
 static int fs_root=-1, fs_writable;
 static int fs_lower=-1;                                        /* --lower: the image's files (overlay.h) */
+#include "pack.h"
 /* Process-wide state every thread of a process shares (workers running its
    threads all point proc_now at the same record): the working directory, the
    guest identity, the umask and a vfork child's shared image. The identity makes
@@ -128,11 +131,15 @@ static void fs_cwd_release(void) {
     fs_cwd=NULL;
 }
 static void fs_cleanup(void) {
-    for(unsigned i=0;i<FS_SLOTS;i++) { fs_directory_release(fs_dirs[i]);if(fs_fd[i])close(fs_fd[i]-1); }
+    for(unsigned i=0;i<FS_SLOTS;i++) { fs_directory_release(fs_dirs[i]);fs_pack_drop(i);if(fs_fd[i])close(fs_fd[i]-1); }
     fs_cwd_release();
     if(fs_root>=0) close(fs_root);
 }
-static int fs_host(uint64_t n) { int slot=fs_slot(n);return slot>=0 && fs_fd[slot]?fs_fd[slot]-1:-1; }
+static int fs_host(uint64_t n) {
+    int slot=fs_slot(n);if(slot<0 || !fs_fd[slot])return -1;
+    if(fs_packed[slot])fs_pack_real((unsigned)slot);                    /* a call the pack cannot serve: the real file */
+    return fs_fd[slot]-1;
+}
 static uint64_t fs_error(void) {
     switch(errno) {
         case ENOENT:return linux_error(2);case ENOTDIR:return linux_error(20);
@@ -156,7 +163,9 @@ static _Thread_local struct {
     uint64_t memory_at,memory_size;unsigned char *memory;                   /* the buffer argument */
     int read_only;                                                          /* the file's slot: fs_ro */
     int fd;uint64_t flags;int opened_ro,opened_device;struct GuestDirectory *directory; /* an opened file to install (fd -1: none) */
+    struct PackOpen *pack;                                                  /* and its pack description */
 } fs_detached={.fd=-1};
+static _Thread_local struct PackOpen *fs_install_pack;                    /* the next fs_install's (pack.h) */
 /* Guest memory a file call reads or writes: the copy while detached. */
 static unsigned char *fs_memory(uint64_t address,uint64_t size,int mode) {
     if(!fs_detached.on)return lookup(address,size,mode);
@@ -660,7 +669,7 @@ static uint64_t fs_memfd(void) {
     if(slot==FS_SLOTS || fd_lowest(0)<0)return linux_error(24);
     char path[]="/tmp/dockiva-memfd-XXXXXX";int fd=mkstemp(path);if(fd<0)return fs_error();
     unlink(path);(void)fcntl(fd,F_SETFD,FD_CLOEXEC);
-    fs_fd[slot]=fd+1;fs_cloexec[slot]=(flags&1)!=0;fs_ro[slot]=0;fs_dev[slot]=0;fs_sole[slot]=0;
+    fs_fd[slot]=fd+1;fs_cloexec[slot]=(flags&1)!=0;fs_ro[slot]=0;fs_dev[slot]=0;fs_sole[slot]=0;fs_packed[slot]=NULL;
     int guest=fd_lowest(0);fs_guest[slot]=(unsigned short)guest;fd_bind((uint64_t)guest,FD_FILE,slot);return (uint64_t)guest;
 }
 static unsigned guest_cpus(void); /* scheduler.h */
@@ -1160,12 +1169,13 @@ static void fs_spare_put(int fd) {
 }
 #endif
 static uint64_t fs_install(int fd,uint64_t flags,int read_only,int device,GuestDirectory *directory) {
-    if(fs_detached.on) { fs_detached.fd=fd;fs_detached.flags=flags;fs_detached.opened_ro=read_only;fs_detached.opened_device=device;fs_detached.directory=directory;return 0; }
+    PackOpen *pack=fs_install_pack;fs_install_pack=NULL;
+    if(fs_detached.on) { fs_detached.fd=fd;fs_detached.flags=flags;fs_detached.opened_ro=read_only;fs_detached.opened_device=device;fs_detached.directory=directory;fs_detached.pack=pack;return 0; }
     unsigned slot=0;while(slot<FS_SLOTS && fs_fd[slot]) slot++;
     int guest=slot<FS_SLOTS?fd_lowest(0):-1;
-    if(guest<0) { close(fd);fs_directory_release(directory);return linux_error(24); }
+    if(guest<0) { close(fd);fs_directory_release(directory);if(pack)pack_unref(pack);return linux_error(24); }
     fs_fd[slot]=fd+1;fs_cloexec[slot]=(flags&524288)!=0;fs_ro[slot]=(unsigned char)read_only;fs_dev[slot]=(unsigned char)device;fs_dirs[slot]=directory;
-    fs_sole[slot]=read_only==2 && !device && !directory;
+    fs_sole[slot]=read_only==2 && !device && !directory && !pack;fs_packed[slot]=pack;
     fs_guest[slot]=(unsigned short)guest;fd_bind((uint64_t)guest,FD_FILE,slot);return (uint64_t)guest;
 }
 static uint64_t fs_open(void) {
@@ -1286,6 +1296,14 @@ static uint64_t fs_open(void) {
         if(S_ISLNK(before.st_mode) && (flags&16384) && !(flags&64)) { close(parent);return linux_error(20); } /* as Linux, not ELOOP */
     }
     if(read_only==2 && !(flags&(3|64|512|1024|16384)) && S_ISREG(before.st_mode) && (uint64_t)before.st_size<=fs_file_limit) {
+        const PackEntry *packed=pack_find(&before,canon);         /* in the image's pack: no host open */
+        PackOpen *o=packed?calloc(1,sizeof(*o)):NULL;
+        int placeholder=o?dup(pack_placeholder):-1;
+        if(placeholder>=0) {
+            o->entry=packed;o->real=-1;o->refs=1;o->st=before;
+            close(parent);fs_install_pack=o;return fs_install(placeholder,flags,2,0,NULL);
+        }
+        free(o);
         int kept=fs_spare_take(before.st_dev,before.st_ino);   /* an image file read again: a kept descriptor */
         if(kept>=0) { close(parent);return fs_install(kept,flags,2,0,NULL); }
     }
@@ -1795,7 +1813,7 @@ static uint64_t fs_call(uint64_t call) {
         }
     }
     if(call==57) { struct stat closing;if(!fstat(fd,&closing)) { fs_locks_release(closing.st_dev,closing.st_ino,process_pid_now());fs_locks_release(closing.st_dev,closing.st_ino,FS_FLOCK_OWNER|(uint64_t)fd); }
-        if(fs_dirs[slot]) { fs_directory_release(fs_dirs[slot]);fs_dirs[slot]=NULL; }fs_fd[slot]=0;fd_unbind(cpu->gpr[0]);return close(fd)<0?fs_error():0; }
+        if(fs_dirs[slot]) { fs_directory_release(fs_dirs[slot]);fs_dirs[slot]=NULL; }fs_pack_drop(slot);fs_fd[slot]=0;fd_unbind(cpu->gpr[0]);return close(fd)<0?fs_error():0; }
     if(call==80) {
         unsigned char *out=lookup(cpu->gpr[1],128,2);if(!out) return linux_error(14);
         struct stat st;if(fstat(fd,&st)<0) return fs_error();

@@ -365,7 +365,7 @@ static void seccomp_forget(uint64_t pid); /* seccomp.h */
 static void task_free(void) {
     seccomp_forget(process_pid);fs_cwd_release();image_free();io_cleanup();net_cleanup();fs_locks_release(0,0,process_pid);io_fifo_forget(process_pid);
     for(unsigned i=0;i<FS_SLOTS;i++) {
-        fs_directory_release(fs_dirs[i]);
+        fs_directory_release(fs_dirs[i]);fs_pack_drop(i);
         if(fs_fd[i])close(fs_fd[i]-1);
     }
     memset(fs_dirs,0,sizeof(fs_dirs));memset(fs_fd,0,sizeof(fs_fd));

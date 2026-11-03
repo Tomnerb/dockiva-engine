@@ -1118,6 +1118,10 @@ int main(int argc,char **argv) {
             if(fs_lower>=0) fail("Lower layer specified twice");
             lower_path=argv[++i];fs_lower=open(lower_path,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
             if(fs_lower<0) fail("Cannot open guest lower layer");
+        } else if(!strcmp(argv[i],"--lower-pack") && i+1<argc) {
+            /* --lower-pack FILE: the lower layer's small files, mapped (pack.h); built there when missing. */
+            if(fs_lower<0) fail("--lower-pack needs --lower first");
+            pack_start(lower_path,argv[++i]);
         } else if(!strcmp(argv[i],"--layers-gen") && i+1<argc) {
             /* --layers-gen FILE: the container's count of upper-layer changes, shared by its runs (overlay.h's lookup cache). */
             if(ov_cache_open(argv[++i])) fail("Cannot map the layers' change count");
