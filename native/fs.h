@@ -1239,8 +1239,18 @@ static uint64_t fs_open(void) {
     if(device) { /* Writable even on a read-only root; O_CREAT/O_TRUNC are no-ops. */
         close(parent);
         if(flags&16384)return linux_error(20);
-        int fd=open(device,options|O_CLOEXEC);if(fd<0)return fs_error();
         unsigned dev=!strcmp(canon,"/dev/null")?FS_DEV_NULL:!strcmp(canon,"/dev/zero")?FS_DEV_ZERO:1;
+        /* /dev/null and /dev/zero: a copy of one host descriptor each (their reads and
+           writes never reach it), not a host open per call (Go opens /dev/null three
+           times for each process it starts). */
+        static int kept[2]={-1,-1};int *own=dev>1?&kept[dev==FS_DEV_ZERO]:NULL,fd=-1;
+        if(own && __atomic_load_n(own,__ATOMIC_ACQUIRE)<0) {
+            int made=open(device,O_RDWR|O_CLOEXEC),none=-1;
+            if(made>=0 && !__atomic_compare_exchange_n(own,&none,made,0,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE))close(made);
+        }
+        if(own && __atomic_load_n(own,__ATOMIC_ACQUIRE)>=0)fd=fcntl(__atomic_load_n(own,__ATOMIC_ACQUIRE),F_DUPFD_CLOEXEC,0);
+        else fd=open(device,options|O_CLOEXEC);
+        if(fd<0)return fs_error();
         if(dev>1)dev|=(options!=O_WRONLY?FS_DEV_READ:0)|(options!=O_RDONLY?FS_DEV_WRITE:0);
         return fs_install(fd,flags,0,(int)dev,NULL);
     }

@@ -201,8 +201,12 @@ static uint64_t exec_build(uint64_t dir,unsigned r) {
 }
 static uint64_t process_exec_at(uint64_t dir,unsigned r) {
     struct ExecStage *stage=&exec_stage;
+    /* The stage is this call's: no guest code ran in this process since it was built
+       (only single-threaded processes build early). A vfork child shares a threaded
+       parent's memory, whose mappings change meanwhile (the generation): the strings
+       were read during this call, as Linux reads them. */
     int ready=stage->ready && stage->pid==process_pid && stage->pc==cpu->pc && stage->dir==dir && stage->r==r &&
-              stage->generation==address_space->generation && stage->arg[0]==cpu->gpr[r] && stage->arg[1]==cpu->gpr[r+1] && stage->arg[2]==cpu->gpr[r+2];
+              (stage->generation==address_space->generation || shared_image) && stage->arg[0]==cpu->gpr[r] && stage->arg[1]==cpu->gpr[r+1] && stage->arg[2]==cpu->gpr[r+2];
     if(!ready) { uint64_t result=exec_build(dir,r);if(result)return result; }
     stage->ready=0;
     GuestIds caller=guest_ids;guest_ids=stage->ids;
@@ -255,12 +259,9 @@ static uint64_t process_clone(void) {
        description; the unscheduled path runs the child inline and then clears the
        socket table, so it still refuses sockets. */
     if(!schedule_active)for(unsigned i=0;i<NET_SLOTS;i++)if(net_fd[i])return linux_error(95);
-    for(unsigned i=0;i<FS_SLOTS;i++)if(fs_fd[i]) {
-        struct stat st;if(fstat(fs_fd[i]-1,&st)<0)return fs_error();
-        if(!S_ISREG(st.st_mode) && !S_ISDIR(st.st_mode) && !S_ISCHR(st.st_mode))return linux_error(95);
-        /* Directory handles require the shared cursor allocated by fs_open. */
-        if(S_ISDIR(st.st_mode) && !fs_dirs[i])return linux_error(95);
-    }
+    /* Every file slot holds a regular file, a directory with its shared cursor
+       (fs_open) or a device (fs_dev): the child can share each as it is, with no
+       host call per descriptor under the lock (a go command holds dozens). */
     GuestDirectory *parent_dirs[FS_SLOTS];memcpy(parent_dirs,fs_dirs,sizeof(fs_dirs));
     int parent_fds[FS_SLOTS],child_fds[FS_SLOTS]={0};unsigned char parent_cloexec[FS_SLOTS];
     memcpy(parent_fds,fs_fd,sizeof(fs_fd));memcpy(parent_cloexec,fs_cloexec,sizeof(fs_cloexec));

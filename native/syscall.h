@@ -771,6 +771,7 @@ static int guest_syscall_unlocked(void) {
     }
     int named=(call==56 || call==79 || call==291 || call==48 || call==439 || call==78 || call==34 || call==35 || call==38 || (call==88 && cpu->gpr[1])) && fs_unlocked_path(cpu->gpr[1],path);
     if(named && call==38)named=fs_unlocked_path(cpu->gpr[3],path);
+    if(!named && (call==56 || call==79) && !fs_string(cpu->gpr[1],path) && (!strcmp(path,"/dev/null") || !strcmp(path,"/dev/zero")))named=1;   /* host devices: no tables */
     if(named && (call==79 || call==291) && ((int32_t)cpu->gpr[0]==-100 || path[0]=='/')) {   /* stat and statx from the lookup cache */
         uint64_t flags=cpu->gpr[call==79?3:2],buffer=cpu->gpr[call==79?2:4],error;struct stat st;
         if(!(flags&~(call==79?UINT64_C(0x100|0x800|0x1000):UINT64_C(0x100|0x800|0x6000))) && fs_stat_cached(path,!(flags&0x100),&st,&error)) {
