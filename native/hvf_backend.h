@@ -680,7 +680,11 @@ static void hvf_put_regs(void) {
     uint64_t *f=hvf_frame;
     memcpy(f,cpu->gpr,31*sizeof(uint64_t));
     f[HF_SP]=cpu->sp;f[HF_TLS]=cpu->tls;f[HF_ELR]=cpu->pc;
-    f[HF_SPSR]=((uint64_t)cpu->flag_n<<31)|((uint64_t)cpu->flag_z<<30)|((uint64_t)cpu->flag_c<<29)|((uint64_t)cpu->flag_v<<28); /* EL0t */
+    /* EL0t, with PSTATE.SSBS set as Linux starts every task (speculative store bypass
+       allowed unless a task asks for the Spectre v4 mitigation): with it clear, code
+       that reloads what it just stored (JIT-compiled JavaScript's stack and context
+       slots) ran up to 2.7 times slower. */
+    f[HF_SPSR]=((uint64_t)cpu->flag_n<<31)|((uint64_t)cpu->flag_z<<30)|((uint64_t)cpu->flag_c<<29)|((uint64_t)cpu->flag_v<<28)|(UINT64_C(1)<<12);
     Thread *th=thread_current();hvf_fast_publish(f,th?th->tid:process_pid);
     hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_PC,HVF_SYSTEM_VA+HVF_RESTORE_OFFSET),"set pc");
     if(!hvf_cpu->framed)hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_CPSR,0x3c5),"set cpsr"); /* EL1h, interrupts masked (framed: it is) */
