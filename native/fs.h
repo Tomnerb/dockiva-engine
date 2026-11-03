@@ -1368,7 +1368,7 @@ static uint64_t io_epoch; /* io.h: changes wake blocked tasks */
    same), kept here: every guest process shares this host process, whose own locks
    would never conflict. end is exclusive; INT64_MAX reaches the end of the file. */
 #define FS_LOCKS 1024
-static struct FsLock { dev_t dev;ino_t ino;uint64_t owner;int64_t start,end;unsigned type,used; } fs_locks[FS_LOCKS];
+static struct FsLock { dev_t dev;ino_t ino;uint64_t owner;int64_t start,end;unsigned type,used,pid; } fs_locks[FS_LOCKS];
 /* flock(2) locks live in the same table under owners with this bit (the open file
    description); they never conflict with fcntl locks, as on Linux. */
 #define FS_FLOCK_OWNER (UINT64_C(1)<<63)
@@ -1379,12 +1379,23 @@ static int fs_lock_conflict(dev_t dev,ino_t ino,uint64_t owner,int64_t start,int
     }
     return -1;
 }
-/* Set by the first lock: until then a close has no lock to release (it runs without the
-   runtime lock). ponytail: never cleared; count live locks if lock users close often. */
+/* Live locks, in all and by the process that took them: a close in a process holding
+   none has none to release (it runs without the runtime lock). The go command locks
+   its build cache files, then its compilers close thousands of files. Changed under
+   the runtime lock and the taking process's mm lock, which its own closes hold. */
 static int fs_locks_taken;
+static unsigned short fs_locks_held[PROCESS_LIMIT+2];
+static void fs_lock_drop(int i) {
+    fs_locks[i].used=0;__atomic_fetch_sub(&fs_locks_taken,1,__ATOMIC_RELEASE);
+    __atomic_fetch_sub(&fs_locks_held[fs_locks[i].pid],1,__ATOMIC_RELEASE);
+}
 static int fs_lock_add(dev_t dev,ino_t ino,uint64_t owner,int64_t start,int64_t end,unsigned type) {
-    __atomic_store_n(&fs_locks_taken,1,__ATOMIC_RELEASE);
-    for(int i=0;i<FS_LOCKS;i++)if(!fs_locks[i].used) { fs_locks[i]=(struct FsLock){dev,ino,owner,start,end,type,1};return 0; }
+    for(int i=0;i<FS_LOCKS;i++)if(!fs_locks[i].used) {
+        unsigned pid=(unsigned)process_pid_now();
+        fs_locks[i]=(struct FsLock){dev,ino,owner,start,end,type,1,pid};
+        __atomic_fetch_add(&fs_locks_taken,1,__ATOMIC_RELEASE);__atomic_fetch_add(&fs_locks_held[pid],1,__ATOMIC_RELEASE);
+        return 0;
+    }
     return -1;
 }
 /* Replace the owner's locks over [start,end) with type (2: unlock), splitting partial ones. */
@@ -1392,7 +1403,7 @@ static uint64_t fs_lock_set(dev_t dev,ino_t ino,uint64_t owner,int64_t start,int
     for(int i=0;i<FS_LOCKS;i++) {
         struct FsLock l=fs_locks[i];
         if(!l.used || l.dev!=dev || l.ino!=ino || l.owner!=owner || l.end<=start || end<=l.start)continue;
-        fs_locks[i].used=0;
+        fs_lock_drop(i);
         if(l.start<start && fs_lock_add(dev,ino,owner,l.start,start,l.type))return linux_error(37);
         if(end<l.end && fs_lock_add(dev,ino,owner,end,l.end,l.type))return linux_error(37);
     }
@@ -1401,7 +1412,7 @@ static uint64_t fs_lock_set(dev_t dev,ino_t ino,uint64_t owner,int64_t start,int
 }
 /* A process closed a descriptor of the file (or exited, dev and ino 0): POSIX drops its locks. */
 static void fs_locks_release(dev_t dev,ino_t ino,uint64_t owner) {
-    for(int i=0;i<FS_LOCKS;i++)if(fs_locks[i].used && fs_locks[i].owner==owner && ((!dev && !ino) || (fs_locks[i].dev==dev && fs_locks[i].ino==ino))) { fs_locks[i].used=0;io_epoch++; }
+    for(int i=0;i<FS_LOCKS;i++)if(fs_locks[i].used && fs_locks[i].owner==owner && ((!dev && !ino) || (fs_locks[i].dev==dev && fs_locks[i].ino==ino))) { fs_lock_drop(i);io_epoch++; }
 }
 static uint64_t fs_fcntl_lock(int fd,uint64_t command) {
     int get=command==5 || command==36,wait=command==7 || command==38;

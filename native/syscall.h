@@ -786,12 +786,12 @@ static int guest_syscall_unlocked(void) {
     if(call==166 && schedule_active) {                                       /* umask: the process's own (tar asks twice per file) */
         unsigned previous=fs_umask;fs_umask=(unsigned)cpu->gpr[0]&0777;cpu->gpr[0]=previous;return 1;
     }
-    /* close of a file (not a directory) while no record lock exists to release: only
+    /* close of a file (not a directory) while this process holds no record lock: only
        this process's tables, which its threads change under its mm lock. The host
        descriptor closes once that lock is released (fs_close_pending), as Linux
        drops the last reference after the number is free; a local file's close
        cannot fail. */
-    if(call==57 && file && !__atomic_load_n(&fs_locks_taken,__ATOMIC_ACQUIRE)) {
+    if(call==57 && file && !__atomic_load_n(&fs_locks_held[process_pid_now()],__ATOMIC_ACQUIRE)) {
         int slot=fs_slot(fd),host=fs_fd[slot]-1;
         fs_fd[slot]=0;fs_cloexec[slot]=0;fd_unbind(fd);
         fs_close_pending();fs_close_later=host;cpu->gpr[0]=0;return 1;
