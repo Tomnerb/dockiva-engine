@@ -457,12 +457,36 @@ static uint64_t hvf_mapped_ipa(uint64_t va) {
     uint64_t descriptor=leaf[(va>>12)&511];
     return (descriptor&1)?descriptor&UINT64_C(0x0000fffffffff000):0;
 }
+/* hvf_map_arena_page for every mapped arena page, with what it decides per page
+   (the backing's sharing, each chunk's guest-physical address) decided once: after
+   a fork of a large process (Node: tens of thousands of pages) it ran on every one. */
 static void hvf_map_arena_all(GuestAddressSpace *space) {
-    int ipa=space->map_flags && space->map_backing;
+    MemoryBacking *backing=space->map_backing;
+    if(!space->map_flags || !backing)return;
     unsigned pages=space->map_capacity/4096;if(space->map_top<pages)pages=space->map_top;
-    if(ipa)for(unsigned i=0;i<pages;i++) {
-        if(!(i&7) && i+8<=pages) { uint64_t w;memcpy(&w,space->map_flags+i,8);if(!(w&UINT64_C(0x0707070707070707))) { i+=7;continue; } }
-        if(space->map_flags[i]&7)hvf_map_arena_page(space,i);
+    int shared=backing->frozen || (backing->refs>1 && backing->refs>address_space_backing_refs(space,backing));
+    uint64_t bits[8];for(unsigned f=0;f<8;f++)bits[f]=hvf_descriptor_bits(f,0);
+    size_t chunk=SIZE_MAX;uint64_t ipa=0,leaf_key=UINT64_MAX,*leaf=NULL;
+    for(unsigned i=0;i<pages;) {
+        if(!(i&7) && i+8<=pages) {                                        /* V8 and Go reserve gigabytes they never map */
+            unsigned span=!(i&63) && i+64<=pages?64:8;uint64_t any=0;
+            for(unsigned k=0;k<span;k+=8) { uint64_t w;memcpy(&w,space->map_flags+i+k,8);any|=w; }
+            if(!(any&UINT64_C(0x0707070707070707))) { i+=span;continue; }
+        }
+        unsigned flags=space->map_flags[i++]&7;if(!flags)continue;
+        size_t offset=(size_t)(i-1)*4096,at=backing->mapped_size<=HVF_CHUNK?0:offset/HVF_CHUNK;
+        uint64_t va=MAP_BASE+offset;
+        if(at!=chunk) { chunk=at;ipa=hvf_ipa_at(backing,at*HVF_CHUNK); }
+        if(!ipa) { hvf_unmap_page(va);leaf_key=UINT64_MAX;continue; }
+        if(flags&2) {                                                     /* as hvf_effective_flags */
+            const BackingPage *page=backing->pages[offset/backing->page_size];
+            if(shared || !page || page->refs>1)flags&=~2u;
+        }
+        if(va>>21!=leaf_key) { if(!(leaf=hvf_leaf(hvf_view,va,1)))return;leaf_key=va>>21; }
+        uint64_t descriptor=(ipa+(offset-at*HVF_CHUNK))|bits[flags],*slot=&leaf[(va>>12)&511];   /* as hvf_map_page */
+        if(((*slot&1) && *slot!=descriptor) || (flags&1))hvf_stale_tlb=1;
+        if(flags&1)hvf_stale_code=1;
+        *slot=descriptor;
     }
 }
 /* Update v to space in place, touching only what changed since v was recorded:
