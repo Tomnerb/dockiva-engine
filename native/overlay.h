@@ -69,7 +69,10 @@ static int ov_cache_open(const char *file) {
     int fd=open(file,O_RDWR|O_CREAT|O_NOFOLLOW|O_CLOEXEC,0600);if(fd<0)return -1;
     struct stat st;void *p=fstat(fd,&st) || (st.st_size<(off_t)size && ftruncate(fd,(off_t)size))?MAP_FAILED:mmap(NULL,size,PROT_READ|PROT_WRITE,MAP_SHARED,fd,0);
     close(fd);
-    if(p==MAP_FAILED || !(ov_cache=calloc(OV_CACHE_SLOTS,sizeof(OvCached))))return -1;
+    if(p==MAP_FAILED)return -1;
+    void *cache=mmap(NULL,(OV_CACHE_SLOTS*sizeof(OvCached)+16383)&~(size_t)16383,PROT_READ|PROT_WRITE,MAP_ANON|MAP_PRIVATE,-1,0);   /* page-aligned: EL1 code reads it (hvf_el1_setup) */
+    if(cache==MAP_FAILED)return -1;
+    ov_cache=cache;
     ov_links=calloc(OV_LINK_SLOTS,sizeof(OvLink));                     /* none: every symlinked path walks */
     ov_gen=p;return 0;
 }

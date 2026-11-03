@@ -29,7 +29,24 @@
    its own tables; guest-physical space right after the system pages. */
 #define HVF_FDS_VA (HVF_FRAME_VA+WORKER_LIMIT*HVF_FRAME_BYTES)
 #define HVF_FDS_BYTES ((((PROCESS_LIMIT+2)*4096u)+16383u)&~16383u)
-#define HVF_FIXED_IPA (HVF_IPA_BASE+HVF_TABLE_BYTES+HVF_SYSTEM_BYTES+HVF_FDS_BYTES) /* backings go above */
+/* EL1 handlers (hvf_el1_guest.c, copied to HVF_EL1_CODE of the code page) and what they
+   read, in the upper half of the address space (TTBR1, EL1-only, the same for every
+   process): the context page, each vCPU's stack, then the lookup cache's counters
+   (at 2 MiB) and entries (at 4 MiB), shared with the runtime. */
+#include "hvf_el1.h"
+#include "hvf_el1_code.h"
+#define HVF_EL1_VA UINT64_C(0xffff000000000000)
+#define HVF_EL1_IPA (HVF_IPA_BASE+HVF_TABLE_BYTES+HVF_SYSTEM_BYTES+HVF_FDS_BYTES)
+#define HVF_EL1_BYTES (UINT64_C(64)<<20)
+#define HVF_EL1_HEAD (2u<<20)                       /* context page, stacks, then (at 1 MiB) the upper half's tables */
+#define HVF_EL1_STACK 8192u
+#define HVF_EL1_TABLES (1u<<20)
+#define HVF_EL1_STUB 0xc00u                         /* in the code page: the vector's way in */
+#define HVF_EL1_CODE 0x1000u
+_Static_assert(HVF_EL1_CODE+sizeof(hvf_el1_code)<=(16u<<10),"EL1 code outgrew the code page");
+_Static_assert(sizeof(hvf_el1_code)<4096,"the fault vector compares the EL1 code's size as a 12-bit immediate");
+static unsigned char *hvf_el1_head;static int hvf_el1_ready;static unsigned hvf_el1_mounts[2];
+#define HVF_FIXED_IPA (HVF_EL1_IPA+HVF_EL1_BYTES) /* backings go above */
 #define HVF_APPEND_OFFSET 0xbfcu                   /* fd_mirror_append, read by the vector */
 #define HVF_FLUSH_OFFSET 0x800u
 #define HVF_SAVE_OFFSET 0x900u
@@ -38,8 +55,12 @@
 #define HVF_FLUSH_RESTORE_OFFSET 0xa00u
 /* Frame words (SP_EL1 points at the vCPU's frame): x0..x30, then these. HF_FAST:
    the EL1 vector's own answers to syscalls 172..178, then HF_FDS: HVF_FDS_VA while it
-   answers fcntl and epoll_ctl from the process's descriptor page, else 0 (hvf_fast_publish). */
-enum { HF_SP=31,HF_TLS,HF_ELR,HF_SPSR,HF_ESR,HF_FAR,HF_TLBI_VA,HF_TLBI_PAGES,HF_FLUSH,HF_FAST,HF_FDS=HF_FAST+7 };
+   answers fcntl and epoll_ctl from the process's descriptor page, else 0 (hvf_fast_publish).
+   HF_STAT: HVF_EL1_VA while the EL1 handlers may answer, else 0; HF_STACK: this vCPU's
+   EL1 stack; HF_SVC_*: the call's ELR, SPSR and ESR while they run (a fault in them
+   restores these and the call exits as before). */
+enum { HF_SP=31,HF_TLS,HF_ELR,HF_SPSR,HF_ESR,HF_FAR,HF_TLBI_VA,HF_TLBI_PAGES,HF_FLUSH,HF_FAST,HF_FDS=HF_FAST+7,HF_STAT,HF_STACK,HF_SVC_ELR,HF_SVC_SPSR,HF_SVC_ESR };
+_Static_assert((HF_SVC_ESR+1)*8<=512,"frame words outgrew the frame");
 #define HVF_BLOCKS 16384                           /* stage-2 blocks: a few backings for each of up to 1024 processes */
 #define HVF_VIEWS (PROCESS_LIMIT+2)                 /* indexed by pid */
 static unsigned char *hvf_tables,*hvf_system;static unsigned hvf_frames_used;
@@ -440,7 +461,7 @@ static void hvf_map_arena_all(GuestAddressSpace *space);
 static void hvf_build(GuestAddressSpace *space) {
     hvf_exhausted=0;hvf_tables_free(hvf_view);
     if(!(hvf_view->root=hvf_table()))return;
-    hvf_map_page(HVF_SYSTEM_VA,HVF_IPA_BASE+HVF_TABLE_BYTES,0,1);
+    for(unsigned i=0;i<HVF_CODE_BYTES/4096;i++)hvf_map_page(HVF_SYSTEM_VA+i*4096,HVF_IPA_BASE+HVF_TABLE_BYTES+i*4096,0,1);   /* vectors, routines, EL1 handlers */
     for(unsigned i=0;i<WORKER_LIMIT*HVF_FRAME_BYTES/4096;i++)hvf_map_page(HVF_FRAME_VA+i*4096,HVF_IPA_BASE+HVF_TABLE_BYTES+HVF_CODE_BYTES+i*4096,0,1);
     hvf_map_page(HVF_FDS_VA,HVF_IPA_BASE+HVF_TABLE_BYTES+HVF_SYSTEM_BYTES+(uint64_t)(hvf_view-hvf_views)*4096,0,2); /* the view's own process */
     for(unsigned i=0;i<space->nseg;i++)hvf_map_range(space,space->seg[i].base,space->seg[i].size,space->seg[i].flags,space->seg[i].backing,space->seg[i].offset);
@@ -693,6 +714,7 @@ static void hvf_fast_publish(uint64_t *frame,uint64_t tid) {
     const uint64_t answers[7]={process_pid,UINT64_MAX,guest_ids.ruid,guest_uid,guest_ids.rgid,guest_gid,tid};
     for(unsigned i=0;i<7;i++)frame[HF_FAST+i]=on?answers[i]:UINT64_MAX;
     frame[HF_FDS]=on && schedule_active && fd_mirror_base && hvf_view_pid()==process_pid?HVF_FDS_VA:0;
+    frame[HF_STAT]=on && hvf_el1_ready && fs_mount_count==hvf_el1_mounts[0] && mem_mount_count==hvf_el1_mounts[1]?HVF_EL1_VA:0;
 }
 static void hvf_fast_push(void) {
     for(unsigned w=0;w<worker_count;w++) {
@@ -824,7 +846,11 @@ static HvfCpu *hvf_cpu_new(int first) {
     else hvf_check(hv_vcpu_set_vtimer_offset(c->vcpu,hvf_vtimer_offset),"set vtimer offset");
     hvf_check(hv_vcpu_set_sys_reg(c->vcpu,HV_SYS_REG_MAIR_EL1,0xff),"set mair");     /* attr 0: normal write-back */
     /* T0SZ=16 (48-bit), WB walks, inner shareable, 4 KiB granule, no TTBR1 walks, 40-bit IPA, TBI0; 8-bit ASIDs from TTBR0. */
-    hvf_check(hv_vcpu_set_sys_reg(c->vcpu,HV_SYS_REG_TCR_EL1,16|(1u<<8)|(1u<<10)|(3u<<12)|(1u<<23)|(UINT64_C(2)<<32)|(UINT64_C(1)<<37)),"set tcr");
+    /* TTBR1 (the upper half): the EL1 region alone, the same 48 bits, 4 KiB granule. */
+    hvf_check(hv_vcpu_set_sys_reg(c->vcpu,HV_SYS_REG_TCR_EL1,16|(1u<<8)|(1u<<10)|(3u<<12)|(UINT64_C(16)<<16)|(UINT64_C(1)<<24)|(UINT64_C(1)<<26)|(UINT64_C(3)<<28)|(UINT64_C(2)<<30)|(UINT64_C(2)<<32)|(UINT64_C(1)<<37)),"set tcr");
+    hvf_check(hv_vcpu_set_sys_reg(c->vcpu,HV_SYS_REG_TTBR1_EL1,HVF_EL1_IPA+HVF_EL1_TABLES),"set ttbr1");
+    hvf_check(hv_vcpu_set_sys_reg(c->vcpu,HV_SYS_REG_TPIDR_EL1,HVF_FRAME_VA+index*HVF_FRAME_BYTES),"set tpidr_el1"); /* the fault vector's frame */
+    c->frame[HF_STACK]=HVF_EL1_VA+16384+(uint64_t)(index+1)*HVF_EL1_STACK;
     hvf_check(hv_vcpu_set_sys_reg(c->vcpu,HV_SYS_REG_VBAR_EL1,HVF_SYSTEM_VA),"set vbar");
     hvf_check(hv_vcpu_set_sys_reg(c->vcpu,HV_SYS_REG_CPACR_EL1,UINT64_C(3)<<20),"set cpacr"); /* FP/SIMD at EL0 */
     hvf_check(hv_vcpu_set_sys_reg(c->vcpu,HV_SYS_REG_CNTKCTL_EL1,3),"set cntkctl");   /* EL0 may read the counters */
@@ -841,6 +867,52 @@ static HvfCpu *hvf_cpu_new(int first) {
     }
     return c;
 }
+/* The EL1 region (HVF_EL1_VA): its tables map the head (context page and stacks) and,
+   when the root's layers have a lookup cache, the cache too; the handlers answer only
+   then (hvf_el1_ready) and only while the mounts are the ones published. */
+static void hvf_el1_map(uint64_t offset,uint64_t ipa,uint64_t bytes) {
+    uint64_t *tables=(uint64_t *)(void *)(hvf_el1_head+HVF_EL1_TABLES),base=HVF_EL1_IPA+HVF_EL1_TABLES;  /* L0, L1, L2, leaves */
+    tables[0]=(base+4096)|3;tables[512]=(base+8192)|3;
+    for(uint64_t p=0;p<bytes;p+=4096) {
+        uint64_t page=(offset+p)>>12,leaf=page/512;
+        tables[1024+leaf]=(base+(3+leaf)*4096)|3;
+        tables[(3+leaf)*512+page%512]=(ipa+p)|hvf_descriptor_bits(0,1);
+    }
+}
+static void hvf_el1_setup(void) {
+    hvf_el1_head=hvf_host_pages(HVF_EL1_HEAD);
+    hvf_check(hv_vm_map(hvf_el1_head,HVF_EL1_IPA,HVF_EL1_HEAD,HV_MEMORY_READ|HV_MEMORY_WRITE),"hv_vm_map el1");
+    hvf_el1_map(0,HVF_EL1_IPA,16384+WORKER_LIMIT*HVF_EL1_STACK);
+    HvfEl1Context *c=(HvfEl1Context *)(void *)hvf_el1_head;c->mounts=UINT32_MAX;
+    if(!ov_gen || !ov_cache || fs_root<0 || fs_lower<0)return;
+    uint64_t gen_bytes=((2+OV_BUCKETS)*sizeof(uint64_t)+16383)&~UINT64_C(16383),cache_bytes=(OV_CACHE_SLOTS*sizeof(OvCached)+16383)&~UINT64_C(16383);
+    if((4u<<20)+cache_bytes>HVF_EL1_BYTES || HVF_EL1_TABLES+(3+((4u<<20)+cache_bytes)/(2u<<20)+1)*4096>HVF_EL1_HEAD)return;
+    /* The counters are a shared file mapping (dockivad counts in it too); a host that
+       refuses to map one leaves the handlers off. */
+    if(hv_vm_map(ov_gen,HVF_EL1_IPA+(2u<<20),gen_bytes,HV_MEMORY_READ)!=HV_SUCCESS ||
+       hv_vm_map(ov_cache,HVF_EL1_IPA+(4u<<20),cache_bytes,HV_MEMORY_READ)!=HV_SUCCESS)return;
+    hvf_el1_map(2u<<20,HVF_EL1_IPA+(2u<<20),gen_bytes);hvf_el1_map(4u<<20,HVF_EL1_IPA+(4u<<20),cache_bytes);
+    c->gen=HVF_EL1_VA+(2u<<20);c->cache=HVF_EL1_VA+(4u<<20);
+    c->slots=OV_CACHE_SLOTS;c->buckets=OV_BUCKETS;c->entry=sizeof(OvCached);c->path=OV_CACHE_PATH;
+    c->e_seq=offsetof(OvCached,seq);c->e_gen=offsetof(OvCached,at.gen);c->e_made=offsetof(OvCached,at.made);c->e_bucket=offsetof(OvCached,at.bucket);
+    c->e_layer=offsetof(OvCached,layer);c->e_lower=offsetof(OvCached,lower);c->e_follow=offsetof(OvCached,follow);
+    c->e_path=offsetof(OvCached,path);c->e_st=offsetof(OvCached,st);
+    c->s_mode=offsetof(struct stat,st_mode);c->s_nlink=offsetof(struct stat,st_nlink);c->s_ino=offsetof(struct stat,st_ino);c->s_size=offsetof(struct stat,st_size);
+    c->s_atime=offsetof(struct stat,st_atimespec);c->s_mtime=offsetof(struct stat,st_mtimespec);c->s_ctime=offsetof(struct stat,st_ctimespec);
+    _Static_assert(sizeof(((struct stat *)0)->st_mode)==2 && sizeof(((struct stat *)0)->st_nlink)==2 && sizeof(struct timespec)==16,"stat layout the EL1 code reads");
+    unsigned n=0,ok=fs_mount_count+mem_mount_count<=HVF_EL1_MOUNTS;
+    for(unsigned i=0;ok && i<fs_mount_count+mem_mount_count;i++) {
+        const char *path=i<fs_mount_count?fs_mounts[i].path:mem_mounts[i-fs_mount_count]->path;size_t length=strlen(path);
+        if(length>=sizeof(c->mount[0]))ok=0;else { memcpy(c->mount[n],path,length+1);c->mount_length[n++]=(uint32_t)length; }
+    }
+    if(!ok)return;
+    c->mounts=n;hvf_el1_mounts[0]=fs_mount_count;hvf_el1_mounts[1]=mem_mount_count;hvf_el1_ready=1;
+}
+/* A64 encodings for the stub hvf_init writes. */
+static uint32_t a64_b(unsigned from,unsigned to,uint32_t op) { return op|(((uint32_t)((int)to-(int)from)/4)&0x3ffffffu); }
+static uint32_t a64_b19(unsigned from,unsigned to,uint32_t op) { return op|((((uint32_t)((int)to-(int)from)/4)&0x7ffffu)<<5); }
+static uint32_t a64_sp(uint32_t op,unsigned offset,unsigned rt) { return op|((offset/8)<<10)|(31u<<5)|rt; }      /* ldr/str xT, [sp, #offset] */
+static uint32_t a64_pair(uint32_t op,unsigned offset,unsigned a,unsigned b) { return op|((offset/8)<<15)|(b<<10)|(31u<<5)|a; }
 static void hvf_init(void) {
     /* Every process's memory stays mapped: ask for the largest guest-physical space (up to the 40-bit TCR_EL1.IPS). */
     hv_vm_config_t config=hv_vm_config_create();uint32_t bits=0;
@@ -900,6 +972,56 @@ static void hvf_init(void) {
         0xa94637ec,0xa9473fee,0xa94847f0,0xa9494ff2,0xa94a57f4,0xa94b5ff6,0xa94c67f8,0xa94d6ffa,0xa94e77fc,0xf9407bfe,0xd69f03e0,
         0xa95287e0,0xd50883a0,0x91000400,0xf1000421,0x54ffffa1,0xd5033b9f,0x17ffffe3};
     memcpy(hvf_system+0x400,lower_sync,sizeof(lower_sync));
+    /* Calls 172..178 aside, newfstatat (79) and statx (291) go to the EL1 handlers while
+       HF_STAT says so: the stub saves what C code may clobber (x2..x18, x30) and the
+       call's ELR, SPSR and ESR, runs el1_entry(frame, context) on the vCPU's stack, and
+       returns to the guest (handled) or takes the exit at save. A fault in the handlers
+       (current EL, at 0x200) restores the call's state and takes the same way out. */
+    {
+        uint32_t *w=(uint32_t *)(void *)hvf_system;
+        w[0x42c/4]=a64_b19(0x42c,HVF_EL1_STUB,0x54000008);              /* b.hi: no longer straight to save */
+        unsigned at=HVF_EL1_STUB,give_up,taken;
+#define EMIT(x) (w[at/4]=(x),at+=4)
+        EMIT(0xf100001fu|(79u<<10)|(8u<<5));at+=4;                          /* cmp x8, #79; b.eq (below) */
+        EMIT(0xf100001fu|(291u<<10)|(8u<<5));EMIT(a64_b19(at,HVF_SAVE_OFFSET,0x54000001)); /* cmp x8, #291; b.ne save */
+        w[(HVF_EL1_STUB+4)/4]=a64_b19(HVF_EL1_STUB+4,at,0x54000000);
+        EMIT(a64_sp(0xf9400000u,HF_STAT*8,0));EMIT(a64_b19(at,HVF_SAVE_OFFSET,0xb4000000)); /* ldr x0, HF_STAT; cbz x0, save */
+        for(unsigned r=2;r<=18;r+=2)EMIT(a64_pair(0xa9000000u,r*8,r,r+1));    /* stp x2, x3 ... x18, x19 */
+        EMIT(a64_sp(0xf9000000u,240,30));                                    /* str x30 */
+        EMIT(0xd5384029);EMIT(a64_sp(0xf9000000u,HF_SVC_ELR*8,9));          /* elr_el1, spsr_el1, esr_el1 */
+        EMIT(0xd5384009);EMIT(a64_sp(0xf9000000u,HF_SVC_SPSR*8,9));
+        EMIT(0xd5385209);EMIT(a64_sp(0xf9000000u,HF_SVC_ESR*8,9));
+        EMIT(0x910003f3);EMIT(0xaa0003e1);EMIT(0x910003e0);                  /* mov x19, sp; mov x1, x0; mov x0, sp */
+        EMIT(a64_sp(0xf9400000u,HF_STACK*8,9));EMIT(0x9100013f);             /* mov sp, the vCPU's EL1 stack */
+        EMIT(a64_b(at,HVF_EL1_CODE+HVF_EL1_ENTRY,0x94000000));              /* bl el1_entry */
+        EMIT(0x9100027f);                                                    /* mov sp, x19 */
+        give_up=at;
+        for(unsigned r=2;r<=18;r+=2)EMIT(a64_pair(0xa9400000u,r*8,r,r+1));    /* ldp x2, x3 ... x18, x19 */
+        EMIT(a64_sp(0xf9400000u,240,30));
+        taken=at;at+=4;                                                      /* cbz x0, (below) */
+        EMIT(0xa94007e0);EMIT(0xd69f03e0);                                   /* ldp x0, x1, [sp]; eret */
+        w[taken/4]=a64_b19(taken,at,0xb4000000);
+        EMIT(0xa94007e0);EMIT(a64_b(at,HVF_SAVE_OFFSET,0x14000000));        /* ldp x0, x1, [sp]; b save */
+        if(at>HVF_EL1_CODE)fail("EL1 stub outgrew its room");
+        /* 0x200, synchronous exceptions at EL1: from the handlers, back to the frame (TPIDR_EL1),
+           the call's registers restored, "not answered"; anything else exits as before (hvc #3). */
+        uint64_t code=HVF_SYSTEM_VA+HVF_EL1_CODE;at=0x200;
+        EMIT(0xd5384029);                                                    /* mrs x9, elr_el1 */
+        EMIT(0xd2800000u|((uint32_t)(code&0xffff)<<5)|10);EMIT(0xf2a00000u|((uint32_t)((code>>16)&0xffff)<<5)|10);
+        EMIT(0xf2c00000u|((uint32_t)((code>>32)&0xffff)<<5)|10);           /* x10: the handlers' address */
+        EMIT(0xcb0a0129);EMIT(0xf100001fu|((uint32_t)sizeof(hvf_el1_code)<<10)|(9u<<5));  /* sub x9, x9, x10; cmp x9, #size */
+        unsigned other=at;at+=4;                                             /* b.hs (below) */
+        EMIT(0xd538d089);EMIT(0x9100013f);                                   /* mrs x9, tpidr_el1; mov sp, x9 */
+        EMIT(a64_sp(0xf9400000u,HF_SVC_ELR*8,9));EMIT(0xd5184029);
+        EMIT(a64_sp(0xf9400000u,HF_SVC_SPSR*8,9));EMIT(0xd5184009);
+        EMIT(a64_sp(0xf9400000u,HF_SVC_ESR*8,9));EMIT(0xd5185209);
+        EMIT(0xd2800000);EMIT(a64_b(at,give_up,0x14000000));                 /* mov x0, #0; b (restore, not answered) */
+        w[other/4]=a64_b19(other,at,0x54000002);
+        EMIT(0xd4000062);EMIT(0x17ffffff);                                   /* hvc #3; b .-4 */
+        if(at>0x280)fail("EL1 fault vector outgrew its room");
+#undef EMIT
+        memcpy(hvf_system+HVF_EL1_CODE,hvf_el1_code,sizeof(hvf_el1_code));
+    }
     memcpy(hvf_system+HVF_SAVE_OFFSET,frame_code,sizeof(frame_code));
     /* 0xa00, hvf_sync_memory's: ldr x0, [sp, #312] (HF_FLUSH); tbz x0, #0, 1f; ic ialluis; 1: tbz x0, #1, 2f
        tlbi vmalle1is; b 3f; 2: and x1, x0, #0xffff000000000000; tlbi aside1is, x1; 3: dsb ish; isb; b restore */
@@ -928,6 +1050,7 @@ static void hvf_init(void) {
     memcpy(hvf_system+0xb00,fds,sizeof(fds));
     const uint32_t flush[]={UINT32_C(0xd508711f),UINT32_C(0xd508831f),UINT32_C(0xd5033b9f),UINT32_C(0xd5033fdf),UINT32_C(0xd4000022),UINT32_C(0x17ffffff)};
     memcpy(hvf_system+HVF_FLUSH_OFFSET,flush,sizeof(flush));
+    hvf_el1_setup();
     worker->backend=hvf_cpu_new(1);
     if(vdso_backing)vdso_start(hvf_vtimer_offset);
     pthread_t watchdog;

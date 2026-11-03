@@ -8,6 +8,8 @@ import platform
 import shutil
 import subprocess
 
+import build_el1
+
 ROOT = Path(__file__).resolve().parents[1]
 
 def main():
@@ -28,6 +30,7 @@ def main():
     source = ROOT / 'native/runtime.c'
     libraries = []
     if args.with_hvf:
+        build_el1.build(args.cc)                                              # native/hvf_el1_code.h, from hvf_el1_guest.c
         flags += ['-DVMFREE_HVF']
         libraries += ['-framework', 'Hypervisor']
     command = [args.cc, *flags, str(source), *libraries, '-o', str(out / name)]
