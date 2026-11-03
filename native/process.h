@@ -264,6 +264,7 @@ static uint64_t process_clone(void) {
     GuestDirectory *parent_dirs[FS_SLOTS];memcpy(parent_dirs,fs_dirs,sizeof(fs_dirs));
     int parent_fds[FS_SLOTS],child_fds[FS_SLOTS]={0};unsigned char parent_cloexec[FS_SLOTS];
     memcpy(parent_fds,fs_fd,sizeof(fs_fd));memcpy(parent_cloexec,fs_cloexec,sizeof(fs_cloexec));
+    memset(fs_sole,0,sizeof(fs_sole));                                  /* parent and child share each description */
     for(unsigned i=0;i<FS_SLOTS;i++)if(fs_fd[i]) {
         int fd=dup(fs_fd[i]-1);
         if(fd<0) { for(unsigned j=0;j<i;j++)if(child_fds[j])close(child_fds[j]-1);return linux_error(24); }

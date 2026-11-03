@@ -147,6 +147,7 @@ static uint64_t guest_dup(uint64_t oldfd,int64_t target,uint64_t min,int cloexec
         int host=dup(fs_fd[from]-1);if(host<0)return fs_error();
         if(target>=0 && fd_kind[fd])(void)guest_close((uint64_t)fd);
         fs_fd[slot]=host+1;fs_cloexec[slot]=(unsigned char)(cloexec!=0);fs_ro[slot]=fs_ro[from];fs_dev[slot]=fs_dev[from];fs_dirs[slot]=fs_dirs[from];
+        fs_sole[slot]=fs_sole[from]=0;
         if(fs_dirs[slot])fs_dirs[slot]->refs++;
         fs_guest[slot]=(unsigned short)fd;
     } else if(kind==FD_NET) {
@@ -183,6 +184,7 @@ static int fd_carry_send(uint64_t guestfd) {
     *c=(struct FdCarry){0};c->kind=fd_kind[guestfd];
     if(c->kind==FD_FILE) {
         c->host=dup(fs_fd[from]-1);if(c->host<0) { c->kind=0;return -24; }
+        fs_sole[from]=0;
         c->ro=fs_ro[from];c->dev=fs_dev[from];c->dir=fs_dirs[from];if(c->dir)c->dir->refs++;
     } else if(c->kind==FD_NET) { c->host=net_fd[from];net_description(from)->refs++; }
     else if(io_copy(&c->io,&io_fds[from])<0) { c->kind=0;return -24; }
@@ -206,7 +208,7 @@ static int64_t fd_carry_receive(int carrier,int cloexec) {
     else if(c->kind==FD_FILE) { for(unsigned i=0;i<FS_SLOTS && slot<0;i++)if(!fs_fd[i])slot=(int)i; }
     else for(unsigned i=3;i<IO_END && slot<0;i++)if(!io_fds[i].kind)slot=(int)i;
     if(slot<0 || fd<0) { fd_carry_drop(c);return -1; }
-    if(c->kind==FD_FILE) { fs_fd[slot]=c->host+1;fs_cloexec[slot]=(unsigned char)(cloexec!=0);fs_ro[slot]=c->ro;fs_dev[slot]=c->dev;fs_dirs[slot]=c->dir;fs_guest[slot]=(unsigned short)fd; }
+    if(c->kind==FD_FILE) { fs_fd[slot]=c->host+1;fs_cloexec[slot]=(unsigned char)(cloexec!=0);fs_ro[slot]=c->ro;fs_dev[slot]=c->dev;fs_sole[slot]=0;fs_dirs[slot]=c->dir;fs_guest[slot]=(unsigned short)fd; }
     else if(c->kind==FD_NET) { net_fd[slot]=c->host;net_flags[slot]=cloexec?524288:0;net_guest[slot]=(unsigned short)fd; }
     else { c->io.cloexec=(unsigned)(cloexec!=0);io_fds[slot]=c->io;io_guest[slot]=(unsigned short)fd; }
     fd_bind((uint64_t)fd,c->kind,(unsigned)slot);memset(c,0,sizeof(*c));
@@ -642,8 +644,8 @@ static int guest_syscall_dispatch(void) {
    epoll_pwait on an epoll no other process shares. Returns 1 when done (result in
    x0), 0 when the call must run under the lock; an aborted attempt changed nothing. */
 #ifdef VMFREE_HVF
-static _Thread_local int fs_close_later=-1;
-static void fs_close_pending(void) { if(fs_close_later>=0) { close(fs_close_later);fs_close_later=-1; } }
+static _Thread_local int fs_close_later=-1,fs_close_keep;
+static void fs_close_pending(void) { if(fs_close_later>=0) { if(fs_close_keep)fs_spare_put(fs_close_later);else close(fs_close_later);fs_close_later=-1; } }
 static int fs_unlocked_path(uint64_t address,char path[1025]) {
     return fs_string(address,path)==0 && strncmp(path,"/proc",5) && strncmp(path,"/dev/",5) && !(path[0]!='/' && fs_cwd && !strncmp(fs_cwd->path,"/proc",5));
 }
@@ -702,14 +704,14 @@ static int fs_call_detached(uint64_t call,const char *path,uint64_t *result,int 
         for(int i=0;i<2;i++)if(fs_detached.base[i]>=0)close(fs_detached.base[i]);
         return 0;
     }
-    fs_detached.fd=-1;fs_detached.on=1;
+    fs_detached.fd=-1;fs_detached.on=1;fs_table->transfers+=transfer;
     mm_unlock(task);
     uint64_t r=!transfer?fs_call(call):sync?(fs_sync(fd)<0?fs_error():0):call==63 || call==64?fs_transfer(fd,call):fs_transfer_at(fd,call==67?63:64,(int64_t)cpu->gpr[3]);
     if(!transfer && call==79 && statx && (int64_t)r>=0) { statx_from_stat(buffer);r=0; }
     fs_detached.on=0;
     if(fd>=0)close(fd);                                                     /* the call's own copies: no lock needed */
     for(int i=0;i<2;i++)if(fs_detached.base[i]>=0)close(fs_detached.base[i]);
-    mm_lock(task);
+    mm_lock(task);fs_table->transfers-=transfer;
     Thread *th=task_thread(task);
     if(syscall_abort || task->exit_pending || (th && !th->state)) {          /* nothing changed, or no one to tell */
         if(fs_detached.fd>=0) { close(fs_detached.fd);fs_directory_release(fs_detached.directory);fs_detached.fd=-1; }
@@ -830,8 +832,9 @@ static int guest_syscall_unlocked(void) {
        cannot fail. */
     if(call==57 && file && !__atomic_load_n(&fs_locks_held[process_pid_now()],__ATOMIC_ACQUIRE)) {
         int slot=fs_slot(fd),host=fs_fd[slot]-1;
-        fs_fd[slot]=0;fs_cloexec[slot]=0;fd_unbind(fd);
-        fs_close_pending();fs_close_later=host;cpu->gpr[0]=0;return 1;
+        fs_close_pending();fs_close_keep=fs_sole[slot] && !fs_table->transfers;   /* no duplicate in flight */
+        fs_fd[slot]=0;fs_cloexec[slot]=0;fs_sole[slot]=0;fd_unbind(fd);
+        fs_close_later=host;cpu->gpr[0]=0;return 1;
     }
     /* ppoll of sockets alone (libpq, pgbench): the host's readiness and the thread's own
        wait; a wait goes to the backend's direct wait, then the locked path. */

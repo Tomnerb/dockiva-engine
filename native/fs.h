@@ -21,7 +21,10 @@
 #define FS_DEV_ZERO 3u
 #define FS_DEV_READ 4u
 #define FS_DEV_WRITE 8u
-typedef struct { int fd[FS_SLOTS];unsigned char cloexec[FS_SLOTS],ro[FS_SLOTS],dev[FS_SLOTS];struct GuestDirectory *dirs[FS_SLOTS];unsigned short guest[FS_SLOTS]; } FsTable;
+/* sole: the host descriptor is the slot's alone (an image file opened read, never
+   duplicated), so its close can keep it for the next open (fs_spare_put); transfers:
+   detached reads and writes in flight, each on a duplicate of a slot's descriptor. */
+typedef struct { int fd[FS_SLOTS];unsigned char cloexec[FS_SLOTS],ro[FS_SLOTS],dev[FS_SLOTS],sole[FS_SLOTS];struct GuestDirectory *dirs[FS_SLOTS];unsigned short guest[FS_SLOTS];int transfers; } FsTable;
 static FsTable fs_table_first;
 static _Thread_local FsTable *fs_table=&fs_table_first;
 #define fs_fd (fs_table->fd)
@@ -29,6 +32,7 @@ static _Thread_local FsTable *fs_table=&fs_table_first;
 #define fs_dirs (fs_table->dirs)
 #define fs_ro (fs_table->ro)
 #define fs_dev (fs_table->dev)
+#define fs_sole (fs_table->sole)
 #define fs_guest (fs_table->guest)
 static int fs_slot(uint64_t guest) { return fd_slot(guest,FD_FILE); }
 #define FS_FILE_LIMIT (16u*1024u*1024u)
@@ -656,7 +660,7 @@ static uint64_t fs_memfd(void) {
     if(slot==FS_SLOTS || fd_lowest(0)<0)return linux_error(24);
     char path[]="/tmp/dockiva-memfd-XXXXXX";int fd=mkstemp(path);if(fd<0)return fs_error();
     unlink(path);(void)fcntl(fd,F_SETFD,FD_CLOEXEC);
-    fs_fd[slot]=fd+1;fs_cloexec[slot]=(flags&1)!=0;fs_ro[slot]=0;fs_dev[slot]=0;
+    fs_fd[slot]=fd+1;fs_cloexec[slot]=(flags&1)!=0;fs_ro[slot]=0;fs_dev[slot]=0;fs_sole[slot]=0;
     int guest=fd_lowest(0);fs_guest[slot]=(unsigned short)guest;fd_bind((uint64_t)guest,FD_FILE,slot);return (uint64_t)guest;
 }
 static unsigned guest_cpus(void); /* scheduler.h */
@@ -1126,12 +1130,42 @@ static int proc_text(const char *path,char *text,size_t capacity,size_t *out) {
 }
 /* An opened host file becomes the lowest free guest descriptor (a detached call's,
    later, under the lock: fs_call_detached). */
+/* Host descriptors of image files a guest closed, kept for the next open of the same
+   file: macOS's open costs about 10 us and admits about 100k a second machine-wide
+   (nginx opens index.html per request; a build reopens each source it hashed), a
+   kept one costs an lseek. Image files never change, and each kept descriptor is
+   no one else's (fs_sole), so its offset and flags are as a fresh open's. */
+#define FS_SPARES 256
+static struct FsSpare { dev_t dev;ino_t ino;int fd; } fs_spares[FS_SPARES];
+static pthread_mutex_t fs_spare_lock=PTHREAD_MUTEX_INITIALIZER;
+static unsigned fs_spare_at(dev_t dev,ino_t ino) { return (unsigned)(((uint64_t)ino*0x9E3779B97F4A7C15u+(uint64_t)dev)>>40)&(FS_SPARES-1); }
+static int fs_spare_take(dev_t dev,ino_t ino) {
+    int fd=-1;unsigned at=fs_spare_at(dev,ino);
+    pthread_mutex_lock(&fs_spare_lock);
+    for(unsigned i=0;i<8 && fd<0;i++) { struct FsSpare *e=&fs_spares[(at+i)&(FS_SPARES-1)];if(e->fd>0 && e->ino==ino && e->dev==dev) { fd=e->fd-1;e->fd=0; } }
+    pthread_mutex_unlock(&fs_spare_lock);
+    return fd;
+}
+#ifdef VMFREE_HVF
+static void fs_spare_put(int fd) {
+    struct stat st;
+    if(fstat(fd,&st) || !S_ISREG(st.st_mode) || fcntl(fd,F_GETFL)!=(O_RDONLY|O_NONBLOCK) || lseek(fd,0,SEEK_SET)) { close(fd);return; }
+    unsigned at=fs_spare_at(st.st_dev,st.st_ino);int old=-1;
+    pthread_mutex_lock(&fs_spare_lock);
+    struct FsSpare *e=&fs_spares[at];
+    for(unsigned i=0;i<8;i++)if(!fs_spares[(at+i)&(FS_SPARES-1)].fd) { e=&fs_spares[(at+i)&(FS_SPARES-1)];break; }
+    old=e->fd-1;*e=(struct FsSpare){st.st_dev,st.st_ino,fd+1};
+    pthread_mutex_unlock(&fs_spare_lock);
+    if(old>=0)close(old);
+}
+#endif
 static uint64_t fs_install(int fd,uint64_t flags,int read_only,int device,GuestDirectory *directory) {
     if(fs_detached.on) { fs_detached.fd=fd;fs_detached.flags=flags;fs_detached.opened_ro=read_only;fs_detached.opened_device=device;fs_detached.directory=directory;return 0; }
     unsigned slot=0;while(slot<FS_SLOTS && fs_fd[slot]) slot++;
     int guest=slot<FS_SLOTS?fd_lowest(0):-1;
     if(guest<0) { close(fd);fs_directory_release(directory);return linux_error(24); }
     fs_fd[slot]=fd+1;fs_cloexec[slot]=(flags&524288)!=0;fs_ro[slot]=(unsigned char)read_only;fs_dev[slot]=(unsigned char)device;fs_dirs[slot]=directory;
+    fs_sole[slot]=read_only==2 && !device && !directory;
     fs_guest[slot]=(unsigned short)guest;fd_bind((uint64_t)guest,FD_FILE,slot);return (uint64_t)guest;
 }
 static uint64_t fs_open(void) {
@@ -1240,6 +1274,10 @@ static uint64_t fs_open(void) {
         }
         if(!S_ISREG(before.st_mode) && !S_ISDIR(before.st_mode) && !S_ISLNK(before.st_mode)) { close(parent);return linux_error(13); }
         if(S_ISLNK(before.st_mode) && (flags&16384) && !(flags&64)) { close(parent);return linux_error(20); } /* as Linux, not ELOOP */
+    }
+    if(read_only==2 && !(flags&(3|64|512|1024|16384)) && S_ISREG(before.st_mode) && (uint64_t)before.st_size<=fs_file_limit) {
+        int kept=fs_spare_take(before.st_dev,before.st_ino);   /* an image file read again: a kept descriptor */
+        if(kept>=0) { close(parent);return fs_install(kept,flags,2,0,NULL); }
     }
     int fd=openat(parent,leaf,options,(mode_t)(cpu->gpr[3]&0777&~fs_umask));
     if(fd<0) { uint64_t e=fs_error();close(parent);return e; }
