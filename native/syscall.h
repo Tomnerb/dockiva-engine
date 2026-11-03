@@ -579,6 +579,13 @@ static int guest_syscall_dispatch(void) {
                 fs_pack(out,48,host.f_ffree,8);fs_pack(out,64,255,8);fs_pack(out,72,host.f_bsize,8);
                 cpu->gpr[0]=0;return -3;
             }
+            if(call==80 && net_host(cpu->gpr[0])>=0) {   /* fstat of a socket: S_IFSOCK, as Linux (Node aborts at start when its stdio says EBADF) */
+                unsigned char *out=lookup(cpu->gpr[1],128,2);struct stat st;
+                if(!out)cpu->gpr[0]=linux_error(14);
+                else if(fstat(net_host(cpu->gpr[0]),&st)<0)cpu->gpr[0]=fs_error();
+                else { fs_stat_pack(out,&st);cpu->gpr[0]=0; }
+                return -3;
+            }
             if(call==166 || call==52 || call==53 || call==78 || call==88 || call==36 || call==37 || call==48 || call==439 || call==45 || call==82 || call==83 || call==61 || (call==25 && fs_host(cpu->gpr[0])>=0) || call==79 || call==56 || call==437 || call==33 || call==34 || call==35 || call==38 || call==46 || call==62 || call==80 || ((call==57 || call==63 || call==64 || call==67 || call==68 || call==69 || call==70 || call==286 || call==287 || call==47 || call==84 || call==32) && fs_host(cpu->gpr[0])>=0)) {
                 uint64_t result=fs_call(call);
                 if(result==IO_BLOCK) { cpu->pc-=4;return -2; }  /* F_SETLKW waits for the lock */
