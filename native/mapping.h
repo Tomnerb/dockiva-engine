@@ -8,10 +8,11 @@ static int map_rwx_allowed;
 static unsigned map_find_free(const unsigned char *flags,unsigned from,unsigned total,unsigned pages) {
     unsigned run=0,start=0;
     for(unsigned i=from;i<total;) {
-        if(!(i&63) && i+64<=total && run+64<pages) {                    /* 64 free pages at once (a 64 MiB Go arena probe is 16384) */
-            uint64_t w[8],any=0;memcpy(w,flags+i,64);
-            for(unsigned k=0;k<8;k++)any|=w[k];
-            if(!any) { if(!run)start=i;run+=64;i+=64;continue; }
+        if(!(i&63) && i+64<=total) {      /* 64 pages at once: free (a 64 MiB Go arena probe is 16384), or all taken (V8's reservations) */
+            uint64_t w[8],any=0,zero=0;memcpy(w,flags+i,64);
+            for(unsigned k=0;k<8;k++) { any|=w[k];zero|=(w[k]-UINT64_C(0x0101010101010101))&~w[k]&UINT64_C(0x8080808080808080); }
+            if(!any && run+64<pages) { if(!run)start=i;run+=64;i+=64;continue; }
+            if(!zero) { run=0;i+=64;continue; }
         }
         if(!(i&7) && i+8<=total) {
             uint64_t w;memcpy(&w,flags+i,8);
