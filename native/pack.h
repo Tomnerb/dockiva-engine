@@ -3,10 +3,11 @@
    wide; Node opens a thousand modules at start, the Go compiler every source file.
    <lower>.pack holds the image's small regular files (not ELF ones: the loader maps
    those) back to back, with an index by inode. An open of an image file it holds
-   makes no host open: the slot gets a placeholder descriptor (a duplicate of the
-   lower directory, so a stray host call on it fails rather than reading the wrong
-   file) and a PackOpen, the open description (offset; shared by dup and fork as on
-   Linux). read, pread, lseek, fstat and close are served from the mapping
+   makes no host open: the slot gets the placeholder descriptor (the lower directory,
+   one for every such slot and never closed by them, so a stray host call on it fails
+   rather than reading the wrong file) and a PackOpen, the open description (offset;
+   shared by dup and fork as on Linux) from a pool in the process block (fs.h), which
+   the EL1 handlers allocate from too. read, pread, lseek, fstat and close are served from the mapping
    (fs_pack_call); anything else asks fs_host for the descriptor, which opens the
    real file at the description's offset and puts it in the slot (fs_pack_real), so
    every other call works as before.
@@ -21,8 +22,9 @@
 #define PACK_FILE_MAX (1u<<20)                       /* larger files are read in place */
 #define PACK_TOTAL_MAX (UINT64_C(1)<<30)
 typedef struct { char magic[8];uint64_t count,entries,strings,strings_size,data,total; } PackHeader;
-typedef struct { uint64_t ino,size,offset;int64_t mtime,mtime_ns;uint32_t path,path_length; } PackEntry;
-typedef struct PackOpen { const PackEntry *entry;uint64_t offset;int real;unsigned refs;struct stat st; } PackOpen;
+typedef HvfPackEntry PackEntry;                      /* hvf_el1.h */
+typedef HvfPackOpen PackOpen;                        /* hvf_el1.h */
+_Static_assert(sizeof(struct stat)<=sizeof(((PackOpen *)0)->st),"PackOpen.st holds a struct stat");
 static const unsigned char *pack_base;static uint64_t pack_bytes,pack_count;static const PackEntry *pack_entries;
 static int pack_placeholder=-1;
 static pthread_mutex_t pack_lock=PTHREAD_MUTEX_INITIALIZER;
@@ -56,30 +58,46 @@ static const PackEntry *pack_find(const struct stat *st,const char *canon) {
     return e;
 }
 static const char *pack_path(const PackEntry *e) { return (const char *)pack_base+((const PackHeader *)(const void *)pack_base)->strings+e->path; }
+static const PackEntry *pack_entry(const PackOpen *o) { return &pack_entries[o->entry]; }
+static inline const struct stat *pack_stat(const PackOpen *o) { return (const struct stat *)(const void *)o->st; }
+/* A description from the pool (NULL when it is used up: the file is opened as before). */
+static PackOpen *pack_open_new(const PackEntry *e,const struct stat *st) {
+    for(unsigned n=0;n<HVF_EL1_PACK_OPENS;n++) {
+        unsigned i=__atomic_fetch_add(&proc_block->pack_hint,1,__ATOMIC_RELAXED)%HVF_EL1_PACK_OPENS;uint32_t free_slot=0;
+        PackOpen *o=&proc_block->pack[i];
+        if(!__atomic_compare_exchange_n(&o->used,&free_slot,1,0,__ATOMIC_ACQUIRE,__ATOMIC_RELAXED))continue;
+        o->entry=(uint64_t)(e-pack_entries);o->offset=0;o->real=-1;memcpy(o->st,st,sizeof(*st));
+        __atomic_store_n(&o->refs,1,__ATOMIC_RELEASE);return o;
+    }
+    return NULL;
+}
 static void pack_ref(PackOpen *o) { __atomic_add_fetch(&o->refs,1,__ATOMIC_RELAXED); }
 static void pack_unref(PackOpen *o) {
     if(__atomic_sub_fetch(&o->refs,1,__ATOMIC_ACQ_REL))return;
     if(o->real>=0)close(o->real);
-    free(o);
+    __atomic_store_n(&o->used,0,__ATOMIC_RELEASE);
 }
-/* Slot slot no longer refers to its PackOpen (closed, or holding the real file now). */
-static void fs_pack_drop(unsigned slot) { if(fs_packed[slot]) { pack_unref(fs_packed[slot]);fs_packed[slot]=NULL; } }
+/* Slot slot no longer refers to its PackOpen (closed, or holding the real file now).
+   1 when it did: its descriptor is the shared placeholder, which stays open. */
+static int fs_pack_drop(unsigned slot) {
+    if(!fs_packed[slot])return 0;
+    pack_unref(fs_packed[slot]);fs_packed[slot]=NULL;return 1;
+}
 /* The real file in place of slot's placeholder: one host open for the description
    (at its offset), then each of its slots takes a duplicate as it is next used. */
 static void fs_pack_real(unsigned slot) {
     PackOpen *o=fs_packed[slot];
     pthread_mutex_lock(&pack_lock);
     if(o->real<0) {
-        int fd=openat(fs_lower,pack_path(o->entry),O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_NONBLOCK);
+        int fd=openat(fs_lower,pack_path(pack_entry(o)),O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_NONBLOCK);
         if(fd>=0 && lseek(fd,(off_t)__atomic_load_n(&o->offset,__ATOMIC_ACQUIRE),SEEK_SET)<0) { close(fd);fd=-1; }
         __atomic_store_n(&o->real,fd,__ATOMIC_RELEASE);
     }
     int real=o->real;
     pthread_mutex_unlock(&pack_lock);
     if(real<0)return;                                      /* the placeholder stays: calls on it fail */
-    if(dup2(real,fs_fd[slot]-1)<0)return;
-    (void)fcntl(fs_fd[slot]-1,F_SETFD,FD_CLOEXEC);
-    fs_pack_drop(slot);
+    int fd=fcntl(real,F_DUPFD_CLOEXEC,0);if(fd<0)return;
+    fs_pack_drop(slot);fs_fd[slot]=fd+1;
 }
 
 /* ---- Building <lower>.pack ---- */

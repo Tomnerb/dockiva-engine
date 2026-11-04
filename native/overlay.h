@@ -25,8 +25,11 @@ static int clonefileat(int a,const char *b,int c,const char *d,int e) { (void)a;
 #define OV_WH ".wh."
 #define OV_OPQ ".wh..wh..opq"
 /* The last walk's leaf: layer 0 upper, 1 lower, 2 neither; canon its guest path, ""
-   outside the layers (a bind mount); whiteout: ov_prepare found ".wh.NAME" for it. */
-typedef struct { int layer,whiteout;char canon[1025]; } OvLeaf;
+   outside the layers (a bind mount); whiteout: ov_prepare found ".wh.NAME" for it;
+   bare: the fast walk found it in neither layer and its directory in the upper one,
+   so no whiteout names it (one is made only for a lower entry, and the lower layer
+   never changes): ov_prepare and ov_rename make no host call to learn so. */
+typedef struct { int layer,whiteout,bare;char canon[1025]; } OvLeaf;
 static _Thread_local OvLeaf ov_leaf;
 /* What ov_walk_fast found for a path in the lower layer or in neither, by canonical
    guest path, so a repeated lookup (nginx's index.html per request, a compiler's
@@ -35,8 +38,9 @@ static _Thread_local OvLeaf ov_leaf;
    The lower layer never changes; the upper one only through ov_prepare, ov_unlink and
    ov_rename (each marks its call, ov_changed counts it when the call ends) and
    dockivad, which count changes in --layers-gen, counters every run of the container
-   maps: [0] any change; [1] a file made where the upper layer has its directory (a
-   build's outputs and cache entries, hundreds a second), which changes the answer for
+   maps: [0] any change; [1] an entry made where the upper layer has its directory, or
+   an upper file renamed (a build's outputs, directories and cache entries, npm's
+   packages: hundreds a second), which changes the answer for
    its own path and for paths below it, in [2+bucket of its path] too. An entry holds
    for the counts it was made under: [0] and its path's bucket, and [1] for a missing
    directory. Upper files are not kept: their stat changes with every write. Removing
@@ -57,9 +61,10 @@ static _Thread_local int ov_dirty;
 static _Thread_local char ov_made[1025];                              /* the call's file made (ov_prepare's fast way) */
 static uint32_t ov_hash(const char *path) { uint32_t h=2166136261u;for(const char *p=path;*p;p++)h=(h^(unsigned char)*p)*16777619u;return h; }
 static uint64_t *ov_bucket(uint32_t h) { return &ov_gen[2+((h>>16)&(OV_BUCKETS-1))]; }
+static void ov_bump(const char *path) { __atomic_fetch_add(&ov_gen[1],1,__ATOMIC_RELEASE);__atomic_fetch_add(ov_bucket(ov_hash(path)),1,__ATOMIC_RELEASE); }   /* a change at path alone, after it */
 static void ov_changed(void) {
     if(ov_made[0]) {
-        if(ov_gen && !ov_dirty) { __atomic_fetch_add(&ov_gen[1],1,__ATOMIC_RELEASE);__atomic_fetch_add(ov_bucket(ov_hash(ov_made)),1,__ATOMIC_RELEASE); }
+        if(ov_gen && !ov_dirty)ov_bump(ov_made);
         ov_made[0]=0;
     }
     if(ov_dirty) { ov_dirty=0;if(ov_gen)__atomic_fetch_add(ov_gen,1,__ATOMIC_RELEASE); }
@@ -284,9 +289,9 @@ static int ov_copy_file(int u,int l,const char *name) {
 /* A canonical directory the upper layer already has, as the path of dir/name below
    fs_root, for host calls that refuse symlinks on the way: one stat (about 2 us)
    instead of ov_upper's open (about 10). 0 when it is not there (ov_upper makes it). */
-static int ov_upper_known(const char *dir,const char *name,char path[1025]) {
+static int ov_upper_known(const char *dir,const char *name,char path[1025],int bare) {
     struct stat st;size_t d=strlen(dir+1),n=strlen(name);
-    if(!FS_DIRECT || d+1+n>1024 || (d && (fstatat(fs_root,dir+1,&st,FS_NOFOLLOW_AT) || !S_ISDIR(st.st_mode))))return 0;
+    if(!FS_DIRECT || d+1+n>1024 || (d && !bare && (fstatat(fs_root,dir+1,&st,FS_NOFOLLOW_AT) || !S_ISDIR(st.st_mode))))return 0;
     memcpy(path,dir+1,d);if(d)path[d++]='/';memcpy(path+d,name,n+1);return 1;
 }
 /* ov_marker of name in canonical directory dir, by path below fs_root. */
@@ -305,10 +310,13 @@ static int ov_prepare(OvLeaf *w,int *parent,char leaf[1025],int how) {
     if(!strcmp(w->canon,"/")) { strcpy(dir,"/");strcpy(name,"."); }
     else ov_split(w->canon,dir,name);
     char path[1025];
-    if(direct && how==OV_CREATE && strcmp(name,".") && ov_upper_known(dir,name,path) && !ov_marker_at(dir,name)) {
-        int u=dup(fs_root);if(u<0)return -1;                         /* most files are made where the upper layer has the directory */
-        if(ov_made[0])ov_dirty=1;else strcpy(ov_made,w->canon);       /* the upper layer changes at this path alone: ov_changed */
-        close(*parent);*parent=u;strcpy(leaf,path);fs_walk_leaf.known=0;return 0;
+    if(how==OV_CREATE && strcmp(name,".") && ov_upper_known(dir,name,path,w->bare) && (w->bare || !ov_marker_at(dir,name))) {
+        /* Most entries (files, a build's directories, npm's packages and links) are made
+           where the upper layer has the directory: the upper layer changes at this path
+           alone (ov_changed), and the lookups cached elsewhere hold. */
+        if(ov_made[0])ov_dirty=1;else strcpy(ov_made,w->canon);
+        int u=direct?dup(fs_root):ov_upper(dir);if(u<0)return -1;     /* direct: by path; else the directory, opened link-free */
+        close(*parent);*parent=u;strcpy(leaf,direct?path:name);fs_walk_leaf.known=direct && w->bare?2:0;return 0;   /* bare: still missing */
     }
     ov_dirty=1;                                                        /* the upper layer may change: ov_changed */
     if(how==OV_MODIFY) {                                             /* a lower leaf */
@@ -351,11 +359,14 @@ static int ov_empty(const char *canon,int clean) {
     }
     ov_close2(u,l);return empty;
 }
-/* Whether the lower layer shows a canonical leaf (a whiteout made for it must stay). */
+/* Whether the lower layer shows a canonical leaf (a whiteout made for it must stay).
+   ov_lower_absent: it has nothing at that path at all (nor below it). */
+static _Thread_local int ov_lower_absent;
 static int ov_lower_has(const char *canon,struct stat *st) {
     /* Most leaves (a container's own files) are not in the image at all: one stat says
        so, where the walk opens every directory on the way (a symlink there: the walk). */
-    if(canon[1] && fstatat(fs_lower,canon+1,st,FS_NOFOLLOW_AT) && (errno==ENOENT || errno==ENOTDIR))return 0;
+    ov_lower_absent=0;
+    if(canon[1] && fstatat(fs_lower,canon+1,st,FS_NOFOLLOW_AT) && (errno==ENOENT || errno==ENOTDIR)) { ov_lower_absent=1;return 0; }
     char dir[1025],name[256];ov_split(canon,dir,name);
     int u,l,m;if(ov_pair(dir,&u,&l,&m))return 0;
     int has=l>=0 && !(u>=0 && ov_marker(u,name)) && !fstatat(l,name,st,AT_SYMLINK_NOFOLLOW);
@@ -373,12 +384,17 @@ static int ov_unlink(OvLeaf *w,int parent,const char *leaf,int directory) {
     int lower=ov_lower_has(w->canon,&low);
     if(lower || directory)ov_dirty=1;                                  /* the upper layer's change shows (ov_changed) */
     else if(S_ISLNK(st.st_mode)) { if(ov_made[0])ov_dirty=1;else strcpy(ov_made,w->canon); }   /* ov_link_get: its bucket */
-    if(directory && !ov_empty(w->canon,w->layer==0)) { errno=ENOTEMPTY;return -1; }
+    /* A directory the lower layer lacks holds no markers (they are made only for lower
+       entries): the host's rmdir says whether it is empty, without reading it. */
+    int quick=directory && ov_lower_absent && w->layer==0;
+    if(directory && !quick && !ov_empty(w->canon,w->layer==0)) { errno=ENOTEMPTY;return -1; }
     int u=lower?ov_upper(dir):-1;
     if(lower && (u<0 || ov_mark(u,name))) { ov_close2(u,-1);return -1; }   /* first: the name never shows the lower entry */
     if(w->layer==0) {
         int up=u>=0?u:parent;const char *at=u>=0?name:leaf;
-        if(unlinkat(up,at,(directory?AT_REMOVEDIR:0)|FS_ANY_AT)) { int saved=errno;if(lower)ov_unmark(u,name);ov_close2(u,-1);errno=saved;return -1; }
+        int r=unlinkat(up,at,(directory?AT_REMOVEDIR:0)|FS_ANY_AT);
+        if(r && quick && errno==ENOTEMPTY)r=ov_empty(w->canon,1)?unlinkat(up,at,AT_REMOVEDIR|FS_ANY_AT):(errno=ENOTEMPTY,-1);   /* hidden names only: the slow way */
+        if(r) { int saved=errno;if(lower)ov_unmark(u,name);ov_close2(u,-1);errno=saved;return -1; }
     }
     ov_close2(u,-1);return 0;
 }
@@ -386,7 +402,6 @@ static int ov_unlink(OvLeaf *w,int parent,const char *leaf,int directory) {
    A lower file is copied up first; a directory with lower files cannot move (EXDEV, as
    overlayfs without redirect_dir: mv copies it). */
 static int ov_rename(OvLeaf *w,int parent,char leaf[1025],OvLeaf *to,int other,char target[1025]) {
-    ov_dirty=1;
     struct stat st,dst,low;
     if(w->layer==2 || fstatat(parent,leaf,&st,FS_NOFOLLOW_AT)) { errno=ENOENT;return -1; }
     if(!strcmp(w->canon,to->canon))return 0;
@@ -401,15 +416,22 @@ static int ov_rename(OvLeaf *w,int parent,char leaf[1025],OvLeaf *to,int other,c
         if(!S_ISDIR(dst.st_mode) && S_ISDIR(st.st_mode)) { errno=ENOTDIR;return -1; }
         if(S_ISDIR(dst.st_mode) && !ov_empty(to->canon,to->layer==0)) { errno=ENOTEMPTY;return -1; }
     }
-    int lower=ov_lower_has(w->canon,&low),below=ov_lower_has(to->canon,&low) && S_ISDIR(low.st_mode);
+    int lower=ov_lower_has(w->canon,&low),below=!to->bare && ov_lower_has(to->canon,&low) && S_ISDIR(low.st_mode);
     OvLeaf from=*w;int sp=dup(parent);char sl[1025];strcpy(sl,leaf);
     if(sp<0 || ov_prepare(&from,&sp,sl,OV_MODIFY)) { ov_close2(sp,-1);return -1; }   /* the source, copied up */
     close(sp);
     /* Nothing below either name and both directories in the upper layer (a file the
        container made, renamed into place): the rename alone, by path. */
     char spath[1025],dpath[1025];
-    if(!lower && !below && ov_upper_known(sdir,sname,spath) && ov_upper_known(ddir,dname,dpath) && !ov_marker_at(ddir,dname))
-        return fs_renameat(fs_root,spath,fs_root,dpath);
+    if(!lower && !below && ov_upper_known(sdir,sname,spath,0) && ov_upper_known(ddir,dname,dpath,to->bare) && (to->bare || !ov_marker_at(ddir,dname))) {
+        int r=fs_renameat(fs_root,spath,fs_root,dpath);
+        /* A file (npm's and Go's write-then-rename): its two paths change alone, as a
+           file made (ov_changed); a directory moves what is below it too. */
+        if(!r && !S_ISDIR(st.st_mode) && ov_gen) { ov_bump(w->canon);ov_bump(to->canon); }
+        else if(!r)ov_dirty=1;
+        return r;
+    }
+    ov_dirty=1;                                                        /* the upper layer changes: ov_changed */
     if((sp=ov_upper(sdir))<0)return -1;
     int dp=ov_upper(ddir);if(dp<0) { ov_close2(sp,-1);return -1; }
     int had=ov_marker(dp,dname);
@@ -544,14 +566,14 @@ static int ov_walk_fast(const char *start,const char *rest,int follow,int direct
         if(fd<0)return errno==ENOENT || errno==ENOTDIR?-1:-2;
         strcpy(leaf,last);
     }
-    ov_leaf.layer=layer;strcpy(ov_leaf.canon,full);fs_where=0;if(canon)strcpy(canon,full);
+    ov_leaf.layer=layer;ov_leaf.bare=layer==2 && base==fs_root;strcpy(ov_leaf.canon,full);fs_where=0;if(canon)strcpy(canon,full);
     return fd;
 }
 /* fs_walk over the layers (see fs_walk): the path from base_path's canonical guest
    path, component by component, with each directory's upper and lower descriptors. */
 static int ov_walk(int base,const char *base_path,const char *input,int follow,char leaf[1025],char canon[1025]) {
     int direct=follow&FS_DIRECT;follow&=1;
-    fs_walk_leaf.known=0;ov_leaf.layer=2;ov_leaf.canon[0]=0;
+    fs_walk_leaf.known=0;ov_leaf.layer=2;ov_leaf.bare=0;ov_leaf.canon[0]=0;
     size_t length=strlen(input);if(length>1024) { errno=ENAMETOOLONG;return -1; }
     const char *floor=fs_scope.root>=0?fs_scope.path:"/";char rest[4097],cur[1025];
     if(input[0]=='/') { if(fs_scope.resolve&8) { errno=EXDEV;return -1; } strcpy(cur,floor); }

@@ -25,7 +25,8 @@
    duplicated), so its close can keep it for the next open (fs_spare_put); transfers:
    detached reads and writes in flight, each on a duplicate of a slot's descriptor.
    pack: an image file served from the image's pack (pack.h), its fd a placeholder. */
-typedef struct { int fd[FS_SLOTS];unsigned char cloexec[FS_SLOTS],ro[FS_SLOTS],dev[FS_SLOTS],sole[FS_SLOTS];struct GuestDirectory *dirs[FS_SLOTS];unsigned short guest[FS_SLOTS];int transfers;struct PackOpen *pack[FS_SLOTS]; } FsTable;
+#include "hvf_el1.h"
+typedef struct { int fd[FS_SLOTS];unsigned char cloexec[FS_SLOTS],ro[FS_SLOTS],dev[FS_SLOTS],sole[FS_SLOTS];struct GuestDirectory *dirs[FS_SLOTS];unsigned short guest[FS_SLOTS];int transfers;HvfPackOpen *pack[FS_SLOTS]; } FsTable;
 static FsTable fs_table_first;
 static _Thread_local FsTable *fs_table=&fs_table_first;
 #define fs_fd (fs_table->fd)
@@ -36,6 +37,53 @@ static _Thread_local FsTable *fs_table=&fs_table_first;
 #define fs_sole (fs_table->sole)
 #define fs_guest (fs_table->guest)
 #define fs_packed (fs_table->pack)
+/* What a process's own EL1 handlers may change (hvf_el1_guest.c), in one block mapped
+   into them: each task's descriptor tables and mm lock word (scheduler.h), each
+   process's count of record locks held, and the pool of pack open descriptions. */
+typedef struct {
+    uint32_t mm[PROCESS_LIMIT+1];
+    unsigned short locks_held[PROCESS_LIMIT+2];
+    uint32_t pack_hint;
+    FsTable fs[PROCESS_LIMIT+3];                      /* by task, then the two outside schedule_tasks (scheduler.h) */
+    FdTable fds[PROCESS_LIMIT+3];
+    HvfPackOpen pack[HVF_EL1_PACK_OPENS];
+    HvfMmCache mm_cache[PROCESS_LIMIT+1];             /* by mm lock index (hvf_el1.h) */
+    uint32_t futex_waiters[HVF_EL1_FUTEX_SLOTS+1];    /* hvf_el1.h; the last: futexes in shared memory */
+} ProcBlock;
+static ProcBlock *proc_block;
+static size_t proc_block_bytes(void) { return (sizeof(ProcBlock)+16383)&~(size_t)16383; }
+/* The region cache (hvf_el1.h) of the current process's memory; NULL when unscheduled. */
+static HvfMmCache *mm_cache_of(void);                 /* scheduler.h */
+static _Thread_local int mm_cache_busy;              /* unparking: its own munmaps change nothing more */
+static uint64_t guest_munmap(uint64_t addr,uint64_t length);
+/* A mapping change by the runtime over [addr, addr+bytes): parked regions there are
+   unmapped for real, registered ones forgotten. */
+static void mm_cache_range(uint64_t addr,uint64_t bytes) {
+    HvfMmCache *m=mm_cache_busy?NULL:mm_cache_of();if(!m || !bytes)return;
+    for(unsigned i=0;i<HVF_EL1_REGISTERED;i++)
+        if(m->pages[i] && m->base[i]<addr+bytes && addr<m->base[i]+(uint64_t)m->pages[i]*4096)m->pages[i]=0;
+    mm_cache_busy=1;
+    for(unsigned i=0;i<m->parked;) {
+        uint64_t base=m->park_base[i],size=(uint64_t)m->park_pages[i]*4096;
+        if(!(base<addr+bytes && addr<base+size)) { i++;continue; }
+        m->parked_pages-=m->park_pages[i];m->parked--;m->park_base[i]=m->park_base[m->parked];m->park_pages[i]=m->park_pages[m->parked];
+        (void)guest_munmap(base,size);
+    }
+    mm_cache_busy=0;
+}
+static void mm_cache_register(uint64_t base,uint64_t bytes) {
+    HvfMmCache *m=mm_cache_of();uint64_t pages=bytes/4096;
+    if(!m || !pages || pages>HVF_EL1_REGION_PAGES)return;
+    unsigned bucket=(unsigned)((base>>12)%(HVF_EL1_REGISTERED/4))*4,slot=bucket;  /* a free way, else the bucket's first */
+    for(unsigned k=0;k<4;k++)if(!m->pages[bucket+k]) { slot=bucket+k;break; }
+    m->pages[slot]=0;m->base[slot]=base;m->pages[slot]=(uint32_t)pages;
+}
+
+static void proc_block_init(void) {
+    void *p=mmap(NULL,proc_block_bytes(),PROT_READ|PROT_WRITE,MAP_ANON|MAP_PRIVATE,-1,0);   /* pages come as they are used */
+    if(p==MAP_FAILED) { perror("dockiva: process tables");exit(125); }
+    proc_block=p;
+}
 static int fs_slot(uint64_t guest) { return fd_slot(guest,FD_FILE); }
 #define FS_FILE_LIMIT (16u*1024u*1024u)
 static int fs_root=-1, fs_writable;
@@ -131,7 +179,7 @@ static void fs_cwd_release(void) {
     fs_cwd=NULL;
 }
 static void fs_cleanup(void) {
-    for(unsigned i=0;i<FS_SLOTS;i++) { fs_directory_release(fs_dirs[i]);fs_pack_drop(i);if(fs_fd[i])close(fs_fd[i]-1); }
+    for(unsigned i=0;i<FS_SLOTS;i++) { fs_directory_release(fs_dirs[i]);if(!fs_pack_drop(i) && fs_fd[i])close(fs_fd[i]-1); }
     fs_cwd_release();
     if(fs_root>=0) close(fs_root);
 }
@@ -163,9 +211,9 @@ static _Thread_local struct {
     uint64_t memory_at,memory_size;unsigned char *memory;                   /* the buffer argument */
     int read_only;                                                          /* the file's slot: fs_ro */
     int fd;uint64_t flags;int opened_ro,opened_device;struct GuestDirectory *directory; /* an opened file to install (fd -1: none) */
-    struct PackOpen *pack;                                                  /* and its pack description */
+    HvfPackOpen *pack;                                                      /* and its pack description */
 } fs_detached={.fd=-1};
-static _Thread_local struct PackOpen *fs_install_pack;                    /* the next fs_install's (pack.h) */
+static _Thread_local HvfPackOpen *fs_install_pack;                    /* the next fs_install's (pack.h) */
 /* Guest memory a file call reads or writes: the copy while detached. */
 static unsigned char *fs_memory(uint64_t address,uint64_t size,int mode) {
     if(!fs_detached.on)return lookup(address,size,mode);
@@ -645,6 +693,33 @@ static uint64_t fs_getcwd(void) {
     unsigned char *out=lookup(cpu->gpr[0],size,2);if(!out)return linux_error(14);
     memcpy(out,path,size);return size;
 }
+/* Programs and ELF interpreters by inode, one host descriptor each kept open: macOS's
+   open costs 12-20 us, and every exec opens its program (a dynamic one its loader
+   too); a stat (often known from the walk) and a dup cost 1-2. The loader only maps
+   and preads them, so duplicates share no offset that matters. An inode stays the same
+   file while a descriptor holds it. ponytail: 32 entries, round robin. */
+#define EXEC_FDS 32u
+static struct { dev_t dev;ino_t ino;int fd; } exec_fds[EXEC_FDS];static unsigned exec_fds_next;
+static pthread_mutex_t exec_fds_lock=PTHREAD_MUTEX_INITIALIZER;
+static int exec_open_at(int parent,const char *leaf,int flags,const struct stat *known) {
+    struct stat st;int fd=-1;
+    if(known)st=*known;else if(fstatat(parent,leaf,&st,FS_NOFOLLOW_AT))st.st_mode=0;
+    if(S_ISREG(st.st_mode)) {
+        pthread_mutex_lock(&exec_fds_lock);
+        for(unsigned i=0;i<EXEC_FDS && fd<0;i++)if(exec_fds[i].fd>0 && exec_fds[i].ino==st.st_ino && exec_fds[i].dev==st.st_dev)fd=fcntl(exec_fds[i].fd-1,F_DUPFD_CLOEXEC,0);
+        pthread_mutex_unlock(&exec_fds_lock);
+        if(fd>=0)return fd;
+    }
+    if((fd=openat(parent,leaf,flags))<0 || !S_ISREG(st.st_mode))return fd;
+    struct stat now;int keep;
+    if(fstat(fd,&now) || now.st_ino!=st.st_ino || now.st_dev!=st.st_dev || (keep=fcntl(fd,F_DUPFD_CLOEXEC,0))<0)return fd;
+    pthread_mutex_lock(&exec_fds_lock);
+    unsigned at=exec_fds_next++%EXEC_FDS;int old=exec_fds[at].fd-1;
+    exec_fds[at].dev=st.st_dev;exec_fds[at].ino=st.st_ino;exec_fds[at].fd=keep+1;
+    pthread_mutex_unlock(&exec_fds_lock);
+    if(old>=0)close(old);
+    return fd;
+}
 /* Interpreter paths originate in an ELF header, not guest memory. */
 static int fs_open_root_file(const char *path) {
     if(fs_root<0 || path[0]!='/') { errno=EACCES;return -1; }
@@ -653,7 +728,7 @@ static int fs_open_root_file(const char *path) {
     for(size_t i=0;i<length;i++)if((unsigned char)path[i]<32 || path[i]==127) { errno=EACCES;return -1; }
     strcpy(copy,path);char leaf[1025];
     int parent=fs_walk(fs_root,"/",copy,1,leaf,NULL);if(parent<0)return -1;
-    int fd=openat(parent,leaf,O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_NONBLOCK);
+    int fd=exec_open_at(parent,leaf,O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_NONBLOCK,NULL);
     int saved=errno;close(parent);errno=saved;
     struct stat st;if(fd>=0 && (fstat(fd,&st)<0 || !S_ISREG(st.st_mode))) { close(fd);errno=EACCES;return -1; }
     return fd;
@@ -1139,11 +1214,13 @@ static int proc_text(const char *path,char *text,size_t capacity,size_t *out) {
 }
 /* An opened host file becomes the lowest free guest descriptor (a detached call's,
    later, under the lock: fs_call_detached). */
-/* Host descriptors of image files a guest closed, kept for the next open of the same
-   file: macOS's open costs about 10 us and admits about 100k a second machine-wide
-   (nginx opens index.html per request; a build reopens each source it hashed), a
-   kept one costs an lseek. Image files never change, and each kept descriptor is
-   no one else's (fs_sole), so its offset and flags are as a fresh open's. */
+/* Host descriptors of files a guest opened read-only (and plainly) and closed, kept for
+   the next such open of the same file: macOS's open costs about 10 us and admits about
+   100k a second machine-wide (nginx opens index.html per request; a build reopens
+   each source it hashed, the go command its cache's entries), a kept one costs an
+   lseek. A descriptor names the inode, so it reads what a fresh open would (a file
+   replaced by a rename is another inode, never matched), and each kept one is no one
+   else's (fs_sole), so its offset and flags are as a fresh open's. */
 #define FS_SPARES 256
 static struct FsSpare { dev_t dev;ino_t ino;int fd; } fs_spares[FS_SPARES];
 static pthread_mutex_t fs_spare_lock=PTHREAD_MUTEX_INITIALIZER;
@@ -1173,9 +1250,9 @@ static uint64_t fs_install(int fd,uint64_t flags,int read_only,int device,GuestD
     if(fs_detached.on) { fs_detached.fd=fd;fs_detached.flags=flags;fs_detached.opened_ro=read_only;fs_detached.opened_device=device;fs_detached.directory=directory;fs_detached.pack=pack;return 0; }
     unsigned slot=0;while(slot<FS_SLOTS && fs_fd[slot]) slot++;
     int guest=slot<FS_SLOTS?fd_lowest(0):-1;
-    if(guest<0) { close(fd);fs_directory_release(directory);if(pack)pack_unref(pack);return linux_error(24); }
+    if(guest<0) { if(pack)pack_unref(pack);else close(fd);fs_directory_release(directory);return linux_error(24); }
     fs_fd[slot]=fd+1;fs_cloexec[slot]=(flags&524288)!=0;fs_ro[slot]=(unsigned char)read_only;fs_dev[slot]=(unsigned char)device;fs_dirs[slot]=directory;
-    fs_sole[slot]=read_only==2 && !device && !directory && !pack;fs_packed[slot]=pack;
+    fs_sole[slot]=!(flags&(3|64|512|1024|4096|65536)) && !device && !directory && !pack;fs_packed[slot]=pack;   /* opened read-only, plainly */
     fs_guest[slot]=(unsigned short)guest;fd_bind((uint64_t)guest,FD_FILE,slot);return (uint64_t)guest;
 }
 static uint64_t fs_open(void) {
@@ -1284,8 +1361,8 @@ static uint64_t fs_open(void) {
     if((flags&64) && fs_count_full()) { close(parent);return linux_error(28); }
     /* Validate the existing leaf before a possible truncate; only regular files/dirs.
        An unfollowed symlink reaches openat, which fails with ELOOP or EEXIST as on Linux. */
-    struct stat before;
-    if(fs_leaf_stat(parent,leaf,&before)==0) {
+    struct stat before;int exists=fs_leaf_stat(parent,leaf,&before)==0;
+    if(exists) {
         if(S_ISFIFO(before.st_mode)) { /* a named pipe: the container's shared pipe */
             close(parent);
             if((flags&(64|128))==(64|128))return linux_error(17);
@@ -1295,26 +1372,26 @@ static uint64_t fs_open(void) {
         if(!S_ISREG(before.st_mode) && !S_ISDIR(before.st_mode) && !S_ISLNK(before.st_mode)) { close(parent);return linux_error(13); }
         if(S_ISLNK(before.st_mode) && (flags&16384) && !(flags&64)) { close(parent);return linux_error(20); } /* as Linux, not ELOOP */
     }
-    if(read_only==2 && !(flags&(3|64|512|1024|16384)) && S_ISREG(before.st_mode) && (uint64_t)before.st_size<=fs_file_limit) {
-        const PackEntry *packed=pack_find(&before,canon);         /* in the image's pack: no host open */
-        PackOpen *o=packed?calloc(1,sizeof(*o)):NULL;
-        int placeholder=o?dup(pack_placeholder):-1;
-        if(placeholder>=0) {
-            o->entry=packed;o->real=-1;o->refs=1;o->st=before;
-            close(parent);fs_install_pack=o;return fs_install(placeholder,flags,2,0,NULL);
-        }
-        free(o);
-        int kept=fs_spare_take(before.st_dev,before.st_ino);   /* an image file read again: a kept descriptor */
+    if(exists && !(flags&(3|64|512|1024|4096|16384|65536)) && S_ISREG(before.st_mode) && (uint64_t)before.st_size<=fs_file_limit) {
+        const PackEntry *packed=read_only==2?pack_find(&before,canon):NULL;   /* in the image's pack: no host open */
+        PackOpen *o=packed?pack_open_new(packed,&before):NULL;
+        if(o) { close(parent);fs_install_pack=o;return fs_install(pack_placeholder,flags,2,0,NULL); }
+        int kept=fs_spare_take(before.st_dev,before.st_ino);   /* a file read again (the same inode): a kept descriptor */
         if(kept>=0) { close(parent);return fs_install(kept,flags,2,0,NULL); }
     }
-    int fd=openat(parent,leaf,options,(mode_t)(cpu->gpr[3]&0777&~fs_umask));
+    /* A leaf the walk found missing (bare): made exclusively, it is a new empty
+       regular file and needs no fstat; one made meanwhile by another process is
+       opened the usual way. */
+    int fresh=made && layers.bare && (options&O_CREAT);mode_t mode=(mode_t)(cpu->gpr[3]&0777&~fs_umask);
+    int fd=openat(parent,leaf,options|(fresh?O_EXCL:0),mode);
+    if(fd<0 && fresh && errno==EEXIST && !(flags&128)) { fresh=0;fd=openat(parent,leaf,options,mode); }
     if(fd<0) { uint64_t e=fs_error();close(parent);return e; }
     struct stat info;
-    if(fstat(fd,&info)<0 || (!S_ISREG(info.st_mode) && !S_ISDIR(info.st_mode)) || (uint64_t)info.st_size>fs_file_limit) {
+    if(!fresh && (fstat(fd,&info)<0 || (!S_ISREG(info.st_mode) && !S_ISDIR(info.st_mode)) || (uint64_t)info.st_size>fs_file_limit)) {
         close(fd);close(parent);return linux_error(13);
     }
     GuestDirectory *directory=NULL;
-    if(S_ISDIR(info.st_mode)) {
+    if(!fresh && S_ISDIR(info.st_mode)) {
         directory=calloc(1,sizeof(*directory));if(!directory) { close(fd);close(parent);return linux_error(12); }
         directory->refs=1;strcpy(directory->path,canon);directory->lower=layers.layer==1 && layers.canon[0];
     }
@@ -1450,7 +1527,7 @@ static int fs_lock_conflict(dev_t dev,ino_t ino,uint64_t owner,int64_t start,int
    its build cache files, then its compilers close thousands of files. Changed under
    the runtime lock and the taking process's mm lock, which its own closes hold. */
 static int fs_locks_taken;
-static unsigned short fs_locks_held[PROCESS_LIMIT+2];
+#define fs_locks_held (proc_block->locks_held)
 static void fs_lock_drop(int i) {
     fs_locks[i].used=0;__atomic_fetch_sub(&fs_locks_taken,1,__ATOMIC_RELEASE);
     __atomic_fetch_sub(&fs_locks_held[fs_locks[i].pid],1,__ATOMIC_RELEASE);

@@ -1078,6 +1078,7 @@ static int run(uint64_t steps) {
     fail("Instruction budget exhausted"); return 125;
 }
 int main(int argc,char **argv) {
+    proc_block_init();                                                         /* descriptor tables, mm locks (fs.h) */
     const char *start_cwd=NULL;
     if(argc==2 && !strcmp(argv[1],"capabilities")) {
         fputs("{\"schema_version\":1,\"runtime_abi\":\"dockiva-native-v1\",\"backends\":{"

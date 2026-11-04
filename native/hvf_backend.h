@@ -32,19 +32,21 @@
 /* EL1 handlers (hvf_el1_guest.c, copied to HVF_EL1_CODE of the code page) and what they
    read, in the upper half of the address space (TTBR1, EL1-only, the same for every
    process): the context page, each vCPU's stack, then the lookup cache's counters
-   (at 2 MiB) and entries (at 4 MiB), shared with the runtime. */
+   (at 2 MiB) and entries (at 4 MiB), the process block (32 MiB) and the pack's index
+   (128 MiB), shared with the runtime. */
 #include "hvf_el1.h"
 #include "hvf_el1_code.h"
 #define HVF_EL1_VA UINT64_C(0xffff000000000000)
 #define HVF_EL1_IPA (HVF_IPA_BASE+HVF_TABLE_BYTES+HVF_SYSTEM_BYTES+HVF_FDS_BYTES)
-#define HVF_EL1_BYTES (UINT64_C(64)<<20)
+#define HVF_EL1_BYTES (UINT64_C(256)<<20)
+#define HVF_EL1_BLOCK (UINT64_C(32)<<20)             /* proc_block (fs.h) */
+#define HVF_EL1_PACK (UINT64_C(128)<<20)             /* the pack's index (pack.h) */
 #define HVF_EL1_HEAD (2u<<20)                       /* context page, stacks, then (at 1 MiB) the upper half's tables */
 #define HVF_EL1_STACK 8192u
 #define HVF_EL1_TABLES (1u<<20)
 #define HVF_EL1_STUB 0xc00u                         /* in the code page: the vector's way in */
 #define HVF_EL1_CODE 0x1000u
 _Static_assert(HVF_EL1_CODE+sizeof(hvf_el1_code)<=(16u<<10),"EL1 code outgrew the code page");
-_Static_assert(sizeof(hvf_el1_code)<4096,"the fault vector compares the EL1 code's size as a 12-bit immediate");
 static unsigned char *hvf_el1_head;static int hvf_el1_ready;static unsigned hvf_el1_mounts[2];
 #define HVF_FIXED_IPA (HVF_EL1_IPA+HVF_EL1_BYTES) /* backings go above */
 #define HVF_APPEND_OFFSET 0xbfcu                   /* fd_mirror_append, read by the vector */
@@ -59,7 +61,10 @@ static unsigned char *hvf_el1_head;static int hvf_el1_ready;static unsigned hvf_
    HF_STAT: HVF_EL1_VA while the EL1 handlers may answer, else 0; HF_STACK: this vCPU's
    EL1 stack; HF_SVC_*: the call's ELR, SPSR and ESR while they run (a fault in them
    restores these and the call exits as before). */
-enum { HF_SP=31,HF_TLS,HF_ELR,HF_SPSR,HF_ESR,HF_FAR,HF_TLBI_VA,HF_TLBI_PAGES,HF_FLUSH,HF_FAST,HF_FDS=HF_FAST+7,HF_STAT,HF_STACK,HF_SVC_ELR,HF_SVC_SPSR,HF_SVC_ESR };
+enum { HF_SP=31,HF_TLS,HF_ELR,HF_SPSR,HF_ESR,HF_FAR,HF_TLBI_VA,HF_TLBI_PAGES,HF_FLUSH,HF_FAST,HF_FDS=HF_FAST+7,HF_STAT,HF_STACK,HF_SVC_ELR,HF_SVC_SPSR,HF_SVC_ESR,
+       HF_TASK,HF_MM,     /* the process's descriptor tables in proc_block and its mm lock, or UINT64_MAX (hvf_el1_guest.c) */
+       HF_HELD };         /* the mm lock word an EL1 handler holds, or 0: a fault in the handler releases it */
+_Static_assert(HF_FAST==40 && HF_FDS==47 && HF_TASK==53 && HF_MM==54 && HF_HELD==55,"frame words hvf_el1_guest.c reads");
 _Static_assert((HF_SVC_ESR+1)*8<=512,"frame words outgrew the frame");
 #define HVF_BLOCKS 16384                           /* stage-2 blocks: a few backings for each of up to 1024 processes */
 #define HVF_VIEWS (PROCESS_LIMIT+2)                 /* indexed by pid */
@@ -715,6 +720,9 @@ static void hvf_fast_publish(uint64_t *frame,uint64_t tid) {
     for(unsigned i=0;i<7;i++)frame[HF_FAST+i]=on?answers[i]:UINT64_MAX;
     frame[HF_FDS]=on && schedule_active && fd_mirror_base && hvf_view_pid()==process_pid?HVF_FDS_VA:0;
     frame[HF_STAT]=on && hvf_el1_ready && fs_mount_count==hvf_el1_mounts[0] && mem_mount_count==hvf_el1_mounts[1]?HVF_EL1_VA:0;
+    unsigned task=schedule_active && process_pid?(unsigned)process_pid-1:0;     /* its own tables, in proc_block: EL1 opens and closes */
+    int tables=frame[HF_STAT] && schedule_active && fs_table==&proc_block->fs[task] && fd_table==&proc_block->fds[task];
+    frame[HF_TASK]=tables?task:UINT64_MAX;frame[HF_MM]=tables?mm_id(task)-1:UINT64_MAX;
 }
 static void hvf_fast_push(void) {
     for(unsigned w=0;w<worker_count;w++) {
@@ -907,6 +915,33 @@ static void hvf_el1_setup(void) {
     }
     if(!ok)return;
     c->mounts=n;hvf_el1_mounts[0]=fs_mount_count;hvf_el1_mounts[1]=mem_mount_count;hvf_el1_ready=1;
+    /* The process block: descriptor tables, mm locks, region caches (fs.h). */
+    uint64_t block_bytes=proc_block_bytes();
+    if(HVF_EL1_BLOCK+block_bytes>HVF_EL1_PACK || hv_vm_map(proc_block,HVF_EL1_IPA+HVF_EL1_BLOCK,block_bytes,HV_MEMORY_READ|HV_MEMORY_WRITE)!=HV_SUCCESS)return;
+    hvf_el1_map(HVF_EL1_BLOCK,HVF_EL1_IPA+HVF_EL1_BLOCK,block_bytes);
+    c->host_block=(uint64_t)(uintptr_t)proc_block;
+    c->b_mm=offsetof(ProcBlock,mm);c->b_locks=offsetof(ProcBlock,locks_held);c->b_hint=offsetof(ProcBlock,pack_hint);
+    c->b_fs=offsetof(ProcBlock,fs);c->b_fds=offsetof(ProcBlock,fds);c->b_pack=offsetof(ProcBlock,pack);c->b_mmc=offsetof(ProcBlock,mm_cache);c->b_futex=offsetof(ProcBlock,futex_waiters);
+    c->fs_size=sizeof(FsTable);c->fds_size=sizeof(FdTable);
+    c->t_fd=offsetof(FsTable,fd);c->t_cloexec=offsetof(FsTable,cloexec);c->t_ro=offsetof(FsTable,ro);c->t_dev=offsetof(FsTable,dev);c->t_sole=offsetof(FsTable,sole);
+    c->t_dirs=offsetof(FsTable,dirs);c->t_guest=offsetof(FsTable,guest);c->t_pack=offsetof(FsTable,pack);c->d_kind=offsetof(FdTable,kind);c->d_index=offsetof(FdTable,index);
+    c->fd_file=FD_FILE;c->mirror_file=FD_MIRROR_FILE;c->mirror_cloexec=FD_MIRROR_CLOEXEC;c->fs_slots=FS_SLOTS;c->fd_limit=GUEST_FD_LIMIT;c->file_limit=fs_file_limit;
+    _Static_assert(sizeof(((FsTable *)0)->fd[0])==4 && sizeof(((FsTable *)0)->guest[0])==2 && sizeof(((FdTable *)0)->index[0])==2 && sizeof(((ProcBlock *)0)->locks_held[0])==2,"table fields hvf_el1_guest.c writes");
+    __atomic_store_n(&c->block,HVF_EL1_VA+HVF_EL1_BLOCK,__ATOMIC_RELEASE);
+    /* Image files in the pack: opens and closes (its index). */
+    if(!pack_base)return;
+    const PackHeader *h=(const PackHeader *)(const void *)pack_base;
+    uint64_t index_bytes=(h->data+16383)&~UINT64_C(16383);
+    if(HVF_EL1_PACK+index_bytes>HVF_EL1_BYTES || HVF_EL1_TABLES+(3+(HVF_EL1_PACK+index_bytes)/(2u<<20)+1)*4096>HVF_EL1_HEAD)return;
+    /* The index is copied: the hypervisor refuses to map a read-only file mapping. */
+    void *index=mmap(NULL,index_bytes,PROT_READ|PROT_WRITE,MAP_ANON|MAP_PRIVATE,-1,0);
+    if(index==MAP_FAILED)return;
+    memcpy(index,pack_base,h->data);
+    if(hv_vm_map(index,HVF_EL1_IPA+HVF_EL1_PACK,index_bytes,HV_MEMORY_READ)!=HV_SUCCESS)return;
+    hvf_el1_map(HVF_EL1_PACK,HVF_EL1_IPA+HVF_EL1_PACK,index_bytes);
+    c->pack_entries=HVF_EL1_VA+HVF_EL1_PACK+h->entries;c->pack_strings=HVF_EL1_VA+HVF_EL1_PACK+h->strings;
+    c->marker=(uint32_t)pack_placeholder+1;
+    __atomic_store_n(&c->pack_count,pack_count,__ATOMIC_RELEASE);
 }
 /* A64 encodings for the stub hvf_init writes. */
 static uint32_t a64_b(unsigned from,unsigned to,uint32_t op) { return op|(((uint32_t)((int)to-(int)from)/4)&0x3ffffffu); }
@@ -930,7 +965,7 @@ static void hvf_init(void) {
     hvf_check(hv_vm_map(hvf_tables,HVF_IPA_BASE,HVF_TABLE_BYTES,HV_MEMORY_READ|HV_MEMORY_WRITE),"hv_vm_map tables");
     hvf_check(hv_vm_map(hvf_system,HVF_IPA_BASE+HVF_TABLE_BYTES,HVF_CODE_BYTES,HV_MEMORY_READ|HV_MEMORY_EXEC),"hv_vm_map system");
     hvf_check(hv_vm_map(hvf_system+HVF_CODE_BYTES,HVF_IPA_BASE+HVF_TABLE_BYTES+HVF_CODE_BYTES,HVF_SYSTEM_BYTES-HVF_CODE_BYTES,HV_MEMORY_READ|HV_MEMORY_WRITE),"hv_vm_map frames");
-    hvf_check(hv_vm_map(fd_mirror_base,HVF_IPA_BASE+HVF_TABLE_BYTES+HVF_SYSTEM_BYTES,HVF_FDS_BYTES,HV_MEMORY_READ),"hv_vm_map descriptors");
+    hvf_check(hv_vm_map(fd_mirror_base,HVF_IPA_BASE+HVF_TABLE_BYTES+HVF_SYSTEM_BYTES,HVF_FDS_BYTES,HV_MEMORY_READ|HV_MEMORY_WRITE),"hv_vm_map descriptors"); /* EL1 opens write it */
     fd_mirror_append=(uint32_t *)(void *)(hvf_system+HVF_APPEND_OFFSET);
     /* Each HVC is followed by "b .-4": under load Hypervisor.framework can resume a
        vCPU past an HVC without reporting its exit (the next instruction, zeros, then
@@ -972,7 +1007,7 @@ static void hvf_init(void) {
         0xa94637ec,0xa9473fee,0xa94847f0,0xa9494ff2,0xa94a57f4,0xa94b5ff6,0xa94c67f8,0xa94d6ffa,0xa94e77fc,0xf9407bfe,0xd69f03e0,
         0xa95287e0,0xd50883a0,0x91000400,0xf1000421,0x54ffffa1,0xd5033b9f,0x17ffffe3};
     memcpy(hvf_system+0x400,lower_sync,sizeof(lower_sync));
-    /* Calls 172..178 aside, newfstatat (79) and statx (291) go to the EL1 handlers while
+    /* Calls 172..178 aside, newfstatat (79), statx (291), openat (56), close (57), mmap (222), munmap (215) and futex (98) go to the EL1 handlers while
        HF_STAT says so: the stub saves what C code may clobber (x2..x18, x30) and the
        call's ELR, SPSR and ESR, runs el1_entry(frame, context) on the vCPU's stack, and
        returns to the guest (handled) or takes the exit at save. A fault in the handlers
@@ -982,9 +1017,11 @@ static void hvf_init(void) {
         w[0x42c/4]=a64_b19(0x42c,HVF_EL1_STUB,0x54000008);              /* b.hi: no longer straight to save */
         unsigned at=HVF_EL1_STUB,give_up,taken;
 #define EMIT(x) (w[at/4]=(x),at+=4)
-        EMIT(0xf100001fu|(79u<<10)|(8u<<5));at+=4;                          /* cmp x8, #79; b.eq (below) */
-        EMIT(0xf100001fu|(291u<<10)|(8u<<5));EMIT(a64_b19(at,HVF_SAVE_OFFSET,0x54000001)); /* cmp x8, #291; b.ne save */
-        w[(HVF_EL1_STUB+4)/4]=a64_b19(HVF_EL1_STUB+4,at,0x54000000);
+        static const unsigned answered[]={79,291,56,57,222,215,98};       /* newfstatat, statx, openat, close, mmap, munmap, futex */
+        unsigned taken_at[8],calls=sizeof(answered)/sizeof(*answered);
+        for(unsigned k=0;k+1<calls;k++) { EMIT(0xf100001fu|(answered[k]<<10)|(8u<<5));taken_at[k]=at;at+=4; }   /* cmp x8, #call; b.eq (below) */
+        EMIT(0xf100001fu|(answered[calls-1]<<10)|(8u<<5));EMIT(a64_b19(at,HVF_SAVE_OFFSET,0x54000001));      /* the last: b.ne save */
+        for(unsigned k=0;k+1<calls;k++)w[taken_at[k]/4]=a64_b19(taken_at[k],at,0x54000000);
         EMIT(a64_sp(0xf9400000u,HF_STAT*8,0));EMIT(a64_b19(at,HVF_SAVE_OFFSET,0xb4000000)); /* ldr x0, HF_STAT; cbz x0, save */
         for(unsigned r=2;r<=18;r+=2)EMIT(a64_pair(0xa9000000u,r*8,r,r+1));    /* stp x2, x3 ... x18, x19 */
         EMIT(a64_sp(0xf9000000u,240,30));                                    /* str x30 */
@@ -1009,9 +1046,11 @@ static void hvf_init(void) {
         EMIT(0xd5384029);                                                    /* mrs x9, elr_el1 */
         EMIT(0xd2800000u|((uint32_t)(code&0xffff)<<5)|10);EMIT(0xf2a00000u|((uint32_t)((code>>16)&0xffff)<<5)|10);
         EMIT(0xf2c00000u|((uint32_t)((code>>32)&0xffff)<<5)|10);           /* x10: the handlers' address */
-        EMIT(0xcb0a0129);EMIT(0xf100001fu|((uint32_t)sizeof(hvf_el1_code)<<10)|(9u<<5));  /* sub x9, x9, x10; cmp x9, #size */
+        EMIT(0xcb0a0129);EMIT(0xd2800000u|((uint32_t)sizeof(hvf_el1_code)<<5)|11);EMIT(0xeb0b013f);   /* sub x9, x9, x10; mov x11, #size; cmp x9, x11 */
         unsigned other=at;at+=4;                                             /* b.hs (below) */
         EMIT(0xd538d089);EMIT(0x9100013f);                                   /* mrs x9, tpidr_el1; mov sp, x9 */
+        EMIT(a64_sp(0xf9400000u,HF_HELD*8,9));EMIT(0xb4000069);              /* ldr x9, HF_HELD; cbz x9, (past the release) */
+        EMIT(0x889ffd3f);EMIT(a64_sp(0xf9000000u,HF_HELD*8,31));             /* stlr wzr, [x9]; str xzr, HF_HELD */
         EMIT(a64_sp(0xf9400000u,HF_SVC_ELR*8,9));EMIT(0xd5184029);
         EMIT(a64_sp(0xf9400000u,HF_SVC_SPSR*8,9));EMIT(0xd5184009);
         EMIT(a64_sp(0xf9400000u,HF_SVC_ESR*8,9));EMIT(0xd5185209);
@@ -1147,6 +1186,15 @@ static unsigned hvf_futex_bucket(uint64_t pid,uint64_t address,const MemoryBacki
     if(backing) { uint64_t k=(uint64_t)(uintptr_t)backing^((uint64_t)offset*0x9e3779b1u);return (unsigned)((k>>4)^(k>>12)^(k>>20))%HVF_FUTEX_BUCKETS; }
     return (unsigned)((address>>2)^(address>>12)^(pid*0x9e37u))%HVF_FUTEX_BUCKETS;
 }
+/* The EL1 wake's count (hvf_el1.h) for a waiter on address, raised; then a full
+   barrier, so the waiter's read of the word comes after it (a waker stores the word,
+   then reads the count). */
+static uint32_t hvf_futex_dummy_count;
+static uint32_t *hvf_futex_count_up(uint64_t address,const MemoryBacking *shared) {
+    uint32_t *c=!proc_block?&hvf_futex_dummy_count:shared?&proc_block->futex_waiters[HVF_EL1_FUTEX_SLOTS]:&proc_block->futex_waiters[hvf_el1_futex_slot(process_pid,address)];
+    __atomic_fetch_add(c,1,__ATOMIC_SEQ_CST);__atomic_thread_fence(__ATOMIC_SEQ_CST);return c;
+}
+static void hvf_futex_count_down(uint32_t *c) { __atomic_fetch_sub(c,1,__ATOMIC_SEQ_CST); }
 /* Wake up to count in-place waiters on address: this process's (this image's), or
    any process's for a futex in shared memory (shared, offset). */
 static unsigned hvf_futex_wake_inplace(uint64_t address,const MemoryBacking *shared,size_t offset,unsigned count,uint32_t bits) {
@@ -1199,6 +1247,7 @@ static unsigned hvf_futex_requeue(uint64_t address,unsigned wake,unsigned move,u
             if(th->state!=2)continue;
             if(shared?th->futex_backing==shared && th->futex_offset==offset:!th->futex_backing && th->futex_address==address) {
                 th->futex_address=target;th->futex_backing=target_shared;th->futex_offset=target_offset;moved++;
+                uint32_t *was=th->futex_count;th->futex_count=hvf_futex_count_up(target,target_shared);if(was)hvf_futex_count_down(was);
             }
         }
     }
@@ -1257,15 +1306,19 @@ static uint64_t hvf_futex(int *waiting) {
         deadline=sec*1000000000+ns;
         if(command==0) { uint64_t now=thread_time_ns(0);if(deadline>UINT64_MAX-now)return linux_error(22);deadline+=now; }
     }
-    if(le(word,4)!=(uint32_t)cpu->gpr[2])return linux_error(11);
-    if(cpu->gpr[3] && deadline<=thread_time_ns(realtime))return linux_error(110);
-    if(!schedule_active)return linux_error(38);
+    size_t shared_offset=0;MemoryBacking *shared=hvf_futex_shared(cpu->gpr[0],&shared_offset);
+    uint32_t *count=hvf_futex_count_up(cpu->gpr[0],shared);
+    if(__atomic_load_n((const uint32_t *)(const void *)word,__ATOMIC_SEQ_CST)!=(uint32_t)cpu->gpr[2]) { hvf_futex_count_down(count);return linux_error(11); }
+    if(cpu->gpr[3] && deadline<=thread_time_ns(realtime)) { hvf_futex_count_down(count);return linux_error(110); }
+    if(!schedule_active) { hvf_futex_count_down(count);return linux_error(38); }
     /* Even a single-threaded process waits (until its timeout, as on Linux). */
-    ThreadTable *p=hvf_threads_ensure();if(!p)return linux_error(12);
+    ThreadTable *p=hvf_threads_ensure();if(!p) { hvf_futex_count_down(count);return linux_error(12); }
     ScheduledTask *task=hvf_task();Thread *t=&p->thread[thread_now];
-    if(job_control_enabled && ((task->signal_pending|t->signal_pending)&~t->signal_mask&~task->signal_ignored))return linux_error(4);
+    if(job_control_enabled && ((task->signal_pending|t->signal_pending)&~t->signal_mask&~task->signal_ignored)) { hvf_futex_count_down(count);return linux_error(4); }
     t->state=2;t->futex_address=cpu->gpr[0];t->deadline_ns=deadline;t->realtime=(unsigned)realtime;t->bitset=bits;t->private_wait=(op&128)!=0;
-    t->futex_backing=hvf_futex_shared(cpu->gpr[0],&t->futex_offset);
+    t->futex_backing=shared;t->futex_offset=shared_offset;
+    if(t->futex_count)hvf_futex_count_down(t->futex_count);
+    t->futex_count=count;
     *waiting=1;return 0;
 }
 /* A successful exec in a threaded process ends every other thread; the caller
@@ -1274,7 +1327,7 @@ static void hvf_exec_threads(void) {
     ScheduledTask *t=hvf_task();hvf_main_clear_tid[process_pid]=0;hvf_views[process_pid].stale=HVF_STALE_NEW;
     t->futex_epoch=__atomic_add_fetch(&schedule_futex_epochs,1,__ATOMIC_RELAXED); /* in-place waiters of the old image wake no one */
     if(!t->threads)return;
-    for(unsigned i=0;i<t->threads->top;i++)if((int)i!=thread_now)t->threads->thread[i].state=0;
+    for(unsigned i=0;i<t->threads->top;i++)if((int)i!=thread_now) { t->threads->thread[i].state=0;futex_uncount(&t->threads->thread[i]); }
     Thread *th=task_thread(t);th->tid=(unsigned)process_pid;th->clear_tid=0;
 }
 /* Thread-aware syscalls, before the shared Linux layer. */
@@ -1449,9 +1502,10 @@ static int hvf_futex_unlocked(void) {
     HvfFutexWaiter w;memset(&w,0,sizeof(w));
     w.pid=process_pid;w.epoch=task->futex_epoch;w.address=address;w.backing=shared;w.offset=offset;w.bits=bits;w.wait=iw;
     unsigned b=hvf_futex_bucket(w.pid,address,shared,offset);
+    uint32_t *count=hvf_futex_count_up(address,shared);
     pthread_mutex_lock(&hvf_futex_buckets[b].lock);
     if(__atomic_load_n((const uint32_t *)word,__ATOMIC_SEQ_CST)!=(uint32_t)cpu->gpr[2]) {
-        pthread_mutex_unlock(&hvf_futex_buckets[b].lock);
+        pthread_mutex_unlock(&hvf_futex_buckets[b].lock);hvf_futex_count_down(count);
         cpu->gpr[0]=linux_error(11);return 1;
     }
     w.next=hvf_futex_buckets[b].head;hvf_futex_buckets[b].head=&w;
@@ -1483,7 +1537,7 @@ static int hvf_futex_unlocked(void) {
         pthread_mutex_unlock(&hvf_futex_buckets[b].lock);
     }
     pthread_mutex_lock(&iw->lock);__atomic_store_n(&iw->state,0,__ATOMIC_RELEASE);iw->futex=0;pthread_mutex_unlock(&iw->lock);
-    __atomic_sub_fetch(&schedule_inplace_count,1,__ATOMIC_RELAXED);
+    __atomic_sub_fetch(&schedule_inplace_count,1,__ATOMIC_RELAXED);hvf_futex_count_down(count);
     mm_lock(task);
     PROFILE_ADD(profile_futex_inplace,1);
     if(w.woken) { PROFILE_ADD(profile_futex_inplace_woken,1);cpu->gpr[0]=0;return 1; }
@@ -1615,7 +1669,14 @@ static int hvf_slice_run(void) {
             fs_close_pending();
             profile_exit_done();
             uint64_t entered=profiling?profile_now_ns():0;
-            ran=hv_vcpu_run(vcpu);
+            /* An interruption (preemption tick, timer) inside EL1 code is resumed at once,
+               before the mm lock: an EL1 handler may hold it (hvf_el1_guest.c). */
+            for(;;) {
+                ran=hv_vcpu_run(vcpu);
+                if(ran!=HV_SUCCESS || (hvf_exit->reason!=HV_EXIT_REASON_CANCELED && hvf_exit->reason!=HV_EXIT_REASON_VTIMER_ACTIVATED))break;
+                uint64_t mode=0;hvf_check(hv_vcpu_get_reg(vcpu,HV_REG_CPSR,&mode),"get cpsr");
+                if(!(mode&0xf))break;
+            }
             atomic_store(&self->in_guest,0);
             hvf_cpu->framed=ran==HV_SUCCESS && hvf_exit->reason==HV_EXIT_REASON_EXCEPTION && (hvf_exit->exception.syndrome>>26)==0x16 && (hvf_exit->exception.syndrome&0xffff)==4; /* hvc #4 */
             if(profiling) {

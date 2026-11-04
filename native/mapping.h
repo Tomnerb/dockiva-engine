@@ -508,7 +508,17 @@ static uint64_t map_outside_clear(uint64_t address,uint64_t bytes) {
 /* Private file-backed guest mappings. Bytes remain ordinary non-executable host
    allocations; MAP_FIXED outside the arena maps anywhere in the user address space. */
 static int dynamic_enabled;
+static uint64_t guest_dynamic_mmap_map(void);
+/* mmap: around the mapping, the region cache (hvf_el1.h): a fixed mapping replaces what
+   was there; a small private anonymous read-write one is registered. */
 static uint64_t guest_dynamic_mmap(void) {
+    uint64_t addr=cpu->gpr[0],length=cpu->gpr[1],prot=cpu->gpr[2],flags=cpu->gpr[3];
+    if((flags&0x100010) && length && length<=UINT64_MAX-4095)mm_cache_range(addr,page_up(length));
+    uint64_t result=guest_dynamic_mmap_map();
+    if((int64_t)result>0 && !addr && prot==3 && flags==0x22 && length<=UINT64_MAX-4095)mm_cache_register(result,page_up(length));
+    return result;
+}
+static uint64_t guest_dynamic_mmap_map(void) {
     uint64_t addr=cpu->gpr[0],length=cpu->gpr[1],prot=cpu->gpr[2],flags=cpu->gpr[3],offset=cpu->gpr[5],hint=(flags&16)?0:addr;
     int anonymous_private=(flags&32) && (flags&3)==2 && !(flags&0x100000);
     int reservable=anonymous_private && !(flags&16) && !prot && length && length<=RESERVE_END;
@@ -613,6 +623,7 @@ static uint64_t guest_mprotect(void) {
     if(addr%4096 || length>UINT64_MAX-4095 || prot>7 || ((prot&6)==6 && !map_rwx_allowed))return linux_error(22);
     if(!length)return 0;
     uint64_t bytes=page_up(length);
+    mm_cache_range(addr,bytes);
     if(addr<MAP_BASE || addr-MAP_BASE>=address_space->map_capacity || bytes>address_space->map_capacity-(addr-MAP_BASE)) {
         if(bytes>UINT64_MAX-addr)return linux_error(22);
         if(reserve_find(addr,bytes)>=0)return reserve_protect(addr,bytes,prot);
@@ -662,6 +673,7 @@ static int reserve_discard(uint64_t address,uint64_t bytes) {
    guest address is passed to host madvise. */
 static uint64_t guest_madvise(void) {
     uint64_t addr=cpu->gpr[0],length=cpu->gpr[1];int32_t advice=(int32_t)cpu->gpr[2];
+    if(length<=UINT64_MAX-4095)mm_cache_range(addr,page_up(length));
     if(!(addr&4095) && length && length<=RESERVE_END && reserve_find(addr,page_up(length))>=0) {
         /* Inside a reservation: hints are accepted; MADV_DONTNEED zeroes committed pages. */
         if(advice==4 && !reserve_discard(addr,page_up(length)))return linux_error(12);
@@ -756,6 +768,7 @@ static uint64_t guest_mremap(void) {
     if((flags&4) && old_size!=new_size)return linux_error(22);                     /* MREMAP_DONTUNMAP moves, never resizes */
     if((flags&2) && (target%4096 || target<UINT64_C(0x10000) || new_size>GUEST_VA_END-target || (target<old+old_size && old<target+new_size)))return linux_error(22);
     if(old_size>GUEST_VA_END-old)return linux_error(14);
+    mm_cache_range(old,old_size);if(flags&2)mm_cache_range(target,new_size);
     if(!address_space_map_flags(address_space))return linux_error(12);
     /* What the old range is. */
     Segment *shared=NULL;unsigned f=0;int arena=map_in_arena(old,old_size?old_size:4096);

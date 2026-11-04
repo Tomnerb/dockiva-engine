@@ -63,9 +63,11 @@ static uint64_t guest_mmap(uint64_t length,uint64_t prot,uint64_t flags,uint64_t
 static uint64_t shared_unmap(uint64_t address,uint64_t bytes); /* mapping.h */
 static int reserve_unmap(uint64_t address,uint64_t bytes);      /* mapping.h */
 static int file_copy_demote(uint64_t address,uint64_t bytes,int partial); /* mapping.h */
+static void mm_cache_range(uint64_t addr,uint64_t bytes);   /* fs.h */
 static uint64_t guest_munmap(uint64_t addr,uint64_t length) {
     if(addr%4096 || !length || length>UINT64_MAX-4095) return linux_error(22);
     uint64_t bytes=page_up(length);
+    mm_cache_range(addr,bytes);
     if(addr<MAP_BASE || addr-MAP_BASE>=address_space->map_capacity || bytes>address_space->map_capacity-(addr-MAP_BASE))
     {
         /* Outside the arena: reservations (every mmap made there) and their commits go;

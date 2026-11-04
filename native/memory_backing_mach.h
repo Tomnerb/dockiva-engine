@@ -31,7 +31,46 @@ static MemoryBacking *backing_descriptor(size_t size) {
     if(backing) { backing->refs=1;backing->size=size;backing->mapped_size=mapped;backing->page_size=page; }
     return backing;
 }
+/* Sources with live snapshots (by address and a serial, as freed addresses are
+   reused): when the last snapshot's host memory is deallocated the source thaws.
+   ponytail: a fixed table; a source that finds it full stays frozen, as before. */
+#define BACKING_THAW 256u
+static struct { MemoryBacking *source;uint64_t serial;unsigned snapshots; } backing_thaw_table[BACKING_THAW];
+static uint64_t backing_thaw_serial;
+static pthread_mutex_t backing_thaw_lock=PTHREAD_MUTEX_INITIALIZER;
+static void backing_thaw_register(MemoryBacking *source,MemoryBacking *copy) {
+    pthread_mutex_lock(&backing_thaw_lock);
+    unsigned free_slot=BACKING_THAW;
+    for(unsigned i=0;i<BACKING_THAW;i++) {
+        if(backing_thaw_table[i].source==source) { backing_thaw_table[i].snapshots++;copy->source=source;copy->source_serial=backing_thaw_table[i].serial;free_slot=BACKING_THAW+1;break; }
+        if(!backing_thaw_table[i].source && free_slot==BACKING_THAW)free_slot=i;
+    }
+    if(free_slot<BACKING_THAW) {
+        uint64_t serial=++backing_thaw_serial;
+        backing_thaw_table[free_slot].source=source;backing_thaw_table[free_slot].serial=serial;backing_thaw_table[free_slot].snapshots=1;
+        copy->source=source;copy->source_serial=serial;
+    }
+    pthread_mutex_unlock(&backing_thaw_lock);
+}
+/* backing's host memory is gone: a source leaves the table; a snapshot's source thaws if it was the last. */
+static void backing_thaw(MemoryBacking *backing) {
+    pthread_mutex_lock(&backing_thaw_lock);
+    for(unsigned i=0;i<BACKING_THAW;i++) {
+        if(backing_thaw_table[i].source==backing)backing_thaw_table[i].source=NULL;   /* freed with snapshots alive */
+        else if(backing->source && backing_thaw_table[i].source==backing->source && backing_thaw_table[i].serial==backing->source_serial &&
+                !--backing_thaw_table[i].snapshots) {
+            __atomic_store_n(&backing_thaw_table[i].source->frozen,0,__ATOMIC_RELEASE);backing_thaw_table[i].source=NULL;
+        }
+    }
+    pthread_mutex_unlock(&backing_thaw_lock);
+}
 static void backing_vm_release(MemoryBacking *backing) {
+    if(backing->source || backing->frozen) {           /* before anything is freed: the table holds no stale address */
+        if(backing->bytes && backing->source && mach_vm_deallocate(mach_task_self(),(mach_vm_address_t)backing->bytes,backing->mapped_size)!=KERN_SUCCESS)
+            fail("Cannot release guest VM backing");
+        if(backing->source)backing->bytes=NULL;
+        backing_thaw(backing);
+    }
     if(backing->bytes && mach_vm_deallocate(mach_task_self(),(mach_vm_address_t)backing->bytes,backing->mapped_size)!=KERN_SUCCESS)
         fail("Cannot release guest VM backing");
     for(size_t i=0;i<backing->used;i++)
@@ -175,7 +214,7 @@ static MemoryBacking *backing_snapshot(MemoryBacking *source) {
     if(result!=KERN_SUCCESS) { free(copy);errno=ENOMEM;return NULL; }
     copy->bytes=(unsigned char *)address;copy->cow_copy=1;
     for(size_t i=0;i<count;i++) { copy->pages[i]=source->pages[i];if(copy->pages[i])__atomic_fetch_add(&copy->pages[i]->refs,1,__ATOMIC_ACQ_REL); }
-    copy->used=count;
+    copy->used=count;backing_thaw_register(source,copy);
     return copy;
 }
 /* A private copy of source's owned pages, charged now (the fork of a small process:

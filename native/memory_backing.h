@@ -7,9 +7,12 @@
 typedef struct BackingPageGroup BackingPageGroup;
 typedef struct { size_t refs;BackingPageGroup *group; } BackingPage;
 struct BackingPageGroup { size_t live,count;unsigned uncharged;BackingPage pages[]; }; /* uncharged: read-only program text */
-/* frozen: the backing was the source of a snapshot. Its memory is never written
-   again (each holder writes its own copy instead): with several vCPUs first-touching
-   pages at once, a write to a snapshot's source can show through in the snapshot. */
+/* frozen: the backing was the source of a snapshot. Its memory is not written while
+   one lives (each holder writes its own copy instead): with several vCPUs first-
+   touching pages at once, a write to a snapshot's source can show through in the
+   snapshot. Once its last snapshot's host memory is gone it thaws (backing_thaw):
+   the parent of a fork whose child copied, then exec'd, writes its own memory again
+   instead of copying all of it too. source, source_serial: a snapshot's source. */
 /* hvf_ipa, hvf_epoch: the hypervisor backend's guest-physical address for it, valid
    while hvf_epoch matches; hvf_chunks: the same per chunk of a large one (see hvf_ipa_at). */
 /* used: one past the highest page ever owned; every page above it is unowned, so
@@ -23,6 +26,7 @@ typedef struct {
     unsigned char *bytes;
     uint64_t hvf_ipa,hvf_epoch,*hvf_chunks;
     void *reap_next;                  /* in backing_reap's queue */
+    void *source;uint64_t source_serial;
     BackingPage *pages[];
 } MemoryBacking;
 #else

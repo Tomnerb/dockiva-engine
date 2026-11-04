@@ -79,11 +79,11 @@ static void guest_ids_of(uint64_t pid,uint32_t uid[3],uint32_t gid[3]) {
 static void proc_memory(uint64_t pid,int own_held,uint64_t *vsz,uint64_t *rss) {
     if(!schedule_active || !pid || pid>PROCESS_LIMIT+1) { if(pid==process_pid)proc_space_memory(address_space,vsz,rss);else *vsz=*rss=0;return; }
     ScheduledTask *t=&schedule_tasks[pid-1];
-    pthread_mutex_t *mm=mm_of(t);                                       /* a vfork child's: its owner's */
+    MmLock *mm=mm_of(t);                                                /* a vfork child's: its owner's */
     int lock=!(own_held && (pid==process_pid || mm==mm_held)) && (t->worker || t->running);
-    if(lock)pthread_mutex_lock(mm);
+    if(lock && !mm_word_try(mm))mm_word_wait(mm);
     proc_space_memory(t->ps.shared?&t->ps.shared->state.memory:&t->image.memory,vsz,rss);
-    if(lock)pthread_mutex_unlock(mm);
+    if(lock)mm_word_unlock(mm);
 }
 static unsigned guest_thread_list(uint64_t pid,unsigned *tids,char *states,uint64_t (*cpu)[2],unsigned capacity) {
     const ThreadTable *table=schedule_active && capacity?schedule_tasks[pid-1].threads:NULL;
@@ -127,8 +127,8 @@ static uint64_t guest_close(uint64_t fd) {
     if(fd_kind[fd]==FD_NET)return net_release((unsigned)slot)<0?net_error():0;
     if(fd_kind[fd]==FD_FILE) {
         if(fs_dirs[slot]) { fs_directory_release(fs_dirs[slot]);fs_dirs[slot]=NULL; }
-        fs_pack_drop((unsigned)slot);
-        int host=fs_fd[slot]-1;fs_fd[slot]=0;fs_cloexec[slot]=0;fd_unbind(fd);return close(host)<0?fs_error():0;
+        int packed=fs_pack_drop((unsigned)slot);                           /* the pack's placeholder stays open */
+        int host=fs_fd[slot]-1;fs_fd[slot]=0;fs_cloexec[slot]=0;fd_unbind(fd);return packed || close(host)>=0?0:fs_error();
     }
     io_release(&io_fds[slot]);fd_unbind(fd);return 0;
 }
@@ -145,7 +145,7 @@ static uint64_t guest_dup(uint64_t oldfd,int64_t target,uint64_t min,int cloexec
     int64_t fd=target>=0?target:fd_lowest(min);
     if(slot<0 || fd<0)return linux_error(24);
     if(kind==FD_FILE) {
-        int host=dup(fs_fd[from]-1);if(host<0)return fs_error();
+        int host=fs_packed[from]?fs_fd[from]-1:dup(fs_fd[from]-1);if(host<0)return fs_error();   /* the pack's placeholder: shared */
         if(target>=0 && fd_kind[fd])(void)guest_close((uint64_t)fd);
         fs_fd[slot]=host+1;fs_cloexec[slot]=(unsigned char)(cloexec!=0);fs_ro[slot]=fs_ro[from];fs_dev[slot]=fs_dev[from];fs_dirs[slot]=fs_dirs[from];
         fs_sole[slot]=fs_sole[from]=0;
@@ -724,7 +724,7 @@ static int fs_call_detached(uint64_t call,const char *path,uint64_t *result,int 
     mm_lock(task);fs_table->transfers-=transfer;
     Thread *th=task_thread(task);
     if(syscall_abort || task->exit_pending || (th && !th->state)) {          /* nothing changed, or no one to tell */
-        if(fs_detached.fd>=0) { close(fs_detached.fd);fs_directory_release(fs_detached.directory);fs_detached.fd=-1; }
+        if(fs_detached.fd>=0) { if(!fs_detached.pack)close(fs_detached.fd);fs_directory_release(fs_detached.directory);fs_detached.fd=-1; }
         if(fs_detached.pack) { pack_unref(fs_detached.pack);fs_detached.pack=NULL; }
         *result=r;return 1;
     }
@@ -759,7 +759,15 @@ static int fs_stat_cached(const char *path,int follow,struct stat *st,uint64_t *
     }
     if(!strcmp(full,"/") || (mem_mount_count && mem_mount_inside(full)) || !strncmp(full,"/proc",5) || !strncmp(full,"/dev",4) || !strncmp(full,"/sys",4) || (fs_mount_count && fs_mount_of(full)) || fs_device(full))return 0;
     OvStamp at;ov_stamp(full,&at);OvCached hit;
-    if(!ov_cache_get(full,follow,&at,&hit))return 0;
+    if(!ov_cache_get(full,follow,&at,&hit)) {
+#if FS_DIRECT
+        /* A path the upper layer holds (a file the container made: the go command's
+           cache, a build's outputs) shows its own stat above anything below: one host
+           call that refuses symlinks anywhere on the way. */
+        if(!fstatat(fs_root,full+1,st,FS_NOFOLLOW_AT) && !(follow && S_ISLNK(st->st_mode))) { *error=0;return S_ISREG(st->st_mode) || S_ISDIR(st->st_mode) || S_ISLNK(st->st_mode); }
+#endif
+        return 0;
+    }
     if(hit.layer!=1) { *error=linux_error(hit.layer==3 && hit.lower?20:2);return 1; }
     *st=hit.st;*error=0;
     return S_ISREG(st->st_mode) || S_ISDIR(st->st_mode) || S_ISLNK(st->st_mode) || S_ISSOCK(st->st_mode) || S_ISFIFO(st->st_mode);
@@ -777,16 +785,15 @@ static int fs_pack_call(uint64_t call) {
     if(slot<0 || !fs_fd[slot] || !fs_packed[slot])return 0;
     PackOpen *o=fs_packed[slot];
     if(__atomic_load_n(&o->real,__ATOMIC_ACQUIRE)>=0)return 0;
-    const PackEntry *e=o->entry;const unsigned char *data=pack_base+e->offset;
-    if(call==57) {
-        fs_close_pending();
-        int host=fs_fd[slot]-1;fs_fd[slot]=0;fs_cloexec[slot]=0;fs_sole[slot]=0;fs_pack_drop((unsigned)slot);fd_unbind(fd);
-        close(host);cpu->gpr[0]=0;return 1;
+    const PackEntry *e=pack_entry(o);const unsigned char *data=pack_base+e->offset;
+    if(call==57) {                                                            /* the placeholder stays open */
+        fs_fd[slot]=0;fs_cloexec[slot]=0;fs_sole[slot]=0;fs_pack_drop((unsigned)slot);fd_unbind(fd);
+        cpu->gpr[0]=0;return 1;
     }
     if(call==80 || call==79 || call==291) {
         unsigned char *out=lookup(cpu->gpr[call==80?1:call==79?2:4],call==291?256:128,2);
         if(!out)cpu->gpr[0]=linux_error(14);
-        else { fs_stat_pack(out,&o->st);if(call==291)statx_from_stat(out);cpu->gpr[0]=0; }
+        else { fs_stat_pack(out,pack_stat(o));if(call==291)statx_from_stat(out);cpu->gpr[0]=0; }
         return 1;
     }
     if(call==62) {
@@ -895,8 +902,9 @@ static int guest_syscall_unlocked(void) {
     if(call==57 && file && !__atomic_load_n(&fs_locks_held[process_pid_now()],__ATOMIC_ACQUIRE)) {
         int slot=fs_slot(fd),host=fs_fd[slot]-1;
         fs_close_pending();fs_close_keep=fs_sole[slot] && !fs_table->transfers;   /* no duplicate in flight */
-        fs_fd[slot]=0;fs_cloexec[slot]=0;fs_sole[slot]=0;fs_pack_drop((unsigned)slot);fd_unbind(fd);
-        fs_close_later=host;cpu->gpr[0]=0;return 1;
+        fs_fd[slot]=0;fs_cloexec[slot]=0;fs_sole[slot]=0;fd_unbind(fd);
+        if(!fs_pack_drop((unsigned)slot))fs_close_later=host;                 /* the pack's placeholder stays open */
+        cpu->gpr[0]=0;return 1;
     }
     /* ppoll of sockets alone (libpq, pgbench): the host's readiness and the thread's own
        wait; a wait goes to the backend's direct wait, then the locked path. */

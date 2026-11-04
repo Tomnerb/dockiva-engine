@@ -21,6 +21,7 @@ typedef struct {
     unsigned wait_masked;uint64_t wait_saved_mask;       /* ppoll/pselect6 with a mask: the thread's own, to restore */
     MemoryBacking *futex_backing; /* a futex in shared memory: keyed by its memory, across processes */
     size_t futex_offset;
+    uint32_t *futex_count;        /* its waiter count while parked on a futex (hvf_el1.h) */
     uint64_t cpu_ns[2];           /* CPU time it used (user, system), for /proc/PID/task */
 } Thread;
 typedef struct { unsigned cursor,top;Thread thread[THREAD_LIMIT]; } ThreadTable; /* top: 1 + the highest slot ever used */
@@ -33,7 +34,7 @@ typedef struct { unsigned cursor,top;Thread thread[THREAD_LIMIT]; } ThreadTable;
    ended while other threads still ran; the last of them frees it. */
 typedef struct {
     ProcessImage image;IoTable io;NetTable net;NetWait network_wait;
-    ProcShared ps;FsTable fs;FdTable fds;
+    ProcShared ps;                                    /* descriptor tables and mm lock: proc_block (fs.h) */
     unsigned vfork_child,saved,state,terminate_signal,pgid,sid,input_wait,stop_signal,execed,blocked,worker;uint64_t epoch,wakeups;
     unsigned child_wait;  /* blocked in wait4/waitid (single-threaded): woken by a child's event or a signal, not by I/O */
     unsigned preempted;   /* as Thread's */
@@ -46,13 +47,22 @@ typedef struct {
     unsigned wait_masked;uint64_t wait_saved_mask; /* ppoll/pselect6 of a single-threaded process (Thread has its own) */
     unsigned sigwaiting;uint64_t sigwait_set,sigwait_info; /* rt_sigtimedwait: the signals it takes, its siginfo (mask in suspend_mask) */
     ThreadTable *threads;unsigned running,exit_pending,exit_signal;int exit_result;
-    pthread_mutex_t mm;
     uint64_t futex_epoch; /* the image's identity for futexes waited on in place (hvf_backend.h): new at fork and exec */
     unsigned mm_owner;    /* a vfork child sharing a threaded process's memory: that pid (its mm lock and page tables), else 0 */
 } ScheduledTask;
 static uint64_t schedule_futex_epochs;
 static uint64_t schedule_switches,schedule_cancellations;
 static ScheduledTask schedule_tasks[PROCESS_LIMIT+1];
+/* A task's descriptor tables; the two tasks outside schedule_tasks (schedule_spare,
+   schedule_cleanup's) have a pair each after them. */
+static ScheduledTask schedule_spare;
+static size_t task_slot(const ScheduledTask *t) {
+    uintptr_t at=(uintptr_t)t,base=(uintptr_t)schedule_tasks;
+    if(at>=base && at<base+sizeof(schedule_tasks))return (size_t)((at-base)/sizeof(*t));
+    return t==&schedule_spare?PROCESS_LIMIT+1:PROCESS_LIMIT+2;
+}
+#define task_fs(t) (&proc_block->fs[task_slot(t)])
+#define task_fds(t) (&proc_block->fds[task_slot(t)])
 /* Workers (--cpus N): N host threads run tasks at once, each on its own CPU
    backend context (a vCPU). Guest code runs in parallel; everything else (system
    calls, faults, scheduling) holds runtime_mutex. The lock holder's current-process
@@ -115,17 +125,28 @@ static void schedule_interrupt(ScheduledTask *t) {
 }
 /* Threads of a process take its mm lock around every exit and hold it for
    microseconds: spin briefly before sleeping in the kernel, where a wakeup takes far
-   longer than a typical hold (and a barging thread can retake the lock meanwhile). */
+   longer than a typical hold (and a barging thread can retake the lock meanwhile).
+   The lock is a word in proc_block: 0 free, 1 held, 2 held with a sleeper. The EL1
+   handlers take it too, by one compare-and-swap (never waiting), and release it
+   without a wake: a sleeper's wait is bounded, so it rechecks within 100 us. */
+extern int __ulock_wait(uint32_t operation,void *address,uint64_t value,uint32_t timeout_us);   /* libsystem_kernel */
+extern int __ulock_wake(uint32_t operation,void *address,uint64_t value);
+typedef uint32_t MmLock;
+static int mm_word_try(MmLock *m) { uint32_t free_word=0;return __atomic_compare_exchange_n(m,&free_word,1,0,__ATOMIC_ACQUIRE,__ATOMIC_RELAXED); }
+static void mm_word_wait(MmLock *m) {
+    while(__atomic_exchange_n(m,2,__ATOMIC_ACQUIRE))(void)__ulock_wait(1,m,2,100);   /* UL_COMPARE_AND_WAIT */
+}
+static void mm_word_unlock(MmLock *m) { if(__atomic_exchange_n(m,0,__ATOMIC_RELEASE)==2)(void)__ulock_wake(1|0x100,m,0); } /* ULF_WAKE_ALL */
 /* A process sharing its memory with a threaded one (a vfork child) takes the
    owner's lock (SharedImage). The lock taken is remembered: exec drops the shared
    image while holding it. */
-static _Thread_local pthread_mutex_t *mm_held;
+static _Thread_local MmLock *mm_held;
 /* The process whose mm lock and page tables task index uses (1-based). */
 static unsigned mm_id(unsigned index) { unsigned owner=schedule_tasks[index].mm_owner;return owner?owner:index+1; }
-static pthread_mutex_t *mm_of(ScheduledTask *t) { return &schedule_tasks[mm_id((unsigned)(t-schedule_tasks))-1].mm; }
+static MmLock *mm_of(ScheduledTask *t) { return &proc_block->mm[mm_id((unsigned)(t-schedule_tasks))-1]; }
 static int mm_trylock(ScheduledTask *t) {
-    pthread_mutex_t *m=mm_of(t);
-    if(pthread_mutex_trylock(m))return 0;
+    MmLock *m=mm_of(t);
+    if(!mm_word_try(m))return 0;
     mm_held=m;return 1;
 }
 static void mm_lock(ScheduledTask *t) {
@@ -137,11 +158,12 @@ static void mm_lock(ScheduledTask *t) {
         __asm__ volatile("yield");
 #endif
     }
-    pthread_mutex_lock(mm_held=mm_of(t));
+    mm_word_wait(mm_held=mm_of(t));
 held:
     if(profiling) { PROFILE_ADD(profile_mm_waits,1);PROFILE_ADD(profile_mm_wait_ns,profile_now_ns()-since); }
 }
-static void mm_unlock(ScheduledTask *t) { (void)t;if(schedule_active && mm_held) { pthread_mutex_t *m=mm_held;mm_held=NULL;pthread_mutex_unlock(m); } }
+static HvfMmCache *mm_cache_of(void) { return schedule_active && process_pid?&proc_block->mm_cache[mm_id((unsigned)process_pid-1)-1]:NULL; }
+static void mm_unlock(ScheduledTask *t) { (void)t;if(schedule_active && mm_held) { MmLock *m=mm_held;mm_held=NULL;mm_word_unlock(m); } }
 static void schedule_notify(void);
 static _Thread_local int runtime_held; /* this worker holds runtime_mutex */
 /* Memory of images that ended (exit, exec) under the runtime lock: no task refers
@@ -346,8 +368,8 @@ static void task_save(ScheduledTask *t) {
     if(io_table!=&t->io)t->io=*io_table;
     if(net_table!=&t->net)t->net=*net_table;
     if(net_wait_now!=&t->network_wait)t->network_wait=net_wait;
-    if(fs_table!=&t->fs)t->fs=*fs_table;
-    if(fd_table!=&t->fds)t->fds=*fd_table;
+    if(fs_table!=task_fs(t))*task_fs(t)=*fs_table;
+    if(fd_table!=task_fds(t))*task_fds(t)=*fd_table;
 }
 static void task_load(ScheduledTask *t) {
     /* A threaded process's memory moves to a shared image without a task_save
@@ -359,14 +381,14 @@ static void task_load(ScheduledTask *t) {
     if(t->mm_owner) { shared_image=t->image.shared;address_space=image_place(shared_image);*cpu=t->image.cpu;fs_umask=t->image.mask;cpu->exclusive_valid=0; }
     else image_restore(&t->image);
     t->saved=0;
-    io_table=&t->io;net_table=&t->net;net_wait_now=&t->network_wait;fs_table=&t->fs;fd_table=&t->fds;
+    io_table=&t->io;net_table=&t->net;net_wait_now=&t->network_wait;fs_table=task_fs(t);fd_table=task_fds(t);
 }
 static void seccomp_forget(uint64_t pid); /* seccomp.h */
 static void task_free(void) {
     seccomp_forget(process_pid);fs_cwd_release();image_free();io_cleanup();net_cleanup();fs_locks_release(0,0,process_pid);io_fifo_forget(process_pid);
     for(unsigned i=0;i<FS_SLOTS;i++) {
-        fs_directory_release(fs_dirs[i]);fs_pack_drop(i);
-        if(fs_fd[i])close(fs_fd[i]-1);
+        fs_directory_release(fs_dirs[i]);
+        if(!fs_pack_drop(i) && fs_fd[i])close(fs_fd[i]-1);
     }
     memset(fs_dirs,0,sizeof(fs_dirs));memset(fs_fd,0,sizeof(fs_fd));
     memset(fs_cloexec,0,sizeof(fs_cloexec));
@@ -381,7 +403,8 @@ static void schedule_cleanup(void) {
 }
 static void schedule_child(uint64_t pid) {
     ScheduledTask *t=&schedule_tasks[pid-1];memset(t,0,sizeof(*t)); /* a reused slot starts clean */
-    pthread_mutex_init(&t->mm,NULL);t->futex_epoch=__atomic_add_fetch(&schedule_futex_epochs,1,__ATOMIC_RELAXED);
+    memset(&proc_block->mm_cache[t-schedule_tasks],0,sizeof(HvfMmCache));
+    __atomic_store_n(&proc_block->mm[t-schedule_tasks],0,__ATOMIC_RELEASE);t->futex_epoch=__atomic_add_fetch(&schedule_futex_epochs,1,__ATOMIC_RELAXED);
     task_save(t);if(fd_mirror_base)memcpy(fd_mirror_base+pid*4096,fd_mirror_base+process_pid*4096,4096); /* the same descriptors */
     t->state=1;t->pgid=schedule_tasks[process_pid-1].pgid;t->sid=schedule_tasks[process_pid-1].sid;
     ScheduledTask *parent=&schedule_tasks[process_pid-1];
@@ -574,7 +597,7 @@ static int schedule_inplace_wait(ScheduledTask *t) {
 static void thread_attach(ScheduledTask *t,int i) {
     Thread *th=&t->threads->thread[i];
     proc_now=&t->ps;image_home_scheduled=&t->image.memory;address_space=image_place(shared_image);
-    io_table=&t->io;net_table=&t->net;fs_table=&t->fs;fd_table=&t->fds;
+    io_table=&t->io;net_table=&t->net;fs_table=task_fs(t);fd_table=task_fds(t);
     net_wait_now=&th->network;thread_now=i;*cpu=th->regs;cpu->exclusive_valid=0;t->saved=0;
 }
 static void thread_detach(ScheduledTask *t) {
@@ -764,8 +787,10 @@ static void schedule_unload(void) { task_load(&schedule_spare);thread_now=-1; }
 /* The process in slot current ended with result (an exit status, or 128+signal):
    free it (it is loaded here and no thread of it runs) and tell its parent.
    Returns 1 when it was the root: the run is over. */
+static void futex_uncount(Thread *th) { if(th->futex_count) { __atomic_fetch_sub(th->futex_count,1,__ATOMIC_SEQ_CST);th->futex_count=NULL; } }
 static int schedule_finish(int current,int result,unsigned terminating) {
     ScheduledTask *t=&schedule_tasks[current];
+    for(unsigned i=0;t->threads && i<t->threads->top;i++)futex_uncount(&t->threads->thread[i]);
     /* saved: a threaded process's last thread detached it; freed now, its slot is free. */
     task_free();t->state=0;t->saved=0;t->terminate_signal=0;t->exit_pending=0;t->running=0;io_epoch++;schedule_vfork_done((uint64_t)current+1);
     /* This worker's wait still names the freed thread table's: point it back at the task's. */
@@ -819,6 +844,7 @@ static int schedule_loop(int current) {
         ScheduledTask *t=&schedule_tasks[current];
         Thread *th=task_thread(t);
         if(th) { th->worker=worker->index+1;t->running++; } else t->worker=worker->index+1;
+        if(th)futex_uncount(th);                                   /* it waits on no futex now */
         if(th && th->state==2)cpu->gpr[0]=linux_error(110);       /* picked because its futex wait timed out */
         unsigned *blocked_call=th?&th->blocked:&t->blocked;
         /* signal_deliver acts only on a pending signal the thread does not block: test
@@ -902,7 +928,7 @@ static void *schedule_worker(void *argument) {
 }
 static int schedule_run(uint64_t steps) {
     schedule_active=1;process_steps=steps;schedule_done=0;schedule_parked=0;schedule_inplace_init();
-    for(unsigned i=0;i<=process_count;i++)pthread_mutex_init(&schedule_tasks[i].mm,NULL); /* later slots: schedule_child */
+    for(unsigned i=0;i<=process_count;i++)proc_block->mm[i]=0;       /* later slots: schedule_child */
     task_save(&schedule_tasks[0]);task_load(&schedule_tasks[0]);    /* the first process now lives in its task */
     schedule_tasks[0].state=1;schedule_tasks[0].pgid=schedule_tasks[0].sid=1;
     if(!workers_supported)worker_count=1;                  /* the interpreter runs guest code under the lock */
