@@ -30,6 +30,7 @@ typedef struct MemXattr { struct MemXattr *next;size_t size;char *name;unsigned 
 struct MemNode {
     uint32_t mode,uid,gid,nlink;      /* nlink: names (a directory: 2 + subdirectories) */
     uint32_t refs;                    /* open descriptions, working directories, shared mappings */
+    unsigned char upper_only;         /* upm.h: a mirror of an upper directory the lower layer lacks (1), holds (2), not looked at (0) */
     uint64_t ino,size;
     struct timespec atime,mtime,ctime;
     MemFs *fs;MemNode *parent;MemEntry *entry; /* a directory's parent and own name (NULL: the root, or removed) */
@@ -65,17 +66,18 @@ static int mem_is(const MemNode *n,uint32_t type) { return (n->mode&0170000)==ty
 /* rwx (4, 2, 1) for the caller: root passes, except execute on a file with no x bit. */
 static int mem_may(const MemNode *n,unsigned want) {
     if(!guest_uid)return !(want&1) || mem_is(n,MEM_DIR) || (n->mode&0111);
-    unsigned bits=guest_uid==n->uid?(n->mode>>6)&7:guest_gid==n->gid?(n->mode>>3)&7:n->mode&7;
+    unsigned bits=guest_uid==n->uid || n->fs==upm_fs?(n->mode>>6)&7:guest_gid==n->gid?(n->mode>>3)&7:n->mode&7;   /* upm.h: owned as host files are */
     return (bits&want)==want;
 }
 /* Removing or renaming node out of dir: the sticky bit keeps others' files. */
 static int mem_sticky_ok(const MemNode *dir,const MemNode *node) {
-    return !(dir->mode&01000) || !guest_uid || guest_uid==dir->uid || guest_uid==node->uid;
+    return !(dir->mode&01000) || !guest_uid || guest_uid==dir->uid || guest_uid==node->uid || dir->fs==upm_fs;
 }
 static MemNode *mem_node_new(MemFs *fs,uint32_t mode) {
     if(fs->inode_limit && fs->inodes>=fs->inode_limit)return NULL;
     MemNode *n=calloc(1,sizeof(*n));if(!n)return NULL;
     n->mode=mode;n->uid=guest_uid;n->gid=guest_gid;n->fs=fs;n->ino=mem_next_ino++;
+    if(fs==upm_fs)n->ino|=UINT64_C(1)<<62;                                       /* upm.h: beside host inode numbers, under the same st_dev */
     n->atime=n->mtime=n->ctime=mem_now();fs->inodes++;
     if(mem_is(n,MEM_DIR)) { n->nlink=2;n->d.next=3; }
     return n;
@@ -420,11 +422,18 @@ host: {  /* the host serves the rest: from canon, at rest+pos */
         }
         if(probe) {                                                           /* where the host walk leads */
             char leaf[1025];mem_redirect.pending=0;int fd;
+            upm_lock_held=1;                                                  /* ov_walk's look into upm.h: mem_lock is ours */
             if(*full)fd=fs_walk(fs_root,"/",full,follow,leaf,NULL);
             else { int base=(int32_t)dir==-100?(fs_cwd?fs_cwd->fd:fs_root):fs_host(dir);fd=base<0?-1:fs_walk(base,"",input,follow,leaf,NULL); }
+            upm_lock_held=0;
             if(fd>=0)close(fd);
             if(mem_redirect_take()) {                                         /* into a mount: the rest is ours */
                 const char *p=mem_redirect.path;size_t best=0;int i=-1;
+                if(p[0]==UPM_MARK[0] && upm_fs) {                                 /* the writable layer's file in memory (upm.h) */
+                    if(++links>FS_LINK_LIMIT)return -40;
+                    strcpy(canon,"/");cur=upm_fs->root;snprintf(rest,sizeof(rest),"%s",p+1);pos=0;spliced=1;
+                    goto again;
+                }
                 for(unsigned k=0;k<mem_mount_count;k++) { size_t n=mem_mounts[k]->length;if(n>best && !strncmp(p,mem_mounts[k]->path,n) && (!p[n] || p[n]=='/')) { best=n;i=(int)k; } }
                 if(i<0 || ++links>FS_LINK_LIMIT)return -40;
                 strcpy(canon,mem_mounts[i]->path);cur=mem_mounts[i]->root;snprintf(rest,sizeof(rest),"%s",p+best);pos=0;spliced=1;
@@ -438,15 +447,22 @@ host: {  /* the host serves the rest: from canon, at rest+pos */
 /* Linux struct stat (arm64, 128 bytes) and struct statfs (120). */
 static uint64_t mem_size_of(const MemNode *n) { return mem_is(n,MEM_REG)?n->size:mem_is(n,MEM_DIR)?20*(uint64_t)(n->d.live+2):mem_is(n,MEM_LNK)?strlen(n->target):0; }
 static void mem_stat_pack(unsigned char *out,const MemNode *n) {
-    memset(out,0,128);
-    fs_pack(out,0,MEM_DEV(n->fs),8);fs_pack(out,8,n->ino,8);fs_pack(out,16,n->mode,4);fs_pack(out,20,n->nlink,4);
-    fs_pack(out,24,n->uid,4);fs_pack(out,28,n->gid,4);fs_pack(out,48,mem_size_of(n),8);fs_pack(out,56,MEM_PAGE,4);
+    memset(out,0,128);int layer=n->fs==upm_fs;                                     /* upm.h: as the layer's host files (fs_stat_pack) */
+    fs_pack(out,0,layer?0:MEM_DEV(n->fs),8);fs_pack(out,8,n->ino,8);fs_pack(out,16,n->mode,4);fs_pack(out,20,n->nlink,4);
+    fs_pack(out,24,layer?guest_uid:n->uid,4);fs_pack(out,28,layer?guest_gid:n->gid,4);fs_pack(out,48,mem_size_of(n),8);fs_pack(out,56,MEM_PAGE,4);
     fs_pack(out,64,mem_is(n,MEM_REG)?n->f.pages*(MEM_PAGE/512):0,8);
     const struct timespec *t[3]={&n->atime,&n->mtime,&n->ctime};
     for(unsigned i=0;i<3;i++) { fs_pack(out,72+i*16,(uint64_t)t[i]->tv_sec,8);fs_pack(out,80+i*16,(uint64_t)t[i]->tv_nsec,8); }
 }
 static uint64_t proc_mem_total(void);
 static void mem_statfs_pack(unsigned char *out,const MemFs *fs) {
+    struct statfs host;
+    if(fs==upm_fs && fs_root>=0 && !fstatfs(fs_root,&host)) {                     /* upm.h: the layer's, as the host's files say (syscall.h) */
+        memset(out,0,120);
+        fs_pack(out,0,0x794c7630,8);fs_pack(out,8,host.f_bsize,8);fs_pack(out,16,host.f_blocks,8);
+        fs_pack(out,24,host.f_bfree,8);fs_pack(out,32,host.f_bavail,8);fs_pack(out,40,host.f_files,8);
+        fs_pack(out,48,host.f_ffree,8);fs_pack(out,64,255,8);fs_pack(out,72,host.f_bsize,8);return;
+    }
     uint64_t total=fs->limit?fs->limit:proc_mem_total()/2,blocks=total/MEM_PAGE,used=fs->used/MEM_PAGE,free_blocks=blocks>used?blocks-used:0;
     uint64_t budget=resource_limit>resource_used?(resource_limit-resource_used)/MEM_PAGE:0;if(free_blocks>budget)free_blocks=budget;
     uint64_t files=fs->inode_limit?fs->inode_limit:blocks/2+1;
@@ -674,6 +690,7 @@ static MemXattr **mem_xattr_find(MemNode *n,const char *name) {
 }
 static int64_t mem_xattr(MemNode *n,uint64_t call,const char *name,uint64_t value,uint64_t size,uint64_t flags) {
     unsigned op=(unsigned)((call-5)/3);                                         /* 0 set, 1 get, 2 list, 3 remove */
+    if(n->fs==upm_fs)return -95;                                                /* upm.h: as the layer's host files */
     if(op!=2 && (!*name || strlen(name)>255))return -34;
     if(op==2) {
         size_t total=0;for(MemXattr *x=n->xattrs;x;x=x->next)total+=strlen(x->name)+1;
@@ -1001,6 +1018,10 @@ static int mem_fd_call(uint64_t call,MemOpen *o) {
 typedef struct { uint64_t dir,at;int follow,empty; } MemArg;
 static int64_t guest_fd_path(const char *path);static int guest_syscall_dispatch(void); /* syscall.h */
 static int64_t mem_path_op(uint64_t call,MemPath *w,const int *res,uint64_t *fifo);
+static int64_t upm_cross(uint64_t call,MemPath *w,const int *res);   /* upm.h */
+static MemEntry *upm_entry(const char *canon);static int upm_lexical(uint64_t dir,const char *input,char out[1025]);
+static int64_t upm_create_fast(const char *canon,uint64_t flags,uint64_t mode);
+static void upm_gone(const char *canon);
 static int mem_path_call(uint64_t call) {
     uint64_t *x=cpu->gpr;MemArg a[2];unsigned n=1;
     switch(call) {
@@ -1045,12 +1066,28 @@ static int mem_path_call(uint64_t call) {
         if(fd>=0 && fd<GUEST_FD_LIMIT && mem_fd((uint64_t)fd)) { a[i].dir=(uint64_t)fd;a[i].empty=1;text[i][0]=0; }
     }
     int probe=0;unsigned scope=call==437?(unsigned)(le(lookup(x[2],24,4)+16,8)&4):0; /* RESOLVE_NO_SYMLINKS */
+    int descriptor=0;for(unsigned i=0;i<n;i++)descriptor|=!text[i][0];          /* a memfs descriptor itself (upm.h's files too) */
+    /* upm.h: a path naming a pending file plainly (no "..": its directories are the
+       host's real ones) is that file, with no host walk; others take the walk's redirect. */
+    unsigned pending=0,plain=0;char pend[2][1025];
+    for(unsigned i=0;upm_fs && i<n;i++)if(text[i][0] && upm_lexical(a[i].dir,text[i],pend[i])) { plain|=1u<<i;if(upm_maybe(pend[i]))pending|=1u<<i; }
+    if(upm_fs && call==56 && !pending && (plain&1) && (x[2]&64) && !mem_mount_inside(pend[0])) {   /* a new file in a mirrored directory */
+        int64_t r=upm_create_fast(pend[0],x[2],x[3]);
+        if(r!=UPM_DISK)return mem_answer(mem_result(r));
+    }
     for(unsigned attempt=0;;attempt++) {
+        if(!mem_mount_count && !probe && !descriptor && !pending) {               /* no mount to name lexically: the host first */
+            if(syscall_unlocked)return MEM_PASS;
+            goto host;
+        }
         pthread_mutex_lock(&mem_lock);fs_scope.resolve=scope;
         int any=0,again=0,error=0;
         for(unsigned i=0;i<n && !error;i++) {
+            MemEntry *held=(pending&(1u<<i))?upm_entry(pend[i]):NULL;
             if(!text[i][0]) {                                                    /* AT_EMPTY_PATH on a memfs descriptor */
                 MemOpen *o=mem_fd(a[i].dir);w[i].dir=NULL;w[i].entry=NULL;w[i].node=o->node;w[i].name[0]=0;w[i].slash=0;w[i].canon[0]=0;res[i]=1;
+            } else if(held) {                                                    /* a pending file (upm.h) */
+                w[i].dir=held->dir;w[i].entry=held;w[i].node=held->node;snprintf(w[i].name,sizeof w[i].name,"%s",held->name);w[i].slash=0;strcpy(w[i].canon,pend[i]);res[i]=1;
             } else if((res[i]=mem_resolve(a[i].dir,text[i],a[i].follow,probe,&w[i],&rewritten[i],mem_rewrite[i]))<0)error=res[i];
             any|=res[i]==1;again|=rewritten[i];
         }
@@ -1065,17 +1102,23 @@ static int mem_path_call(uint64_t call) {
             }
             if(r==MEM_PASS-1)return mem_abort();
             if(r==MEM_PASS-2)return -3;                                           /* answered */
+            if(r==MEM_PASS-3) { if(attempt==8)return mem_answer(linux_error(40));probe=0;continue; }   /* upm.h: written back, the host's now */
             return mem_answer(mem_result(r));
         }
         pthread_mutex_unlock(&mem_lock);
         if(syscall_unlocked) { if(again || probe)return mem_abort();return MEM_PASS; }
+      host:
         if(attempt==8)return mem_answer(linux_error(40));
         uint64_t saved[9];memcpy(saved,x,sizeof(saved));
         for(unsigned i=0;i<n;i++)if(rewritten[i]) { fs_swap.at[i]=a[i].at;fs_swap.path[i]=mem_rewrite[i];strcpy(text[i],mem_rewrite[i]); }
         mem_inside=1;int rc=guest_syscall_dispatch();mem_inside=0;
         fs_swap.path[0]=fs_swap.path[1]=NULL;
         if(!mem_redirect_take())return rc;
-        memcpy(x,saved,sizeof(saved));probe=1;                                  /* the host walk reached a mount: ours after all */
+        memcpy(x,saved,sizeof(saved));
+        if(n==1 && mem_redirect.path[0]==UPM_MARK[0] && upm_fs) {                /* a pending file the walk found: by its path, no second walk */
+            snprintf(pend[0],sizeof pend[0],"%s",mem_redirect.path+1);pending=1;continue;
+        }
+        probe=1;                                                                 /* the host walk reached a mount: ours after all */
     }
 }
 /* The memfs part of a path call (mem_lock held; released here). Returns a result
@@ -1083,7 +1126,12 @@ static int mem_path_call(uint64_t call) {
    path) or MEM_PASS-2 (answered in x0). */
 static int64_t mem_path_op(uint64_t call,MemPath *w,const int *res,uint64_t *fifo) {
     uint64_t *x=cpu->gpr;int64_t r=0;MemNode *n=w[0].node;
-    if((call==38 || call==276 || call==37) && res[0]!=res[1]) { r=-18;goto done; }  /* EXDEV: between memfs and the host */
+    if((call==38 || call==276 || call==37) && res[0]!=res[1]) {                 /* between memfs and the host */
+        int layer=(res[0]==1 && n && n->fs==upm_fs) || (res[1]==1 && w[1].dir && w[1].dir->fs==upm_fs);
+        if(layer)return upm_cross(call,w,res);                                   /* upm.h (it releases mem_lock) */
+        r=-18;goto done;                                                         /* EXDEV */
+    }
+    int layer=n && n->fs==upm_fs;char was[1025];if(layer)snprintf(was,sizeof was,"%s",w[0].canon);
     switch(call) {
     case 56: case 437: {
         uint64_t flags=x[2],mode=x[3];
@@ -1156,6 +1204,7 @@ static int64_t mem_path_op(uint64_t call,MemPath *w,const int *res,uint64_t *fif
     }
     if(!r && n && (call==53 || call==54 || call==88 || (call>=5 && call<=7) || (call>=14 && call<=16)))mem_notify_child(w[0].dir,w[0].name,n,IN_ATTRIB);
     if(!r && n && call==45)mem_notify_child(w[0].dir,w[0].name,n,IN_MODIFY);
+    if(!r && layer && (call==35 || ((call==38 || call==276) && !(call==276 && (x[4]&2)))))upm_gone(was);  /* upm.h: no longer at that path */
 done:
     pthread_mutex_unlock(&mem_lock);
     return r;
@@ -1200,7 +1249,7 @@ static int mem_route_unlocked(uint64_t call) {
    descriptor, MEM_HOST_PATH when the host resolves the path (fs_swap may hold a
    rewritten one; mem_exec_done clears it), or -errno. probe: after fs_walk redirected. */
 static int mem_exec_open(uint64_t dir,uint64_t at,char exe[1025],int probe) {
-    if(!mem_mount_count)return MEM_HOST_PATH;
+    if(!mem_active || (!mem_mount_count && !probe))return MEM_HOST_PATH;
     char text[1025];if(fs_string(at,text)<0)return MEM_HOST_PATH;
     MemPath w;int rewritten;
     for(unsigned attempt=0;attempt<8;attempt++) {

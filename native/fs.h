@@ -228,6 +228,20 @@ static _Thread_local struct { uint64_t at[2];const char *path[2]; } fs_swap;
    mount's guest path and the rest of the path; memfs then serves the call. */
 static unsigned mem_mount_count;
 static pthread_mutex_t mem_lock=PTHREAD_MUTEX_INITIALIZER;   /* every memfs (memfs.h) */
+/* The writable layer's new files in memory (upm.h): a memfs no guest path names,
+   reached only through ov_walk's redirect (UPM_MARK) for a path missing on disk. */
+static struct MemFs *upm_fs;
+static uint64_t upm_drains;static _Thread_local uint64_t upm_walk_drains; /* write-backs done; the walk's start */
+static _Thread_local int upm_lock_held;                     /* this thread holds mem_lock (memfs's probe walk) */
+#define UPM_MARK "\x01"
+#define mem_active (mem_mount_count || upm_fs)
+static int upm_walk_hit(const char *canon);                 /* upm.h */
+static int upm_maybe(const char *canon);
+static int upm_has_files(const char *canon);
+struct OvList;static int upm_list(const char *canon,struct OvList *list,size_t *capacity);
+static void upm_moved(const char *from,const char *to);
+static int64_t upm_create(const char *canon,uint64_t flags,uint64_t mode);
+#define UPM_DISK INT64_MIN
 #define MEM_HOST_PATH (-1001)                                /* memfs.h: a path the host resolves */
 struct GuestInotify;static int64_t mem_inotify_watch(struct GuestInotify *in,uint64_t at,uint32_t mask,int follow);
 static int mem_mount_at(const char *canon);static int mem_mount_inside(const char *canon);
@@ -1383,6 +1397,11 @@ static uint64_t fs_open(void) {
        regular file and needs no fstat; one made meanwhile by another process is
        opened the usual way. */
     int fresh=made && layers.bare && (options&O_CREAT);mode_t mode=(mode_t)(cpu->gpr[3]&0777&~fs_umask);
+    if(fresh && upm_fs && !fs_where && !(flags&(16384|0x200000|0x400000))) {   /* a new file of the writable layer: in memory (upm.h) */
+        if(syscall_unlocked) { close(parent);syscall_abort=1;return linux_error(11); }   /* memfs descriptors: the locked path */
+        int64_t r=upm_create(layers.canon,flags,cpu->gpr[3]);
+        if(r!=UPM_DISK) { close(parent);if(r>=0)fs_count_created();return r<0?linux_error((unsigned)-r):(uint64_t)r; }
+    }
     int fd=openat(parent,leaf,options|(fresh?O_EXCL:0),mode);
     if(fd<0 && fresh && errno==EEXIST && !(flags&128)) { fresh=0;fd=openat(parent,leaf,options,mode); }
     if(fd<0) { uint64_t e=fs_error();close(parent);return e; }
@@ -1817,9 +1836,12 @@ static uint64_t fs_call(uint64_t call) {
             if(other<0) { uint64_t e=fs_error();close(parent);return e; }
             if(!fs_path_writable()) { close(other);close(parent);return linux_error(30); }
             if(!strcmp(target,".")) { close(other);close(parent);return linux_error(fs_where>0?16:13); }
-            OvLeaf to=ov_leaf;
-            if(layers || (fs_lower>=0 && to.canon[0]))result=layers && to.canon[0]?ov_rename(&w,parent,leaf,&to,other,target):(errno=EXDEV,-1);
+            OvLeaf to=ov_leaf;struct stat moving;
+            int directory=upm_fs && layers && to.canon[0] && !fstatat(parent,leaf,&moving,FS_NOFOLLOW_AT) && S_ISDIR(moving.st_mode);
+            if(directory && upm_has_files(to.canon)) { result=-1;errno=ENOTEMPTY; }        /* its pending files (upm.h) are entries */
+            else if(layers || (fs_lower>=0 && to.canon[0]))result=layers && to.canon[0]?ov_rename(&w,parent,leaf,&to,other,target):(errno=EXDEV,-1);
             else result=fs_renameat(parent,leaf,other,target);
+            if(directory && !result)upm_moved(w.canon,to.canon);
             int saved=errno;close(other);errno=saved;
         }
         uint64_t e=result<0?fs_error():0;
@@ -1857,7 +1879,7 @@ static uint64_t fs_call(uint64_t call) {
         int layers=fs_lower>=0 && dir->path[0] && !(fs_mount_count && fs_mount_of(dir->path));
         if(!dir->stream && !dir->merged) {
             struct stat below;   /* only a directory both layers hold merges: a lower-only one (most of an image's) streams as it is */
-            if(layers && !dir->lower && !fstatat(fs_lower,dir->path[1]?dir->path+1:".",&below,FS_NOFOLLOW_AT) && S_ISDIR(below.st_mode))dir->merged=ov_list(dir->path);
+            if(layers && !dir->lower && ((!fstatat(fs_lower,dir->path[1]?dir->path+1:".",&below,FS_NOFOLLOW_AT) && S_ISDIR(below.st_mode)) || upm_has_files(dir->path)))dir->merged=ov_list(dir->path);
             if(!dir->merged) {
                 int copy=dup(fd);if(copy<0)return fs_error();
                 dir->stream=fdopendir(copy);if(!dir->stream) { int saved=errno;close(copy);errno=saved;return fs_error(); }

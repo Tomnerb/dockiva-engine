@@ -411,6 +411,7 @@ func releaseLower(home, state, lower string) {
 func (b *engine) commitContainer(name string, q url.Values) obj {
 	reject(q.Get("changes") == "", "docker commit --change is not supported")
 	p := b.container(name)
+	b.upperSync(p)
 	c := readObject(filepath.Join(p, "config.json"))
 	r := containerLayers(p, c)
 	reject(r.lower != "", "docker commit needs the layered layout (this container was made with --rootfs copy)")

@@ -47,7 +47,8 @@ static void fs_cleanup(void);
 static void io_cleanup(void);
 static void schedule_cleanup(void);
 static void image_free(void);
-static void cleanup(void) { schedule_cleanup();profile_dump(); image_free(); net_cleanup(); fs_cleanup(); io_cleanup(); }
+static void upm_finish(void);
+static void cleanup(void) { schedule_cleanup();profile_dump(); image_free(); net_cleanup(); upm_finish(); fs_cleanup(); io_cleanup(); }
 static void fail(const char *message) { if(exec_loading) longjmp(exec_recovery,1); if(trace) {
         fprintf(stderr,"guest pc=0x%" PRIx64 "\n",cpu->pc);
         for(unsigned i=0;i<16;i++) { unsigned at=(trace_cursor+i)%16;if(trace_tail[at].word)fprintf(stderr,"tail pc=0x%" PRIx64 " instruction=0x%08" PRIx32 "\n",trace_tail[at].address,trace_tail[at].word); }
@@ -100,6 +101,7 @@ static void epoll_forget_socket(int host);
 #include "epoll.h"
 #include "compat.h"
 #include "memfs.h"
+#include "upm.h"
 #include "vdso.h"
 /* Read-only segments of programs run recently, shared by later execs of the same
    file (Linux serves them from its page cache): an exec reuses their bytes instead of
@@ -1123,6 +1125,11 @@ int main(int argc,char **argv) {
             /* --lower-pack FILE: the lower layer's small files, mapped (pack.h); built there when missing. */
             if(fs_lower<0) fail("--lower-pack needs --lower first");
             pack_start(lower_path,argv[++i]);
+        } else if(!strcmp(argv[i],"--upper-memory") && i+1<argc) {
+            /* --upper-memory SYNC: the writable layer's new files in memory, written back (upm.h); SYNC: dockivad's request file. */
+            snprintf(upm_sync,sizeof upm_sync,"%s",argv[++i]);
+        } else if(!strcmp(argv[i],"--upper-discard")) {
+            upm_discard=1;                                          /* the layer goes with the container (docker run --rm): no write-back at the end */
         } else if(!strcmp(argv[i],"--layers-gen") && i+1<argc) {
             /* --layers-gen FILE: the container's count of upper-layer changes, shared by its runs (overlay.h's lookup cache). */
             if(ov_cache_open(argv[++i])) fail("Cannot map the layers' change count");
@@ -1224,6 +1231,7 @@ int main(int argc,char **argv) {
             steps=strtoull(s,&end,10); if(errno || *end) fail("Invalid step budget");
         } else fail("Unknown option");
     }
+    upm_start();                                                    /* upm.h: with --upper-memory and the image's layers */
     if(use_hvf) {
 #ifndef VMFREE_HVF
         fail("Hypervisor backend is not compiled into this executable");

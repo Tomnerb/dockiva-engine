@@ -380,6 +380,7 @@ static int ov_unlink(OvLeaf *w,int parent,const char *leaf,int directory) {
     if(!strcmp(w->canon,"/")) { errno=EBUSY;return -1; }
     if(directory && !S_ISDIR(st.st_mode)) { errno=ENOTDIR;return -1; }
     if(!directory && S_ISDIR(st.st_mode)) { errno=EPERM;return -1; }   /* the caller reports EISDIR, as Linux */
+    if(directory && upm_fs && upm_has_files(w->canon)) { errno=ENOTEMPTY;return -1; }   /* files in memory (upm.h) */
     char dir[1025],name[256];ov_split(w->canon,dir,name);
     int lower=ov_lower_has(w->canon,&low);
     if(lower || directory)ov_dirty=1;                                  /* the upper layer's change shows (ov_changed) */
@@ -557,8 +558,9 @@ static int ov_walk_fast(const char *start,const char *rest,int follow,int direct
             base=fs_lower;
         } else base=fs_root;
     } else base=layer?fs_lower:fs_root;
-    if(ov_gen && layer)ov_cache_put(full,follow,&at,layer,base==fs_lower,layer==1?&st:NULL);
+    if(ov_gen && layer && !(layer==2 && upm_maybe(full)))ov_cache_put(full,follow,&at,layer,base==fs_lower,layer==1?&st:NULL);
   found:;
+    if(layer==2 && base==fs_root && upm_fs) { int pending=upm_walk_hit(full);if(pending>0)return -1;if(pending<0)return -2; }   /* in memory (upm.h): redirected */
     int fd;
     if(direct) { fd=dup(base);if(fd<0)return -1;strcpy(leaf,rel);fs_walk_leaf.known=layer==2?2:1;if(layer!=2)fs_walk_leaf.st=st; }
     else {
@@ -574,6 +576,7 @@ static int ov_walk_fast(const char *start,const char *rest,int follow,int direct
 static int ov_walk(int base,const char *base_path,const char *input,int follow,char leaf[1025],char canon[1025]) {
     int direct=follow&FS_DIRECT;follow&=1;
     fs_walk_leaf.known=0;ov_leaf.layer=2;ov_leaf.bare=0;ov_leaf.canon[0]=0;
+    if(upm_fs)upm_walk_drains=__atomic_load_n(&upm_drains,__ATOMIC_ACQUIRE);   /* a write-back meanwhile: the walk redoes */
     size_t length=strlen(input);if(length>1024) { errno=ENAMETOOLONG;return -1; }
     const char *floor=fs_scope.root>=0?fs_scope.path:"/";char rest[4097],cur[1025];
     if(input[0]=='/') { if(fs_scope.resolve&8) { errno=EXDEV;return -1; } strcpy(cur,floor); }
@@ -653,6 +656,11 @@ static int ov_walk(int base,const char *base_path,const char *input,int follow,c
             }
             continue;
         }
+        if(last && layer<0 && mount<0 && u>=0 && upm_fs) {                /* missing on disk: in memory? (upm.h) */
+            int pending=upm_walk_hit(at);
+            if(pending>0) { ov_close2(u,l);return -1; }
+            if(pending<0 && !fstatat(u,part,&st,AT_SYMLINK_NOFOLLOW))layer=0;     /* written back meanwhile */
+        }
         if(last) {
             strcpy(leaf,part);if(canon)strcpy(canon,at);
             fs_where=mount>=0?mount+1:0;
@@ -689,7 +697,8 @@ static int ov_list_add(OvList *list,size_t *capacity,uint64_t ino,unsigned char 
 }
 static OvList *ov_list(const char *canon) {
     int u,l,m;if(ov_pair(canon,&u,&l,&m))return NULL;
-    if(u<0 || l<0) { ov_close2(u,l);return NULL; }
+    int pending=upm_fs && upm_has_files(canon);                       /* files in memory (upm.h) list after the upper's */
+    if(u<0 || (l<0 && !pending)) { ov_close2(u,l);return NULL; }
     OvList *list=calloc(1,sizeof(*list)),hidden={0};size_t capacity=0,hidden_capacity=0,names=0;char **seen=NULL;
     int ok=list!=NULL;struct dirent *e;
     DIR *s=ok?ov_opendir(u):NULL;
@@ -704,13 +713,14 @@ static OvList *ov_list(const char *canon) {
     names=0;
     for(size_t at=0;ok && at<hidden.size;at+=10+strlen(hidden.data+at+9))seen[names++]=hidden.data+at+9;
     if(ok)qsort(seen,names,sizeof(*seen),ov_name_compare);
-    s=ok?ov_opendir(l):NULL;
-    if(!s)ok=0;
-    while(ok && (e=readdir(s))!=NULL) {
+    s=ok && l>=0?ov_opendir(l):NULL;
+    if(!s && l>=0)ok=0;
+    while(ok && s && (e=readdir(s))!=NULL) {
         const char *key=e->d_name;
         if(!names || !bsearch(&key,seen,names,sizeof(*seen),ov_name_compare))ok=!ov_list_add(list,&capacity,e->d_ino,e->d_type,e->d_name);
     }
     if(s)closedir(s);
+    if(ok && pending)ok=upm_list(canon,list,&capacity)==0;
     free(seen);free(hidden.data);ov_close2(u,l);
     if(!ok) { if(list)free(list->data);free(list);return NULL; }
     return list;

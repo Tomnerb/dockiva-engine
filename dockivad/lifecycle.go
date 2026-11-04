@@ -589,6 +589,20 @@ func runtimeCommand(p, native string, c obj, command []string, argv0 string, env
 	if r.lower != "" {
 		// The image's small files from one mapping, built beside its root by the first run.
 		args = append(args, "--lower", r.lower, "--layers-gen", r.gen, "--lower-pack", r.lower+".pack")
+		// The container's own run keeps the writable layer's new files in memory until
+		// it writes them back (runtime upm.h): dockivad asks for them first whenever it
+		// reads the layer's directory itself (upperSync). DOCKIVA_UPPER_MEMORY=0 opts out.
+		marker := filepath.Join(p, "upper-memory")
+		_ = os.Remove(filepath.Join(p, "upper-sync")) // a request no run answered
+		if publish && os.Getenv("DOCKIVA_UPPER_MEMORY") != "0" {
+			check(os.WriteFile(marker, nil, 0o600))
+			args = append(args, "--upper-memory", filepath.Join(p, "upper-sync"))
+			if c["auto_remove"] == true {
+				args = append(args, "--upper-discard") // docker run --rm: the layer goes with the container
+			}
+		} else if publish {
+			_ = os.Remove(marker)
+		}
 	}
 	args = append(args, "--argv0", argv0, "--max-steps", steps, "--memory-limit-mib", strconv.FormatInt(memory, 10), "--oom-file", filepath.Join(p, "oom"))
 	// Abstract Unix socket names live in one directory per container, shared by its execs.
@@ -901,6 +915,7 @@ func supervise(p, native, worker, generation string) (result error) {
 		select {
 		case <-done:
 		case <-time.After(grace):
+			upperSync(p) // the files the run keeps in memory, before nothing can write them
 			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 			<-done
 		}
@@ -1000,6 +1015,9 @@ func supervise(p, native, worker, generation string) (result error) {
 			for _, s := range stopSignals {
 				allowed = allowed || (err == nil && s == syscall.Signal(n) && s != syscall.SIGWINCH)
 			}
+			if allowed && syscall.Signal(n) == syscall.SIGKILL {
+				upperSync(p) // docker kill: the run's files in memory first
+			}
 			if allowed && syscall.Kill(-cmd.Process.Pid, syscall.Signal(n)) == nil {
 				_, _ = conn.Write([]byte("OK"))
 			}
@@ -1042,6 +1060,36 @@ func resolvConf(host []byte) string {
 		out += "search " + strings.Join(search, " ") + "\n"
 	}
 	return out
+}
+
+// upperSync has a container's run write the files it keeps in memory (runtime
+// --upper-memory) to the writable layer, before something reads the layer's
+// directory itself: docker cp, export, diff and commit, an exec or healthcheck run (a
+// runtime of its own, on the same directory), a SIGKILL. The run removes the request
+// file once done; a run that ended meanwhile cannot, so the wait is bounded.
+func upperSync(p string) {
+	if !exists(filepath.Join(p, "upper-memory")) {
+		return
+	}
+	request := filepath.Join(p, "upper-sync")
+	f, e := os.OpenFile(request, os.O_CREATE|os.O_WRONLY, 0o600)
+	if e != nil {
+		return
+	}
+	f.Close()
+	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(2 * time.Millisecond) {
+		if !exists(request) {
+			return
+		}
+	}
+	_ = os.Remove(request)
+}
+
+// upperSync for an API request: only a running container's run holds files in memory.
+func (b *engine) upperSync(p string) {
+	if live(b.status(p)) {
+		upperSync(p)
+	}
 }
 
 // writeGuestFile replaces a regular file (or a symlink, never followed) inside a

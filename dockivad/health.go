@@ -64,6 +64,7 @@ func probe(p, native, worker string, c obj, argv []string, timeout time.Duration
 	}()
 	env := stringsOf(c["env"])
 	command, argv0 := containerCommand(p, c, workdir(c), env, argv)
+	upperSync(p) // the check is a run of its own: it sees the files the container's run made
 	cmd := exec.Command(worker, runtimeCommand(p, native, c, command, argv0, env, false)...)
 	alive, keep, e := os.Pipe()
 	check(e)

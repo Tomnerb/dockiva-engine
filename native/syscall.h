@@ -301,7 +301,7 @@ static int guest_syscall_dispatch(void) {
             if(profiling && call<512)__atomic_fetch_add(&profile_syscalls[call],1,__ATOMIC_RELAXED);
             if(trace) fprintf(stderr,"pid %" PRIu64 " syscall %" PRIu64 ": x0..5=[%" PRIu64 ", %" PRIu64 ", %" PRIu64 ", %" PRIu64 ", %" PRIu64 ", %" PRIu64 "]\n",process_pid,call,cpu->gpr[0],cpu->gpr[1],cpu->gpr[2],cpu->gpr[3],cpu->gpr[4],cpu->gpr[5]);
             if(trace && (call==56 || call==437 || call==281 || call==79 || call==48 || call==35 || call==78 || call==34)) { char path[1025];if(!fs_string(cpu->gpr[1],path))fprintf(stderr,"  path %s\n",path); }
-            if(mem_mount_count && !mem_inside) { int r=mem_route(call);if(r!=MEM_PASS)return r; }   /* memfs.h */
+            if(mem_active && !mem_inside) { int r=mem_route(call);if(r!=MEM_PASS)return r; }   /* memfs.h */
             if(call==139 && job_control_enabled) { signal_return();if(schedule_tasks[process_pid-1].terminate_signal || schedule_tasks[process_pid-1].stop_signal)return -1;return -3; }
             if(call==137) { uint64_t r=signal_timedwait();if(r==IO_BLOCK) { cpu->pc-=4;return -2; }cpu->gpr[0]=r;return -3; }
             if(call==133) { uint64_t r=signal_suspend();if(r==IO_BLOCK) { cpu->pc-=4;return -2; }cpu->gpr[0]=r;return -3; }
@@ -823,7 +823,7 @@ static int fs_pack_call(uint64_t call) {
 static int guest_syscall_unlocked(void) {
     uint64_t call=cpu->gpr[8],fd=cpu->gpr[0],count=cpu->gpr[2];
     if(trace)return 0;
-    if(mem_mount_count) { int r=mem_route_unlocked(call);if(r>=0)return r; }        /* memfs.h: its own lock */
+    if(mem_active) { int r=mem_route_unlocked(call);if(r>=0)return r; }        /* memfs.h: its own lock */
     if(fs_pack_call(call))return 1;
     int file=fs_host(fd)>=0 && !fs_dirs[fs_slot(fd)],socket=!file && net_host(fd)>=0;
     int epoll=call==22 && io_managed(fd) && IO(fd).kind==IO_EPOLL && epolls[IO(fd).host].refs==1;

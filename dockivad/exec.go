@@ -144,6 +144,7 @@ func (b *engine) startExec(w http.ResponseWriter, r *http.Request, id string, bo
 	j.started = true
 	j.mu.Unlock()
 	detach := body["Detach"] == true
+	b.upperSync(b.container(j.Container)) // an exec is a run of its own on the layer's directory
 	cmd, input, output, errput := b.execCommand(j)
 	var size [2]uint16
 	if a, ok := body["ConsoleSize"].([]any); ok && len(a) == 2 && !idle(a[0]) {

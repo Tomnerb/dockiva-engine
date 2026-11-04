@@ -91,7 +91,13 @@ static void backing_free_now(MemoryBacking *backing) {
    unmapping and freeing them cost more than the rest of a short process's life).
    Only memory every holder let go of as a dead image, where no guest code still runs
    (so no stale page table entry is used), never a snapshot or a snapshot's source
-   (their host pages are copy-on-write), and only with few pages to zero. */
+   (their host pages are copy-on-write), and with at most BACKING_POOL_PAGES to zero.
+   The zeroed pages stay resident: macOS zero-fills a fresh page on its first touch
+   (8-14 ms per 128 MiB, the same through faults or mlock), where a recycled one costs
+   only the write fault that charges it, so a build's next process (each compile, the
+   next node) starts on warm memory, as a VM's processes do on its RAM. At most
+   BACKING_POOL_WARM is kept, and all of it goes after BACKING_POOL_IDLE_NS with no
+   backing taken: an idle engine keeps no build's memory. */
 static int backing_reaping;
 static _Thread_local int backing_dead_image;    /* address_space_destroy is dropping a dead image's memory */
 static pthread_mutex_t backing_reap_lock=PTHREAD_MUTEX_INITIALIZER;
@@ -99,28 +105,53 @@ static pthread_cond_t backing_reap_cond=PTHREAD_COND_INITIALIZER;
 static MemoryBacking *backing_reap_queue;
 #define BACKING_POOL 32u
 #define BACKING_POOL_LARGE 4u                   /* of more than 256 MiB (mmap arenas): guest-physical space */
-#define BACKING_POOL_PAGES 64u                  /* host pages to zero, at most */
+#define BACKING_POOL_PAGES 16384u               /* host pages to zero, at most (256 MiB) */
+#define BACKING_POOL_WARM (UINT64_C(512)<<20)   /* resident zeroed memory kept, at most */
+#define BACKING_POOL_IDLE_NS UINT64_C(2000000000)
 static MemoryBacking *backing_pool[BACKING_POOL];
 static unsigned backing_pool_count,backing_pool_large;
+static uint64_t backing_pool_warm,backing_pool_used_ns;   /* under backing_reap_lock */
+static unsigned backing_pool_reserved;                    /* places taken by backings being zeroed */
+static uint64_t backing_now_ns(void) { return clock_gettime_nsec_np(CLOCK_UPTIME_RAW); }
 static BackingPage backing_zero_mark;           /* pages[i] of a recycled backing: owned until now, to zero */
 static int backing_large(const MemoryBacking *backing) { return backing->mapped_size>(UINT64_C(256)<<20); }
 static void *backing_reaper(void *unused) {
     (void)unused;
     pthread_mutex_lock(&backing_reap_lock);
     for(;;) {
-        while(!backing_reap_queue)pthread_cond_wait(&backing_reap_cond,&backing_reap_lock);
+        while(!backing_reap_queue) {
+            if(!backing_pool_warm) { pthread_cond_wait(&backing_reap_cond,&backing_reap_lock);continue; }
+            struct timespec second={1,0};(void)pthread_cond_timedwait_relative_np(&backing_reap_cond,&backing_reap_lock,&second);
+            if(backing_reap_queue || backing_now_ns()-backing_pool_used_ns<BACKING_POOL_IDLE_NS)continue;
+            MemoryBacking *idle[BACKING_POOL];unsigned n=0;           /* idle: the warm ones go */
+            for(unsigned i=backing_pool_count;i--;)if(backing_pool[i]->warm) {
+                MemoryBacking *b=backing_pool[i];idle[n++]=b;backing_pool_warm-=b->warm;b->warm=0;
+                backing_pool_large-=(unsigned)backing_large(b);backing_pool[i]=backing_pool[--backing_pool_count];
+            }
+            backing_pool_warm=0;
+            pthread_mutex_unlock(&backing_reap_lock);
+            for(unsigned i=0;i<n;i++)backing_free_now(idle[i]);
+            pthread_mutex_lock(&backing_reap_lock);
+        }
         MemoryBacking *dead=backing_reap_queue;backing_reap_queue=NULL;
         pthread_mutex_unlock(&backing_reap_lock);
         while(dead) {
             MemoryBacking *next=dead->reap_next;
             if(dead->recycle) {
-                for(size_t i=0;i<dead->used;i++)if(dead->pages[i]) { memset(dead->bytes+i*dead->page_size,0,dead->page_size);dead->pages[i]=NULL; }
-                dead->used=0;
-                pthread_mutex_lock(&backing_reap_lock);
-                if(backing_pool_count<BACKING_POOL && (!backing_large(dead) || backing_pool_large<BACKING_POOL_LARGE)) {
-                    backing_pool_large+=(unsigned)backing_large(dead);backing_pool[backing_pool_count++]=dead;dead=NULL;
-                }
+                size_t marked=0;
+                for(size_t i=0;i<dead->used;i++)marked+=dead->pages[i]!=NULL;
+                size_t warm=marked>BACKING_POOL_PAGES/256?marked*dead->page_size:0;   /* a few pages: kept as before, untimed */
+                pthread_mutex_lock(&backing_reap_lock);               /* a place first: no zeroing for memory that is freed */
+                int kept=backing_pool_count+backing_pool_reserved<BACKING_POOL && (!backing_large(dead) || backing_pool_large<BACKING_POOL_LARGE) && backing_pool_warm+warm<=BACKING_POOL_WARM;
+                if(kept) { backing_pool_reserved++;backing_pool_large+=(unsigned)backing_large(dead);backing_pool_warm+=warm; }
                 pthread_mutex_unlock(&backing_reap_lock);
+                if(kept) {
+                    for(size_t i=0;i<dead->used;i++)if(dead->pages[i]) { memset(dead->bytes+i*dead->page_size,0,dead->page_size);dead->pages[i]=NULL; }
+                    dead->used=0;dead->warm=warm;
+                    pthread_mutex_lock(&backing_reap_lock);
+                    backing_pool_reserved--;backing_pool[backing_pool_count++]=dead;dead=NULL;backing_pool_used_ns=backing_now_ns();
+                    pthread_mutex_unlock(&backing_reap_lock);
+                } else { for(size_t i=0;i<dead->used;i++)dead->pages[i]=NULL;dead->used=0; }   /* zero marks only: freed below */
             }
             if(dead)backing_free_now(dead);            /* its pages went already: used is 0 */
             dead=next;
@@ -157,7 +188,8 @@ static MemoryBacking *backing_pool_take(size_t size) {
     if(!backing_reaping || !size || size>SIZE_MAX-(page-1))return NULL;
     pthread_mutex_lock(&backing_reap_lock);
     for(unsigned i=backing_pool_count;i--;)if(backing_pool[i]->mapped_size==mapped) {
-        backing=backing_pool[i];backing_pool[i]=backing_pool[--backing_pool_count];backing_pool_large-=(unsigned)backing_large(backing);break;
+        backing=backing_pool[i];backing_pool[i]=backing_pool[--backing_pool_count];backing_pool_large-=(unsigned)backing_large(backing);
+        backing_pool_warm-=backing->warm;backing->warm=0;backing_pool_used_ns=backing_now_ns();break;
     }
     pthread_mutex_unlock(&backing_reap_lock);
     if(backing) { backing->refs=1;backing->size=size;backing->frozen=backing->cow_copy=backing->unpooled=backing->recycle=0; }

@@ -169,6 +169,7 @@ func archiveName(requested string) string {
 
 // getArchive streams a tar of a container path (docker cp CONTAINER:PATH -).
 func (b *engine) getArchive(w http.ResponseWriter, name, requested string, head bool) {
+	b.upperSync(b.container(name))
 	f := b.guestFile(name, requested)
 	w.Header().Set("X-Docker-Container-Path-Stat", pathStat(f, requested))
 	if head {
@@ -223,6 +224,7 @@ func tarEntry(out *tar.Writer, name, p string, info os.FileInfo) error {
 // (mounts left out, as Docker does).
 func (b *engine) export(w http.ResponseWriter, name string) {
 	p := b.container(name)
+	b.upperSync(p)
 	r := containerLayers(p, readObject(filepath.Join(p, "config.json")))
 	w.Header().Set("Content-Type", "application/x-tar")
 	w.WriteHeader(200)
@@ -246,6 +248,7 @@ var engineFiles = map[string]bool{"etc/hosts": true, "etc/resolv.conf": true, "e
 // one the engine made (for its files, or a mount point) only for what is in it.
 func (b *engine) changes(name string) []obj {
 	p := b.container(name)
+	b.upperSync(p)
 	c := readObject(filepath.Join(p, "config.json"))
 	reject(c["lower"] != nil, "docker diff needs the layered layout (this container was made with --rootfs copy)")
 	r := containerLayers(p, c)
@@ -287,6 +290,7 @@ func (b *engine) changes(name string) []obj {
 
 // putArchive extracts a tar into a container directory (docker cp - CONTAINER:PATH).
 func (b *engine) putArchive(name, requested string, body io.Reader, noOverwriteDirNonDir bool) {
+	b.upperSync(b.container(name)) // the run's files first: what is copied in replaces them on disk
 	resolve := b.guestFiles(name)
 	f := resolve(requested, false)
 	st, e := os.Lstat(f.host)

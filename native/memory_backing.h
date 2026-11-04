@@ -23,6 +23,7 @@ struct BackingPageGroup { size_t live,count;unsigned uncharged;BackingPage pages
 typedef struct {
     size_t refs,size,mapped_size,page_size,used;
     unsigned frozen,cow_copy,unpooled,recycle;
+    size_t warm;                      /* pooled: bytes of its host memory still resident, zeroed (backing_pool_take) */
     unsigned char *bytes;
     uint64_t hvf_ipa,hvf_epoch,*hvf_chunks;
     void *reap_next;                  /* in backing_reap's queue */
