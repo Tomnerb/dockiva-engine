@@ -269,6 +269,12 @@ static int el1_zero_page(uint64_t page) {
    as a parked region: that region, zeroed. */
 static long el1_mmap(uint64_t *frame,const HvfEl1Context *c) {
     uint64_t length=frame[1],task=frame[HF_TASK],mm=frame[HF_MM];
+    /* Go's heap hints on arm64 (i<<40 | 0x4000000000 for i 0x7f down to 0, 64 MiB of
+       PROT_NONE): far above the arena (at most 24 GiB), so the runtime maps each
+       elsewhere and Go unmaps it and tries the next, 256 calls at every start. ENOMEM
+       says the same at once: Go goes on to the next hint, then takes any address. */
+    if(frame[2]==0 && frame[3]==0x22 && length==(UINT64_C(64)<<20) && (frame[0]&((UINT64_C(1)<<40)-1))==UINT64_C(0x4000000000) &&
+       (frame[0]>>40)<0x80 && frame[4]==UINT64_MAX && frame[5]==0) { frame[0]=(uint64_t)-12;return 1; }
     if(frame[0] || frame[2]!=3 || frame[3]!=0x22 || !length || length>HVF_EL1_REGION_PAGES*4096 || task>UINT32_MAX || !c->block)return 0;
     uint32_t pages=(uint32_t)((length+4095)/4096);
     if(!el1_lock(frame,c,mm))return 0;

@@ -503,7 +503,12 @@ static void schedule_notify(void) {
     schedule_kick();
 }
 #define SCHEDULE_INPLACE_NS 1000000u
-#define SCHEDULE_INPLACE_SPIN_NS 20000u
+/* How long a thread waiting in place (a futex, a pipe, an eventfd, epoll) spins before
+   it sleeps on its condition variable. A wake that finds it asleep costs the waker a
+   host system call and the sleeper its wake-up latency; npm's main thread woke a
+   sleeping libuv or V8 worker 7k times an install with 20 us (0.43 s), 50 us caught
+   most of them (0.41 s, as Linux in a VM). Spinning longer made no difference. */
+#define SCHEDULE_INPLACE_SPIN_NS 50000u
 #ifdef VMFREE_HVF
 static void mm_lock(ScheduledTask *t);static void mm_unlock(ScheduledTask *t);
 /* Whether a thread may wait in place now: no thread waits for a worker. Without the

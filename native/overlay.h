@@ -571,6 +571,17 @@ static int ov_walk_fast(const char *start,const char *rest,int follow,int direct
     ov_leaf.layer=layer;ov_leaf.bare=layer==2 && base==fs_root;strcpy(ov_leaf.canon,full);fs_where=0;if(canon)strcpy(canon,full);
     return fd;
 }
+/* Whether rest names its start directory itself: "." parts and slashes only. */
+static int ov_dot(const char *rest) {
+    int dots=0;
+    for(const char *p=rest;*p;) {
+        while(*p=='/')p++;
+        if(!*p)break;
+        if(p[0]!='.' || (p[1] && p[1]!='/'))return 0;
+        dots=1;p++;
+    }
+    return dots;
+}
 /* fs_walk over the layers (see fs_walk): the path from base_path's canonical guest
    path, component by component, with each directory's upper and lower descriptors. */
 static int ov_walk(int base,const char *base_path,const char *input,int follow,char leaf[1025],char canon[1025]) {
@@ -596,6 +607,23 @@ static int ov_walk(int base,const char *base_path,const char *input,int follow,c
         if(ov_link_get(cur,rest,follow,to) && (fast=ov_walk_fast("/",to,follow,direct,leaf,canon))!=-2)return fast;
         if((fast=ov_walk_fast(cur,rest,follow,direct,leaf,canon))!=-2)return fast;
         if(ov_gen && ov_links) { passed.ok=1;passed.gen=__atomic_load_n(&ov_gen[0],__ATOMIC_ACQUIRE);passed.mounts=ov_link_mounts();strcpy(from,cur); }
+    }
+    /* "." (or "./", ".//."): the directory itself, from the descriptor the call came
+       with, not two directory opens below (ov_pair). Go's os.Getwd stats "." for each
+       path its tools make absolute: the assembler 45 times a run, the compiler more.
+       The upper layer's copy when it has one (overlayfs reports that one), else base
+       (the lower's). The leaf stays ".", so rmdir and unlink refuse it as before. */
+    if(input[0]!='/' && ov_dot(rest) && fs_scope.root<0 && !(fs_mount_count && fs_mount_of(cur))) {
+        struct stat up,own;int fd=-1,layer=1;
+        if(!fstatat(fs_root,cur[1]?cur+1:".",&up,FS_NOFOLLOW_AT) && S_ISDIR(up.st_mode)) {
+            layer=0;
+            fd=!fstat(base,&own) && own.st_ino==up.st_ino && own.st_dev==up.st_dev?dup(base):openat(fs_root,cur[1]?cur+1:".",O_RDONLY|O_DIRECTORY|FS_NOFOLLOW_OPEN|O_CLOEXEC);
+        } else if(errno==ENOENT || errno==ENOTDIR)fd=dup(base);
+        if(fd>=0) {
+            strcpy(leaf,".");if(canon)strcpy(canon,cur);
+            fs_where=0;ov_leaf.layer=layer;strcpy(ov_leaf.canon,cur);
+            return fd;
+        }
     }
     int u,l,mount;unsigned links=0;size_t pos=0;
     if(ov_pair(cur,&u,&l,&mount))return -1;

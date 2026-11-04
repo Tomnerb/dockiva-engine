@@ -6,7 +6,7 @@
       "exit": 0,
       "stdout": "PASS: two private forks add 0 backing bytes to 90856 tracked bytes\nPASS: nested forks, parent/child stores and split views remain isolated\nPASS: heap regrowth, MAP_FIXED, unmap/reuse and allocation-failure rollback preserve peers\nPASS: syscall readv writes detach backing and preserve multiple output pointers\nPASS: actual process clone/store/exit/wait path preserves the parent image\n",
       "stderr": "",
-      "binary_sha256": "2a02de440bee0cc7e1e3ae40b42ac27ed08ad6bcfdb86cd3aa6bfa8e95ffa97b"
+      "binary_sha256": "2923f77f0c737e0966a6eb7940f5ea84cdee20c52b5ec7ebe8b80869d918a09d"
     },
     {
       "test": "interpreter-sanitize-oom-store",
@@ -21,7 +21,7 @@
       "exit": 0,
       "stdout": "PASS: arena=67108864 host_page=16384 first_write_charge=49328 second_write_charge=16432\nPASS: stable pointers, nested snapshots, cross-host-page COW, transactional OOM and final release\n",
       "stderr": "",
-      "binary_sha256": "d3e8a068de016f14451a9ba9fa95e0a470830032b9a8a3320d6b1402f88cff7b"
+      "binary_sha256": "7be83bca36784445dcee5f576db6e109c9355c914b44ec4217922b2f67219e00"
     }
   ],
   "source_hashes": {
@@ -38,7 +38,7 @@
     "native/heap.h": "01d7c53a4d5e4fccf32fe735c49dfe5be2e89443e31d2493c7f5daa768ce8959",
     "native/hvf_backend.h": "e5b7ce6b835c124f2a2ceb8d158b22aeaa8fb5bfd6705c0c881d51fb12f00780",
     "native/hvf_el1.h": "fde9a4013dcd624047dcfae4b90e9aa77b13785ef2df0c692acd565b6930d824",
-    "native/hvf_el1_code.h": "7c5377fe34960f80f29e35185cfc346c188a220d64486a7c8aa7138b21892909",
+    "native/hvf_el1_code.h": "7d1b1cadc9aa2b7549b54572d3a787d9d81251116c34650c53e3252d739a8135",
     "native/inotify.h": "1c7242449c9f742c26c99e2cde0102bafeab885e68272bb80dead98d25f1e3d3",
     "native/io.h": "a04f65aefd798294ae65185b1d196c69f4d3f7980543cd4c7eec922f15d90c40",
     "native/mapping.h": "e1e537435b3282d7df4f8b968b5497744b4e26d56692dc816209d5a07aa3d772",
@@ -47,19 +47,19 @@
     "native/memory_backing_mach.h": "0dc85d80c0ee10e329eff7c5dc7c5589e114fc24fbd1e25a727f7694d52d9d7d",
     "native/memory_backing_ops.h": "b3b355d8042a4b17646eabd1a4501560a1ae991c697e817074e259643249dfa1",
     "native/net.h": "185aac40b10dd7f967337cdd1d416d7acee876fcae367d5ec272e79145abc16a",
-    "native/overlay.h": "01b93c694cb2071b697eca8cbb5a29bbb63c2105304c5b54589b6424a664c92b",
+    "native/overlay.h": "ffbf4eb427045927c2ab2c029b6ab572306f7babd0fe511f129933cc70a47811",
     "native/pack.h": "d780d15a5e6c5661548b96087545117fdb6be7e56d2abcbe25f8f82c7aa4b11a",
     "native/process.h": "98c513b2cba95b2189fc7395317252188747ec60574e9b3bfe0ebb40e179aa0a",
     "native/profile.h": "55a98ccbc09a092563f53f834d4a4d0f71821aaa6c29bb68c02696f6580d03d1",
     "native/resources.h": "e3e0d3ca847c8ef5af7a1944d3ef7a48cf44b3de797e304126ed61feb4ef042d",
     "native/runtime_context.h": "01197d81e8aa48acff643a170d072ea71783913093253d4549487051d5618fb5",
-    "native/scheduler.h": "01a4e44fd3dcbeb78686948829e0509daa58640c863463880a72e8d5bd83920e",
+    "native/scheduler.h": "9167914198b6ceb5e8cb535e252ce645d12d5b60f2820ac70175208f86c1cad9",
     "native/seccomp.h": "d2eedc46eb954ef161d216a3c70660ff9aa658da6b353b1af45e6f46e419ff0f",
     "native/signals.h": "68197a8a40060f2178ecda8253cac288aeac7a351beae253f7bad88f9786ad44",
     "native/syscall.h": "5b7711ab0a7e523d429cabc8bb28fee1d7058142dfe14d6ea3dff56124c19b74",
     "native/sysinfo.h": "ab21958fdd65572e57ee635b9ce1dec8d2b3af6080af315a5688230794d59578",
     "native/terminal.h": "96da45f2a3ce60a38a10a34d8ce722b3cfbfd09161e06c03c6981f0d4a56b2d7",
-    "native/upm.h": "d3e9755d7af7ee2bfc2a7d45fc2185e2b053e7deba423115525dcb5f07a1b7dc",
+    "native/upm.h": "491e31e3205ff700e40c9dfb2e1f72678793557191761879e7df1a63a2741151",
     "native/vdso.h": "55ebda26b591fffb3df807a02a24e44ac5d60566ca63c7bf7fcc5cb261a60c4c",
     "native/runtime.c": "15a6041c7095e036968cba288cc4dbb66267c8cdab2a6e5a5492ef991a8bcf34"
   }
