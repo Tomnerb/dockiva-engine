@@ -181,9 +181,15 @@ func TestLoadSkipsOtherPlatformsAndUnsafePaths(t *testing.T) {
 	if amd64 == string(config) {
 		t.Fatalf("fixture config: %s", config)
 	}
+	// linux/amd64 loads (it runs through FEX); another platform is skipped.
 	stream, failure := load(t, b, classicArchive(t, []byte(amd64), layer, `["test/x86:1"]`), "")
-	if !strings.Contains(stream, "Skipped test/x86:1: it is linux/amd64") || !strings.Contains(failure, "No linux/arm64 image") || exists(filepath.Join(b.Cache, key("test/x86:1"))) {
+	if failure != "" || stream != "Loaded image: test/x86:1\n" || imageArch(b.image("test/x86:1")) != "amd64" {
 		t.Fatalf("amd64 image: %q %q", stream, failure)
+	}
+	s390x := strings.Replace(string(config), `"architecture":"arm64"`, `"architecture":"s390x"`, 1)
+	stream, failure = load(t, b, classicArchive(t, []byte(s390x), layer, `["test/s390x:1"]`), "")
+	if !strings.Contains(stream, "Skipped test/s390x:1: it is linux/s390x") || !strings.Contains(failure, "No linux/arm64 or linux/amd64 image") || exists(filepath.Join(b.Cache, key("test/s390x:1"))) {
+		t.Fatalf("s390x image: %q %q", stream, failure)
 	}
 	for name, body := range map[string][]byte{
 		"traversal": archive(t, [2]string{"../escape", "x"}),

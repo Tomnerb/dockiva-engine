@@ -45,7 +45,8 @@ func (c *capped) Read(p []byte) (int, error) {
 }
 
 // loadImages serves POST /images/load: the archive (plain or gzip) is unpacked to
-// disk, then each linux/arm64 image in it is cached under its tags. Progress is
+// disk, then each linux/arm64 or linux/amd64 image in it is cached under its tags
+// (loadArch). Progress is
 // JSON messages, as the docker CLI expects; quiet leaves out the layer lines.
 func (b *engine) loadImages(w http.ResponseWriter, body io.Reader, quiet bool) {
 	w.Header().Set("Content-Type", "application/json")
@@ -80,7 +81,7 @@ func (b *engine) loadImages(w http.ResponseWriter, body io.Reader, quiet bool) {
 	for _, s := range skipped {
 		say(obj{"stream": s + "\n"})
 	}
-	reject(len(images) > 0, "No linux/arm64 image in the archive: Dockiva Engine runs linux/arm64 only")
+	reject(len(images) > 0, "No linux/arm64 or linux/amd64 image in the archive: Dockiva Engine runs those only")
 	for _, l := range images {
 		im := loadImage(l.layout)
 		if !quiet {
@@ -143,28 +144,32 @@ func ociImages(dir, work string) ([]loadedImage, []string) {
 		if label == "" {
 			label = text(desc["digest"])
 		}
-		if desc["mediaType"] == indexMedia || desc["mediaType"] == dockerList { // a multi-platform image
+		if desc["mediaType"] == indexMedia || desc["mediaType"] == dockerList { // a multi-platform image: arm64, else amd64
 			var chosen obj
 			platforms := []string{}
 			for _, m := range array(decode(blob(dir, desc, maxJSON, indexMedia, dockerList), maxJSON)["manifests"]) {
 				md := object(m)
 				p := object(md["platform"])
-				if p["os"] == "linux" && p["architecture"] == "arm64" && (idle(p["variant"]) || p["variant"] == "v8") {
+				if arch := loadArch(p); arch == "arm64" || arch == "amd64" && chosen == nil {
 					chosen = md
-					break
+					if arch == "arm64" {
+						break
+					}
 				}
 				platforms = append(platforms, text(p["os"])+"/"+text(p["architecture"]))
 			}
 			if chosen == nil {
-				skipped = append(skipped, "Skipped "+label+": no linux/arm64 variant ("+strings.Join(platforms, ", ")+"); Dockiva Engine runs linux/arm64 only")
+				skipped = append(skipped, "Skipped "+label+": no linux/arm64 or linux/amd64 variant ("+strings.Join(platforms, ", ")+")")
 				continue
 			}
 			desc = chosen
 		}
 		manifest := decode(blob(dir, desc, maxJSON, manifestMedia, dockerManifest), maxJSON)
 		cd := object(manifest["config"])
-		if p := platformOf(decode(blob(dir, cd, maxJSON, configMedia, dockerConfig), maxJSON)); p != "linux/arm64" {
-			skipped = append(skipped, "Skipped "+label+": it is "+p+"; Dockiva Engine runs linux/arm64 only")
+		config := decode(blob(dir, cd, maxJSON, configMedia, dockerConfig), maxJSON)
+		arch := loadArch(config)
+		if arch == "" {
+			skipped = append(skipped, "Skipped "+label+": it is "+platformOf(config)+"; Dockiva Engine runs linux/arm64 and linux/amd64 only")
 			continue
 		}
 		d := str(desc["digest"])
@@ -181,7 +186,7 @@ func ociImages(dir, work string) ([]loadedImage, []string) {
 					linkOrCopy(noLinks(dir, "blobs/sha256/"+d[7:]), filepath.Join(blobs, d[7:]))
 				}
 			}
-			save(filepath.Join(layout, "index.json"), obj{"schemaVersion": 2, "manifests": []any{obj{"mediaType": desc["mediaType"], "digest": d, "size": desc["size"], "platform": obj{"os": "linux", "architecture": "arm64"}}}})
+			save(filepath.Join(layout, "index.json"), obj{"schemaVersion": 2, "manifests": []any{obj{"mediaType": desc["mediaType"], "digest": d, "size": desc["size"], "platform": obj{"os": "linux", "architecture": arch}}}})
 			i = len(out)
 			seen[d] = i
 			out = append(out, loadedImage{layout: layout})
@@ -207,12 +212,13 @@ func classicImages(dir, work string) ([]loadedImage, []string) {
 		for _, t := range stringsOf(e["RepoTags"]) {
 			tags = addTag(tags, t)
 		}
-		if p := platformOf(decode(raw, maxJSON)); p != "linux/arm64" {
+		arch := loadArch(decode(raw, maxJSON))
+		if arch == "" {
 			label := digest(raw)
 			if len(tags) > 0 {
 				label = tags[0]
 			}
-			skipped = append(skipped, "Skipped "+label+": it is "+p+"; Dockiva Engine runs linux/arm64 only")
+			skipped = append(skipped, "Skipped "+label+": it is "+platformOf(decode(raw, maxJSON))+"; Dockiva Engine runs linux/arm64 and linux/amd64 only")
 			continue
 		}
 		files := stringsOfAny(e["Layers"])
@@ -230,7 +236,7 @@ func classicImages(dir, work string) ([]loadedImage, []string) {
 			layers = append(layers, obj{"mediaType": media, "digest": d, "size": size})
 		}
 		id, n := writeJSONBlob(blobs, obj{"schemaVersion": 2, "mediaType": manifestMedia, "config": obj{"mediaType": configMedia, "digest": config, "size": len(raw)}, "layers": layers})
-		save(filepath.Join(layout, "index.json"), obj{"schemaVersion": 2, "manifests": []any{obj{"mediaType": manifestMedia, "digest": id, "size": n, "platform": obj{"os": "linux", "architecture": "arm64"}}}})
+		save(filepath.Join(layout, "index.json"), obj{"schemaVersion": 2, "manifests": []any{obj{"mediaType": manifestMedia, "digest": id, "size": n, "platform": obj{"os": "linux", "architecture": arch}}}})
 		out = append(out, loadedImage{layout: layout, tags: tags})
 	}
 	return out, skipped
@@ -274,6 +280,20 @@ func layerFile(p string) (string, int64, string) {
 
 // platformOf is an image config's os/architecture.
 func platformOf(config obj) string { return text(config["os"]) + "/" + text(config["architecture"]) }
+
+// loadArch is what an image for a platform (or with a config) of os, architecture
+// and variant runs as here: "arm64", "amd64" (through FEX: x86.go), or "" (not at all).
+func loadArch(p obj) string {
+	switch {
+	case p["os"] != "linux":
+		return ""
+	case p["architecture"] == "arm64" && (idle(p["variant"]) || p["variant"] == "v8"):
+		return "arm64"
+	case p["architecture"] == "amd64" && idle(p["variant"]):
+		return "amd64"
+	}
+	return ""
+}
 
 // addTag adds a tag, in the form images are cached under, once.
 func addTag(tags []string, t string) []string {

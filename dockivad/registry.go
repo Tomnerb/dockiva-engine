@@ -203,6 +203,12 @@ func pullImage(reference, cache string, insecure bool, bearer string) string {
 // insecure (--insecure-local) lets a loopback registry (127.0.0.1, localhost) use
 // plain HTTP; others are HTTPS.
 func pullWith(reference, cache string, insecure bool, creds credentials, commit func(name, layout string) string) string {
+	return pullFor(reference, "", cache, insecure, creds, commit)
+}
+
+// pullFor is pullWith for an architecture (platformArch): "" takes an index's
+// linux/arm64 image, or else its linux/amd64 one (run through FEX, x86.go).
+func pullFor(reference, arch, cache string, insecure bool, creds credentials, commit func(name, layout string) string) string {
 	host, repo, ref, name := parseReference(reference)
 	reject(creds.RegistryToken == "" || validToken(creds.RegistryToken), "Invalid registry token")
 	plain := insecure && loopback(host)
@@ -290,15 +296,26 @@ func pullWith(reference, cache string, insecure bool, creds credentials, commit 
 	if manifest["mediaType"] == indexMedia || manifest["mediaType"] == dockerList {
 		items := array(manifest["manifests"])
 		reject(len(items) <= 32, "Too many index entries")
-		selected := []obj{}
-		for _, v := range items {
-			d := object(v)
-			platform := object(d["platform"])
-			if platform["os"] == "linux" && platform["architecture"] == "arm64" {
-				selected = append(selected, d)
+		pick := func(want string) []obj {
+			selected := []obj{}
+			for _, v := range items {
+				d := object(v)
+				platform := object(d["platform"])
+				if platform["os"] == "linux" && platform["architecture"] == want && (want != "amd64" || idle(platform["variant"])) {
+					selected = append(selected, d)
+				}
 			}
+			return selected
 		}
-		reject(len(selected) == 1, "Index must select exactly one linux/arm64 image")
+		want := arch
+		if want == "" {
+			want = "arm64"
+		}
+		selected := pick(want)
+		if arch == "" && len(selected) == 0 { // no arm64 variant: the amd64 one, as Docker on Apple silicon
+			want, selected = "amd64", pick("amd64")
+		}
+		reject(len(selected) == 1, "Index must select exactly one linux/"+want+" image")
 		d := selected[0]
 		dg := str(d["digest"])
 		reject(digestPattern.MatchString(dg), "Invalid selected digest")

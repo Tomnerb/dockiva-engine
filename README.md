@@ -7,6 +7,28 @@ bundle ships it as `Dockiva.app/Contents/Resources/dockiva-engine/`; its state l
 in `~/.dockiva-engine`. The notes below keep the project's history and its original
 development name for the Python tooling (`vmfree.py`).
 
+## linux/amd64 images
+
+Images without an arm64 variant, or asked for with `--platform linux/amd64`, run
+their x86-64 programs through [FEX](https://github.com/FEX-Emu/FEX), an x86-64
+translator that is itself an arm64 Linux program (MIT). The runtime acts as
+binfmt_misc with FEX registered: an exec of an x86-64 ELF starts FEX with the
+program's descriptor (`AT_EXECFD`), and FEX and its arm64 libraries come from a
+bundle mounted read-only at `/.dockiva/x86`. `docker pull`, `create` and `run` with
+`--platform linux/amd64`, and `docker load` of amd64 archives, work; `docker build`
+still targets linux/arm64 only.
+
+The bundle holds `bin/FEX`, `bin/FEXServer` and `lib/` with their arm64 glibc
+(`ld-linux-aarch64.so.1`, `libc.so.6`, `libm.so.6`, `libgcc_s.so.1`,
+`libstdc++.so.6`). It is looked for at `$DOCKIVA_X86`, in an `x86` directory beside
+the runtime binary, then in `~/.dockiva-engine/x86`; without one, an amd64 container
+does not start and says where to put it. Tested: FEX 2610 (Ubuntu's
+`fex-emu-armv8.4` package) with Ubuntu 24.04's libraries. On an M2 Max, Debian,
+Alpine and Python 3.12 amd64 images pass shell, fork and exec, signal, thread,
+multiprocessing, ssl, sqlite, subprocess and published-port HTTP checks; a Python
+loop runs about 1.5x slower than on the arm64 image, and a container starts in
+about 0.23 s (0.06 s for arm64).
+
 ## History
 
 Run supported Linux ARM64 guests on Apple Silicon macOS without a Linux kernel VM.

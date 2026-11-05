@@ -59,7 +59,7 @@ func (b *engine) imageInfo(name string) obj {
 	}
 	st, e := os.Stat(filepath.Join(b.imagePath(name), "image.json"))
 	check(e)
-	return obj{"Id": im.Digest, "RepoTags": []string{name}, "RepoDigests": []string{repository(name) + "@" + im.Digest}, "Created": st.ModTime().UTC().Format(time.RFC3339Nano), "Size": size, "Architecture": "arm64", "Os": "linux", "Config": obj{"Entrypoint": im.Entry, "Cmd": im.Args, "Env": im.Env, "WorkingDir": im.WorkingDir}, "RootFS": obj{"Type": "layers", "Layers": []string{}}}
+	return obj{"Id": im.Digest, "RepoTags": []string{name}, "RepoDigests": []string{repository(name) + "@" + im.Digest}, "Created": st.ModTime().UTC().Format(time.RFC3339Nano), "Size": size, "Architecture": imageArch(im), "Os": "linux", "Config": obj{"Entrypoint": im.Entry, "Cmd": im.Args, "Env": im.Env, "WorkingDir": im.WorkingDir}, "RootFS": obj{"Type": "layers", "Layers": []string{}}}
 }
 
 // imageFilter is docker images NAME (reference: a name or pattern, with or without
@@ -442,7 +442,7 @@ func (b *engine) createWith(name string, body obj, prepared *image) obj {
 	if override != nil {
 		cmd = override
 	}
-	config := obj{"image": im.Digest, "image_name": imageName, "command": command, "entrypoint": im.Entry, "cmd": cmd, "env": im.Env, "writable": host["ReadonlyRootfs"] != true, "cpu_backend": "interpreter", "schedule": false, "process_tree": false, "scheduled_network": false, "dynamic": false, "job_control": false, "memory_limit_mib": 256, "host_sandbox": false, "max_steps": 10000000, "labels": labels, "ports": ports, "exposed": exposedList, "workdir": im.WorkingDir, "network": networkMode(host), "stop_signal": im.StopSignal, "created_at": now()}
+	config := obj{"arch": imageArch(im), "image": im.Digest, "image_name": imageName, "command": command, "entrypoint": im.Entry, "cmd": cmd, "env": im.Env, "writable": host["ReadonlyRootfs"] != true, "cpu_backend": "interpreter", "schedule": false, "process_tree": false, "scheduled_network": false, "dynamic": false, "job_control": false, "memory_limit_mib": 256, "host_sandbox": false, "max_steps": 10000000, "labels": labels, "ports": ports, "exposed": exposedList, "workdir": im.WorkingDir, "network": networkMode(host), "stop_signal": im.StopSignal, "created_at": now()}
 	// The default bridge or a user network: a private address and ports. "host" shares
 	// the Mac's network; "none" keeps the container to its own loopback.
 	mode := text(host["NetworkMode"])
@@ -714,7 +714,13 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 			return
 		case path == "/containers/create" && method == "POST":
 			defer debug.FreeOSMemory()
-			reject(q.Get("platform") == "" || q.Get("platform") == "linux/arm64", "Only linux/arm64 supported")
+			if arch := platformArch(q.Get("platform")); arch != "" && len(raw) > 0 { // docker run --platform
+				var im *image
+				ref := text(decode(raw, maxJSON)["Image"])
+				if safeRun(func() { im = b.image(ref) }) == nil && imageArch(im) != arch {
+					panic(apiError{404, "No such image: " + ref + " (for linux/" + arch + ")"}) // the CLI then pulls that platform
+				}
+			}
 			name := q.Get("name")
 			if name == "" {
 				name = token()[:24]
@@ -867,7 +873,7 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 			// No engine lock (a pull is staged, then renamed in) and no write deadline:
 			// a large image takes minutes, and other requests go on meanwhile.
 			unbounded(w)
-			pullWith(reference, b.Cache, b.Insecure, registryCredentials(r.Header.Get("X-Registry-Auth")), b.commitPulled)
+			pullFor(reference, platformArch(q.Get("platform")), b.Cache, b.Insecure, registryCredentials(r.Header.Get("X-Registry-Auth")), b.commitPulled)
 			pulled := shortName(reference)
 			if !strings.Contains(pulled, "@") && !strings.Contains(pulled[strings.LastIndex(pulled, "/")+1:], ":") {
 				pulled += ":latest"

@@ -6,6 +6,7 @@ import (
 	"cmp"
 	"compress/gzip"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -58,6 +59,7 @@ type image struct {
 	Healthcheck      obj      // HEALTHCHECK, as Config.Healthcheck (Test, Interval, ...)
 	Root             string
 	Lower            string // beneath Root, a container's image files (layers); "" for none
+	Arch             string // "arm64", or "amd64" (run through FEX: x86.go)
 	layout           string
 	descriptor       obj
 	blobs            []string // manifest, config and layer digests
@@ -95,10 +97,13 @@ func blobDigest(desc obj, limit int64, media ...string) string {
 		ok = ok || desc["mediaType"] == m
 	}
 	reject(ok, "Unsupported descriptor media type: "+text(desc["mediaType"]))
-	_, embedded := desc["data"]
-	reject(idle(desc["urls"]) && !embedded, "External/embedded blobs unsupported")
+	reject(idle(desc["urls"]), "External blobs (urls) unsupported")
 	size := integer(desc["size"])
 	reject(size >= 0 && size <= limit, "Invalid descriptor size")
+	if data, embedded := desc["data"]; embedded { // OCI 1.1: the blob's bytes inline (Debian's configs); the same blob is fetched by digest
+		raw, e := base64.StdEncoding.DecodeString(text(data))
+		reject(e == nil && int64(len(raw)) == size && digest(raw) == d, "Embedded blob data does not match its descriptor")
+	}
 	return d
 }
 
@@ -164,14 +169,15 @@ func loadImage(layout string) *image {
 	reject(integer(manifest["schemaVersion"]) == 2 && (manifest["mediaType"] == nil || manifest["mediaType"] == desc["mediaType"]), "Invalid image manifest")
 	if p := desc["platform"]; p != nil {
 		m := object(p)
-		reject(m["os"] == "linux" && m["architecture"] == "arm64", "Only linux/arm64 supported")
+		reject(m["os"] == "linux" && (m["architecture"] == "arm64" || m["architecture"] == "amd64"), "Only linux/arm64 and linux/amd64 supported")
 	}
 	im := &image{Digest: str(desc["digest"]), descriptor: desc, layout: layout, blobs: []string{str(desc["digest"])}}
 	cd := object(manifest["config"])
 	cr := blob(layout, cd, maxJSON, configMedia, dockerConfig)
 	im.blobs = append(im.blobs, str(cd["digest"]))
 	c := decode(cr, maxJSON)
-	reject(c["os"] == "linux" && c["architecture"] == "arm64", "Only linux/arm64 supported")
+	reject(c["os"] == "linux" && (c["architecture"] == "arm64" || c["architecture"] == "amd64"), "Only linux/arm64 and linux/amd64 supported")
+	im.Arch = text(c["architecture"])
 	settings := object(c["config"])
 	im.User = validUser(text(settings["User"]))
 	im.StopSignal = stopSignal(text(settings["StopSignal"]))

@@ -669,6 +669,9 @@ func runtimeCommand(p, native string, c obj, command []string, argv0 string, env
 	}
 	// <home>/containers/<name>: volumes are in <home>/volumes.
 	args = append(args, prepareMounts(filepath.Dir(filepath.Dir(p)), r, c, publish)...)
+	if c["arch"] == "amd64" { // FEX runs its x86 programs (x86.go)
+		args = append(args, x86Args(r, native, home)...)
+	}
 	// dockiva-engine --tmp memory: /tmp (unless mounted) and /dev/shm in the runtime's
 	// memory (memfs), as tmpfs mounts; Docker keeps /tmp on the writable layer. Not for
 	// a build's RUN steps: their /tmp is part of the image (a later step reads it).
