@@ -963,8 +963,46 @@ static int guest_memory_unlocked(void) {
     return 1;
 }
 #endif
+/* Arguments the kernel declares as a signed int where a negative value means
+   something (pid_t, clockid_t, a directory descriptor, a timeout): Linux takes the
+   low 32 bits, sign-extended (SYSCALL_DEFINE's casts). Their upper half need not be
+   set: syscall(2) passes int arguments on as they are, and FEX an x86 program's
+   registers (its wait4(-1) arrives as 0xffffffff). Bit i: xi. */
+static unsigned syscall_int_args(uint64_t call) {
+    switch(call) {
+    case 33: case 34: case 35: case 48: case 53: case 54: case 56: case 74: case 78: case 79: case 88: case 100: case 107:
+    case 112: case 113: case 114: case 115: case 118: case 120: case 121: case 122: case 123: case 127: case 155: case 156:
+    case 165: case 186: case 190: case 194: case 238: case 239: case 260: case 261: case 264: case 265: case 266: case 270:
+    case 271: case 274: case 275: case 281: case 289: case 291: case 428: case 433: case 434: case 437: case 439: case 442:
+    case 452: case 463: case 464: case 465: case 466: case 467:
+        return 1;
+    case 36: return 2;                                           /* symlinkat: newdfd */
+    case 37: case 38: case 276: case 429: return 5;              /* olddfd, newdfd */
+    case 31: case 95: case 119: case 129: case 130: case 138: case 141: case 154: case 424: return 3;
+    case 30: case 131: case 140: case 240: case 272: return 7;
+    case 22: return 12;                                          /* epoll_pwait: maxevents, timeout */
+    case 441: return 4;
+    case 263: case 287: return 8;                                /* fanotify_mark's dfd, pkey_mprotect's key */
+    case 241: return 14;                                         /* perf_event_open: pid, cpu, group_fd */
+    }
+    return 0;
+}
+typedef struct { uint64_t saved[6];unsigned changed; } SyscallInts;
+static void syscall_ints_take(SyscallInts *s) {
+    s->changed=0;
+    for(unsigned mask=syscall_int_args(cpu->gpr[8]),i=0;mask;mask>>=1,i++) {
+        uint64_t value=(uint64_t)(int64_t)(int32_t)cpu->gpr[i];
+        if((mask&1) && value!=cpu->gpr[i]) { s->saved[i]=cpu->gpr[i];cpu->gpr[i]=value;s->changed|=1u<<i; }
+    }
+}
+/* x1..x5 as the caller left them, as Linux keeps them (x0: the result, or the same
+   argument again for a call that runs again). */
+static void syscall_ints_give(const SyscallInts *s) {
+    for(unsigned i=1;i<6;i++)if(s->changed>>i&1)cpu->gpr[i]=s->saved[i];
+}
 static int guest_syscall(void) {
     uint64_t call=cpu->gpr[8],count=cpu->gpr[2];
+    SyscallInts ints;syscall_ints_take(&ints);
     int clamp=(call==63 || call==64 || call==206 || call==207) && count>1024*1024 && fs_host(cpu->gpr[0])<0; /* files: fs_transfer_at */
     if(clamp)cpu->gpr[2]=1024*1024;
     net_wait.targeted=0; /* set again only by this call's own net_suspend */
@@ -974,5 +1012,6 @@ static int guest_syscall(void) {
     if(clamp)cpu->gpr[2]=count;
     if(trace && result==-3 && cpu->gpr[0]>=(uint64_t)-4095)                /* failures, with what they were given */
         fprintf(stderr,"pid %" PRIu64 " syscall %" PRIu64 " failed: %" PRId64 "\n",process_pid,call,(int64_t)cpu->gpr[0]);
+    syscall_ints_give(&ints);
     return result;
 }

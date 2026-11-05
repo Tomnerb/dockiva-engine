@@ -18,7 +18,10 @@
 #include <pthread.h>
 #include <stdatomic.h>
 #define HVF_IPA_BASE UINT64_C(0x80000000)
-#define HVF_TABLE_BYTES (64u<<20)                   /* stage-1 tables of every process: 16384 x 4 KiB */
+/* Stage-1 tables of every process: 131072 x 4 KiB of guest-physical space, host pages
+   only as tables are used (freed ones are reused first). FEX maps about 5 GiB of
+   mostly untouched memory, about 2800 tables per x86 process (x86.go). */
+#define HVF_TABLE_BYTES (512u<<20)
 #define HVF_TABLES (HVF_TABLE_BYTES/4096)
 #define HVF_CODE_BYTES (16u<<10)                    /* one host page: vectors and EL1 routines */
 #define HVF_FRAME_BYTES 512u                        /* each vCPU's register frame (WORKER_LIMIT of them) */
@@ -71,7 +74,7 @@ _Static_assert((HF_SVC_ESR+1)*8<=512,"frame words outgrew the frame");
 #define HVF_VIEWS (PROCESS_LIMIT+2)                 /* indexed by pid */
 static unsigned char *hvf_tables,*hvf_system;static unsigned hvf_frames_used;
 static unsigned short hvf_table_owner[HVF_TABLES];  /* 0 free, else the pid whose tables use it */
-static unsigned short hvf_table_link[HVF_TABLES];  /* the next table of the same view, plus one (0: its last) */
+static uint32_t hvf_table_link[HVF_TABLES];        /* the next table of the same view, plus one (0: its last) */
 /* Freed tables are reused first, warm in the caches and their host pages in memory.
    Taken in turn through the pool instead, a new runtime faulted in its 64 MiB a host
    page per four tables until it wrapped (a Go fork's 40-table copy 18-22 us against 7;
@@ -82,7 +85,7 @@ static unsigned short hvf_table_link[HVF_TABLES];  /* the next table of the same
    (hvf_flush; every fork that holds memory runs one), then joins hvf_table_freed, the
    latest last. Then tables never used (hvf_table_fresh); with the pool exhausted, the
    old scan takes any free one. */
-static unsigned short hvf_table_freed[HVF_TABLES],hvf_table_waiting[HVF_TABLES];static uint32_t hvf_table_waiting_since[HVF_TABLES];
+static uint32_t hvf_table_freed[HVF_TABLES],hvf_table_waiting[HVF_TABLES],hvf_table_waiting_since[HVF_TABLES];
 static unsigned hvf_table_nfreed,hvf_table_fresh,hvf_table_wait_head,hvf_table_nwaiting,hvf_table_hint;
 static uint32_t hvf_flushes_begun,hvf_flushes_done;  /* full invalidations begun, and the number of the latest one finished */
 typedef struct { const unsigned char *host;size_t size;uint64_t ipa; } HvfBlock;
@@ -302,7 +305,7 @@ static _Thread_local struct { uint64_t root,key,epoch;uint64_t *leaf; } hvf_walk
 static void hvf_table_wait(unsigned i,uint32_t since) {
     if(hvf_table_nwaiting==HVF_TABLES)return;                         /* (only duplicates: the scan finds it) */
     unsigned at=(hvf_table_wait_head+hvf_table_nwaiting++)%HVF_TABLES;
-    hvf_table_waiting[at]=(unsigned short)i;hvf_table_waiting_since[at]=since;
+    hvf_table_waiting[at]=i;hvf_table_waiting_since[at]=since;
 }
 /* A table for view v, under hvf_mutex (see hvf_table_freed); HVF_TABLES when none is
    left. An index listed twice (the scan took it meanwhile) is skipped once owned. */
@@ -310,14 +313,14 @@ static unsigned hvf_table_take_one(HvfView *v) {
     uint32_t done=__atomic_load_n(&hvf_flushes_done,__ATOMIC_ACQUIRE);
     while(hvf_table_nwaiting && (int32_t)(done-hvf_table_waiting_since[hvf_table_wait_head])>0) {
         unsigned w=hvf_table_waiting[hvf_table_wait_head];hvf_table_wait_head=(hvf_table_wait_head+1)%HVF_TABLES;hvf_table_nwaiting--;
-        if(!hvf_table_owner[w] && hvf_table_nfreed<HVF_TABLES)hvf_table_freed[hvf_table_nfreed++]=(unsigned short)w;
+        if(!hvf_table_owner[w] && hvf_table_nfreed<HVF_TABLES)hvf_table_freed[hvf_table_nfreed++]=w;
     }
     unsigned i=HVF_TABLES;
     while(i==HVF_TABLES && hvf_table_nfreed) { i=hvf_table_freed[--hvf_table_nfreed];if(hvf_table_owner[i])i=HVF_TABLES; }
     if(i==HVF_TABLES && hvf_table_fresh<HVF_TABLES)i=hvf_table_fresh++;
     for(unsigned n=0;i==HVF_TABLES && n<HVF_TABLES;n++) { unsigned k=(hvf_table_hint+n)%HVF_TABLES;if(!hvf_table_owner[k]) { i=k;hvf_table_hint=k+1; } }
     if(i==HVF_TABLES)return i;
-    hvf_table_owner[i]=(unsigned short)(v-hvf_views);hvf_table_link[i]=(unsigned short)v->table_chain;v->table_chain=i+1;v->tables++;
+    hvf_table_owner[i]=(unsigned short)(v-hvf_views);hvf_table_link[i]=v->table_chain;v->table_chain=i+1;v->tables++;
     return i;
 }
 static uint64_t hvf_table_of(HvfView *v,int zero) {
@@ -737,7 +740,7 @@ static int hvf_view_fork(uint64_t pid) {
     if(!root) { hvf_tables_free(to);return 0; }
     if(next<n) {           /* fewer in its tree after all: the rest back (the chain's first, as taken last) */
         pthread_mutex_lock(&hvf_mutex);
-        for(unsigned i=n;i-->next;) { hvf_table_owner[idx[i]]=0;if(hvf_table_nfreed<HVF_TABLES)hvf_table_freed[hvf_table_nfreed++]=(unsigned short)idx[i]; }  /* never walked */
+        for(unsigned i=n;i-->next;) { hvf_table_owner[idx[i]]=0;if(hvf_table_nfreed<HVF_TABLES)hvf_table_freed[hvf_table_nfreed++]=idx[i]; }  /* never walked */
         to->table_chain=next?idx[next-1]+1:0;to->tables-=n-next;
         pthread_mutex_unlock(&hvf_mutex);
     }
@@ -1637,7 +1640,7 @@ static int hvf_thread_call(uint64_t call) {
     if(call==220 && (cpu->gpr[0]&0x10000)) { cpu->gpr[0]=hvf_thread_clone();return -3; }
     if(call==178) { cpu->gpr[0]=tid;return -3; }
     if((call==130 || call==131) && job_control_enabled) {               /* tkill(tid,sig), tgkill(tgid,tid,sig) */
-        uint64_t tgid=call==131?cpu->gpr[0]:process_pid,target=cpu->gpr[call==131?1:0],signal=cpu->gpr[call==131?2:1];
+        uint64_t tgid=call==131?(uint64_t)(int64_t)(int32_t)cpu->gpr[0]:process_pid,target=(uint64_t)(int64_t)(int32_t)cpu->gpr[call==131?1:0],signal=(uint32_t)cpu->gpr[call==131?2:1]; /* ints (syscall_int_args) */
         if((int64_t)target<=0 || (int64_t)tgid<=0 || signal>64) { cpu->gpr[0]=linux_error(22);return -3; }
         if(tgid==process_pid && th) { cpu->gpr[0]=hvf_thread_signal(task,target,signal);return -3; }
         if(tgid==process_pid && target!=process_pid) { cpu->gpr[0]=linux_error(3);return -3; }
@@ -1693,6 +1696,16 @@ static int hvf_id_register(uint64_t esr,uint64_t *value) {
 /* A data abort for an unaligned access (an LDAXR, or an LSE2 atomic crossing 16
    bytes): SIGBUS, BUS_ADRALN, as Linux sends; FEX backpatches x86 atomics on it. */
 #define HVF_ALIGNMENT(esr) (((esr)>>26)==0x24 && ((esr)&0x3f)==0x21)
+/* Whether address lies in a mapping of any protection, PROT_NONE included: a fault
+   there is SEGV_ACCERR, as on Linux, and elsewhere SEGV_MAPERR. FEX tells a fault on
+   the page it protects to interrupt its JIT code (a deferred signal) by SEGV_ACCERR. */
+static int guest_mapped(uint64_t address) {
+    const GuestAddressSpace *space=address_space;
+    if(map_in_arena(address,1) && space->map_flags && (space->map_flags[(address-MAP_BASE)/4096]&8))return 1;
+    for(unsigned i=0;i<space->nseg;i++)if(address>=space->seg[i].base && address-space->seg[i].base<space->seg[i].size)return 1;
+    if(address>=space->brk_base && address-space->brk_base<space->brk_pages)return 1;
+    return reserve_find(address,1)>=0;
+}
 /* Under the scheduler a guest fault is a SIGSEGV, SIGBUS or SIGILL for that process: its
    handler runs if it has one and has not blocked the signal (OpenSSL probes CPU
    features this way, JVMs and V8 catch faults on purpose); else the process ends. */
@@ -1704,7 +1717,7 @@ static int hvf_fault(unsigned signal,uint64_t pc,uint64_t address,unsigned ec) {
             /* ILL_ILLOPC at the instruction; BUS_ADRALN, and SEGV_ACCERR on a mapped page, else SEGV_MAPERR, at the address. */
             /* Per thread: JVM safepoints fault many threads at once, and each handler
                needs its own si_code and si_addr. */
-            unsigned code=signal!=11?1u:(lookup(address,1,4) || lookup(address,1,1))?2u:1u;uint64_t where=signal==4?pc:address; /* ILL_ILLOPC, BUS_ADRALN */
+            unsigned code=signal!=11?1u:guest_mapped(address)?2u:1u;uint64_t where=signal==4?pc:address; /* ILL_ILLOPC, BUS_ADRALN */
             Thread *th=thread_current();
             if(th) { th->fault_signal=signal;th->fault_code=code;th->fault_addr=where; }
             else { task->signal_fault_code[index]=code;task->signal_fault_addr[index]=where; }
@@ -1913,9 +1926,11 @@ static int hvf_unlocked_exit(void) {
        !(mem_active && (call==61 || call==36 || call==37 || call==33 || call==52 || call==53 || call==54 || call==55 || call==46 || call==47 ||
                              call==45 || call==276 || call==69 || call==70 || call==286 || call==287 || call==71 || call==285 || call==43 || call==44)))return 0; /* 221: execve builds its image (exec_build); the rest: memfs */
     hvf_get_regs(1,elr,spsr);
+    SyscallInts ints;syscall_ints_take(&ints);
     int served=memory?guest_memory_unlocked():guest_syscall_unlocked();
     ov_changed();                                                              /* overlay.h: whether served or retried locked */
-    if(!served)return 0;   /* the locked path rereads the same exit */
+    syscall_ints_give(&ints);
+    if(!served) { if(ints.changed&1)cpu->gpr[0]=ints.saved[0];return 0; }   /* the locked path rereads the same exit */
     PROFILE_ADD(profile_unlocked_calls,1);
     if(profiling && call<512)__atomic_fetch_add(&profile_syscalls[call],1,__ATOMIC_RELAXED);
     hvf_put_regs();return 1;

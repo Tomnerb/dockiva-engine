@@ -1069,9 +1069,52 @@ static size_t proc_maps(char *out,size_t capacity); /* mapping.h */
    Linux defaults, and somaxconn as the backlog this runtime grants (NET_BACKLOG_LIMIT). */
 static const char *const fs_proc_sys[][2]={{"/proc/sys/vm/max_map_count","262144\n"},{"/proc/sys/vm/overcommit_memory","0\n"},
     {"/proc/sys/net/core/somaxconn","128\n"},{"/proc/sys/kernel/pid_max","4194304\n"},{"/proc/sys/kernel/ngroups_max","65536\n"}};
+/* --x86-translator DIR: FEX in the guest at DIR (bin/FEX and bin/FEXServer, lib/ with
+   their arm64 glibc and ld.so). The runtime then acts as binfmt_misc with FEX
+   registered (x86_exec_args): an x86 ELF exec'd runs as "FEX PROGRAM ARGS", and FEX's
+   own programs through DIR/lib's ld.so. /proc/sys/fs/binfmt_misc lists FEX's two
+   entries, which is how FEX knows to hand an x86 execve back to the kernel rather
+   than re-executing itself. */
+static char x86_translator[256];
+/* AT_EXECFD for startup, when >= 0: the program's descriptor that binfmt_misc's O flag
+   gives its interpreter (FEX reads the program through it, and its argv in the
+   preserve-argv0 layout); startup leaves the value's guest address in
+   startup_execfd_slot. */
+static int64_t startup_execfd=-1;static uint64_t startup_execfd_slot;
+/* Whether fd holds an x86-64 or i386 ELF. */
+static int x86_elf(int fd) {
+    unsigned char h[20];
+    if(pread(fd,h,sizeof(h),0)!=(ssize_t)sizeof(h) || memcmp(h,"\177ELF",4))return 0;
+    unsigned machine=(unsigned)h[18]|(unsigned)h[19]<<8;
+    return (h[4]==2 && machine==62) || (h[4]==1 && machine==3);
+}
 static const char *fs_proc_sys_value(const char *path) {
     for(unsigned i=0;i<sizeof(fs_proc_sys)/sizeof(*fs_proc_sys);i++)if(!strcmp(path,fs_proc_sys[i][0]))return fs_proc_sys[i][1];
+    if(x86_translator[0] && (!strcmp(path,"/proc/sys/fs/binfmt_misc/FEX-x86_64") || !strcmp(path,"/proc/sys/fs/binfmt_misc/FEX-x86")))return "enabled\nflags: POCF\n";
     return NULL;
+}
+/* The command line binfmt_misc gives a program at the guest path exe (argv: n of them,
+   argv[0] first), when it is x86 (x86 set) or one of FEX's own (under
+   x86_translator): the translator's ld.so, its lib directory, then FEX with exe, its
+   argv[0] and the other arguments (binfmt's preserve-argv0 layout, which FEX reads
+   with AT_EXECFD set: the caller gives that), or the program itself named argv[0].
+   The strings go to buffer from used; out gets the new argv. Returns its length, 0
+   when exe is neither, -1 when the entries or strings would not fit. */
+static int x86_exec_args(const char *exe,int x86,const char *const *argv,unsigned n,char *buffer,size_t *used,size_t limit,const char **out,unsigned capacity) {
+    size_t dir=strlen(x86_translator);
+    char ld[300],lib[300],fex[300];
+    snprintf(ld,sizeof(ld),"%s/lib/ld-linux-aarch64.so.1",x86_translator);snprintf(lib,sizeof(lib),"%s/lib",x86_translator);snprintf(fex,sizeof(fex),"%s/bin/FEX",x86_translator);
+    if(!x86_translator[0] || (!x86 && (strncmp(exe,x86_translator,dir) || exe[dir]!='/' || !strcmp(exe,ld))))return 0;
+    const char *first=n?argv[0]:exe;
+    const char *extra[8]={ld,"--library-path",lib,"--argv0",x86?fex:first,x86?fex:exe,exe,first};
+    unsigned k=x86?8:6;
+    if(n+k>capacity)return -1;
+    for(unsigned i=0;i<k;i++) {
+        size_t length=strlen(extra[i])+1;if(*used+length>limit)return -1;
+        memcpy(buffer+*used,extra[i],length);out[i]=buffer+*used;*used+=length;
+    }
+    for(unsigned i=1;i<n;i++)out[k-1+i]=argv[i];
+    return (int)(k-1+(n?n:1));
 }
 /* A path argument as /proc sees it: relative to a /proc working directory (busybox
    top chdirs there) or to one of our /proc directory descriptors (htop reads files

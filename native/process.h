@@ -98,15 +98,18 @@ static pthread_mutex_t exec_lock=PTHREAD_MUTEX_INITIALIZER;
 static _Thread_local struct ExecStage {
     int ready;uint64_t pid,pc,dir,arg[3],generation;unsigned r; /* the call it was built for */
     GuestIds ids;GuestCpuState cpu;char exe[1025],cmdline[sizeof(proc_cmdline[0])];unsigned cmdline_size;
+    int execfd;uint64_t execfd_slot; /* an x86 program's host descriptor plus one, and its AT_EXECFD's address: numbered at the exec (x86_exec_args) */
     GuestAddressSpace space;
 } exec_stage;
 static void exec_discard(void) {
     if(exec_stage.ready) { address_space_destroy(&exec_stage.space);exec_stage.ready=0; }
+    if(exec_stage.execfd) { close(exec_stage.execfd-1);exec_stage.execfd=0; }
 }
 /* execve (path, argv, envp in x0..x2), or execveat (dirfd in x0, the rest from x1: r=1),
    whose path may be relative to dirfd: the new image into exec_stage. 0 or an error. */
 static _Thread_local int exec_unlocked;               /* exec_build runs without the runtime lock */
 static uint64_t exec_build_held(uint64_t dir,unsigned r) {
+    if(exec_stage.execfd) { close(exec_stage.execfd-1);exec_stage.execfd=0; }   /* an earlier build's that failed */
     char leaf[1025],exe[1025];int saved,fd=mem_exec_open(dir,cpu->gpr[r],exe,0);   /* memfs: a host copy */
     if(fd==MEM_HOST_PATH) {
         syscall_unlocked=exec_unlocked;syscall_abort=0;int parent=fs_lookup(dir,cpu->gpr[r],leaf,1|FS_DIRECT,exe);syscall_unlocked=0;
@@ -161,6 +164,21 @@ static uint64_t exec_build_held(uint64_t dir,unsigned r) {
         fd=openat(dir,leaf2,O_RDONLY|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC);saved=errno;close(dir);errno=saved;if(fd<0)return fs_error();
         if(fstat(fd,&st)<0 || !S_ISREG(st.st_mode) || !(st.st_mode&0111)) { close(fd);return linux_error(8); }
     }
+    int x86=x86_elf(fd);
+    if(x86 && !x86_translator[0]) { close(fd);return linux_error(8); }            /* no translator: ENOEXEC, as Linux without binfmt_misc */
+    { /* binfmt_misc with FEX registered (x86_exec_args): FEX runs an x86 program; FEX's own through its ld.so */
+        const char *line[EXEC_ENTRIES];
+        int n=x86_exec_args(exe,x86,(const char *const *)args,argc,buffer,&used,EXEC_STRINGS,line,EXEC_ENTRIES);
+        if(n<0) { close(fd);return linux_error(7); }
+        if(n>0) {
+            for(int i=0;i<n;i++)args[i]=(char *)line[i];
+            if(x86) { int program=dup(fd);if(program<0) { close(fd);return linux_error(24); }exec_stage.execfd=program+1; }
+            argc=(unsigned)n;close(fd);
+            if(x86)snprintf(exe,sizeof(exe),"%s/bin/FEX",x86_translator);              /* /proc/self/exe: FEX finds FEXServer beside it */
+            if((fd=fs_open_root_file(args[0]))<0)return fs_error();
+            if(fstat(fd,&st)<0) { saved=errno;close(fd);errno=saved;return fs_error(); }
+        }
+    }
     FILE *input=fdopen(fd,"rb");if(!input) { close(fd);return linux_error(12); }
     /* A set-user-ID or set-group-ID file runs with its owner as effective and saved
        ID, unless no_new_privs is set. ponytail: the owner is root (image files are;
@@ -182,7 +200,11 @@ static uint64_t exec_build_held(uint64_t dir,unsigned r) {
         exec_loading=exec_staging=0;pthread_mutex_unlock(&exec_lock);
         address_space_destroy(&stage->space);address_space=home;cpu=regs;guest_ids=caller;return linux_error(8);
     }
-    load_stream(input);heap_init();startup((int)argc,(const char **)args,envc,(const char **)env);
+    load_stream(input);heap_init();
+    if(exec_stage.execfd)startup_execfd=0x7fffffff;          /* numbered at the exec: the lowest free descriptor then */
+    startup((int)argc,(const char **)args,envc,(const char **)env);
+    if(exec_stage.execfd)exec_stage.execfd_slot=startup_execfd_slot;
+    startup_execfd=-1;
     exec_loading=exec_staging=0;pthread_mutex_unlock(&exec_lock);address_space=home;cpu=regs;
     stage->ids=guest_ids;guest_ids=caller;
     snprintf(stage->exe,sizeof(stage->exe),"%s",exe);
@@ -224,6 +246,13 @@ static uint64_t process_exec_at(uint64_t dir,unsigned r) {
     for(unsigned i=0;i<FS_SLOTS;i++)if(fs_fd[i] && fs_cloexec[i]) {
         if(fs_dirs[i]) { fs_directory_release(fs_dirs[i]);fs_dirs[i]=NULL; }
         if(!fs_pack_drop(i))close(fs_fd[i]-1);fs_fd[i]=0;fs_cloexec[i]=0;fd_unbind(fs_guest[i]);
+    }
+    if(stage->execfd) { /* binfmt_misc's O flag: the x86 program's descriptor, the lowest free one, into AT_EXECFD */
+        uint64_t guest=fs_install(stage->execfd-1,0,1,0,NULL);stage->execfd=0;
+        if((int64_t)guest>=0 && stage->execfd_slot) {
+            store_le(stage->execfd_slot,guest,8);
+            for(unsigned i=0;i+1<address_space->auxv_count;i+=2)if(address_space->auxv[i]==2)address_space->auxv[i+1]=guest; /* /proc/self/auxv */
+        }
     }
     if(guest_uid)cap_held[0]=cap_held[1]=0; /* no file capabilities: a non-root exec loses them */
     else if(caller.uid) { cap_held[0]=UINT32_MAX;cap_held[1]=0x1ffu; } /* a set-user-ID-root exec gains them all */

@@ -6,7 +6,7 @@
       "exit": 0,
       "stdout": "PASS: two private forks add 0 bytes to 82956 tracked bytes\nPASS: nested forks, parent/child stores and split views remain isolated\nPASS: heap regrowth, MAP_FIXED, unmap/reuse and allocation-failure rollback preserve peers\nPASS: syscall readv writes detach backing and preserve multiple output pointers\nPASS: actual process clone/store/exit/wait path preserves the parent image\n",
       "stderr": "",
-      "binary_sha256": "58b7b8fb9c1773f5ed67f9984fe36fad498b005a7ee8453308e15acaaa502a4c"
+      "binary_sha256": "0a6759eea7812cd93d1e371aaad33f71e15a381f0ecceac88b18e2c8420c192a"
     },
     {
       "test": "interpreter-sanitize-oom-store",
@@ -21,7 +21,7 @@
       "exit": 0,
       "stdout": "PASS: arena=67108864 host_page=16384 first_write_charge=49504 second_write_charge=16432\nPASS: stable pointers, nested snapshots, cross-host-page COW, transactional OOM and final release\n",
       "stderr": "",
-      "binary_sha256": "4c23d72accb291c55b466abbf5be0f2640ccbaf91399fa8bee844aa9d33987b3"
+      "binary_sha256": "60fff36b3acba88247ca55fa17bff30faf6cfa12ade3eab6311ca5f09652a1a2"
     }
   ],
   "source_hashes": {
@@ -34,9 +34,9 @@
     "native/decode.h": "fdc15750c69a7f12c54e1ef9c27ac93c47fd722093958d1190497964a8ff40bd",
     "native/epoll.h": "1542fffecd806b9cee005c64de2cf9dfcf77c980c7f1fcb3fbae4dc8df295e01",
     "native/fadvise.h": "08db7b94b12205e6994a6a2de7632addf04d8a2977878fc41b639257965a91bc",
-    "native/fs.h": "d4254686bc548c6fd3864b0583a325807128f8014c79ccc0672668f62a67e2e5",
+    "native/fs.h": "39c25cc5c969a6b4ee070b6a17ce7a989a192fa188e80c4c323b84605f5c50ba",
     "native/heap.h": "fdcc0aaf351daada37e74118216f00eeaca4472a50a29e9ebcbd0eac03a9599a",
-    "native/hvf_backend.h": "8005f0804d216be67a8375928afe12b0d66eba612c1f1d710b9bedbcff3b3988",
+    "native/hvf_backend.h": "272cdb1ba94c42da06eef8cabf8ccf4b6ebf36b38e9a9cfc77562daf7a4db4b8",
     "native/hvf_el1.h": "715985c08ad86d49cbb62a60a65b8193f45206f54a3974def00936744d09b144",
     "native/hvf_el1_code.h": "927305c4558340062001044f1aae700f18008ffd3f996f2428bdc3ab15374bc9",
     "native/inotify.h": "1c7242449c9f742c26c99e2cde0102bafeab885e68272bb80dead98d25f1e3d3",
@@ -49,18 +49,18 @@
     "native/net.h": "f510922025207e713a6a64152e6827204fdd151ecf931b463b81d4d37a395ded",
     "native/overlay.h": "ffbf4eb427045927c2ab2c029b6ab572306f7babd0fe511f129933cc70a47811",
     "native/pack.h": "d780d15a5e6c5661548b96087545117fdb6be7e56d2abcbe25f8f82c7aa4b11a",
-    "native/process.h": "8962e9ec805c408d754701dcbc3316cce6957c9a042696bead5ff13152ad891a",
+    "native/process.h": "b96c6f1173395726dc04926689db3f9da33e82437a3f582616953cd5a40b2dc4",
     "native/profile.h": "1a442b96318d469eb0591c5e780df398d8c5714331d06aa29c168eb35e59cefd",
     "native/resources.h": "e3e0d3ca847c8ef5af7a1944d3ef7a48cf44b3de797e304126ed61feb4ef042d",
     "native/runtime_context.h": "01197d81e8aa48acff643a170d072ea71783913093253d4549487051d5618fb5",
     "native/scheduler.h": "39ed7470dc47a0cb90fd286c827401fae0cc87be1ca007c974e1e573501a3e37",
     "native/seccomp.h": "d2eedc46eb954ef161d216a3c70660ff9aa658da6b353b1af45e6f46e419ff0f",
     "native/signals.h": "c51aca3f224d53fa743f94d47318e1ac5f1c7c3830892d230f8b7527c044c18e",
-    "native/syscall.h": "f73dc4c95bde78c2989595379a7f713d7c57ba9fccc6ab74dcf681f4f0daf6c4",
+    "native/syscall.h": "4660f2f39c4daf07ea6cd5a725be882ceacb59b815651f93be68be0462dea4fc",
     "native/sysinfo.h": "ab21958fdd65572e57ee635b9ce1dec8d2b3af6080af315a5688230794d59578",
     "native/terminal.h": "55146752ef4c7021aaad41e86c8a38ed53f8055e1ebb97474b91f5504288d19c",
-    "native/upm.h": "491e31e3205ff700e40c9dfb2e1f72678793557191761879e7df1a63a2741151",
+    "native/upm.h": "163cc8851a3b31b6acb83800c69201ec6999f2422d6f10b602be51da6b72d624",
     "native/vdso.h": "55ebda26b591fffb3df807a02a24e44ac5d60566ca63c7bf7fcc5cb261a60c4c",
-    "native/runtime.c": "7d3003897c2c26d679c50b22ee8d6d94a019959f82efa547c2829d38377c61ab"
+    "native/runtime.c": "3f7281eed11f86af13a7dcb6960c9029ce94c4e56eb7493cebd223dc60d0b748"
   }
 }

@@ -396,11 +396,14 @@ static void startup(int argc, const char **argv, unsigned envc, const char **env
     vector[n++]=26; vector[n++]=hwcap_bits(1);
     vector[n++]=31; vector[n++]=args[0];
     if(vdso_backing) { vector[n++]=33; vector[n++]=VDSO_BASE; } /* AT_SYSINFO_EHDR */
+    unsigned execfd_at=0;
+    if(startup_execfd>=0) { vector[n++]=2;execfd_at=n;vector[n++]=(uint64_t)startup_execfd; } /* AT_EXECFD (fs.h) */
     vector[n++]=0; vector[n++]=0;
     /* Kept for /proc/self/auxv. */
     address_space->auxv_count=n-aux<48?n-aux:48;memcpy(address_space->auxv,vector+aux,address_space->auxv_count*8);
     cpu->sp=(cursor-n*8)&~UINT64_C(15);
     for(unsigned i=0;i<n;i++) store_le(cpu->sp+i*8,vector[i],8);
+    startup_execfd_slot=execfd_at?cpu->sp+execfd_at*8:0;
 }
 static uint64_t mask_width(unsigned width) { return width==64 ? UINT64_MAX : UINT32_MAX; }
 static uint64_t getreg(unsigned r, int allow_sp) { return r==31 ? (allow_sp?cpu->sp:0) : cpu->gpr[r]; }
@@ -1166,6 +1169,11 @@ int main(int argc,char **argv) {
         }
         else if(!strcmp(argv[i],"--outbound")) net_outbound=1;
         else if(!strcmp(argv[i],"--proc-publish") && i+1<argc) proc_publish_path=argv[++i]; /* this run's process table, for exec runs and docker top */
+        else if(!strcmp(argv[i],"--x86-translator") && i+1<argc) {   /* FEX's guest directory: x86 programs run under it (fs.h) */
+            const char *dir=argv[++i];
+            if(dir[0]!='/' || strlen(dir)>=sizeof(x86_translator)-32 || dir[strlen(dir)-1]=='/')fail("--x86-translator takes an absolute guest directory");
+            strcpy(x86_translator,dir);
+        }
         else if(!strcmp(argv[i],"--abstract-dir") && i+1<argc) {      /* the container's abstract Unix socket names */
             const char *dir=argv[++i];if(dir[0]!='/' || strlen(dir)>=sizeof(net_abstract_dir))fail("Invalid --abstract-dir");
             strcpy(net_abstract_dir,dir);
@@ -1254,23 +1262,41 @@ int main(int argc,char **argv) {
 #ifdef VMFREE_HVF
     if(use_hvf)vdso_build();
 #endif
-    FILE *input=fopen(argv[2],"rb");if(!input)fail("Cannot open ELF file");
+    char guest_exe[sizeof(proc_exe[0])]="";
+    { /* the ELF's path inside the root (/proc/1/exe), or its lower layer */
+        char root_real[PATH_MAX],elf_real[PATH_MAX];size_t n;
+        for(int layer=0;layer<2;layer++) {
+            const char *base=layer?lower_path:root_path;
+            if(base && realpath(base,root_real) && realpath(argv[2],elf_real) && !strncmp(elf_real,root_real,n=strlen(root_real)) && elf_real[n]=='/' && strlen(elf_real+n)<sizeof(guest_exe)) { strcpy(guest_exe,elf_real+n);break; }
+        }
+    }
+    FILE *input=NULL;
+    if(x86_translator[0] && strcmp(argv[1],"inspect") && guest_exe[0]) { /* an x86 program: FEX runs it (x86_exec_args) */
+        int probe=open(argv[2],O_RDONLY|O_CLOEXEC),x86=probe>=0 && x86_elf(probe);
+        if(probe>=0)close(probe);
+        static char strings[4096];size_t used=0;static const char *line[EXEC_ENTRIES];
+        int n=x86?x86_exec_args(guest_exe,1,guestargv,(unsigned)guestargc,strings,&used,sizeof(strings),line,EXEC_ENTRIES):0;
+        if(n<0)fail("Too many guest arguments");
+        if(n>0) {
+            for(int k=0;k<n;k++)guestargv[k]=line[k];
+            guestargc=n;snprintf(guest_exe,sizeof(guest_exe),"%s/bin/FEX",x86_translator);
+            int program=open(argv[2],O_RDONLY|O_CLOEXEC);                         /* binfmt's O flag: FEX reads the program through it */
+            if(program<0 || (int64_t)(startup_execfd=(int64_t)fs_install(program,0,1,0,NULL))<0)fail("Cannot open the x86 program");
+            int fd=fs_open_root_file(guestargv[0]);
+            if(fd<0 || !(input=fdopen(fd,"rb")))fail("Cannot open the x86 translator (--x86-translator)");
+        }
+    }
+    if(!input && !(input=fopen(argv[2],"rb")))fail("Cannot open ELF file");
     { /* As execve would: a set-ID file runs as its owner (root, see process_exec); a non-root run holds no capabilities */
         struct stat st;
         if(!fstat(fileno(input),&st)) { if(st.st_mode&S_ISUID)guest_ids.uid=guest_ids.suid=0;if(st.st_mode&S_ISGID)guest_ids.gid=guest_ids.sgid=0; }
         if(guest_uid)cap_held[0]=cap_held[1]=0;
     }
     load_stream(input);
-    { /* /proc/1/exe: the ELF's path inside the root */
-        char root_real[PATH_MAX],elf_real[PATH_MAX];size_t n;
-        for(int layer=0;layer<2;layer++) {                                  /* the root, or its lower layer */
-            const char *base=layer?lower_path:root_path;
-            if(base && realpath(base,root_real) && realpath(argv[2],elf_real) && !strncmp(elf_real,root_real,n=strlen(root_real)) && elf_real[n]=='/' && strlen(elf_real+n)<sizeof(proc_exe[0])) { strcpy(proc_exe[1],elf_real+n);break; }
-        }
-    }
+    strcpy(proc_exe[1],guest_exe); /* /proc/1/exe */
     if(!strcmp(argv[1],"inspect")) { printf("ARM64 ELF64; entry=0x%" PRIx64 "; segments=%u\n",cpu->pc,address_space->nseg); return 0; }
     heap_init();
-    startup(guestargc,guestargv,envc,guestenv);
+    startup(guestargc,guestargv,envc,guestenv);startup_execfd=-1;
     process_steps=steps;
     if(terminal_enabled)terminal_init();
     else if(signals_forwarded)host_signals_install();
