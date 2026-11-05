@@ -129,11 +129,15 @@ static void upm_gone(const char *canon) {
     upm_count(canon,-1);if(upm_files)upm_files--;
     if(ov_gen)ov_bump(canon);
 }
+/* /dev/shm stays on disk: sem_open makes a semaphore under a temporary name and links
+   it into place while it is still open, which a pending file cannot be (upm_cross:
+   EXDEV, and Python's multiprocessing locks failed); and its files are few. */
+static int upm_on_disk(const char *canon) { return !strncmp(canon,"/dev/shm/",9); }
 /* fs_open: a new regular file at canon (bare), made in memory. Its descriptor, -errno,
    or UPM_DISK (the host makes it: the budget is used, or a name clash). */
 static int64_t upm_create(const char *canon,uint64_t flags,uint64_t mode) {
     char dir[1025];const char *name;upm_split(canon,dir,&name);
-    if(!*name || strlen(name)>255 || !strncmp(name,OV_WH,4))return UPM_DISK;
+    if(!*name || strlen(name)>255 || !strncmp(name,OV_WH,4) || upm_on_disk(canon))return UPM_DISK;
     pthread_mutex_lock(&mem_lock);
     if(upm_files>=UPM_FILES_MAX || upm_fs->used>=upm_bytes_max) { pthread_mutex_unlock(&mem_lock);return UPM_DISK; }
     MemNode *parent=upm_dir(dir,1);
@@ -160,7 +164,7 @@ static int64_t upm_create(const char *canon,uint64_t flags,uint64_t mode) {
    and the name free on disk, then the file is made in memory, with no walk and no
    runtime lock. UPM_DISK: the usual way. */
 static int64_t upm_create_fast(const char *canon,uint64_t flags,uint64_t mode) {
-    if((flags&(16384|0x200000|0x400000)) || fs_root<0 || !fs_writable || fs_device(canon) || (fs_mount_count && fs_mount_of(canon)))return UPM_DISK;
+    if((flags&(16384|0x200000|0x400000)) || fs_root<0 || !fs_writable || fs_device(canon) || (fs_mount_count && fs_mount_of(canon)) || upm_on_disk(canon))return UPM_DISK;
     char dir[1025];const char *name;upm_split(canon,dir,&name);
     if(!*name || strlen(name)>255 || !strncmp(name,OV_WH,4))return UPM_DISK;
     pthread_mutex_lock(&mem_lock);
