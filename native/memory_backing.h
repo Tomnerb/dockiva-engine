@@ -19,10 +19,13 @@ struct BackingPageGroup { size_t live,count;unsigned uncharged;BackingPage pages
    snapshots and releases need not walk the rest (a 12 GiB arena is 786,432 pages,
    and a forked process usually touches a few hundred). */
 /* cow_copy: a snapshot (its host pages are copy-on-write with its source's).
-   unpooled: a reference to it went other than with a dead image (see backing_reap). */
+   unpooled: a reference to it went other than with a dead image (see backing_reap).
+   held: (hypervisor) a fork's child took a snapshot of it and its own process goes on
+   mapping it, its owned pages read-only in its page tables: a guest write waits for
+   the snapshot to go (address_space_fork_backing, hvf_backing_hold). */
 typedef struct {
     size_t refs,size,mapped_size,page_size,used;
-    unsigned frozen,cow_copy,unpooled,recycle;
+    unsigned frozen,cow_copy,unpooled,recycle,held;
     size_t warm;                      /* pooled: bytes of its host memory still resident, zeroed (backing_pool_take) */
     unsigned char *bytes;
     uint64_t hvf_ipa,hvf_epoch,*hvf_chunks;
@@ -38,6 +41,7 @@ typedef struct {
 } MemoryBacking;
 #endif
 static void (*backing_release_hook)(MemoryBacking *); /* the hypervisor backend forgets the memory first */
+static void (*backing_hold_hook)(MemoryBacking *,int); /* a fork's hold on its parent's backing: 1 at the fork, 0 at the thaw; NULL without the hypervisor */
 static unsigned char *backing_data(MemoryBacking *backing) {
     return backing?backing->bytes:NULL;
 }

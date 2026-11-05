@@ -34,6 +34,13 @@ typedef struct {
 static inline uint32_t hvf_el1_futex_slot(uint64_t pid,uint64_t address) {
     return (uint32_t)(((address>>2)^(address>>14)^(pid*UINT64_C(0x9e3779b1)))&(HVF_EL1_FUTEX_SLOTS-1));
 }
+/* A thread waiting in place on a private futex while it spins (hvf_futex_unlocked),
+   one slot per worker: EL1's FUTEX_WAKE of one waiter claims it by changing state from
+   gen<<2|1 to gen<<2|2, with no exit; the runtime's wakes claim it with gen<<2|3 (also
+   what the waiter sets when it stops spinning to sleep), so each waiter is woken once.
+   gen changes with every wait: a slot read between two waits never matches. */
+#define HVF_EL1_SPINNERS 64u
+typedef struct { uint64_t address,epoch;uint32_t pid,bits,state,pad; } HvfSpinner;
 /* An entry of the pack's index (pack.h), sorted by inode. */
 typedef struct { uint64_t ino,size,offset;int64_t mtime,mtime_ns;uint32_t path,path_length; } HvfPackEntry;
 typedef struct {
@@ -54,5 +61,6 @@ typedef struct {
     uint32_t marker,fd_file,mirror_file,mirror_cloexec,fs_slots,fd_limit;
     uint32_t b_mmc;                                   /* the block's HvfMmCache array, by mm lock index */
     uint32_t b_futex;                                 /* the block's futex counts: HVF_EL1_FUTEX_SLOTS, then the shared one */
+    uint32_t b_spin,b_epoch;                          /* the block's HvfSpinner array and each task's futex epoch (uint64) */
 } HvfEl1Context;
 #endif

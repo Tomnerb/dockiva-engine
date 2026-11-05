@@ -59,6 +59,7 @@ static void image_free(void) {
         if(address_space!=image_home)address_space_assign(image_home,&shared->state.memory);   /* the last sharer takes the memory */
         shared_image=NULL;free(shared);address_space=image_home;
     }
+    address_space_thaw_dead(address_space);
     if(!image_destroy_later(address_space))address_space_destroy(address_space);
     memset(cpu,0,sizeof(*cpu));
 }
@@ -342,27 +343,30 @@ static uint64_t process_clone(void) {
     if(flags&0x100000)fs_pack(lookup(parent_tid,4,2),0,(unsigned)pid,4);
     return pid;
 }
+/* wait4's answer: the status, and the rusage (not measured: zeros). 0 if either cannot be
+   written. Only with an answer, as Linux: a write prepares the memory, and the checks
+   this made while the call blocked had a forked parent copy its memory each time. */
+static int process_wait_out(unsigned status) {
+    if(cpu->gpr[1]) { unsigned char *p=lookup(cpu->gpr[1],4,2);if(!p)return 0;fs_pack(p,0,status,4); }
+    if(cpu->gpr[3]) { unsigned char *usage=lookup(cpu->gpr[3],144,2);if(!usage)return 0;memset(usage,0,144); }
+    return 1;
+}
 static uint64_t process_wait(void) {
     cpu->gpr[2]&=~UINT64_C(0x60000000);                                   /* __WALL, __WNOTHREAD: no effect here */
     if(cpu->gpr[2]&~(job_control_enabled?UINT64_C(11):UINT64_C(1)))return linux_error(95);
-    if(cpu->gpr[3]) { unsigned char *usage=lookup(cpu->gpr[3],144,2);if(!usage)return linux_error(14);memset(usage,0,144); } /* rusage: not measured */
     int64_t pid=(int64_t)cpu->gpr[0];if(pid<=0)pid=-1;                    /* ponytail: a process group waits for any child */
     if(process_depth && !process_tree_enabled)return linux_error(10);
     unsigned live=0;
-    if(cpu->gpr[1] && !lookup(cpu->gpr[1],4,2))return linux_error(14);
     for(unsigned i=0;i<process_count;i++)if(process_children[i].pid && process_children[i].parent==process_pid && (pid==-1 || (uint64_t)pid==process_children[i].pid)) {
         if(process_children[i].live) {
             unsigned event=process_children[i].event_status;
             if(event && ((event==65535 && (cpu->gpr[2]&8)) || (event!=65535 && (cpu->gpr[2]&2)))) {
-                if(cpu->gpr[1])fs_pack(lookup(cpu->gpr[1],4,2),0,event,4);
+                if(!process_wait_out(event))return linux_error(14);
                 process_children[i].event_status=0;return process_children[i].pid;
             }
             live=1;continue;
         }
-        if(cpu->gpr[1]) {
-            unsigned char *p=lookup(cpu->gpr[1],4,2);if(!p)return linux_error(14);
-            fs_pack(p,0,process_children[i].status,4);
-        }
+        if(!process_wait_out(process_children[i].status))return linux_error(14);
         uint64_t result=process_children[i].pid;process_children[i].pid=0;return result;
     }
     return live?((cpu->gpr[2]&1)?0:IO_BLOCK):linux_error(10);

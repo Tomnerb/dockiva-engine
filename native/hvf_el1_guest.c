@@ -335,8 +335,22 @@ static long el1_futex(uint64_t *frame,const HvfEl1Context *c) {
         if((int32_t)frame[2]<0 || !user_ok(address,0))return 0;
         __atomic_thread_fence(__ATOMIC_SEQ_CST);
         const uint32_t *counts=(const uint32_t *)(const void *)at(c,c->b_futex);
-        if(__atomic_load_n(&counts[HVF_EL1_FUTEX_SLOTS],__ATOMIC_SEQ_CST) || __atomic_load_n(&counts[hvf_el1_futex_slot(pid,address)],__ATOMIC_SEQ_CST))return 0;
-        frame[0]=0;return 1;
+        if(__atomic_load_n(&counts[HVF_EL1_FUTEX_SLOTS],__ATOMIC_SEQ_CST))return 0;           /* waiters in shared memory: the runtime's */
+        if(!__atomic_load_n(&counts[hvf_el1_futex_slot(pid,address)],__ATOMIC_SEQ_CST)) { frame[0]=0;return 1; }
+        /* One waiter to wake (pthread_cond_signal, a mutex's unlock): one still spinning,
+           claimed in its slot; it sees that and goes on (hvf_futex_unlocked). */
+        uint64_t task=frame[HF_TASK];uint32_t bits=command==10?(uint32_t)frame[5]:UINT32_MAX;
+        if((int32_t)frame[2]!=1 || task>UINT32_MAX)return 0;
+        uint64_t epoch=load64(at(c,c->b_epoch+8*task));
+        HvfSpinner *sp=(HvfSpinner *)(void *)at(c,c->b_spin);
+        for(unsigned i=0;i<HVF_EL1_SPINNERS;i++) {
+            uint32_t seen=__atomic_load_n(&sp[i].state,__ATOMIC_ACQUIRE);
+            if((seen&3)!=1)continue;
+            if(sp[i].address!=address || sp[i].pid!=(uint32_t)pid || !(sp[i].bits&bits) || sp[i].epoch!=epoch)continue;
+            if(__atomic_load_n(&sp[i].state,__ATOMIC_ACQUIRE)!=seen)continue;               /* another wait meanwhile */
+            if(__atomic_compare_exchange_n(&sp[i].state,&seen,(seen&~3u)|2,0,__ATOMIC_ACQ_REL,__ATOMIC_RELAXED)) { frame[0]=1;return 1; }
+        }
+        return 0;
     }
     return 0;
 }

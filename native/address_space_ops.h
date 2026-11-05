@@ -79,6 +79,20 @@ static void address_space_destroy(GuestAddressSpace *space) {
 #endif
     address_space_reset(space);
 }
+static size_t address_space_backing_refs(const GuestAddressSpace *space,const MemoryBacking *backing);
+/* The image is dead (exit, exec) and its memory goes later (image_destroy_later): the
+   sources of the snapshots only it holds thaw now, before its parent hears of it. A
+   fork's parent got SIGCHLD while still frozen, and its signal frame took a snapshot. */
+static void address_space_thaw_dead(GuestAddressSpace *space) {
+#ifdef __APPLE__
+    for(unsigned i=0;i<space->nseg+2;i++) {
+        MemoryBacking *b=i==0?space->map_backing:i==1?space->brk_backing:space->seg[i-2].backing;
+        if(b && b->source && b->refs==address_space_backing_refs(space,b)) { backing_thaw(b);b->source=NULL; }
+    }
+#else
+    (void)space;
+#endif
+}
 /* Multiple views in this address space are one owner for COW purposes. */
 static size_t address_space_backing_refs(const GuestAddressSpace *space,const MemoryBacking *backing) {
     size_t local=(space->brk_backing==backing)+(space->map_backing==backing);
@@ -112,11 +126,21 @@ static int address_space_writable_backing(const GuestAddressSpace *space,const M
 static MemoryBacking *address_space_fork_backing(const GuestAddressSpace *source,MemoryBacking *backing,MemoryBacking **from,MemoryBacking **to,unsigned *copied) {
     for(unsigned i=0;i<*copied;i++)if(from[i]==backing) { if(!backing_retain(to[i],1))return NULL;return to[i]; }
 #ifdef __APPLE__
-    if(fork_copy_pages && *copied<8 && !backing->frozen && !address_space_shared(source,backing) && address_space_writable_backing(source,backing) &&
-       backing->refs==address_space_backing_refs(source,backing)) {
+    int own=!address_space_shared(source,backing) && address_space_writable_backing(source,backing) && backing->refs==address_space_backing_refs(source,backing);
+    if(fork_copy_pages && *copied<8 && !backing->frozen && own) {
         size_t owned=0;
         for(size_t i=0;i<backing->used && owned<=fork_copy_pages;i++)owned+=backing->pages[i]!=NULL;
         MemoryBacking *copy=owned<=fork_copy_pages?backing_clone(backing,owned):NULL;
+        if(copy) { from[*copied]=backing;to[(*copied)++]=copy;return copy; }
+    }
+    /* A larger one (the hypervisor's hold): the child gets a snapshot now, and the parent
+       keeps the memory with its guest-physical space and page tables, its owned pages
+       read-only until the snapshot goes (address_space_fork_private holds it). Shared
+       instead, every page became copy-on-write in the parent's tables and each process
+       snapshotted on its first write: Node's spawn of a child that execs at once took
+       three snapshots and six remaps of tens of thousands of pages. */
+    if(backing_hold_hook && *copied<8 && own && (!backing->frozen || backing->held)) {
+        MemoryBacking *copy=backing_snapshot(backing);
         if(copy) { from[*copied]=backing;to[(*copied)++]=copy;return copy; }
     }
 #endif
@@ -147,6 +171,9 @@ static int address_space_fork_private(GuestAddressSpace *destination,GuestAddres
         if(source->seg[i].backing && !(copy.seg[i].backing=address_space_fork_backing(source,source->seg[i].backing,from,to,&copied)))goto failed;
     if(source->brk_backing && !(copy.brk_backing=address_space_fork_backing(source,source->brk_backing,from,to,&copied)))goto failed;
     if(source->map_backing && !(copy.map_backing=address_space_fork_backing(source,source->map_backing,from,to,&copied)))goto failed;
+#ifdef __APPLE__
+    for(unsigned i=0;i<copied;i++)if(to[i]->cow_copy && !from[i]->held)backing_hold_hook(from[i],1);   /* the parent's, while the child's snapshot lives */
+#endif
     address_space_assign(destination,&copy);if(fork_shared_private)address_space_changed(source);
     address_space_changed(destination);return 1;
 failed:
@@ -169,6 +196,7 @@ static int address_space_make_private(GuestAddressSpace *space,MemoryBacking *ba
     int changed=0;
     if(backing->refs==local && !backing->frozen) {
         if(!backing_prepare(backing,offset,size,&changed))return 0;
+        if(changed)PROFILE_ADD(profile_fault_charged,1);else PROFILE_ADD(profile_fault_owned,1);
         if(changed) {
             uint64_t previous=space->generation;address_space_touched(space);
             space->private_range_backing=backing;space->private_range_previous=previous;
@@ -178,6 +206,7 @@ static int address_space_make_private(GuestAddressSpace *space,MemoryBacking *ba
         }
         return 1;
     }
+    PROFILE_ADD(profile_fault_snapshot,1);
     MemoryBacking *copy=backing_snapshot(backing);
     if(!copy)return 0;
     if(!backing_prepare(copy,offset,size,&changed)) { backing_release(copy);return 0; }

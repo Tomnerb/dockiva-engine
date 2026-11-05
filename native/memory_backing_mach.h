@@ -40,6 +40,11 @@ static uint64_t backing_thaw_serial;
 static pthread_mutex_t backing_thaw_lock=PTHREAD_MUTEX_INITIALIZER;
 static void backing_thaw_register(MemoryBacking *source,MemoryBacking *copy) {
     pthread_mutex_lock(&backing_thaw_lock);
+    /* Frozen again here, with its entry: a thaw of the source's earlier snapshots (a
+       dead image's, the reaper's) can run between backing_snapshot's store and this,
+       leaving a listed source that is written while its snapshot lives and freed with
+       its entry still there. */
+    __atomic_store_n(&source->frozen,1,__ATOMIC_RELEASE);
     unsigned free_slot=BACKING_THAW;
     for(unsigned i=0;i<BACKING_THAW;i++) {
         if(backing_thaw_table[i].source==source) { backing_thaw_table[i].snapshots++;copy->source=source;copy->source_serial=backing_thaw_table[i].serial;free_slot=BACKING_THAW+1;break; }
@@ -59,7 +64,9 @@ static void backing_thaw(MemoryBacking *backing) {
         if(backing_thaw_table[i].source==backing)backing_thaw_table[i].source=NULL;   /* freed with snapshots alive */
         else if(backing->source && backing_thaw_table[i].source==backing->source && backing_thaw_table[i].serial==backing->source_serial &&
                 !--backing_thaw_table[i].snapshots) {
-            __atomic_store_n(&backing_thaw_table[i].source->frozen,0,__ATOMIC_RELEASE);backing_thaw_table[i].source=NULL;
+            MemoryBacking *source=backing_thaw_table[i].source;
+            __atomic_store_n(&source->frozen,0,__ATOMIC_RELEASE);backing_thaw_table[i].source=NULL;
+            if(source->held && backing_hold_hook)backing_hold_hook(source,0);   /* its process writes it again */
         }
     }
     pthread_mutex_unlock(&backing_thaw_lock);
@@ -171,6 +178,11 @@ static int backing_reap(MemoryBacking *backing) {
         backing_page_release(backing->pages[i],backing->page_size);backing->pages[i]=backing->recycle?&backing_zero_mark:NULL;
     }
     if(!backing->recycle)backing->used=0;
+    /* A dead image's snapshot: nothing reads it again (no guest code runs on it, it is
+       never recycled), so its source thaws now rather than when the reaper has freed
+       it; a source's write showing through in it no longer matters. The parent of a
+       fork whose child exec'd writes its own memory again at once. */
+    if(backing_dead_image && backing->source) { backing_thaw(backing);backing->source=NULL; }
     pthread_mutex_lock(&backing_reap_lock);
     if(!started) {
         pthread_t thread;
@@ -192,7 +204,7 @@ static MemoryBacking *backing_pool_take(size_t size) {
         backing_pool_warm-=backing->warm;backing->warm=0;backing_pool_used_ns=backing_now_ns();break;
     }
     pthread_mutex_unlock(&backing_reap_lock);
-    if(backing) { backing->refs=1;backing->size=size;backing->frozen=backing->cow_copy=backing->unpooled=backing->recycle=0; }
+    if(backing) { backing->refs=1;backing->size=size;backing->frozen=backing->cow_copy=backing->unpooled=backing->recycle=backing->held=0; }
     return backing;
 }
 /* A backing of size with host memory and no owned page: recycled, or new. */
@@ -236,6 +248,7 @@ static void backing_discard(MemoryBacking *backing,size_t offset,size_t size) {
     }
 }
 static MemoryBacking *backing_snapshot(MemoryBacking *source) {
+    uint64_t profile_at=profiling?profile_now_ns():0;
     MemoryBacking *copy=backing_descriptor(source->size);if(!copy)return NULL;
     size_t count=source->used;
     for(size_t i=0;i<count;i++)if(source->pages[i] && source->pages[i]->refs==SIZE_MAX) { free(copy);errno=ENOMEM;return NULL; }
@@ -247,6 +260,7 @@ static MemoryBacking *backing_snapshot(MemoryBacking *source) {
     copy->bytes=(unsigned char *)address;copy->cow_copy=1;
     for(size_t i=0;i<count;i++) { copy->pages[i]=source->pages[i];if(copy->pages[i])__atomic_fetch_add(&copy->pages[i]->refs,1,__ATOMIC_ACQ_REL); }
     copy->used=count;backing_thaw_register(source,copy);
+    if(profiling) { PROFILE_ADD(profile_snapshots,1);PROFILE_ADD(profile_snapshot_ns,profile_now_ns()-profile_at); }
     return copy;
 }
 /* A private copy of source's owned pages, charged now (the fork of a small process:

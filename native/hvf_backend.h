@@ -193,12 +193,63 @@ static void hvf_block_unmap(unsigned i) {
     hvf_blocks[i]=hvf_blocks[--hvf_nblocks];if(!hvf_nblocks)hvf_ipa_top=0;
     __atomic_fetch_add(&hvf_ipa_epoch,1,__ATOMIC_RELEASE);
 }
+/* Fork hold (backing_hold_hook, MemoryBacking.held): the parent keeps a
+   backing whose snapshot its child took, but must not write it while the snapshot
+   lives (frozen). Its own page tables lose write permission on the backing's owned
+   pages (those it maps writable: a few thousand entries, where a copy-on-write pass
+   rewrote every mapped page); a write fault on it waits for the snapshot to go
+   (hvf_held_sleep), and the first one after that gives the permission back the same way
+   (hvf_hold). Only the process's own view maps the backing (it was not shared).
+   Hypervisor-level (stage-2) protection did the same with no table pass, but
+   hv_vm_protect took 30-150 us per 256 MiB block each way. */
+static unsigned hvf_held_live;                          /* backings held now (atomic) */
+static uint64_t hvf_held_thaws;                         /* thaws so far, under hvf_held_lock */
+static pthread_mutex_t hvf_held_lock=PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t hvf_held_cond=PTHREAD_COND_INITIALIZER;
+static void hvf_held_wake(void) { pthread_mutex_lock(&hvf_held_lock);hvf_held_thaws++;pthread_cond_broadcast(&hvf_held_cond);pthread_mutex_unlock(&hvf_held_lock); }
+static uint64_t *hvf_leaf(HvfView *v,uint64_t va,int create);
+static void hvf_flush(void);
+/* Clear (protect) or give back (0, pages its process owns alone) write permission on
+   the view's pages of backing's owned host pages it maps writable. 1 if any changed. */
+static int hvf_hold(HvfView *v,const GuestAddressSpace *space,MemoryBacking *backing,int protect) {
+    if(!v->root)return 0;
+    int changed=0;size_t ps=backing->page_size;
+    for(unsigned r=0;r<space->nseg+2;r++) {
+        uint64_t base,size;size_t offset;unsigned flags;int arena=0;
+        if(r==0) { if(space->map_backing!=backing || !space->map_flags)continue;base=MAP_BASE;size=space->map_capacity;offset=0;flags=6;arena=1; }
+        else if(r==1) { if(space->brk_backing!=backing)continue;base=space->brk_base;size=space->brk_pages;offset=0;flags=6; }
+        else { const Segment *g=&space->seg[r-2];if(g->backing!=backing)continue;base=g->base;size=g->size;offset=g->offset;flags=g->flags; }
+        if(!(flags&2) || (flags&SEG_SHARED))continue;
+        size_t end=offset+size,last=(end+ps-1)/ps;if(last>backing->used)last=backing->used;
+        for(size_t h=offset/ps;h<last;h++) {
+            const BackingPage *p=backing->pages[h];
+            if(!p || (!protect && p->refs!=1))continue;
+            for(size_t off=h*ps;off<(h+1)*ps;off+=4096) {
+                if(off<offset || off>=end)continue;
+                uint64_t va=base+(off-offset);
+                if(arena && (space->map_flags[(va-MAP_BASE)/4096]&(2|MAP_RESERVED))!=2)continue;
+                uint64_t *leaf=hvf_leaf(v,va,0);if(!leaf)continue;
+                uint64_t *slot=&leaf[(va>>12)&511];
+                if(!(*slot&1) || !(*slot&(UINT64_C(1)<<7))==!protect)continue;   /* unmapped, or already so */
+                *slot^=UINT64_C(1)<<7;changed=1;
+            }
+        }
+    }
+    return changed;
+}
+static void hvf_backing_hold(MemoryBacking *backing,int protect) {
+    if(!protect) { hvf_held_wake();return; }                    /* thawed: the parent's next write fault gives permission back */
+    if(!__atomic_exchange_n(&backing->held,1,__ATOMIC_ACQ_REL))__atomic_add_fetch(&hvf_held_live,1,__ATOMIC_ACQ_REL);
+    if(hvf_hold(hvf_own_view,address_space,backing,1))hvf_flush();
+    PROFILE_ADD(profile_holds,1);
+}
 /* backing_release_hook: no live process maps a freed backing, and the tables of
    a process that used to are rebuilt (its layout changed) before it runs again.
    Its blocks are unmapped without hvf_mutex (every table build takes it): meanwhile
    they have no host (no lookup finds them) but keep their guest-physical space. */
 static void hvf_backing_gone(MemoryBacking *backing) {
     const unsigned char *host=backing_data(backing);
+    if(__atomic_exchange_n(&backing->held,0,__ATOMIC_ACQ_REL)) { __atomic_sub_fetch(&hvf_held_live,1,__ATOMIC_ACQ_REL);hvf_held_wake(); }   /* freed while held */
     for(;;) {
         uint64_t ipa[16],size[16];unsigned n=0;
         pthread_mutex_lock(&hvf_mutex);
@@ -486,7 +537,13 @@ static uint64_t hvf_mapped_ipa(uint64_t va) {
 /* hvf_map_arena_page for every mapped arena page, with what it decides per page
    (the backing's sharing, each chunk's guest-physical address) decided once: after
    a fork of a large process (Node: tens of thousands of pages) it ran on every one. */
+static void hvf_map_arena_pass(GuestAddressSpace *space,uint64_t *mapped);
 static void hvf_map_arena_all(GuestAddressSpace *space) {
+    if(!profiling) { uint64_t n=0;hvf_map_arena_pass(space,&n);return; }
+    uint64_t at=profile_now_ns(),n=0;hvf_map_arena_pass(space,&n);
+    PROFILE_ADD(profile_arena_passes,1);PROFILE_ADD(profile_arena_ns,profile_now_ns()-at);PROFILE_ADD(profile_arena_pages,n);
+}
+static void hvf_map_arena_pass(GuestAddressSpace *space,uint64_t *mapped) {
     MemoryBacking *backing=space->map_backing;
     if(!space->map_flags || !backing)return;
     unsigned pages=space->map_capacity/4096;if(space->map_top<pages)pages=space->map_top;
@@ -512,7 +569,7 @@ static void hvf_map_arena_all(GuestAddressSpace *space) {
         uint64_t descriptor=(ipa+(offset-at*HVF_CHUNK))|bits[flags],*slot=&leaf[(va>>12)&511];   /* as hvf_map_page */
         if(((*slot&1) && *slot!=descriptor) || (flags&1))hvf_stale_tlb=1;
         if(flags&1)hvf_stale_code=1;
-        *slot=descriptor;
+        *slot=descriptor;(*mapped)++;
     }
 }
 /* Update v to space in place, touching only what changed since v was recorded:
@@ -571,8 +628,14 @@ static int hvf_sync_tables(GuestAddressSpace *space,HvfView *v) {
     }
 rebuild:
     if(v->root)hvf_siblings_out();                       /* threads of this process on other vCPUs use these tables */
-    if(hvf_sync_partial(space,v)) { hvf_activate(v);hvf_view_record(v,space);hvf_arena_synced(space);return 1; }
+    uint64_t profile_at=profiling?profile_now_ns():0;
+    if(hvf_sync_partial(space,v)) {
+        if(profiling) { PROFILE_ADD(profile_partials,1);PROFILE_ADD(profile_partial_ns,profile_now_ns()-profile_at); }
+        hvf_activate(v);hvf_view_record(v,space);hvf_arena_synced(space);return 1;
+    }
+    if(profiling)profile_at=profile_now_ns();
     hvf_view=v;hvf_build(space);
+    if(profiling) { PROFILE_ADD(profile_builds,1);PROFILE_ADD(profile_build_ns,profile_now_ns()-profile_at); }
     if(hvf_exhausted) {
         hvf_evict();hvf_build(space);
         if(hvf_exhausted)fail("Guest memory exceeds the hypervisor's page tables or guest-physical space");
@@ -714,12 +777,23 @@ static void hvf_fp_pull(void) {
    share them). Off while syscalls are traced, counted or filtered. Descriptor
    answers (HF_FDS) need the process's own tables: not for a vfork child running on
    its parent's (its page is the parent's). */
+/* This process has memory protected for a fork (hvf_backing_hold): the EL1 handlers,
+   some of which write guest memory, stay off meanwhile. */
+static int hvf_holding(void) {
+    if(!__atomic_load_n(&hvf_held_live,__ATOMIC_ACQUIRE))return 0;
+    const GuestAddressSpace *s=address_space;
+#define HVF_HELD(b) ((b) && __atomic_load_n(&(b)->held,__ATOMIC_ACQUIRE) && __atomic_load_n(&(b)->frozen,__ATOMIC_ACQUIRE))
+    if(HVF_HELD(s->map_backing) || HVF_HELD(s->brk_backing))return 1;
+    for(unsigned i=0;i<s->nseg;i++)if(HVF_HELD(s->seg[i].backing))return 1;
+    return 0;
+#undef HVF_HELD
+}
 static void hvf_fast_publish(uint64_t *frame,uint64_t tid) {
     int on=!trace && !profiling && !seccomp_active();
     const uint64_t answers[7]={process_pid,UINT64_MAX,guest_ids.ruid,guest_uid,guest_ids.rgid,guest_gid,tid};
     for(unsigned i=0;i<7;i++)frame[HF_FAST+i]=on?answers[i]:UINT64_MAX;
     frame[HF_FDS]=on && schedule_active && fd_mirror_base && hvf_view_pid()==process_pid?HVF_FDS_VA:0;
-    frame[HF_STAT]=on && hvf_el1_ready && fs_mount_count==hvf_el1_mounts[0] && mem_mount_count==hvf_el1_mounts[1]?HVF_EL1_VA:0;
+    frame[HF_STAT]=on && hvf_el1_ready && fs_mount_count==hvf_el1_mounts[0] && mem_mount_count==hvf_el1_mounts[1] && !hvf_holding()?HVF_EL1_VA:0;
     unsigned task=schedule_active && process_pid?(unsigned)process_pid-1:0;     /* its own tables, in proc_block: EL1 opens and closes */
     int tables=frame[HF_STAT] && schedule_active && fs_table==&proc_block->fs[task] && fd_table==&proc_block->fds[task];
     frame[HF_TASK]=tables?task:UINT64_MAX;frame[HF_MM]=tables?mm_id(task)-1:UINT64_MAX;
@@ -814,6 +888,51 @@ static void hvf_resume_el0(uint64_t pc,uint64_t spsr) {
         return;
     }
     hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_PC,pc),"set pc");hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_CPSR,spsr),"set cpsr");
+}
+/* A guest write to memory protected for a fork (hvf_backing_hold) waits for the
+   child's snapshot to go: a child that execs or exits does within microseconds, and
+   the parent then writes its own memory as it was. After HVF_HELD_WAIT_NS on one
+   instruction (a child that lives on, a server's worker), the locked path gives the
+   process its own copy instead (lookup snapshots it). */
+#define HVF_HELD_WAIT_NS UINT64_C(1000000)
+#define HVF_HELD_GAP_NS UINT64_C(200000)
+static _Thread_local uint64_t hvf_held_pc,hvf_held_since,hvf_held_last;
+/* How long the write at pc has waited (now): a new wait unless this thread was waiting
+   for it just now (Node's spawn faults on the same instruction at every fork). */
+static uint64_t hvf_held_waited(uint64_t pc,uint64_t now) {
+    if(pc!=hvf_held_pc || now-hvf_held_last>HVF_HELD_GAP_NS) { hvf_held_pc=pc;hvf_held_since=now; }
+    hvf_held_last=now;return now-hvf_held_since;
+}
+static uint64_t hvf_held_seen(void) { pthread_mutex_lock(&hvf_held_lock);uint64_t seen=hvf_held_thaws;pthread_mutex_unlock(&hvf_held_lock);return seen; }
+/* Sleep until a thaw after seen (1: retry the write) or the instruction at pc has
+   waited long enough (0). */
+static int hvf_held_sleep(uint64_t seen,uint64_t pc) {
+    uint64_t now=clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+    if(hvf_held_waited(pc,now)>=HVF_HELD_WAIT_NS)return 0;
+    uint64_t since=profiling?profile_now_ns():0;
+    pthread_mutex_lock(&hvf_held_lock);
+    while(hvf_held_thaws==seen && (now=clock_gettime_nsec_np(CLOCK_UPTIME_RAW))-hvf_held_since<HVF_HELD_WAIT_NS) {
+        uint64_t left=HVF_HELD_WAIT_NS-(now-hvf_held_since);
+        struct timespec pause={(time_t)(left/1000000000),(long)(left%1000000000)};
+        (void)pthread_cond_timedwait_relative_np(&hvf_held_cond,&hvf_held_lock,&pause);
+    }
+    int woken=hvf_held_thaws!=seen;
+    pthread_mutex_unlock(&hvf_held_lock);
+    hvf_held_last=clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+    if(profiling) { PROFILE_ADD(profile_hold_waits,1);PROFILE_ADD(profile_hold_wait_ns,profile_now_ns()-since);PROFILE_ADD(profile_hold_timeouts,woken?0:1); }
+    return woken;
+}
+/* A write fault on held memory reached the locked path (a pending signal sent it, or
+   the unlocked wait ran out). The runtime lock is the one the child needs to exec or
+   exit, so this path cannot wait: 1 while the instruction at pc has waited less than
+   HVF_HELD_WAIT_NS (the thread yields, the write to run again: a pending signal goes
+   first, then the unlocked path waits), 0 to copy the memory now. Under the mm lock. */
+static int hvf_held_yield(uint64_t far,uint64_t pc) {
+    if(!__atomic_load_n(&hvf_held_live,__ATOMIC_ACQUIRE))return 0;
+    uint64_t low=0,high=0;size_t start=0;unsigned flags=0;
+    MemoryBacking *b=hvf_region(address_space,far,&low,&high,&start,&flags);
+    if(!b || !__atomic_load_n(&b->held,__ATOMIC_ACQUIRE) || !__atomic_load_n(&b->frozen,__ATOMIC_ACQUIRE))return 0;
+    return hvf_held_waited(pc,clock_gettime_nsec_np(CLOCK_UPTIME_RAW))<HVF_HELD_WAIT_NS;
 }
 /* Stop a worker's guest code soon (preemption, a signal for its task, the run ending). */
 static void hvf_interrupt(Worker *w) {
@@ -921,7 +1040,7 @@ static void hvf_el1_setup(void) {
     hvf_el1_map(HVF_EL1_BLOCK,HVF_EL1_IPA+HVF_EL1_BLOCK,block_bytes);
     c->host_block=(uint64_t)(uintptr_t)proc_block;
     c->b_mm=offsetof(ProcBlock,mm);c->b_locks=offsetof(ProcBlock,locks_held);c->b_hint=offsetof(ProcBlock,pack_hint);
-    c->b_fs=offsetof(ProcBlock,fs);c->b_fds=offsetof(ProcBlock,fds);c->b_pack=offsetof(ProcBlock,pack);c->b_mmc=offsetof(ProcBlock,mm_cache);c->b_futex=offsetof(ProcBlock,futex_waiters);
+    c->b_fs=offsetof(ProcBlock,fs);c->b_fds=offsetof(ProcBlock,fds);c->b_pack=offsetof(ProcBlock,pack);c->b_mmc=offsetof(ProcBlock,mm_cache);c->b_futex=offsetof(ProcBlock,futex_waiters);c->b_spin=offsetof(ProcBlock,spinners);c->b_epoch=offsetof(ProcBlock,futex_epoch);
     c->fs_size=sizeof(FsTable);c->fds_size=sizeof(FdTable);
     c->t_fd=offsetof(FsTable,fd);c->t_cloexec=offsetof(FsTable,cloexec);c->t_ro=offsetof(FsTable,ro);c->t_dev=offsetof(FsTable,dev);c->t_sole=offsetof(FsTable,sole);
     c->t_dirs=offsetof(FsTable,dirs);c->t_guest=offsetof(FsTable,guest);c->t_pack=offsetof(FsTable,pack);c->d_kind=offsetof(FdTable,kind);c->d_index=offsetof(FdTable,index);
@@ -959,7 +1078,7 @@ static void hvf_init(void) {
     if(config)os_release(config);
     uint32_t vcpus=0;
     if(hv_vm_get_max_vcpu_count(&vcpus)==HV_SUCCESS && vcpus && worker_count>vcpus)worker_count=vcpus;
-    backing_release_hook=hvf_backing_gone;worker_interrupt=hvf_interrupt;workers_supported=1;
+    backing_release_hook=hvf_backing_gone;backing_hold_hook=hvf_backing_hold;worker_interrupt=hvf_interrupt;workers_supported=1;
     hvf_futex_init();
     hvf_tables=hvf_host_pages(HVF_TABLE_BYTES);hvf_system=hvf_host_pages(HVF_SYSTEM_BYTES);fd_mirror_base=hvf_host_pages(HVF_FDS_BYTES);
     hvf_check(hv_vm_map(hvf_tables,HVF_IPA_BASE,HVF_TABLE_BYTES,HV_MEMORY_READ|HV_MEMORY_WRITE),"hv_vm_map tables");
@@ -1178,7 +1297,7 @@ static MemoryBacking *hvf_futex_shared(uint64_t address,size_t *offset) {
    (hvf_futex_unlocked). It is queued in a bucket by its key: (process, image,
    address), or (memory, offset) for a futex in shared memory; wakers take only the
    bucket's lock. */
-typedef struct HvfFutexWaiter { struct HvfFutexWaiter *next;uint64_t pid,epoch,address;const MemoryBacking *backing;size_t offset;uint32_t bits;int woken;InplaceWait *wait; } HvfFutexWaiter; /* wait: its worker's (scheduler.h) */
+typedef struct HvfFutexWaiter { struct HvfFutexWaiter *next;uint64_t pid,epoch,address;const MemoryBacking *backing;size_t offset;uint32_t bits;int woken;InplaceWait *wait;HvfSpinner *spinner;uint32_t spin; } HvfFutexWaiter; /* wait: its worker's (scheduler.h) */
 #define HVF_FUTEX_BUCKETS 256u
 static struct { pthread_mutex_t lock;HvfFutexWaiter *head; } hvf_futex_buckets[HVF_FUTEX_BUCKETS];
 static void hvf_futex_init(void) { for(unsigned i=0;i<HVF_FUTEX_BUCKETS;i++)pthread_mutex_init(&hvf_futex_buckets[i].lock,NULL); }
@@ -1205,6 +1324,10 @@ static unsigned hvf_futex_wake_inplace(uint64_t address,const MemoryBacking *sha
         HvfFutexWaiter *w=*link;
         int match=shared?w->backing==shared && w->offset==offset:!w->backing && w->pid==pid && w->epoch==epoch && w->address==address;
         if(!match || !(w->bits&bits)) { link=&w->next;continue; }
+        if(w->spinner) {                               /* spinning: claimed here, unless EL1 took it (it leaves on its own) */
+            uint32_t seen=w->spin;
+            if(!__atomic_compare_exchange_n(&w->spinner->state,&seen,(w->spin&~3u)|3,0,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE) && seen==((w->spin&~3u)|2)) { link=&w->next;continue; }
+        }
         InplaceWait *iw=w->wait;                       /* w is gone once it sees woken */
         *link=w->next;pthread_mutex_lock(&iw->lock);__atomic_store_n(&w->woken,1,__ATOMIC_RELEASE);pthread_cond_signal(&iw->cond);pthread_mutex_unlock(&iw->lock);woken++;
     }
@@ -1326,6 +1449,7 @@ static uint64_t hvf_futex(int *waiting) {
 static void hvf_exec_threads(void) {
     ScheduledTask *t=hvf_task();hvf_main_clear_tid[process_pid]=0;hvf_views[process_pid].stale=HVF_STALE_NEW;
     t->futex_epoch=__atomic_add_fetch(&schedule_futex_epochs,1,__ATOMIC_RELAXED); /* in-place waiters of the old image wake no one */
+    __atomic_store_n(&proc_block->futex_epoch[t-schedule_tasks],t->futex_epoch,__ATOMIC_RELEASE);
     if(!t->threads)return;
     for(unsigned i=0;i<t->threads->top;i++)if((int)i!=thread_now) { t->threads->thread[i].state=0;futex_uncount(&t->threads->thread[i]); }
     Thread *th=task_thread(t);th->tid=(unsigned)process_pid;th->clear_tid=0;
@@ -1508,6 +1632,12 @@ static int hvf_futex_unlocked(void) {
         pthread_mutex_unlock(&hvf_futex_buckets[b].lock);hvf_futex_count_down(count);
         cpu->gpr[0]=linux_error(11);return 1;
     }
+    if(!shared && proc_block && worker->index<HVF_EL1_SPINNERS) {  /* EL1 may wake it while it spins (hvf_el1.h); before it is linked */
+        HvfSpinner *sp=&proc_block->spinners[worker->index];
+        w.spin=((__atomic_load_n(&sp->state,__ATOMIC_RELAXED)>>2)+1)<<2|1;
+        sp->address=address;sp->epoch=w.epoch;sp->pid=(uint32_t)w.pid;sp->bits=bits;
+        __atomic_store_n(&sp->state,w.spin,__ATOMIC_RELEASE);w.spinner=sp;
+    }
     w.next=hvf_futex_buckets[b].head;hvf_futex_buckets[b].head=&w;
     pthread_mutex_lock(&iw->lock);iw->task=task;iw->thread=task_thread(task);iw->futex=1;iw->polling=0;__atomic_store_n(&iw->state,1,__ATOMIC_RELEASE);pthread_mutex_unlock(&iw->lock);
     __atomic_add_fetch(&schedule_inplace_count,1,__ATOMIC_RELAXED);
@@ -1517,13 +1647,16 @@ static int hvf_futex_unlocked(void) {
     /* A wake usually follows within microseconds (a lock hand-off, a channel ping-pong):
        spin briefly before sleeping, as a condition variable's wake costs several. */
     uint64_t start=thread_time_ns(0),spin_end=start+(wait<SCHEDULE_INPLACE_SPIN_NS?wait:SCHEDULE_INPLACE_SPIN_NS);
-    while(!__atomic_load_n(&w.woken,__ATOMIC_ACQUIRE) && __atomic_load_n(&iw->state,__ATOMIC_ACQUIRE)==1 && thread_time_ns(0)<spin_end) {
+    while(!__atomic_load_n(&w.woken,__ATOMIC_ACQUIRE) && __atomic_load_n(&iw->state,__ATOMIC_ACQUIRE)==1 && thread_time_ns(0)<spin_end &&
+          (!w.spinner || __atomic_load_n(&w.spinner->state,__ATOMIC_ACQUIRE)==w.spin)) {
 #if defined(__aarch64__)
         __asm__ volatile("yield");
 #endif
     }
+    int guest_woken=0;                                         /* EL1 took it: no runtime wake comes; it leaves the bucket below */
+    if(w.spinner) { uint32_t seen=w.spin;if(!__atomic_compare_exchange_n(&w.spinner->state,&seen,(w.spin&~3u)|3,0,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE))guest_woken=seen==((w.spin&~3u)|2); }
     pthread_mutex_lock(&iw->lock);
-    for(;;) {
+    for(;!guest_woken;) {
         if(__atomic_load_n(&w.woken,__ATOMIC_ACQUIRE) || __atomic_load_n(&iw->state,__ATOMIC_ACQUIRE)!=1)break;
         uint64_t at=thread_time_ns(0);if(at-start>=wait)break;
         struct timespec pause={(time_t)((wait-(at-start))/1000000000),(long)((wait-(at-start))%1000000000)};
@@ -1537,10 +1670,11 @@ static int hvf_futex_unlocked(void) {
         pthread_mutex_unlock(&hvf_futex_buckets[b].lock);
     }
     pthread_mutex_lock(&iw->lock);__atomic_store_n(&iw->state,0,__ATOMIC_RELEASE);iw->futex=0;pthread_mutex_unlock(&iw->lock);
+    if(w.spinner)__atomic_store_n(&w.spinner->state,w.spin&~3u,__ATOMIC_RELEASE);   /* idle; the next wait takes the next gen */
     __atomic_sub_fetch(&schedule_inplace_count,1,__ATOMIC_RELAXED);hvf_futex_count_down(count);
     mm_lock(task);
     PROFILE_ADD(profile_futex_inplace,1);
-    if(w.woken) { PROFILE_ADD(profile_futex_inplace_woken,1);cpu->gpr[0]=0;return 1; }
+    if(w.woken || guest_woken) { PROFILE_ADD(profile_futex_inplace_woken,1);cpu->gpr[0]=0;return 1; }
     if(deadline && thread_time_ns(0)>=deadline) { cpu->gpr[0]=linux_error(110);return 1; }
     return 0;
 }
@@ -1554,6 +1688,30 @@ static int hvf_unlocked_exit(void) {
         /* A write to a copy-on-write or not yet charged page: the same handling as
            under the lock. A genuine fault goes to the locked path. */
         uint64_t layout=address_space->layout;
+        if(__atomic_load_n(&hvf_held_live,__ATOMIC_ACQUIRE)) {             /* memory held for a fork (hvf_backing_hold) */
+            uint64_t low=0,high=0;size_t start=0;unsigned flags=0;
+            MemoryBacking *b=hvf_region(address_space,far,&low,&high,&start,&flags);
+            if(b && __atomic_load_n(&b->held,__ATOMIC_ACQUIRE)) {
+                int kept=1;
+                if(__atomic_load_n(&b->frozen,__ATOMIC_ACQUIRE)) {
+                    ScheduledTask *task=hvf_task();uint64_t seen=hvf_held_seen();
+                    mm_unlock(task);int again=hvf_held_sleep(seen,elr);mm_lock(task);
+                    /* Another thread's write may have replaced the backing meanwhile (a
+                       snapshot under the lock) and freed it: b is used only if the layout held. */
+                    kept=address_space->layout==layout;
+                    if(again && kept) { hvf_resume_el1=hvf_fault_resume(elr,spsr);return 1; }   /* the write again */
+                }
+                if(kept && !__atomic_load_n(&b->frozen,__ATOMIC_ACQUIRE) && __atomic_exchange_n(&b->held,0,__ATOMIC_ACQ_REL)) {
+                    __atomic_sub_fetch(&hvf_held_live,1,__ATOMIC_ACQ_REL);
+                    if(hvf_view==hvf_own_view && hvf_hold(hvf_view,address_space,b,0)) {   /* resume through an ASID flush */
+                        hvf_resume_el0(elr,spsr);
+                        hvf_frame[HF_FLUSH]=(uint64_t)hvf_view->asid<<48;
+                        hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_PC,HVF_SYSTEM_VA+HVF_FLUSH_RESTORE_OFFSET),"set pc");
+                        hvf_resume_el1=1;return 1;
+                    }
+                }
+            }
+        }
         if(!hvf_spurious_write(far)) {
             if(!lookup(far,1,2))return 0;
             address_space_touched(address_space);
@@ -1777,6 +1935,7 @@ static int hvf_slice_run(void) {
                guest mapping is writable; a genuine read-only page stays a fault. */
             uint64_t layout=address_space->layout;
             if(hvf_spurious_write(far)) { in_vector=hvf_fault_resume(elr,spsr);fast=1;continue; }
+            if(schedule_active && hvf_held_yield(far,elr)) { hvf_get_regs(1,elr,spsr);return -1; }   /* held for a fork: later */
             if(lookup(far,1,2)) {
                 /* The page is private (and charged) now: remap its host page writable.
                    A new backing (a fork snapshot) changes the layout: rebuild then. */

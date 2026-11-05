@@ -49,6 +49,8 @@ typedef struct {
     HvfPackOpen pack[HVF_EL1_PACK_OPENS];
     HvfMmCache mm_cache[PROCESS_LIMIT+1];             /* by mm lock index (hvf_el1.h) */
     uint32_t futex_waiters[HVF_EL1_FUTEX_SLOTS+1];    /* hvf_el1.h; the last: futexes in shared memory */
+    HvfSpinner spinners[HVF_EL1_SPINNERS];            /* by worker (hvf_el1.h) */
+    uint64_t futex_epoch[PROCESS_LIMIT+3];            /* each task's (ScheduledTask.futex_epoch), for EL1 */
 } ProcBlock;
 static ProcBlock *proc_block;
 static size_t proc_block_bytes(void) { return (sizeof(ProcBlock)+16383)&~(size_t)16383; }

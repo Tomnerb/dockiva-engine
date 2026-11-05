@@ -405,6 +405,7 @@ static void schedule_child(uint64_t pid) {
     ScheduledTask *t=&schedule_tasks[pid-1];memset(t,0,sizeof(*t)); /* a reused slot starts clean */
     memset(&proc_block->mm_cache[t-schedule_tasks],0,sizeof(HvfMmCache));
     __atomic_store_n(&proc_block->mm[t-schedule_tasks],0,__ATOMIC_RELEASE);t->futex_epoch=__atomic_add_fetch(&schedule_futex_epochs,1,__ATOMIC_RELAXED);
+    __atomic_store_n(&proc_block->futex_epoch[t-schedule_tasks],t->futex_epoch,__ATOMIC_RELEASE);
     task_save(t);if(fd_mirror_base)memcpy(fd_mirror_base+pid*4096,fd_mirror_base+process_pid*4096,4096); /* the same descriptors */
     t->state=1;t->pgid=schedule_tasks[process_pid-1].pgid;t->sid=schedule_tasks[process_pid-1].sid;
     ScheduledTask *parent=&schedule_tasks[process_pid-1];
@@ -414,6 +415,10 @@ static void schedule_child(uint64_t pid) {
     memcpy(t->signal_restorer,parent->signal_restorer,sizeof(t->signal_restorer));
     memcpy(t->signal_handler,parent->signal_handler,sizeof(t->signal_handler));
     schedule_live++;
+    /* A runnable task: the lock's release wakes an idle worker for it (schedule_notify).
+       Without this a fork's child waited for some worker to come free on its own, the
+       parent running on (Node's spawn: 0.75 ms of every 1.7). */
+    schedule_events++;
 }
 static void schedule_vfork(uint64_t pid) {
     Thread *th=thread_current();
