@@ -39,6 +39,7 @@ type engine struct {
 	pausing                                          sync.Mutex    // pause and unpause, and an exec starting meanwhile
 	quit                                             chan struct{} // POST /dockiva/shutdown asks main to exit
 	watched                                          watcher       // what engine.watch last saw
+	spares                                           spareSlot     // a supervisor started ahead of the next start
 }
 
 // memoryMiB is a container's guest memory limit: docker run -m, else its profile's.
@@ -200,17 +201,32 @@ func (b *engine) start(name string) {
 	log, e := os.OpenFile(filepath.Join(p, "supervisor.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	check(e)
 	defer log.Close()
-	cmd := exec.Command(b.Self, "_supervise", p, b.Native, b.Worker, generation)
-	cmd.ExtraFiles = []*os.File{f}
-	cmd.Stdout = log
-	cmd.Stderr = log
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	cmd.Env = append(os.Environ(), "DOCKIVA_DEFAULT_BIND_IP="+b.BindIP, "DOCKIVA_PROBES="+knownProbes())
-	check(cmd.Start())
+	// The supervisor closes its end once the run's status is saved (or it fails).
+	ready, readyEnd, e := os.Pipe()
+	check(e)
+	defer ready.Close()
+	args := []string{p, b.Native, b.Worker, generation}
+	env := []string{"DOCKIVA_DEFAULT_BIND_IP=" + b.BindIP, "DOCKIVA_PROBES=" + knownProbes(), "DOCKIVA_READY_FD=4"}
+	cmd := b.takeSpare(args, env, f, readyEnd, log)
+	if cmd == nil {
+		cmd = exec.Command(b.Self, append([]string{"_supervise"}, args...)...)
+		cmd.ExtraFiles = []*os.File{f, readyEnd}
+		cmd.Stdout = log
+		cmd.Stderr = log
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		cmd.Env = append(os.Environ(), env...)
+		if e = cmd.Start(); e != nil {
+			readyEnd.Close()
+			check(e)
+		}
+	}
+	readyEnd.Close()
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait(); notifyChanged() }() // its runs are over (a restart keeps it)
+	signaled := make(chan struct{})
+	go func() { _, _ = ready.Read(make([]byte, 1)); close(signaled) }() // EOF
 	deadline := time.Now().Add(10 * time.Second)
-	pace := newBackoff(time.Millisecond, 4*time.Millisecond) // a start takes about 20 ms
+	pace := newBackoff(time.Millisecond, 4*time.Millisecond) // only if the pipe says nothing
 	for time.Now().Before(deadline) {
 		s = readObject(filepath.Join(p, "status.json"))
 		if s["generation"] == generation {
@@ -230,6 +246,8 @@ func (b *engine) start(name string) {
 				panic(apiError{409, text(s["error"])})
 			}
 			panic(apiError{409, "Supervisor exited; inspect supervisor.log"})
+		case <-signaled:
+			signaled = nil // read status now; then back to pacing
 		case <-pace.after():
 		}
 	}
@@ -763,6 +781,18 @@ func supervise(p, native, worker, generation string) (result error) {
 	reject(st.Mode().IsRegular(), "Supervisor requires an inherited container lock")
 	check(syscall.Flock(3, syscall.LOCK_EX|syscall.LOCK_NB))
 	status := obj{"state": "starting", "generation": generation, "supervisor": "dockivad", "supervisor_pid": os.Getpid()}
+	// start waits on fd 4: closed once the first run's status is saved, or after the
+	// failed status below, so it reads status.json when there is something to read.
+	var ready *os.File
+	if os.Getenv("DOCKIVA_READY_FD") == "4" {
+		syscall.CloseOnExec(4) // the run must not hold it
+		ready = os.NewFile(4, "ready")
+	}
+	defer func() {
+		if ready != nil {
+			ready.Close()
+		}
+	}()
 	var listener net.Listener
 	var cmd *exec.Cmd
 	var writer *os.File
@@ -810,7 +840,8 @@ func supervise(p, native, worker, generation string) (result error) {
 	listener, listenerErr = net.Listen("tcp", "127.0.0.1:0")
 	check(listenerErr)
 	secret := token()
-	save(filepath.Join(p, "control.json"), obj{"port": listener.Addr().(*net.TCPAddr).Port, "token": secret})
+	// Read only while this supervisor holds the lock (status turns a lost one into failed).
+	store(filepath.Join(p, "control.json"), obj{"port": listener.Addr().(*net.TCPAddr).Port, "token": secret}, volatile)
 	out := openStampedLog(p, "stdout") // through pipes: each line's time is indexed
 	defer out.Close()
 	errout := openStampedLog(p, "stderr")
@@ -874,7 +905,13 @@ func supervise(p, native, worker, generation string) (result error) {
 		status["state"] = "running"
 		status["pid"] = cmd.Process.Pid
 		status["started_at"] = now()
-		save(filepath.Join(p, "status.json"), status)
+		// Lost in a crash, the run reads as its previous state; status() also
+		// reports a running one without its supervisor as failed.
+		store(filepath.Join(p, "status.json"), status, whole)
+		if ready != nil {
+			ready.Close()
+			ready = nil
+		}
 		if c["healthcheck"] != nil {
 			healthStop = make(chan struct{})
 			go watchHealth(p, native, worker, c, healthStop)

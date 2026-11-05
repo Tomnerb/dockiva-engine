@@ -32,6 +32,10 @@ func run() {
 		check(supervise(os.Args[2], os.Args[3], os.Args[4], os.Args[5]))
 		return
 	}
+	if len(os.Args) == 2 && os.Args[1] == "_supervise_spare" {
+		check(superviseSpare())
+		return
+	}
 	self, e := os.Executable()
 	check(e)
 	self, e = filepath.EvalSymlinks(self)
@@ -154,6 +158,8 @@ func run() {
 	done := make(chan struct{})
 	defer close(done)
 	go b.watch(done)
+	b.spares.on = true // after the Setenvs above: a spare inherits them as an exec'd supervisor would
+	b.refillSpare()
 	go b.restartOnBoot()
 	if userListener != nil {
 		docker := &http.Server{Handler: b.socketHandler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 40 * time.Second, IdleTimeout: 10 * time.Second, MaxHeaderBytes: 16384}

@@ -206,7 +206,17 @@ func readBounded(root, relative string, limit int64) []byte {
 func readObject(path string) obj {
 	return decode(readBounded(filepath.Dir(path), filepath.Base(path), 1<<20), 1<<20)
 }
-func save(path string, v any) {
+func save(path string, v any) { store(path, v, durable) }
+
+// How much of a crash a state file survives. Each barrier is about 0.3 ms, and a
+// container's run writes several state files on the way to its first instruction.
+const (
+	volatile = iota // only read while its supervisor holds the container lock: a crash makes it moot
+	whole           // old or new after a crash, never torn, but the newest may be lost
+	durable         // whole, and the newest survives
+)
+
+func store(path string, v any, level int) {
 	b, e := json.MarshalIndent(v, "", "  ")
 	check(e)
 	f, e := os.CreateTemp(filepath.Dir(path), ".state-")
@@ -216,9 +226,14 @@ func save(path string, v any) {
 	defer f.Close()
 	_, e = f.Write(append(b, '\n'))
 	check(e)
-	check(barrierSync(f))
+	if level >= whole {
+		check(barrierSync(f))
+	}
 	check(f.Close())
 	check(os.Rename(name, path))
+	if level < durable {
+		return
+	}
 	dir, e := os.Open(filepath.Dir(path))
 	check(e)
 	defer dir.Close()

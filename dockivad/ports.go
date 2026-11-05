@@ -293,7 +293,11 @@ func publishPorts(p string, c obj, defaultIP string) (args []string, closeAll fu
 			}
 		}
 	}
-	save(filepath.Join(p, "ports.json"), obj{"ports": bound})
+	if len(bound) > 0 { // none: no file, as networkPortBindings expects
+		store(filepath.Join(p, "ports.json"), obj{"ports": bound}, volatile)
+	} else {
+		_ = os.Remove(filepath.Join(p, "ports.json"))
+	}
 	ok = true
 	return args, closeAll
 }
