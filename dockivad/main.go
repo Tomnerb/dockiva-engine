@@ -32,8 +32,8 @@ func run() {
 		check(supervise(os.Args[2], os.Args[3], os.Args[4], os.Args[5]))
 		return
 	}
-	if len(os.Args) == 2 && os.Args[1] == "_supervise_spare" {
-		check(superviseSpare())
+	if len(os.Args) == 4 && os.Args[1] == "_supervise_spare" {
+		check(superviseSpare(os.Args[2], os.Args[3]))
 		return
 	}
 	self, e := os.Executable()

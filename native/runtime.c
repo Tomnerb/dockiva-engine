@@ -1082,8 +1082,50 @@ static int run(uint64_t steps) {
     }
     fail("Instruction budget exhausted"); return 125;
 }
+/* "prestart": started (under its guard) before its container is known, so a start
+   does not wait for this process's launch, about 4 ms. Fd 4 then brings the run: a
+   4-byte length and the arguments as NUL-terminated strings (argv[0] first), with
+   its standard output and error as SCM_RIGHTS. The guard set the 1 TiB file-size
+   cap; the run's own (--file-limit-mib, else 16 MiB as the guard's) is set here. */
+#include <sys/resource.h>
+#include <sys/socket.h>
+static void prestart_receive(int *argc,char ***argv) {
+    static char job[1u<<20];static char *args[EXEC_ENTRIES*2+256];
+    uint32_t len=0;char control[CMSG_SPACE(2*sizeof(int))];
+    struct iovec iov={&len,sizeof len};struct msghdr m={0};
+    m.msg_iov=&iov;m.msg_iovlen=1;m.msg_control=control;m.msg_controllen=sizeof control;
+    ssize_t n;
+    do n=recvmsg(4,&m,MSG_WAITALL); while(n<0 && errno==EINTR);
+    if(n==0)_exit(0);                                                          /* not needed: the engine went on without it */
+    struct cmsghdr *c=n==(ssize_t)sizeof len?CMSG_FIRSTHDR(&m):NULL;
+    if(!c || c->cmsg_level!=SOL_SOCKET || c->cmsg_type!=SCM_RIGHTS || c->cmsg_len!=CMSG_LEN(2*sizeof(int)) || (m.msg_flags&MSG_CTRUNC))fail("prestart: invalid run");
+    int fds[2];memcpy(fds,CMSG_DATA(c),sizeof fds);
+    if(!len || len>sizeof job)fail("prestart: invalid run length");
+    for(uint32_t got=0;got<len;) {
+        ssize_t r=read(4,job+got,len-got);
+        if(r<0 && errno==EINTR)continue;
+        if(r<=0)fail("prestart: run cut short");
+        got+=(uint32_t)r;
+    }
+    close(4);
+    if(job[len-1])fail("prestart: unterminated argument");
+    if(dup2(fds[0],1)<0 || dup2(fds[1],2)<0)fail("prestart: output");
+    close(fds[0]);close(fds[1]);
+    int count=0;
+    for(uint32_t i=0;i<len;i+=(uint32_t)strlen(job+i)+1) {
+        if(count==(int)(sizeof args/sizeof *args)-1)fail("prestart: too many arguments");
+        args[count++]=job+i;
+    }
+    args[count]=NULL;
+    rlim_t file_size=16*1024*1024;                                             /* as worker_launcher.c */
+    for(int i=1;i+1<count;i++)if(!strcmp(args[i],"--file-limit-mib")) { long long mib=atoll(args[i+1]);if(mib>0 && mib<=1048576)file_size=(rlim_t)mib<<20; }
+    struct rlimit lim={file_size,file_size};
+    if(setrlimit(RLIMIT_FSIZE,&lim))fail("prestart: file size limit");
+    *argc=count;*argv=args;
+}
 int main(int argc,char **argv) {
     proc_block_init();                                                         /* descriptor tables, mm locks (fs.h) */
+    if(argc>=2 && !strcmp(argv[1],"prestart"))prestart_receive(&argc,&argv);
     const char *start_cwd=NULL;
     if(argc==2 && !strcmp(argv[1],"capabilities")) {
         fputs("{\"schema_version\":1,\"runtime_abi\":\"dockiva-native-v1\",\"backends\":{"

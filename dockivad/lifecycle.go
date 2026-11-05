@@ -858,9 +858,8 @@ func supervise(p, native, worker, generation string) (result error) {
 	var input, terminal *os.File
 	var copied, healthStop chan struct{}
 	var started time.Time
-	// launch starts a run: the first, or a restart under the container's policy.
-	launch := func() {
-		finished = false
+	// launchWorker starts the run's guard, which starts the runtime.
+	launchWorker := func() {
 		reader, w, e := os.Pipe() // the worker's liveness pipe: it ends the run if we go
 		check(e)
 		writer = w
@@ -887,8 +886,6 @@ func supervise(p, native, worker, generation string) (result error) {
 			input, child = os.NewFile(uintptr(pair[0]), "stdin"), os.NewFile(uintptr(pair[1]), "container-stdin")
 			cmd.Stdin = child
 		}
-		_ = os.Remove(filepath.Join(p, "oom"))    // OOMKilled describes the latest run
-		_ = os.Remove(filepath.Join(p, "paused")) // left by a run that ended frozen
 		check(cmd.Start())
 		if child != nil {
 			child.Close()
@@ -901,6 +898,22 @@ func supervise(p, native, worker, generation string) (result error) {
 		}
 		done = make(chan error, 1)
 		go func(cmd *exec.Cmd, done chan error) { done <- cmd.Wait() }(cmd, done)
+	}
+	// launch starts a run: the first, or a restart under the container's policy.
+	launch := func() {
+		finished = false
+		_ = os.Remove(filepath.Join(p, "oom"))    // OOMKilled describes the latest run
+		_ = os.Remove(filepath.Join(p, "paused")) // left by a run that ended frozen
+		if guard, liveness, drained := prestartedRun(invocation, c, out, errout); guard != nil {
+			// A spare supervisor's first run: its guard and runtime are already started.
+			cmd, writer = guard, liveness
+			copied = make(chan struct{})
+			close(copied)
+			done = make(chan error, 1)
+			go func(cmd *exec.Cmd, done chan error) { e := cmd.Wait(); drained(); done <- e }(cmd, done)
+		} else {
+			launchWorker()
+		}
 		started = time.Now()
 		status["state"] = "running"
 		status["pid"] = cmd.Process.Pid
