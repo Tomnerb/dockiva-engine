@@ -11,6 +11,7 @@ static MemoryBacking *backing_alloc(size_t size,int clear) {
 }
 static MemoryBacking *backing_reserve(size_t size) { return backing_alloc(size,1); }
 static MemoryBacking *backing_alloc_text(size_t size) { return backing_alloc(size,1); }
+static int backing_inherits(const MemoryBacking *b,size_t page) { (void)b;(void)page;return 0; }   /* overlays are the Mach backing's */
 #endif
 static int backing_retain(MemoryBacking *backing,size_t count) {
     if(!backing || !backing->refs || count>SIZE_MAX-backing->refs) { errno=ENOMEM;return 0; }
@@ -26,6 +27,7 @@ static void backing_drop(MemoryBacking *backing,size_t count) {
 #endif
     if(!__atomic_sub_fetch(&backing->refs,count,__ATOMIC_ACQ_REL)) {
 #ifdef __APPLE__
+        if(backing_orphan(backing))return;           /* overlays still read it: the last frees it */
         if(backing_reap(backing))return;
 #endif
         if(backing_release_hook)backing_release_hook(backing);

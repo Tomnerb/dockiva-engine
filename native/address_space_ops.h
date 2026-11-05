@@ -81,13 +81,17 @@ static void address_space_destroy(GuestAddressSpace *space) {
 }
 static size_t address_space_backing_refs(const GuestAddressSpace *space,const MemoryBacking *backing);
 /* The image is dead (exit, exec) and its memory goes later (image_destroy_later): the
-   sources of the snapshots only it holds thaw now, before its parent hears of it. A
-   fork's parent got SIGCHLD while still frozen, and its signal frame took a snapshot. */
+   sources of the snapshots only it holds thaw now, before its parent hears of it, and
+   its overlays let go of their bases. A fork's parent got SIGCHLD while still frozen,
+   and its signal frame took a snapshot. */
 static void address_space_thaw_dead(GuestAddressSpace *space) {
 #ifdef __APPLE__
     for(unsigned i=0;i<space->nseg+2;i++) {
         MemoryBacking *b=i==0?space->map_backing:i==1?space->brk_backing:space->seg[i-2].backing;
-        if(b && b->source && b->refs==address_space_backing_refs(space,b)) { backing_thaw(b);b->source=NULL; }
+        if(b && (b->source || b->base) && b->refs==address_space_backing_refs(space,b)) {
+            if(b->source) { backing_thaw(b);b->source=NULL; }
+            if(b->base)backing_detach(b);
+        }
     }
 #else
     (void)space;
@@ -133,14 +137,15 @@ static MemoryBacking *address_space_fork_backing(const GuestAddressSpace *source
         MemoryBacking *copy=owned<=fork_copy_pages?backing_clone(backing,owned):NULL;
         if(copy) { from[*copied]=backing;to[(*copied)++]=copy;return copy; }
     }
-    /* A larger one (the hypervisor's hold): the child gets a snapshot now, and the parent
-       keeps the memory with its guest-physical space and page tables, its owned pages
-       read-only until the snapshot goes (address_space_fork_private holds it). Shared
-       instead, every page became copy-on-write in the parent's tables and each process
-       snapshotted on its first write: Node's spawn of a child that execs at once took
-       three snapshots and six remaps of tens of thousands of pages. */
+    /* A larger one (the hypervisor's hold): the child gets an overlay of it (its pages
+       read the parent's until it writes them: backing_overlay), and the parent keeps the
+       memory with its guest-physical space and page tables, its owned pages read-only
+       until the overlay goes (address_space_fork_private holds it). Shared instead, every
+       page became copy-on-write in the parent's tables and each process snapshotted on
+       its first write: Node's spawn of a child that execs at once took three snapshots
+       and six remaps of tens of thousands of pages. */
     if(backing_hold_hook && *copied<8 && own && (!backing->frozen || backing->held)) {
-        MemoryBacking *copy=backing_snapshot(backing);
+        MemoryBacking *copy=backing_overlay(backing);
         if(copy) { from[*copied]=backing;to[(*copied)++]=copy;return copy; }
     }
 #endif
@@ -172,7 +177,7 @@ static int address_space_fork_private(GuestAddressSpace *destination,GuestAddres
     if(source->brk_backing && !(copy.brk_backing=address_space_fork_backing(source,source->brk_backing,from,to,&copied)))goto failed;
     if(source->map_backing && !(copy.map_backing=address_space_fork_backing(source,source->map_backing,from,to,&copied)))goto failed;
 #ifdef __APPLE__
-    for(unsigned i=0;i<copied;i++)if(to[i]->cow_copy && !from[i]->held)backing_hold_hook(from[i],1);   /* the parent's, while the child's snapshot lives */
+    for(unsigned i=0;i<copied;i++)if(to[i]->base==from[i])backing_hold_hook(from[i],1);   /* the parent's, while the child's overlay lives (again at every fork: pages written since are writable) */
 #endif
     address_space_assign(destination,&copy);if(fork_shared_private)address_space_changed(source);
     address_space_changed(destination);return 1;
@@ -229,6 +234,28 @@ static int address_space_write(GuestAddressSpace *space,MemoryBacking *backing,s
     if(syscall_abort)return 0;
     return memory_exhausted();
 }
+/* Host bytes for a lookup of [offset, offset+size) of *ref (after address_space_write for
+   one that writes). A read of an overlay's pages it has not copied reads its base's
+   (frozen: as the fork left them); a read of both kinds copies them now (make_private: the
+   guest's tables follow), which unlocked is the locked path's job. NULL if that fails. */
+static unsigned char *address_space_bytes(GuestAddressSpace *space,MemoryBacking **ref,size_t offset,size_t size,unsigned permission) {
+    if(!*ref)return NULL;
+#ifdef __APPLE__
+    MemoryBacking *b=*ref;
+    if(b->base && size && !(permission&2)) {
+        size_t ps=b->page_size,first=offset/ps,last=(offset+size-1)/ps,inherited=0;
+        for(size_t i=first;i<=last;i++)inherited+=(size_t)backing_inherits(b,i);
+        if(inherited==last-first+1)return BACKING_BASE(b)->bytes+offset;
+        if(inherited) {
+            if(syscall_unlocked) { syscall_abort=1;return NULL; }
+            if(!address_space_write(space,b,offset,size))return NULL;
+        }
+    }
+#else
+    (void)space;(void)size;(void)permission;
+#endif
+    return backing_data(*ref)+offset;
+}
 /* This address space's own MemoryBacking for the bytes it shares with another
    address space after fork (a VM snapshot; nothing is charged or copied yet). */
 static MemoryBacking *address_space_unshare(GuestAddressSpace *space,MemoryBacking *backing) {
@@ -258,7 +285,7 @@ static int address_space_zero_partial(GuestAddressSpace *space,MemoryBacking *ba
 #ifdef __APPLE__
     for(size_t page=begin/backing->page_size*backing->page_size;page<end;page+=backing->page_size) {
         size_t low=begin>page?begin:page,high=end<page+backing->page_size?end:page+backing->page_size;
-        if(!backing->pages[page/backing->page_size])continue; /* unowned: already zero */
+        if(!backing->pages[page/backing->page_size] && !backing_inherits(backing,page/backing->page_size))continue; /* unowned: already zero (an overlay's base page is not) */
         if(!address_space_make_private(space,backing,low,high-low))return 0;
         memset(backing->bytes+low,0,high-low);
     }

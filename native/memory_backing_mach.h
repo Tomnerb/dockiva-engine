@@ -71,7 +71,47 @@ static void backing_thaw(MemoryBacking *backing) {
     }
     pthread_mutex_unlock(&backing_thaw_lock);
 }
+/* Overlays (backing_overlay): a fork's child does not copy or snapshot a large private
+   backing of its parent's. It gets an empty one of its own (recycled memory when there is
+   some, its guest-physical space already mapped) whose host pages read as the parent's
+   until it writes them, each copied then (backing_prepare), as Linux copies on write.
+   The base is frozen meanwhile, so its bytes are still the fork's; it outlives every
+   overlay reading it (based: one its holders let go of meanwhile is freed by the last
+   overlay to go). A Mach snapshot instead cost 70-150 us per fork, and every page either
+   side wrote afterwards a copy-on-write host fault (Node's spawn: 125 host faults). */
+#define BACKING_BASE(b) ((MemoryBacking *)(b)->base)
+static int backing_inherits(const MemoryBacking *b,size_t page) {
+    return b->base && page<b->inherit_pages && (b->inherit[page>>6]>>(page&63)&1);
+}
+/* Copy the host pages of [first, last] an overlay still reads from its base, owning (and
+   charging) them: how many, or -1 when out of memory (nothing changed). */
+static long backing_materialize(MemoryBacking *b,size_t first,size_t last) {
+    if(!b->base || first>=b->inherit_pages)return 0;
+    if(last>=b->inherit_pages)last=b->inherit_pages-1;
+    size_t count=0,ps=b->page_size,next=0;
+    for(size_t i=first;i<=last;i++)count+=backing_inherits(b,i);
+    if(!count)return 0;
+    BackingPageGroup *group=backing_page_group(count,ps,1);if(!group)return -1;
+    const MemoryBacking *base=BACKING_BASE(b);
+    for(size_t i=first;i<=last;i++)if(backing_inherits(b,i)) {
+        memcpy(b->bytes+i*ps,base->bytes+i*ps,ps);b->inherit[i>>6]&=~(UINT64_C(1)<<(i&63));
+        if(b->pages[i])backing_page_release(b->pages[i],ps);
+        b->pages[i]=&group->pages[next++];if(i+1>b->used)b->used=i+1;
+    }
+    PROFILE_ADD(profile_overlay_copies,count);
+    return (long)count;
+}
+/* Its references are gone: 1 if overlays still read it (the last of them frees it). */
+static int backing_orphan(MemoryBacking *b) {
+    if(!__atomic_load_n(&b->based,__ATOMIC_ACQUIRE))return 0;    /* none, and none can start: nothing holds it to fork */
+    pthread_mutex_lock(&backing_thaw_lock);
+    int read=__atomic_load_n(&b->based,__ATOMIC_ACQUIRE)!=0;if(read)b->orphaned=1;
+    pthread_mutex_unlock(&backing_thaw_lock);
+    return read;
+}
+static void backing_detach(MemoryBacking *b);
 static void backing_vm_release(MemoryBacking *backing) {
+    if(backing->base)backing_detach(backing);
     if(backing->source || backing->frozen) {           /* before anything is freed: the table holds no stale address */
         if(backing->bytes && backing->source && mach_vm_deallocate(mach_task_self(),(mach_vm_address_t)backing->bytes,backing->mapped_size)!=KERN_SUCCESS)
             fail("Cannot release guest VM backing");
@@ -183,6 +223,7 @@ static int backing_reap(MemoryBacking *backing) {
        it; a source's write showing through in it no longer matters. The parent of a
        fork whose child exec'd writes its own memory again at once. */
     if(backing_dead_image && backing->source) { backing_thaw(backing);backing->source=NULL; }
+    if(backing_dead_image && backing->base)backing_detach(backing);
     pthread_mutex_lock(&backing_reap_lock);
     if(!started) {
         pthread_t thread;
@@ -194,6 +235,16 @@ static int backing_reap(MemoryBacking *backing) {
     pthread_mutex_unlock(&backing_reap_lock);
     return 1;
 }
+/* An overlay stops reading its base (it goes): the base goes too if its holders let go of
+   it meanwhile. */
+static void backing_detach(MemoryBacking *b) {
+    MemoryBacking *base=BACKING_BASE(b);if(!base)return;
+    b->base=NULL;free(b->inherit);b->inherit=NULL;b->inherit_pages=0;
+    pthread_mutex_lock(&backing_thaw_lock);
+    int last=!__atomic_sub_fetch(&base->based,1,__ATOMIC_ACQ_REL) && base->orphaned;if(last)base->orphaned=0;
+    pthread_mutex_unlock(&backing_thaw_lock);
+    if(last && !backing_reap(base))backing_free_now(base);
+}
 /* Recycled memory of size's host-page size, or NULL. */
 static MemoryBacking *backing_pool_take(size_t size) {
     size_t page=(size_t)vm_page_size,mapped=(size+page-1)/page*page;MemoryBacking *backing=NULL;
@@ -204,7 +255,10 @@ static MemoryBacking *backing_pool_take(size_t size) {
         backing_pool_warm-=backing->warm;backing->warm=0;backing_pool_used_ns=backing_now_ns();break;
     }
     pthread_mutex_unlock(&backing_reap_lock);
-    if(backing) { backing->refs=1;backing->size=size;backing->frozen=backing->cow_copy=backing->unpooled=backing->recycle=backing->held=0; }
+    if(backing) {
+        backing->refs=1;backing->size=size;backing->frozen=backing->cow_copy=backing->unpooled=backing->recycle=backing->held=backing->orphaned=0;
+        backing->base=NULL;backing->inherit=NULL;backing->inherit_pages=backing->based=0;
+    }
     return backing;
 }
 /* A backing of size with host memory and no owned page: recycled, or new. */
@@ -214,6 +268,20 @@ static MemoryBacking *backing_region(size_t size) {
     mach_vm_address_t address=0;
     if(mach_vm_allocate(mach_task_self(),&address,backing->mapped_size,VM_FLAGS_ANYWHERE)!=KERN_SUCCESS) { free(backing);errno=ENOMEM;return NULL; }
     backing->bytes=(unsigned char *)address;return backing;
+}
+/* An overlay of base for a fork's child; base stays frozen while it lives (registered as
+   base's snapshot: backing_thaw). NULL when out of memory. */
+static MemoryBacking *backing_overlay(MemoryBacking *base) {
+    if(base->base && backing_materialize(base,0,SIZE_MAX)<0)return NULL;    /* a base reads nothing from another */
+    size_t pages=base->used,words=(pages+63)/64;
+    uint64_t *bits=words?calloc(words,sizeof(uint64_t)):NULL;if(words && !bits)return NULL;
+    for(size_t i=0;i<pages;i++)if(base->pages[i])bits[i>>6]|=UINT64_C(1)<<(i&63);
+    MemoryBacking *copy=backing_region(base->size);if(!copy) { free(bits);return NULL; }
+    copy->inherit=bits;copy->inherit_pages=pages;copy->base=base;
+    pthread_mutex_lock(&backing_thaw_lock);__atomic_add_fetch(&base->based,1,__ATOMIC_ACQ_REL);pthread_mutex_unlock(&backing_thaw_lock);
+    backing_thaw_register(base,copy);
+    PROFILE_ADD(profile_overlays,1);
+    return copy;
 }
 /* charge 0: memory the budget does not count (read-only program text, which Linux
    keeps in its reclaimable page cache); a write copies, and charges, a page. */
@@ -236,6 +304,8 @@ static MemoryBacking *backing_reserve(size_t size) { return backing_region(size)
    free and reuse heap memory constantly, and a reclaimed page costs a host fault when
    written again (a Node allocation loop ran 17% faster). */
 static void backing_discard(MemoryBacking *backing,size_t offset,size_t size) {
+    if(backing->base)                                   /* an overlay's discarded pages read zero, not its base's */
+        for(size_t i=offset/backing->page_size;i<(offset+size)/backing->page_size && i<backing->inherit_pages;i++)backing->inherit[i>>6]&=~(UINT64_C(1)<<(i&63));
     size_t end=(offset+size)/backing->page_size;if(end>backing->used)end=backing->used; /* none owned above */
     int keep=__atomic_load_n(&resource_used,__ATOMIC_RELAXED)<resource_limit/2;
     for(size_t i=offset/backing->page_size;i<end;) {
@@ -249,6 +319,7 @@ static void backing_discard(MemoryBacking *backing,size_t offset,size_t size) {
 }
 static MemoryBacking *backing_snapshot(MemoryBacking *source) {
     uint64_t profile_at=profiling?profile_now_ns():0;
+    if(source->base && backing_materialize(source,0,SIZE_MAX)<0) { errno=ENOMEM;return NULL; }   /* an overlay's host memory lacks its base's pages */
     MemoryBacking *copy=backing_descriptor(source->size);if(!copy)return NULL;
     size_t count=source->used;
     for(size_t i=0;i<count;i++)if(source->pages[i] && source->pages[i]->refs==SIZE_MAX) { free(copy);errno=ENOMEM;return NULL; }
@@ -266,6 +337,10 @@ static MemoryBacking *backing_snapshot(MemoryBacking *source) {
 /* A private copy of source's owned pages, charged now (the fork of a small process:
    cheaper than two snapshots, see address_space_fork_private). NULL on failure. */
 static MemoryBacking *backing_clone(const MemoryBacking *source,size_t owned) {
+    if(source->base) {                                  /* an overlay: its base's pages first (then more are owned) */
+        if(backing_materialize((MemoryBacking *)source,0,SIZE_MAX)<0)return NULL;
+        owned=0;for(size_t i=0;i<source->used;i++)owned+=source->pages[i]!=NULL;
+    }
     MemoryBacking *copy=backing_region(source->size);if(!copy)return NULL;
     BackingPageGroup *group=owned?backing_page_group(owned,source->page_size,1):NULL;
     if(owned && !group) { backing_free_now(copy);return NULL; }
@@ -296,6 +371,10 @@ static int backing_prepare(MemoryBacking *backing,size_t offset,size_t size,int 
     if(offset>backing->size || size>backing->size-offset) { errno=EINVAL;return 0; }
     if(!size)return 1;
     size_t first=offset/backing->page_size,last=(offset+size-1)/backing->page_size,count=0;
+    if(backing->base) {                                 /* an overlay's own copy; the running process's tables follow */
+        long copied=backing_materialize(backing,first,last);if(copied<0)return 0;
+        if(copied) { *changed=1;if(backing_moved_hook)backing_moved_hook(backing,first*backing->page_size,(last-first+1)*backing->page_size); }
+    }
     for(size_t i=first;i<=last;i++)count+=!backing->pages[i] || backing->pages[i]->refs>1; /* unowned or shared */
     if(!count)return 1;
     BackingPageGroup *group=backing_page_group(count,backing->page_size,1);if(!group)return 0;

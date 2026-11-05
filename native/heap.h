@@ -24,13 +24,13 @@ static unsigned char *heap_lookup(uint64_t addr,uint64_t count,unsigned permissi
     if(addr>=address_space->brk_base && addr-address_space->brk_base<address_space->brk_pages && count<=address_space->brk_pages-(addr-address_space->brk_base)) {
         if(!(permission&6))return NULL;
         if((permission&2) && !address_space_write(address_space,address_space->brk_backing,(size_t)(addr-address_space->brk_base),(size_t)count))return NULL;
-        return backing_data(address_space->brk_backing)+(size_t)(addr-address_space->brk_base);
+        return address_space_bytes(address_space,&address_space->brk_backing,(size_t)(addr-address_space->brk_base),(size_t)count,permission);
     }
     if(!backing_data(address_space->map_backing) || !address_space->map_flags || addr<MAP_BASE || addr-MAP_BASE>=address_space->map_capacity || count>address_space->map_capacity-(addr-MAP_BASE)) return NULL;
     uint64_t off=addr-MAP_BASE, first=off/4096, last=(off+(count?count:1)-1)/4096;
     for(uint64_t i=first;i<=last;i++) if(!(address_space->map_flags[i]&permission)) return NULL;
     if((permission&2) && !address_space_write(address_space,address_space->map_backing,(size_t)off,(size_t)count))return NULL;
-    return backing_data(address_space->map_backing)+(size_t)off;
+    return address_space_bytes(address_space,&address_space->map_backing,(size_t)off,(size_t)count,permission);
 }
 static int map_outside_used(uint64_t address,uint64_t bytes);   /* mapping.h */
 static uint64_t guest_brk(uint64_t requested) {

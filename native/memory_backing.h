@@ -31,6 +31,8 @@ typedef struct {
     uint64_t hvf_ipa,hvf_epoch,*hvf_chunks;
     void *reap_next;                  /* in backing_reap's queue */
     void *source;uint64_t source_serial;
+    void *base;uint64_t *inherit;size_t inherit_pages; /* an overlay: its base, and a bit per host page still read from there (backing_overlay) */
+    size_t based;unsigned orphaned;     /* a base: overlays reading it; its holders let go of it meanwhile (the last overlay frees it) */
     BackingPage *pages[];
 } MemoryBacking;
 #else
@@ -41,6 +43,7 @@ typedef struct {
 } MemoryBacking;
 #endif
 static void (*backing_release_hook)(MemoryBacking *); /* the hypervisor backend forgets the memory first */
+static void (*backing_moved_hook)(MemoryBacking *,size_t,size_t); /* an overlay's [offset, offset+size) now holds its own copy (backing_prepare): tables still name its base there */
 static void (*backing_hold_hook)(MemoryBacking *,int); /* a fork's hold on its parent's backing: 1 at the fork, 0 at the thaw; NULL without the hypervisor */
 static unsigned char *backing_data(MemoryBacking *backing) {
     return backing?backing->bytes:NULL;

@@ -107,6 +107,7 @@ typedef struct {
     MemoryBacking *brk_backing,*map_backing;uint64_t brk_base,brk_pages;
     uint64_t layout,arena_rev,generation;
     unsigned asid,asid_generation;            /* valid while asid_generation is hvf_asid_generation */
+    struct { MemoryBacking *backing;size_t offset,size; } moved[8];unsigned nmoved; /* overlay ranges a host write copied, to map again (hvf_backing_moved) */
 } HvfView;
 static HvfView hvf_views[HVF_VIEWS];
 /* The view of the current process's memory: its own, or (a vfork child of a threaded
@@ -188,6 +189,13 @@ static uint64_t hvf_ipa_at(MemoryBacking *backing,size_t offset) {
     pthread_mutex_unlock(&hvf_mutex);
     return ipa?ipa+(offset-chunk*HVF_CHUNK):0;
 }
+/* The guest-physical address a process's tables give byte offset of backing: an
+   overlay's page it has not copied is its base's (mapped read-only: a write copies it),
+   whose stage-2 entries its parent's use keeps warm; else its own. */
+static uint64_t hvf_page_ipa(MemoryBacking *backing,size_t offset) {
+    if(backing->base && backing_inherits(backing,offset/backing->page_size))return hvf_ipa_at(BACKING_BASE(backing),offset);
+    return hvf_ipa_at(backing,offset);
+}
 static void hvf_block_unmap(unsigned i) {
     hvf_check(hv_vm_unmap(hvf_blocks[i].ipa,hvf_blocks[i].size),"hv_vm_unmap");
     hvf_blocks[i]=hvf_blocks[--hvf_nblocks];if(!hvf_nblocks)hvf_ipa_top=0;
@@ -239,6 +247,9 @@ static int hvf_hold(HvfView *v,const GuestAddressSpace *space,MemoryBacking *bac
 }
 static void hvf_backing_hold(MemoryBacking *backing,int protect) {
     if(!protect) { hvf_held_wake();return; }                    /* thawed: the parent's next write fault gives permission back */
+    /* Every fork's pass, held already or not: pages written since the last one (the
+       parent's writes after a thaw remap a page at a time when the locked path serves
+       them) are writable again. */
     if(!__atomic_exchange_n(&backing->held,1,__ATOMIC_ACQ_REL))__atomic_add_fetch(&hvf_held_live,1,__ATOMIC_ACQ_REL);
     if(hvf_hold(hvf_own_view,address_space,backing,1))hvf_flush();
     PROFILE_ADD(profile_holds,1);
@@ -349,7 +360,8 @@ static unsigned hvf_effective_flags(const GuestAddressSpace *space,MemoryBacking
 static void hvf_map_range(const GuestAddressSpace *space,uint64_t base,uint64_t size,unsigned flags,MemoryBacking *backing,size_t offset) {
     if(!size || !flags || !backing)return;
     if((base|size|offset)&4095)fail("Hypervisor backend needs page-aligned guest mappings (use --dynamic)");
-    HvfView *v=hvf_view;uint64_t ipa=0;
+    HvfView *v=hvf_view;uint64_t ipa=0,bipa=0;
+    MemoryBacking *over=backing->base?BACKING_BASE(backing):NULL;  /* an overlay's base (same size, same chunks) */
     int per_page=0;unsigned uniform=flags;                   /* as hvf_effective_flags decides */
     if(flags&SEG_SHARED)uniform=flags&7;
     else if(flags&2) {
@@ -359,13 +371,16 @@ static void hvf_map_range(const GuestAddressSpace *space,uint64_t base,uint64_t 
     uint64_t bits[2]={hvf_descriptor_bits(flags&~2u,0),hvf_descriptor_bits(flags,0)},single=hvf_descriptor_bits(uniform,0);
     int stale=0;
     for(uint64_t p=0;p<size;) {
-        if(!ipa || !((offset+p)%HVF_CHUNK)) { if(!(ipa=hvf_ipa_at(backing,offset+(size_t)p)))break;ipa-=p; } /* each chunk's address */
+        if(!ipa || !((offset+p)%HVF_CHUNK)) {                                       /* each chunk's address (and its base's) */
+            if(!(ipa=hvf_ipa_at(backing,offset+(size_t)p)))break;ipa-=p;
+            if(over) { if(!(bipa=hvf_ipa_at(over,offset+(size_t)p)))break;bipa-=p; }
+        }
         uint64_t *leaf=hvf_leaf(v,base+p,1);if(!leaf)break;
         uint64_t end=p+4096*(512-((base+p)>>12&511)),chunk=p+(HVF_CHUNK-(offset+p)%HVF_CHUNK);
         if(end>chunk)end=chunk;
         if(end>size)end=size;
         for(;p<end;p+=4096) {
-            uint64_t descriptor=ipa+p;
+            uint64_t descriptor=(over && backing_inherits(backing,(offset+p)/backing->page_size)?bipa:ipa)+p;
             if(per_page) {
                 const BackingPage *page=backing->pages[(offset+p)/backing->page_size];
                 descriptor|=bits[page && page->refs==1];
@@ -397,7 +412,7 @@ static void hvf_view_record(HvfView *v,const GuestAddressSpace *space) {
     v->brk_backing=space->brk_backing;v->map_backing=space->map_backing;
     v->brk_base=space->brk_base;v->brk_pages=space->brk_pages;
     memcpy(v->seg,space->seg,space->nseg*sizeof(Segment));
-    v->layout=space->layout;v->generation=space->generation;v->stale=0;
+    v->layout=space->layout;v->generation=space->generation;v->stale=0;v->nmoved=0;
 }
 /* Returns how many pages from va on are now unmapped: 1, or up to the next 2 MiB
    boundary when no leaf table covers va (Go reserves and frees arenas of PROT_NONE
@@ -414,7 +429,7 @@ static void hvf_arena_synced(GuestAddressSpace *space) {
     space->arena_dirty_lo=space->arena_dirty_hi=0;space->arena_dirty_since=space->arena_rev;
 }
 static void hvf_map_arena_page(GuestAddressSpace *space,unsigned i) {
-    unsigned flags=space->map_flags[i]&7;uint64_t ipa=flags?hvf_ipa_at(space->map_backing,(size_t)i*4096):0;
+    unsigned flags=space->map_flags[i]&7;uint64_t ipa=flags?hvf_page_ipa(space->map_backing,(size_t)i*4096):0;
     if(ipa)hvf_map_page(MAP_BASE+(uint64_t)i*4096,ipa,hvf_effective_flags(space,space->map_backing,flags,(size_t)i*4096),0);
     else hvf_unmap_page(MAP_BASE+(uint64_t)i*4096);                       /* PROT_NONE stays unmapped */
 }
@@ -549,7 +564,8 @@ static void hvf_map_arena_pass(GuestAddressSpace *space,uint64_t *mapped) {
     unsigned pages=space->map_capacity/4096;if(space->map_top<pages)pages=space->map_top;
     int shared=backing->frozen || (backing->refs>1 && backing->refs>address_space_backing_refs(space,backing));
     uint64_t bits[8];for(unsigned f=0;f<8;f++)bits[f]=hvf_descriptor_bits(f,0);
-    size_t chunk=SIZE_MAX;uint64_t ipa=0,leaf_key=UINT64_MAX,*leaf=NULL;
+    size_t chunk=SIZE_MAX;uint64_t ipa=0,bipa=0,leaf_key=UINT64_MAX,*leaf=NULL;
+    MemoryBacking *over=backing->base?BACKING_BASE(backing):NULL;   /* an overlay's base */
     for(unsigned i=0;i<pages;) {
         if(!(i&7) && i+8<=pages) {                                        /* V8 and Go reserve gigabytes they never map */
             unsigned span=!(i&63) && i+64<=pages?64:8;uint64_t any=0;
@@ -559,14 +575,15 @@ static void hvf_map_arena_pass(GuestAddressSpace *space,uint64_t *mapped) {
         unsigned flags=space->map_flags[i++]&7;if(!flags)continue;
         size_t offset=(size_t)(i-1)*4096,at=backing->mapped_size<=HVF_CHUNK?0:offset/HVF_CHUNK;
         uint64_t va=MAP_BASE+offset;
-        if(at!=chunk) { chunk=at;ipa=hvf_ipa_at(backing,at*HVF_CHUNK); }
-        if(!ipa) { hvf_unmap_page(va);leaf_key=UINT64_MAX;continue; }
+        if(at!=chunk) { chunk=at;ipa=hvf_ipa_at(backing,at*HVF_CHUNK);bipa=over?hvf_ipa_at(over,at*HVF_CHUNK):0; }
+        uint64_t use=over && backing_inherits(backing,offset/backing->page_size)?bipa:ipa;   /* an overlay's page it has not copied: its base's */
+        if(!use) { hvf_unmap_page(va);leaf_key=UINT64_MAX;continue; }
         if(flags&2) {                                                     /* as hvf_effective_flags */
             const BackingPage *page=backing->pages[offset/backing->page_size];
             if(shared || !page || page->refs>1)flags&=~2u;
         }
         if(va>>21!=leaf_key) { if(!(leaf=hvf_leaf(hvf_view,va,1)))return;leaf_key=va>>21; }
-        uint64_t descriptor=(ipa+(offset-at*HVF_CHUNK))|bits[flags],*slot=&leaf[(va>>12)&511];   /* as hvf_map_page */
+        uint64_t descriptor=(use+(offset-at*HVF_CHUNK))|bits[flags],*slot=&leaf[(va>>12)&511];   /* as hvf_map_page */
         if(((*slot&1) && *slot!=descriptor) || (flags&1))hvf_stale_tlb=1;
         if(flags&1)hvf_stale_code=1;
         *slot=descriptor;(*mapped)++;
@@ -600,7 +617,7 @@ static int hvf_sync_partial(GuestAddressSpace *space,HvfView *v) {
         for(unsigned i=0;i<v->nseg && !kept;i++)kept=hvf_same_segment(s,&v->seg[i]);
         for(unsigned r=0;kept && r<removed;r++)if(s->base<removed_high[r] && removed_low[r]<s->base+s->size)kept=0;
         /* A backing freed and another allocated at its address keeps the pointer, not the block. */
-        if(kept && s->backing && s->flags && s->size && hvf_mapped_ipa(s->base)!=hvf_ipa_at(s->backing,s->offset))kept=0;
+        if(kept && s->backing && s->flags && s->size && hvf_mapped_ipa(s->base)!=hvf_page_ipa(s->backing,s->offset))kept=0;
         if(!kept || (all && !(s->flags&SEG_SHARED)))hvf_map_range(space,s->base,s->size,s->flags,s->backing,s->offset);
     }
     if(v->brk_backing!=space->brk_backing || v->brk_base!=space->brk_base || v->brk_pages!=space->brk_pages) {
@@ -610,6 +627,36 @@ static int hvf_sync_partial(GuestAddressSpace *space,HvfView *v) {
     if(arena_dirty)hvf_remap_arena(space);                       /* pages mapped, unmapped or reprotected since */
     if(all || v->map_backing!=space->map_backing)hvf_map_arena_all(space);
     return !hvf_exhausted;
+}
+/* Map backing's [offset, offset+size) again wherever space maps it, into v. */
+static void hvf_remap_backing(const GuestAddressSpace *space,HvfView *v,MemoryBacking *backing,size_t offset,size_t size) {
+    for(unsigned r=0;r<space->nseg+2;r++) {
+        uint64_t base,length;size_t from;unsigned flags;int arena=0;
+        if(r==0) { if(space->map_backing!=backing || !space->map_flags)continue;base=MAP_BASE;length=space->map_capacity;from=0;flags=0;arena=1; }
+        else if(r==1) { if(space->brk_backing!=backing)continue;base=space->brk_base;length=space->brk_pages;from=0;flags=6; }
+        else { const Segment *g=&space->seg[r-2];if(g->backing!=backing)continue;base=g->base;length=g->size;from=g->offset;flags=g->flags; }
+        size_t low=offset>from?offset:from,high=offset+size<from+length?offset+size:from+(size_t)length;
+        for(size_t at=low&~(size_t)4095;at<high;at+=4096) {
+            uint64_t va=base+(at-from);
+            unsigned f=arena?space->map_flags[(va-MAP_BASE)/4096]:flags;
+            if(arena && (f&MAP_RESERVED))continue;
+            if(arena)f&=7;
+            if(!(f&7))continue;
+            uint64_t ipa=hvf_page_ipa(backing,at);if(!ipa)continue;
+            hvf_map_page_in(v,va,ipa,hvf_effective_flags(space,backing,f,at),0);
+        }
+    }
+}
+/* backing_moved_hook: an overlay's pages a host write copied (a read() into memory the
+   fork's child had not written yet) are still its base's in the running process's
+   tables; mapped again before its guest code runs (hvf_sync_tables). A write fault maps
+   what it copies itself (hvf_faulting). */
+static _Thread_local int hvf_faulting;
+static void hvf_backing_moved(MemoryBacking *backing,size_t offset,size_t size) {
+    if(hvf_faulting)return;
+    HvfView *v=hvf_own_view;if(!v->root)return;
+    if(v->nmoved<sizeof(v->moved)/sizeof(*v->moved)) { v->moved[v->nmoved].backing=backing;v->moved[v->nmoved].offset=offset;v->moved[v->nmoved].size=size;v->nmoved++; }
+    else v->stale=HVF_STALE_COW;                         /* many: every private page again */
 }
 /* Bring the current process's tables up to date; returns whether TLBs need maintenance:
    1 for this view's ASID, 2 for every one (the tables were rebuilt). */
@@ -623,6 +670,13 @@ static int hvf_sync_tables(GuestAddressSpace *space,HvfView *v) {
             hvf_exhausted=0;hvf_stale_tlb=0;hvf_remap_arena(space);
             if(hvf_exhausted)goto rebuild;
             hvf_arena_synced(space);stale=hvf_stale_tlb;
+        }
+        if(v->nmoved) {                                  /* overlay pages a host write copied: off their base */
+            hvf_exhausted=0;hvf_stale_tlb=0;
+            for(unsigned i=0;i<v->nmoved;i++)hvf_remap_backing(space,v,v->moved[i].backing,v->moved[i].offset,v->moved[i].size);
+            v->nmoved=0;
+            if(hvf_exhausted)goto rebuild;
+            stale|=hvf_stale_tlb;
         }
         v->generation=space->generation;return stale;
     }
@@ -689,7 +743,7 @@ static void hvf_remap_host_page(const GuestAddressSpace *space,uint64_t far,unsi
         if(offset<start)continue;
         uint64_t page=low+(offset-start);if(page>=high)break;
         unsigned f=space->map_flags && low==MAP_BASE?space->map_flags[(page-MAP_BASE)/4096]&7:flags;
-        if(f && (ipa=hvf_ipa_at(backing,offset))) { hvf_map_page(page,ipa,hvf_effective_flags(space,backing,f,offset),0);if(!first)first=page;last=page; }
+        if(f && (ipa=hvf_page_ipa(backing,offset))) { hvf_map_page(page,ipa,hvf_effective_flags(space,backing,f,offset),0);if(!first)first=page;last=page; }
     }
     if(hvf_exhausted) { hvf_view->stale=HVF_STALE_NEW;return; } /* the next sync rebuilds (and evicts) */
     if(hvf_stale_tlb && (hvf_stale_code || !first))hvf_flush();
@@ -934,6 +988,18 @@ static int hvf_held_yield(uint64_t far,uint64_t pc) {
     if(!b || !__atomic_load_n(&b->held,__ATOMIC_ACQUIRE) || !__atomic_load_n(&b->frozen,__ATOMIC_ACQUIRE))return 0;
     return hvf_held_waited(pc,clock_gettime_nsec_np(CLOCK_UPTIME_RAW))<HVF_HELD_WAIT_NS;
 }
+/* A write fault on memory a fork held that has thawed: give this view's write permission
+   back in one pass and resume the write through an ASID flush (1; the vCPU is then in
+   an EL1 routine). 0 when nothing was restored here. Under the mm lock, framed. */
+static int hvf_held_restore(MemoryBacking *b,uint64_t elr,uint64_t spsr) {
+    if(__atomic_load_n(&b->frozen,__ATOMIC_ACQUIRE) || !__atomic_exchange_n(&b->held,0,__ATOMIC_ACQ_REL))return 0;
+    __atomic_sub_fetch(&hvf_held_live,1,__ATOMIC_ACQ_REL);
+    if(hvf_view!=hvf_own_view || !hvf_hold(hvf_view,address_space,b,0))return 0;
+    hvf_resume_el0(elr,spsr);
+    hvf_frame[HF_FLUSH]=(uint64_t)hvf_view->asid<<48;
+    hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_PC,HVF_SYSTEM_VA+HVF_FLUSH_RESTORE_OFFSET),"set pc");
+    return 1;
+}
 /* Stop a worker's guest code soon (preemption, a signal for its task, the run ending). */
 static void hvf_interrupt(Worker *w) {
     HvfCpu *c=w->backend;
@@ -1078,7 +1144,7 @@ static void hvf_init(void) {
     if(config)os_release(config);
     uint32_t vcpus=0;
     if(hv_vm_get_max_vcpu_count(&vcpus)==HV_SUCCESS && vcpus && worker_count>vcpus)worker_count=vcpus;
-    backing_release_hook=hvf_backing_gone;backing_hold_hook=hvf_backing_hold;worker_interrupt=hvf_interrupt;workers_supported=1;
+    backing_release_hook=hvf_backing_gone;backing_hold_hook=hvf_backing_hold;backing_moved_hook=hvf_backing_moved;worker_interrupt=hvf_interrupt;workers_supported=1;
     hvf_futex_init();
     hvf_tables=hvf_host_pages(HVF_TABLE_BYTES);hvf_system=hvf_host_pages(HVF_SYSTEM_BYTES);fd_mirror_base=hvf_host_pages(HVF_FDS_BYTES);
     hvf_check(hv_vm_map(hvf_tables,HVF_IPA_BASE,HVF_TABLE_BYTES,HV_MEMORY_READ|HV_MEMORY_WRITE),"hv_vm_map tables");
@@ -1701,24 +1767,18 @@ static int hvf_unlocked_exit(void) {
                     kept=address_space->layout==layout;
                     if(again && kept) { hvf_resume_el1=hvf_fault_resume(elr,spsr);return 1; }   /* the write again */
                 }
-                if(kept && !__atomic_load_n(&b->frozen,__ATOMIC_ACQUIRE) && __atomic_exchange_n(&b->held,0,__ATOMIC_ACQ_REL)) {
-                    __atomic_sub_fetch(&hvf_held_live,1,__ATOMIC_ACQ_REL);
-                    if(hvf_view==hvf_own_view && hvf_hold(hvf_view,address_space,b,0)) {   /* resume through an ASID flush */
-                        hvf_resume_el0(elr,spsr);
-                        hvf_frame[HF_FLUSH]=(uint64_t)hvf_view->asid<<48;
-                        hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_PC,HVF_SYSTEM_VA+HVF_FLUSH_RESTORE_OFFSET),"set pc");
-                        hvf_resume_el1=1;return 1;
-                    }
-                }
+                if(kept && hvf_held_restore(b,elr,spsr)) { hvf_resume_el1=1;return 1; }
             }
         }
         if(!hvf_spurious_write(far)) {
-            if(!lookup(far,1,2))return 0;
+            hvf_faulting=1;                                              /* what it copies is remapped below */
+            if(!lookup(far,1,2)) { hvf_faulting=0;return 0; }
             address_space_touched(address_space);
             if(address_space->layout==layout && hvf_view==hvf_own_view && hvf_view_matches(address_space)) {
                 unsigned around=hvf_fault_around(address_space,far);PROFILE_ADD(profile_fault_around,around);
                 hvf_remap_host_page(address_space,far,1+around);hvf_view->generation=address_space->generation;
             } else hvf_own_view->stale=HVF_STALE_COW;
+            hvf_faulting=0;
         }
         hvf_resume_el1=hvf_fault_resume(elr,spsr);return 1;
     }
@@ -1936,6 +1996,12 @@ static int hvf_slice_run(void) {
             uint64_t layout=address_space->layout;
             if(hvf_spurious_write(far)) { in_vector=hvf_fault_resume(elr,spsr);fast=1;continue; }
             if(schedule_active && hvf_held_yield(far,elr)) { hvf_get_regs(1,elr,spsr);return -1; }   /* held for a fork: later */
+            if(__atomic_load_n(&hvf_held_live,__ATOMIC_ACQUIRE)) {             /* held, now thawed: all of it writable again */
+                uint64_t low=0,high=0;size_t start=0;unsigned flags=0;
+                MemoryBacking *b=hvf_region(address_space,far,&low,&high,&start,&flags);
+                if(b && __atomic_load_n(&b->held,__ATOMIC_ACQUIRE) && hvf_held_restore(b,elr,spsr)) { in_vector=1;fast=1;continue; }
+            }
+            hvf_faulting=1;                                              /* what it copies is remapped here */
             if(lookup(far,1,2)) {
                 /* The page is private (and charged) now: remap its host page writable.
                    A new backing (a fork snapshot) changes the layout: rebuild then. */
@@ -1944,8 +2010,9 @@ static int hvf_slice_run(void) {
                     unsigned around=hvf_fault_around(address_space,far);PROFILE_ADD(profile_fault_around,around);
                     hvf_remap_host_page(address_space,far,1+around);hvf_view->generation=address_space->generation;
                 } else hvf_own_view->stale=HVF_STALE_COW;
-                in_vector=hvf_fault_resume(elr,spsr);fast=1;continue;
+                hvf_faulting=0;in_vector=hvf_fault_resume(elr,spsr);fast=1;continue;
             }
+            hvf_faulting=0;
         }
         /* A read or instruction fetch that the address space allows (lookup: 4 read,
            1 execute) faulted: the tables are stale, which is the runtime's fault, not

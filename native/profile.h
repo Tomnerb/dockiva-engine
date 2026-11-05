@@ -15,7 +15,7 @@ static uint64_t profile_decode_checks, profile_decode_hits, profile_decode_misse
    whole-arena passes (count, ns, pages mapped); write faults by what they needed
    (an owned page remapped, a page made private and charged, a snapshot). */
 static uint64_t profile_snapshots,profile_snapshot_ns,profile_builds,profile_build_ns,profile_partials,profile_partial_ns,profile_arena_passes,profile_arena_ns,profile_arena_pages;
-static uint64_t profile_fault_owned,profile_fault_charged,profile_fault_snapshot;
+static uint64_t profile_fault_owned,profile_fault_charged,profile_fault_snapshot,profile_overlays,profile_overlay_copies;
 static uint64_t profile_holds,profile_hold_waits,profile_hold_wait_ns,profile_hold_timeouts; /* fork holds: holds, waits (and their time), waits that ran out (the write copies) */
 /* Exit accounting (hypervisor, --profile): per class (syscall number; 512 write
    fault, 513 preemption, 514 other exception) the exits served without the runtime
@@ -59,8 +59,8 @@ static void profile_dump(void) {
     }
     fprintf(stderr,"},\"lookup_cache_hits\":%" PRIu64 ",\"decode_checks\":%" PRIu64 ",\"decode_hits\":%" PRIu64 ",\"decode_misses\":%" PRIu64 ",\"allocated_bytes\":%" PRIu64 ",\"peak_allocated_bytes\":%" PRIu64 ",\"allocation_limit_bytes\":%" PRIu64 ",\"allocation_denials\":%" PRIu64 "}\n",profile_cache_hits,profile_decode_checks,profile_decode_hits,profile_decode_misses,resource_used,resource_peak,resource_limit,resource_denials);
     if(profile_snapshots || profile_builds || profile_partials || profile_holds)
-        fprintf(stderr,"VMFREE_FORK {\"snapshots\":%" PRIu64 ",\"snapshot_us\":%" PRIu64 ",\"builds\":%" PRIu64 ",\"build_us\":%" PRIu64 ",\"partials\":%" PRIu64 ",\"partial_us\":%" PRIu64 ",\"arena_passes\":%" PRIu64 ",\"arena_us\":%" PRIu64 ",\"arena_pages\":%" PRIu64 ",\"fault_owned\":%" PRIu64 ",\"fault_charged\":%" PRIu64 ",\"fault_snapshot\":%" PRIu64 ",\"holds\":%" PRIu64 ",\"hold_waits\":%" PRIu64 ",\"hold_wait_us\":%" PRIu64 ",\"hold_timeouts\":%" PRIu64 "}\n",
-                profile_snapshots,profile_snapshot_ns/1000,profile_builds,profile_build_ns/1000,profile_partials,profile_partial_ns/1000,profile_arena_passes,profile_arena_ns/1000,profile_arena_pages,profile_fault_owned,profile_fault_charged,profile_fault_snapshot,profile_holds,profile_hold_waits,profile_hold_wait_ns/1000,profile_hold_timeouts);
+        fprintf(stderr,"VMFREE_FORK {\"snapshots\":%" PRIu64 ",\"snapshot_us\":%" PRIu64 ",\"builds\":%" PRIu64 ",\"build_us\":%" PRIu64 ",\"partials\":%" PRIu64 ",\"partial_us\":%" PRIu64 ",\"arena_passes\":%" PRIu64 ",\"arena_us\":%" PRIu64 ",\"arena_pages\":%" PRIu64 ",\"fault_owned\":%" PRIu64 ",\"fault_charged\":%" PRIu64 ",\"fault_snapshot\":%" PRIu64 ",\"holds\":%" PRIu64 ",\"hold_waits\":%" PRIu64 ",\"hold_wait_us\":%" PRIu64 ",\"hold_timeouts\":%" PRIu64 ",\"overlays\":%" PRIu64 ",\"overlay_copies\":%" PRIu64 "}\n",
+                profile_snapshots,profile_snapshot_ns/1000,profile_builds,profile_build_ns/1000,profile_partials,profile_partial_ns/1000,profile_arena_passes,profile_arena_ns/1000,profile_arena_pages,profile_fault_owned,profile_fault_charged,profile_fault_snapshot,profile_holds,profile_hold_waits,profile_hold_wait_ns/1000,profile_hold_timeouts,profile_overlays,profile_overlay_copies);
     if(profile_slices) {
         fprintf(stderr,"VMFREE_EXITS {\"guest_ms\":%" PRIu64 ",\"wait_idle_ms\":%" PRIu64 ",\"wait_futex_ms\":%" PRIu64 ",\"wait_sleep_ms\":%" PRIu64 ",\"wait_socket_ms\":%" PRIu64 ",\"sched_ms\":%" PRIu64 ",\"slices\":%" PRIu64 ",\"classes\":{",
                 profile_guest_ns/1000000,profile_wait_ns[0]/1000000,profile_wait_ns[1]/1000000,profile_wait_ns[2]/1000000,profile_wait_ns[3]/1000000,profile_sched_ns/1000000,profile_slices);

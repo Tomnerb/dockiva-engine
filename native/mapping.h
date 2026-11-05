@@ -729,7 +729,7 @@ static uint64_t guest_madvise(void) {
 static uint64_t map_prot(unsigned f) { return ((f&4)?1u:0u)|((f&2)?2u:0u)|((f&1)?4u:0u); }
 static int backing_owned(const MemoryBacking *backing,size_t offset) {
 #ifdef __APPLE__
-    size_t page=offset/backing->page_size;return page<backing->used && backing->pages[page];
+    size_t page=offset/backing->page_size;return (page<backing->used && backing->pages[page]) || backing_inherits(backing,page);
 #else
     (void)backing;(void)offset;return 1;
 #endif
@@ -756,7 +756,11 @@ static int map_copy(uint64_t target,uint64_t source,uint64_t bytes) {
     for(uint64_t at=0;at<bytes;at+=4096) {
         size_t from,to;uint64_t available;MemoryBacking *in=map_bytes(source+at,&from,&available);
         if(!in || !backing_owned(in,from) || !map_bytes(target+at,&to,&available))continue;
-        unsigned char page[4096];memcpy(page,backing_data(in)+from,4096);
+        unsigned char page[4096];const unsigned char *bytes=backing_data(in)+from;
+#ifdef __APPLE__
+        if(backing_inherits(in,from/in->page_size))bytes=BACKING_BASE(in)->bytes+from;   /* an overlay's page it has not copied */
+#endif
+        memcpy(page,bytes,4096);
         if(!map_store(target+at,page,4096))return 0;
     }
     return 1;

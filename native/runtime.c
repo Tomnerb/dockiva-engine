@@ -74,7 +74,7 @@ static unsigned char *lookup(uint64_t addr, uint64_t count, unsigned permission)
                count<=cached->size-(addr-cached->base) && (cached->flags & permission)) {
                 if(profiling) profile_cache_hits++;
                 if((permission&2) && !address_space_write(address_space,cached->backing,cached->offset+(size_t)(addr-cached->base),(size_t)count))return NULL;
-                return segment_data(cached)+(size_t)(addr-cached->base);
+                return address_space_bytes(address_space,&cached->backing,cached->offset+(size_t)(addr-cached->base),(size_t)count,permission);
             }
         }
     }
@@ -85,7 +85,7 @@ static unsigned char *lookup(uint64_t addr, uint64_t count, unsigned permission)
             if(!(s->flags & permission)) return NULL;
             if(lookup_cache_enabled && count && permission<8) address_space->lookup_cache[permission]=s;
             if((permission&2) && !address_space_write(address_space,s->backing,s->offset+(size_t)(addr-s->base),(size_t)count))return NULL;
-            return segment_data(s)+(size_t)(addr-s->base);
+            return address_space_bytes(address_space,&s->backing,s->offset+(size_t)(addr-s->base),(size_t)count,permission);
         }
     }
     return heap_lookup(addr,count,permission);
