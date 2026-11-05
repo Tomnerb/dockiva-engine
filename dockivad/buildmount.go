@@ -11,16 +11,20 @@ package main
 //	--mount=type=tmpfs   an empty directory, discarded after the step
 //	--mount=type=secret  a secret from the client's session (docker build --secret),
 //	                     as a read-only file and/or an environment variable (env=)
+//	--mount=type=ssh     a socket forwarding to the client's SSH agent (docker build
+//	                     --ssh), at /run/buildkit/ssh_agent.N by default; the first
+//	                     one is SSH_AUTH_SOCK
 //	--network            default, none or host; --security=sandbox (insecure is refused)
 //
 // Each mount is a bind mount into the step's container. The mount points the
 // runtime makes in the stage's files are removed after the step, as BuildKit does.
 // ponytail: sharing=private is shared (BuildKit makes a second cache while one is
-// in use); uid and gid are ignored (guest files belong to the container user);
-// type=ssh is refused (no agent forwarding).
+// in use); uid and gid are ignored (guest files belong to the container user).
 
 import (
 	"encoding/csv"
+	"fmt"
+	"net"
 	"os"
 	"path"
 	"path/filepath"
@@ -33,16 +37,16 @@ import (
 )
 
 type runMount struct {
-	kind     string // bind, cache, tmpfs, secret, or script (a RUN here-document starting #!)
+	kind     string // bind, cache, tmpfs, secret, ssh, or script (a RUN here-document starting #!)
 	target   string // absolute guest path; "" for a secret given as env= only
 	readonly bool
 	from     string // bind and cache: a stage or image the source is in (the context by default)
 	source   string // bind and cache: the path in from
 	host     string // bind, and cache with from: the source's host path
-	id       string // cache: the cache's name; secret: the secret's
+	id       string // cache: the cache's name; secret: the secret's; ssh: the agent's (default)
 	sharing  string // cache: shared, private or locked
-	mode     int64  // cache and secret: permissions, -1 when not given
-	required bool   // secret: fail when the client has no such secret
+	mode     int64  // cache, secret and ssh: permissions, -1 when not given
+	required bool   // secret and ssh: fail when the client has no such secret or agent
 	env      string // secret: an environment variable set to the value
 	script   string // script: the file
 }
@@ -78,8 +82,18 @@ func (bd *builder) runOptions(st *buildStage, in instruction, env map[string]str
 	if script != nil {
 		o.mounts = append(o.mounts, *script)
 	}
+	agents := 0
 	for _, spec := range in.mounts {
 		m := parseMount(spec, env, bd.escape, stageWorkdir(st))
+		if m.kind == "ssh" {
+			if m.target == "" {
+				m.target = fmt.Sprintf("/run/buildkit/ssh_agent.%d", agents)
+			}
+			if agents == 0 { // the first agent is the step's SSH_AUTH_SOCK
+				m.env = "SSH_AUTH_SOCK"
+			}
+			agents++
+		}
 		part, ok := bd.resolveMount(st, &m)
 		o.extra += part + "\n"
 		o.cacheable = o.cacheable && ok
@@ -181,11 +195,9 @@ func parseMount(spec string, env map[string]string, escape byte, workdir string)
 		}
 	}
 	switch m.kind {
-	case "bind", "cache", "tmpfs", "secret":
-	case "ssh":
-		panic(apiError{400, "RUN --mount=type=ssh needs SSH agent forwarding, which Dockiva Engine's builder does not support"})
+	case "bind", "cache", "tmpfs", "secret", "ssh":
 	default:
-		panic(apiError{400, "Unsupported RUN --mount type: " + m.kind + " (bind, cache, tmpfs and secret are supported)"})
+		panic(apiError{400, "Unsupported RUN --mount type: " + m.kind + " (bind, cache, tmpfs, secret and ssh are supported)"})
 	}
 	only := func(key string, kinds ...string) {
 		for _, k := range kinds {
@@ -197,16 +209,19 @@ func parseMount(spec string, env map[string]string, escape byte, workdir string)
 	}
 	only("from", "bind", "cache")
 	only("source", "bind", "cache", "secret")
-	only("id", "cache", "secret")
+	only("id", "cache", "secret", "ssh")
 	only("sharing", "cache")
-	only("mode", "cache", "secret")
-	only("uid", "cache", "secret")
-	only("gid", "cache", "secret")
-	only("required", "secret")
+	only("mode", "cache", "secret", "ssh")
+	only("uid", "cache", "secret", "ssh")
+	only("gid", "cache", "secret", "ssh")
+	only("required", "secret", "ssh")
 	only("env", "secret")
 	only("size", "tmpfs")
 	if !given["ro"] {
 		m.readonly = m.kind == "bind" || m.kind == "secret"
+	}
+	if m.kind == "ssh" && m.id == "" {
+		m.id = "default"
 	}
 	if m.kind == "secret" {
 		reject(m.source == "" || m.id == "", "A secret mount takes id= or source=, not both")
@@ -228,7 +243,7 @@ func parseMount(spec string, env map[string]string, escape byte, workdir string)
 		}
 		m.target = mountTarget(path.Clean(m.target))
 	} else {
-		reject(m.kind == "secret", "RUN --mount=type="+m.kind+" needs a target")
+		reject(m.kind == "secret" || m.kind == "ssh", "RUN --mount=type="+m.kind+" needs a target") // ssh: runOptions numbers it
 	}
 	if m.kind == "cache" && m.id == "" {
 		m.id = m.target
@@ -329,6 +344,37 @@ func (bd *builder) mountSources(mounts []runMount) (binds []any, env []string, t
 			key, data := bd.b.useCacheMount(bd.work, m)
 			undo = append(undo, func() { bd.b.releaseCacheMount(key) })
 			bind(data, m.target, m.readonly)
+		case "ssh":
+			forward, e := bd.sshAgent(m.id)
+			if e != nil {
+				reject(!m.required, "RUN --mount=type=ssh,id="+m.id+": "+e.Error())
+				continue // optional: no socket
+			}
+			short, e := os.MkdirTemp("", "dkv-ssh-") // a socket path is limited to 104 bytes; the build's directory can be longer
+			check(e)
+			undo = append(undo, func() { os.RemoveAll(short) })
+			sock := filepath.Join(short, "agent")
+			l, e := net.Listen("unix", sock)
+			check(e)
+			undo = append(undo, func() { l.Close() })
+			go func() {
+				for {
+					c, e := l.Accept()
+					if e != nil {
+						return
+					}
+					go forward(c)
+				}
+			}()
+			mode := os.FileMode(0o600)
+			if m.mode >= 0 {
+				mode = os.FileMode(m.mode)
+			}
+			check(os.Chmod(sock, mode|0o600))
+			bind(sock, m.target, false)
+			if m.env != "" {
+				env = append(env, m.env+"="+m.target)
+			}
 		case "secret":
 			value, why := bd.secretValue(m.id)
 			if why != "" {
@@ -352,6 +398,14 @@ func (bd *builder) mountSources(mounts []runMount) (binds []any, env []string, t
 	}
 	done = true
 	return binds, env, targets, release
+}
+
+// sshAgent is a forwarder to the client's SSH agent id, or why there is none.
+func (bd *builder) sshAgent(id string) (func(net.Conn), error) {
+	if bd.ssh == nil {
+		return nil, fmt.Errorf("SSH agent forwarding needs buildx: docker build --ssh %s (the classic builder, DOCKER_BUILDKIT=0, has none)", id)
+	}
+	return bd.ssh(id)
 }
 
 // secretValue is a secret from the client's session, or why there is none.

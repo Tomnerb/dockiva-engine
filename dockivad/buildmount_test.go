@@ -26,6 +26,8 @@ func TestParseMount(t *testing.T) {
 		{"type=secret,target=/etc/token", runMount{kind: "secret", id: "token", target: "/etc/token", readonly: true, mode: -1}},
 		{"type=secret,id=tok,env=TOKEN", runMount{kind: "secret", id: "tok", env: "TOKEN", readonly: true, mode: -1}},
 		{`"type=bind","target=/a,b"`, runMount{kind: "bind", target: "/a,b", readonly: true, mode: -1}},
+		{"type=ssh", runMount{kind: "ssh", id: "default", mode: -1}}, // runOptions numbers its target
+		{"type=ssh,id=gh,target=/agent.sock,required,mode=0666", runMount{kind: "ssh", id: "gh", target: "/agent.sock", required: true, mode: 0o666}},
 	} {
 		t.Run(c.spec, func(t *testing.T) {
 			if got := parseMount(c.spec, env, '\\', "/app"); !reflect.DeepEqual(got, c.want) {
@@ -33,7 +35,7 @@ func TestParseMount(t *testing.T) {
 			}
 		})
 	}
-	for _, bad := range []string{"", "type=cache", "type=bind,target=/", "type=ssh", "type=nfs,target=/x", "type=bind,target=/x,id=a",
+	for _, bad := range []string{"", "type=cache", "type=bind,target=/", "type=ssh,source=x", "type=ssh,env=A", "type=ssh,from=b", "type=nfs,target=/x", "type=bind,target=/x,id=a",
 		"type=cache,target=/x,sharing=maybe", "type=bind,target=/x,sharing=locked", "type=bind,target=/x,mode=755", "type=cache,target=/x,mode=9",
 		"type=bind,target=/x,required", "type=secret", "type=secret,id=a,source=b", "type=secret,id=a,from=b", "type=tmpfs,target=/x,from=a",
 		"type=bind,target=/x,bogus=1", "type=bind,target=/x,ro=maybe", "type=bind,target"} {
@@ -119,7 +121,7 @@ func TestBuildMountsAndHeredocs(t *testing.T) {
 	}
 	for dockerfile, want := range map[string]string{
 		"FROM dockiva/shell:demo\nRUN --mount=type=secret,id=tok,required busybox true\n": "no such secret: the classic builder",
-		"FROM dockiva/shell:demo\nRUN --mount=type=ssh busybox true\n":                    "type=ssh needs SSH agent forwarding",
+		"FROM dockiva/shell:demo\nRUN --mount=type=ssh,required busybox true\n":           "SSH agent forwarding needs buildx",
 		"FROM dockiva/shell:demo\nRUN --security=insecure busybox true\n":                 "--security=insecure needs a privileged",
 		"FROM dockiva/shell:demo\nRUN --network=bridge2 busybox true\n":                   "--network takes default, none or host",
 		"FROM dockiva/shell:demo\nRUN --mount=type=bind,source=nope,target=/x true\n":     "nope not found in the build context",

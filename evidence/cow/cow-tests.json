@@ -6,7 +6,7 @@
       "exit": 0,
       "stdout": "PASS: two private forks add 0 bytes to 82956 tracked bytes\nPASS: nested forks, parent/child stores and split views remain isolated\nPASS: heap regrowth, MAP_FIXED, unmap/reuse and allocation-failure rollback preserve peers\nPASS: syscall readv writes detach backing and preserve multiple output pointers\nPASS: actual process clone/store/exit/wait path preserves the parent image\n",
       "stderr": "",
-      "binary_sha256": "2cf05feba60dd5bfb639bb7b5c805501dd3b37399af8a53752b700ed67864a3f"
+      "binary_sha256": "58b7b8fb9c1773f5ed67f9984fe36fad498b005a7ee8453308e15acaaa502a4c"
     },
     {
       "test": "interpreter-sanitize-oom-store",
@@ -21,7 +21,7 @@
       "exit": 0,
       "stdout": "PASS: arena=67108864 host_page=16384 first_write_charge=49504 second_write_charge=16432\nPASS: stable pointers, nested snapshots, cross-host-page COW, transactional OOM and final release\n",
       "stderr": "",
-      "binary_sha256": "f8afa97a15e716e0edc6702dfa1877641361d8abf769cae106d575394a157d7f"
+      "binary_sha256": "4c23d72accb291c55b466abbf5be0f2640ccbaf91399fa8bee844aa9d33987b3"
     }
   ],
   "source_hashes": {
@@ -34,7 +34,7 @@
     "native/decode.h": "fdc15750c69a7f12c54e1ef9c27ac93c47fd722093958d1190497964a8ff40bd",
     "native/epoll.h": "1542fffecd806b9cee005c64de2cf9dfcf77c980c7f1fcb3fbae4dc8df295e01",
     "native/fadvise.h": "08db7b94b12205e6994a6a2de7632addf04d8a2977878fc41b639257965a91bc",
-    "native/fs.h": "5b40b122e674c137ea2ee7485d01b40af28574dc5feba423b472e5c27cb7e8f1",
+    "native/fs.h": "d4254686bc548c6fd3864b0583a325807128f8014c79ccc0672668f62a67e2e5",
     "native/heap.h": "fdcc0aaf351daada37e74118216f00eeaca4472a50a29e9ebcbd0eac03a9599a",
     "native/hvf_backend.h": "8005f0804d216be67a8375928afe12b0d66eba612c1f1d710b9bedbcff3b3988",
     "native/hvf_el1.h": "715985c08ad86d49cbb62a60a65b8193f45206f54a3974def00936744d09b144",

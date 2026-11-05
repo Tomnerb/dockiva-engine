@@ -25,6 +25,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"slices"
 	"sort"
 	"strconv"
@@ -531,12 +532,22 @@ func (b *engine) buildkitMethod(w http.ResponseWriter, r *http.Request) {
 	case bkGateway + "Ping":
 		grpcRequest(r)
 		caps := pbuf{}
-		for _, id := range []string{"solve.base", "return", "returnmap", "proto.refarray"} {
+		for _, id := range []string{"solve.base", "return", "returnmap", "proto.refarray", "readfile", "statfile"} {
 			caps = caps.msg(1, pbuf{}.str(1, id).flag(2, true))
+		}
+		for _, id := range llbCaps {
+			caps = caps.msg(2, pbuf{}.str(1, id).flag(2, true))
 		}
 		grpcWrite(w, caps.msg(3, bkWorker()))
 	case bkGateway + "Solve":
 		grpcWrite(w, b.bkGatewaySolve(ctx, r.Header.Get("Buildkit-Controlapi-Buildid"), grpcRequest(r)))
+	case bkGateway + "StatFile": // StatFileRequest{Ref, path}
+		q := grpcRequest(r)
+		grpcWrite(w, llbStat(bkSolveFor(r.Header.Get("Buildkit-Controlapi-Buildid")).llbRef(q.str(1)), q.str(2)))
+	case bkGateway + "ReadFile": // ReadFileRequest{Ref, FilePath, Range{Offset, Length}}
+		q := grpcRequest(r)
+		rng := q.sub(3)
+		grpcWrite(w, llbRead(bkSolveFor(r.Header.Get("Buildkit-Controlapi-Buildid")).llbRef(q.str(1)), q.str(2), int64(rng.num(1)), int64(rng.num(2))))
 	case bkGateway + "Return":
 		bkReturn(r.Header.Get("Buildkit-Controlapi-Buildid"), grpcRequest(r))
 		grpcWrite(w, nil)
@@ -565,11 +576,19 @@ type bkSolve struct {
 	returned   chan struct{} // the gateway's Return arrived
 	returnOnce sync.Once
 	session    string
-	names      []string // image names to export
-	output     string   // an export type other than an image, which is unsupported
+	names      []string   // image names to export
+	outputs    []bkOutput // files exports (--output type=local or tar)
 	mu         sync.Mutex
-	failure    string // Return's error
-	id         string // the image built
+	failure    string  // Return's error
+	id         string  // the image built
+	llb        llbRefs // trees solved from LLB definitions (llb.go)
+}
+
+// bkOutput is an export of the result's files: its type and its index among the
+// solve's exports (the client's session finds the destination by it).
+type bkOutput struct {
+	kind  string
+	index int
 }
 
 var bkSolves = struct {
@@ -601,6 +620,11 @@ func (b *engine) bkControlSolve(ctx context.Context, req pbFields) pbuf {
 			bkSolves.Lock()
 			delete(bkSolves.m, ref)
 			bkSolves.Unlock()
+			st.mu.Lock()
+			if st.llb.work != "" {
+				go os.RemoveAll(st.llb.work)
+			}
+			st.mu.Unlock()
 		})
 	}()
 	reject(len(req[2]) == 0 && req.str(6) == "", "Dockiva Engine builds Dockerfiles through buildx (docker build) only, not LLB definitions or other frontends")
@@ -608,10 +632,11 @@ func (b *engine) bkControlSolve(ctx context.Context, req pbFields) pbuf {
 	if len(exports) == 0 && req.str(3) != "" { // older clients: ExporterDeprecated, ExporterAttrsDeprecated
 		exports = []pbValue{{b: pbuf{}.str(1, req.str(3)).strMap(2, req.strMap(4))}}
 	}
-	for _, x := range exports {
+	for i, x := range exports {
 		e := pbDecode(x.b)
-		if e.str(1) != "moby" {
-			st.output = e.str(1)
+		if kind := e.str(1); kind != "moby" {
+			reject(kind == "local" || kind == "tar", "Dockiva Engine exports builds as images (--load, --push), a directory (--output type=local) or a tar file (--output type=tar), not --output type="+kind)
+			st.outputs = append(st.outputs, bkOutput{kind, i})
 			continue
 		}
 		for _, name := range strings.Split(e.strMap(2)["name"], ",") {
@@ -650,9 +675,11 @@ func (b *engine) bkGatewaySolve(ctx context.Context, ref string, req pbFields) p
 	case <-time.After(30 * time.Second):
 		panic(apiError{400, "The build " + ref + " was not started with Control.Solve"})
 	}
+	if req.str(2) == "" && len(req[1]) > 0 { // a definition: a remote context's files, read before the build
+		return b.llbSolve(ctx, st, req.sub(1))
+	}
 	reject(req.str(2) == "dockerfile.v0", "Dockiva Engine runs Dockerfile builds only, not frontend "+strconv.Quote(req.str(2)))
-	reject(len(req[1]) == 0 && len(req[13]) == 0, "LLB definitions and frontend inputs (--build-context) need BuildKit; Dockiva Engine's builder does not support them")
-	reject(st.output == "", "Dockiva Engine stores build results as images only (--load); --output type="+st.output+" is not supported")
+	reject(len(req[1]) == 0 && len(req[13]) == 0, "LLB definitions and frontend inputs (a --build-context that is a build target or an OCI layout) need BuildKit; Dockiva Engine's builder does not support them")
 	id := b.bkBuild(ctx, st, req.strMap(3))
 	st.mu.Lock()
 	st.id = id

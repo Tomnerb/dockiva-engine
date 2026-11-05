@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -59,8 +60,10 @@ type builder struct {
 	used    map[string]bool
 	global  map[string]string // ARGs declared before the first FROM
 	stages  []*buildStage
-	nocache bool                            // run every step (--no-cache); results are still cached
-	secret  func(id string) ([]byte, error) // the client's secrets (buildx --secret); nil in the classic API
+	nocache bool                                    // run every step (--no-cache); results are still cached
+	secret  func(id string) ([]byte, error)         // the client's secrets (buildx --secret); nil in the classic API
+	ssh     func(id string) (func(net.Conn), error) // the client's SSH agents (buildx --ssh): a forwarder per connection; nil in the classic API
+	named   map[string]namedContext                 // --build-context (buildx)
 }
 
 // Builders predefine these, as BuildKit does; a Dockerfile still declares them with ARG.
@@ -524,17 +527,16 @@ func (bd *builder) from(in instruction) {
 			parent = s
 		}
 	}
+	named, isNamed := bd.named[strings.ToLower(ref)]
 	switch {
-	case parent != nil:
-		cloneTree(parent.root, st.root)
-		st.config, st.cacheID = cloneObj(parent.config), parent.cacheID
-		st.digest, st.baseRoot, st.baseLayout = parent.digest, parent.baseRoot, parent.baseLayout
-		st.baseLayers, st.baseDiffs, st.baseHistory = parent.baseLayers, parent.baseDiffs, parent.baseHistory
-	case strings.EqualFold(ref, "scratch"):
-		check(mkdirGuest(st.root))
+	case isNamed && named.dir != "": // a directory: its files, with no image config
+		cloneTree(named.dir, st.root)
 		st.digest = "sha256:" + strings.Repeat("0", 64)
-		st.cacheID = st.digest
-	default:
+		st.cacheID = "context " + treeHash(named.dir)
+	case isNamed:
+		ref = named.image
+		fallthrough
+	case parent == nil && !strings.EqualFold(ref, "scratch"):
 		im := bd.pull(ref)
 		cloneTree(im.Root, st.root)
 		manifest, config := imageDocs(im.layout)
@@ -545,6 +547,15 @@ func (bd *builder) from(in instruction) {
 			st.baseHistory = h
 		}
 		bd.say(" ---> " + im.Digest[7:19] + "\n")
+	case parent != nil:
+		cloneTree(parent.root, st.root)
+		st.config, st.cacheID = cloneObj(parent.config), parent.cacheID
+		st.digest, st.baseRoot, st.baseLayout = parent.digest, parent.baseRoot, parent.baseLayout
+		st.baseLayers, st.baseDiffs, st.baseHistory = parent.baseLayers, parent.baseDiffs, parent.baseHistory
+	default: // scratch
+		check(mkdirGuest(st.root))
+		st.digest = "sha256:" + strings.Repeat("0", 64)
+		st.cacheID = st.digest
 	}
 	bd.stages = append(bd.stages, st)
 }
@@ -785,7 +796,9 @@ func (bd *builder) copyArgs(st *buildStage, in instruction, env map[string]strin
 	root := bd.context
 	if from := in.flags["from"]; from != "" {
 		from = processWords(from, env, bd.escape, false)[0]
-		if s := bd.findStage(from); s != nil {
+		if named, _, ok := bd.namedRoot(from); ok {
+			root = named
+		} else if s := bd.findStage(from); s != nil {
 			reject(s != st, in.cmd+" --from cannot name the current stage")
 			root = s.root
 		} else {
@@ -901,33 +914,20 @@ func copyFileTo(src, root, guest string, mode os.FileMode, chmod bool) {
 	}
 }
 
-// isArchive is ADD's test for a local archive to unpack: tar, gzip or bzip2.
-// ponytail: xz archives are copied, not unpacked (no xz in the standard library).
+// isArchive is ADD's test for a local archive to unpack: a tar, plain or compressed
+// (gzip, bzip2, xz or zstd), as Docker's; any other file is copied.
 func isArchive(p string) bool {
-	f, e := os.Open(p)
-	if e != nil {
-		return false
+	r, ok := archiveStream(p)
+	if ok {
+		r.Close()
 	}
-	defer f.Close()
-	head := make([]byte, 262)
-	n, _ := io.ReadFull(f, head)
-	head = head[:n]
-	return n >= 2 && head[0] == 0x1f && head[1] == 0x8b || n >= 3 && string(head[:3]) == "BZh" || n >= 262 && string(head[257:262]) == "ustar"
+	return ok
 }
 
 func extractArchive(p, dir string) {
-	f, e := os.Open(p)
-	check(e)
-	defer f.Close()
-	in := bufio.NewReader(f)
-	var r io.Reader = in
-	if head, _ := in.Peek(3); len(head) >= 2 && head[0] == 0x1f && head[1] == 0x8b {
-		gz, e := gzip.NewReader(in)
-		check(e)
-		r = gz
-	} else if string(head) == "BZh" {
-		r = bzip2.NewReader(in)
-	}
+	r, ok := archiveStream(p)
+	reject(ok, "ADD: "+filepath.Base(p)+" is not an archive")
+	defer r.Close()
 	members := 0
 	applyLayer(dir, r, &members)
 }

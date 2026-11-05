@@ -87,8 +87,20 @@ archives, plain or gzip; linux/arm64 images only, others are skipped),
 `container prune`, `image prune` (`-a`), `system prune` (`until`, `label`
 and `label!` filters), `version`/`info`, and `build` and `compose build` (plain, through
 buildx's `docker` driver, or with `DOCKER_BUILDKIT=0`). Builds run the
-Dockerfile on the engine's classic builder: linux/arm64 only, results go to the
-image store, and `--build-context`, `--output`, `--call`/`--check` are refused.
+Dockerfile on the engine's classic builder: linux/arm64 only; results go to the
+image store, and through buildx also to a directory or tar file
+(`--output type=local,dest=DIR`, `--output type=tar,dest=FILE`: the result's
+files, sent through the client's session). The context can be a local directory,
+a Git repository (`https://...git#ref:subdir`, `git@host:repo`, `git://`,
+`github.com/...`: cloned with the Mac's git, without `.git`) or an http(s) URL
+(a tar archive, plain or gzip, bzip2, xz or zstd, or else the Dockerfile).
+`--build-context name=VALUE` (buildx) takes a local directory, `docker-image://REF`,
+or a Git or http(s) source; `FROM name`, `COPY --from=name` and
+`RUN --mount=from=name` find it before stages and images. buildx's read of a
+remote context's `Dockerfile.rego` goes through a minimal LLB evaluator (`llb.go`:
+Git and HTTP sources and copies, with `StatFile`/`ReadFile`). `--call`/`--check`,
+other `--output` types, and a build context that is a build target or an OCI
+layout are refused.
 tmpfs mounts (`docker run --tmpfs DIR[:size=,mode=,uid=,gid=,exec]`, `--mount
 type=tmpfs,target=DIR[,tmpfs-size=,tmpfs-mode=]`) are file systems the runtime keeps
 in memory, charged to the container's memory limit as Linux charges tmpfs, with
@@ -115,7 +127,12 @@ accepted; other frontends are refused, and `# check=` is ignored):
   no secrets, so a `required` one fails), as a read-only file
   (`/run/secrets/ID` by default) and/or an environment variable. Secret values
   never enter the image or the cache key.
-- `RUN --mount=type=ssh` is refused (no SSH agent forwarding).
+- `RUN --mount=type=ssh[,id=,target=,required,mode=]`: a socket forwarding to
+  the client's SSH agent (`docker build --ssh default` or `--ssh ID=SOCKET`;
+  buildx only), at `/run/buildkit/ssh_agent.N` unless `target`; the first one is
+  the step's `SSH_AUTH_SOCK`. An optional agent the client lacks is skipped.
+- `ADD` unpacks local tar archives, plain or gzip, bzip2, xz (through the Mac's
+  bsdtar) or zstd; a compressed file that is not a tar is copied.
 - `RUN --network=default|none|host`; `RUN --security=insecure` is refused.
 - Here-documents: `RUN <<EOF` (the script, run by its `#!` line or the shell),
   `RUN python3 <<EOF` and several documents in one instruction (the shell does

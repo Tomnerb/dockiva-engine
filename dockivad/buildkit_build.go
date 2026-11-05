@@ -1,13 +1,15 @@
 package main
 
 // A buildx build (buildkit.go) on the classic builder: the Dockerfile and context
-// come from the client's session (FileSync.DiffCopy), the builder's output becomes
-// BuildKit progress, and the image is tagged with the names buildx exports.
+// come from the client's session (FileSync.DiffCopy) or a Git repository or URL,
+// the builder's output becomes BuildKit progress, and the image is tagged with the
+// names buildx exports; files exports go back through the session (buildexport.go).
 
 import (
 	"archive/tar"
 	"context"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -24,10 +26,6 @@ var stepLine = regexp.MustCompile(`(?s)^Step (\d+/\d+) : (.*)$`)
 // bkBuild runs the Dockerfile frontend's options (FrontendOpt) and returns the image ID.
 func (b *engine) bkBuild(ctx context.Context, st *bkSolve, opts map[string]string) string {
 	reject(opts["requestid"] == "", "docker build --call, --check and --print need BuildKit; Dockiva Engine's builder does not support them")
-	reject(opts["context"] == "", "Dockiva Engine builds from a local directory only, not a Git, URL or stdin context")
-	for k := range opts {
-		reject(!strings.HasPrefix(k, "context:") && !strings.HasPrefix(k, "input:"), "Named build contexts (--build-context) need BuildKit; Dockiva Engine's builder does not support them")
-	}
 	for _, p := range strings.Split(opts["platform"], ",") {
 		reject(p == "" || p == "linux/arm64" || p == "linux/arm64/v8", "Only linux/arm64 builds are supported, not "+p)
 	}
@@ -42,7 +40,7 @@ func (b *engine) bkBuild(ctx context.Context, st *bkSolve, opts map[string]strin
 	check(e)
 	defer func() { go os.RemoveAll(work) }()
 	bd := &builder{b: b, ctx: ctx, work: work, context: filepath.Join(work, "context"), network: opts["force-network-mode"],
-		args: map[string]string{}, used: map[string]bool{}, global: map[string]string{}, nocache: nocache}
+		args: map[string]string{}, used: map[string]bool{}, global: map[string]string{}, nocache: nocache, named: map[string]namedContext{}}
 	for k, v := range platformArgs {
 		bd.global[k] = v
 	}
@@ -51,6 +49,9 @@ func (b *engine) bkBuild(ctx context.Context, st *bkSolve, opts map[string]strin
 			value = grpcUnary(ctx, bkSessionFor(ctx, st.session).rt, "/moby.buildkit.secrets.v1.Secrets/GetSecret", nil, pbuf{}.str(1, id)).last(1).b
 		})
 		return value, e
+	}
+	bd.ssh = func(id string) (func(net.Conn), error) { // RUN --mount=type=ssh: the session's SSH service
+		return bkSessionFor(ctx, st.session).sshAgent(ctx, id)
 	}
 	labels := obj{}
 	for k, v := range opts {
@@ -93,28 +94,56 @@ func (b *engine) bkBuild(ctx context.Context, st *bkSolve, opts map[string]strin
 	}
 	filename = pathName(filename)
 	dockerfiles := filepath.Join(work, "dockerfile")
+	remote := opts["context"] // docker build URL: a Git repository or an http(s) source
+	if remote != "" {
+		step("[internal] load remote build context "+remote, func(v *bkVertex) {
+			bd.say = v.log
+			bd.context = bd.fetchRemote(remote, filepath.Join(work, "remote"))
+		})
+		if opts["dockerfilekey"] == "" { // the Dockerfile is the remote's (docker build -f with a local file sets the key)
+			dockerfiles = bd.context
+		}
+	}
 	var text string
 	step("[internal] load build definition from "+path.Base(filename), func(v *bkVertex) {
-		n := fetch(key("dockerfile"), dockerfiles, []string{filename, filename + ".dockerignore"}, nil, []string{filename})
+		if dockerfiles != bd.context || remote == "" {
+			v.status("transferring dockerfile:", fetch(key("dockerfile"), dockerfiles, []string{filename, filename + ".dockerignore"}, nil, []string{filename}))
+		}
 		reject(exists(filepath.Join(dockerfiles, filename)), "Cannot locate specified Dockerfile: "+filename)
 		text = string(readBounded(dockerfiles, filename, maxJSON))
-		v.status("transferring dockerfile:", n)
 	})
-	var ignore []byte
-	step("[internal] load .dockerignore", func(v *bkVertex) {
-		if exists(filepath.Join(dockerfiles, filename+".dockerignore")) {
-			ignore = readBounded(dockerfiles, filename+".dockerignore", maxJSON)
-			return
+	fetchLocal := func(local, dest string) { // a session directory, with its .dockerignore applied
+		probe := filepath.Join(work, "ignore-"+token()[:12])
+		fetch(local, probe, []string{".dockerignore"}, nil, []string{".dockerignore"})
+		var patterns []string
+		if exists(filepath.Join(probe, ".dockerignore")) {
+			patterns = dockerignorePatterns(readBounded(probe, ".dockerignore", maxJSON))
 		}
-		dir := filepath.Join(work, "dockerignore")
-		v.status("transferring context:", fetch(key("context"), dir, []string{".dockerignore"}, nil, []string{".dockerignore"}))
-		if exists(filepath.Join(dir, ".dockerignore")) {
-			ignore = readBounded(dir, ".dockerignore", maxJSON)
-		}
-	})
-	step("[internal] load build context", func(v *bkVertex) {
-		v.status("transferring context:", fetch(key("context"), bd.context, nil, dockerignorePatterns(ignore), nil))
-	})
+		fetch(local, dest, nil, patterns, nil)
+	}
+	if hasNamed(opts) {
+		step("[internal] load build contexts", func(v *bkVertex) {
+			bd.say = v.log
+			bd.namedContexts(opts, fetchLocal)
+		})
+	}
+	if remote == "" { // (a remote context is used as it is)
+		var ignore []byte
+		step("[internal] load .dockerignore", func(v *bkVertex) {
+			if exists(filepath.Join(dockerfiles, filename+".dockerignore")) {
+				ignore = readBounded(dockerfiles, filename+".dockerignore", maxJSON)
+				return
+			}
+			dir := filepath.Join(work, "dockerignore")
+			v.status("transferring context:", fetch(key("context"), dir, []string{".dockerignore"}, nil, []string{".dockerignore"}))
+			if exists(filepath.Join(dir, ".dockerignore")) {
+				ignore = readBounded(dir, ".dockerignore", maxJSON)
+			}
+		})
+		step("[internal] load build context", func(v *bkVertex) {
+			v.status("transferring context:", fetch(key("context"), bd.context, nil, dockerignorePatterns(ignore), nil))
+		})
+	}
 
 	// The builder's output: "Step 2/5 : RUN ..." starts a step; the rest is its log.
 	var cur *bkVertex
@@ -156,7 +185,23 @@ func (b *engine) bkBuild(ctx context.Context, st *bkSolve, opts map[string]strin
 			v.status("naming to "+t, 0)
 		}
 	})
+	for _, out := range st.outputs { // --output type=local or tar: the image's files, sent to the client
+		name := map[string]string{"local": "exporting to client directory", "tar": "exporting to client tarball"}[out.kind]
+		step(name, func(v *bkVertex) {
+			v.status("copying files", bkSessionFor(ctx, st.session).exportFiles(ctx, filepath.Join(work, "out", "rootfs"), out.kind, out.index))
+		})
+	}
 	return id
+}
+
+// hasNamed is whether the build has named contexts (--build-context).
+func hasNamed(opts map[string]string) bool {
+	for k := range opts {
+		if strings.HasPrefix(k, "context:") {
+			return true
+		}
+	}
+	return false
 }
 
 // dockerignorePatterns reads a .dockerignore as Docker does (moby/patternmatcher's
