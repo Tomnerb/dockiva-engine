@@ -874,11 +874,17 @@ static uint64_t net_call(uint64_t number) {
     if(number==210) {
         if(cpu->gpr[1]>2)return linux_error(22);
         if(shutdown(fd,(int)cpu->gpr[1])==0)return 0;
-        /* A listening socket: Darwin says ENOTCONN, Linux succeeds (and SHUT_RD stops it
-           accepting; servers shut their listeners down before closing them). */
-        int listening=0;socklen_t size=sizeof(listening);
-        if(errno==ENOTCONN && !getsockopt(fd,SOL_SOCKET,SO_ACCEPTCONN,&listening,&size) && listening)return 0;
-        return net_error();
+        /* Darwin says ENOTCONN where Linux succeeds: a listening socket (SHUT_RD stops it
+           accepting; servers shut their listeners down before closing them), and a Unix
+           socket whose peer is gone (Linux's never fails: Node shuts a child's stdin
+           down after the child may have exited). The checks keep shutdown's errno. */
+        int error=errno;
+        if(error==ENOTCONN) {
+            int listening=0;socklen_t size=sizeof(listening);struct sockaddr_storage name;socklen_t length=sizeof(name);
+            if(!getsockopt(fd,SOL_SOCKET,SO_ACCEPTCONN,&listening,&size) && listening)return 0;
+            if(!getsockname(fd,(struct sockaddr *)&name,&length) && name.ss_family==AF_UNIX)return 0;
+        }
+        errno=error;return net_error();
     }
     if(number==202 || number==242) {
         net_description(slot)->reads++;

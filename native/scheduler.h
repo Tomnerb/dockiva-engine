@@ -164,7 +164,6 @@ held:
 }
 static HvfMmCache *mm_cache_of(void) { return schedule_active && process_pid?&proc_block->mm_cache[mm_id((unsigned)process_pid-1)-1]:NULL; }
 static void mm_unlock(ScheduledTask *t) { (void)t;if(schedule_active && mm_held) { MmLock *m=mm_held;mm_held=NULL;mm_word_unlock(m); } }
-static void schedule_notify(void);
 static _Thread_local int runtime_held; /* this worker holds runtime_mutex */
 /* Memory of images that ended (exit, exec) under the runtime lock: no task refers
    to it any more, and releasing it (its backings, guest-physical blocks and host
@@ -183,9 +182,12 @@ static void image_destroy_dead(void) {
     while(image_dead_count) { GuestAddressSpace *dead=image_dead[--image_dead_count];address_space_destroy(dead);free(dead); }
 }
 /* Around guest execution and host waits; no-ops with a single worker. */
+static unsigned schedule_notify_due(void);
+static void schedule_kick_now(unsigned due);
 static void runtime_unlock(void) {
     if(!worker_threads)return;
-    runtime_held=0;schedule_notify();pthread_mutex_unlock(&runtime_mutex);
+    runtime_held=0;unsigned due=schedule_notify_due();pthread_mutex_unlock(&runtime_mutex);
+    schedule_kick_now(due);                    /* the worker it wakes finds the lock free */
     image_destroy_dead();
 }
 /* The lock is held for microseconds at a time: spin briefly before sleeping in the kernel. */
@@ -251,6 +253,31 @@ static void schedule_wake_pipe(uint64_t mask,const struct GuestPipe *pipe) {
     }
 }
 static void schedule_signal(ScheduledTask *task,unsigned signal);
+/* The thread of a threaded process that takes a process-directed signal, as Linux
+   picks it: the main thread if it does not block it, else one running now, else the
+   first that does not. NULL when every thread blocks it. */
+static Thread *signal_thread(ScheduledTask *task,uint64_t bit) {
+    Thread *running=NULL,*first=NULL;
+    for(unsigned i=0;i<task->threads->top;i++) {
+        Thread *th=&task->threads->thread[i];
+        if(!th->state || (th->signal_mask&bit))continue;
+        if(th->tid==(unsigned)(task-schedule_tasks)+1)return th;
+        if(!running && th->worker)running=th;
+        if(!first)first=th;
+    }
+    return running?running:first;
+}
+/* A child's event: its parent's threads in wait4 or waitid. Waking every blocked
+   thread of a threaded parent ran each once for nothing (Node's on every spawn). */
+static void schedule_wake_child_wait(ScheduledTask *task) {
+    if(!task->threads) { schedule_wake(task);return; }
+    task->wakeups++;
+    for(unsigned i=0;i<task->threads->top;i++) {
+        Thread *th=&task->threads->thread[i];
+        if(th->child_wait) { th->wakeups++;if(th->state==3)th->state=1; }
+    }
+    schedule_events++;
+}
 static void schedule_signal_apply(ScheduledTask *task,unsigned signal) {
     uint64_t bit=UINT64_C(1)<<(signal-1);
     unsigned slot=(unsigned)(task-schedule_tasks);
@@ -267,6 +294,17 @@ static void schedule_signal_apply(ScheduledTask *task,unsigned signal) {
     if(job_control_enabled && task->state==3 && signal!=9 && signal!=18) { task->signal_pending|=bit;return; }
     task->signal_sender[signal-1]=(unsigned)process_pid;
     if(signal!=9 && ((task_signals_blocked(task)&bit) || task_sig(task)->handler[signal-1] || (task->sigwaiting && (task->sigwait_set&bit)))) {
+        /* A handled one for a threaded process: pending for the one thread that takes
+           it, which alone is woken (its futex wait ends with EINTR). Pending for the
+           process, every thread's wait ended and every thread left its guest code to
+           look (Node's ten, on each SIGCHLD). */
+        Thread *one=task->threads && task_sig(task)->handler[signal-1] && !(task->sigwaiting && (task->sigwait_set&bit))?signal_thread(task,bit):NULL;
+        if(one) {
+            one->signal_pending|=bit;one->wakeups++;
+            if(one->state==2) { one->state=1;one->regs.gpr[0]=linux_error(4); }
+            else if(one->state==3)one->state=1;
+            schedule_events++;return;
+        }
         task->signal_pending|=bit;io_epoch++;schedule_wake(task);
         if(task->threads)for(unsigned i=0;i<task->threads->top;i++) {    /* a futex wait that can take it ends (EINTR) */
             Thread *th=&task->threads->thread[i];
@@ -402,7 +440,10 @@ static void schedule_cleanup(void) {
     task_load(&active);schedule_live=0;
 }
 static void schedule_child(uint64_t pid) {
-    ScheduledTask *t=&schedule_tasks[pid-1];memset(t,0,sizeof(*t)); /* a reused slot starts clean */
+    ScheduledTask *t=&schedule_tasks[pid-1];
+    /* A reused slot starts clean: task_save below writes its image (but segments past
+       nseg, never read) and tables whole, about 100 KiB not cleared first. */
+    memset(&t->vfork_child,0,sizeof(*t)-offsetof(ScheduledTask,vfork_child));
     memset(&proc_block->mm_cache[t-schedule_tasks],0,sizeof(HvfMmCache));
     __atomic_store_n(&proc_block->mm[t-schedule_tasks],0,__ATOMIC_RELEASE);t->futex_epoch=__atomic_add_fetch(&schedule_futex_epochs,1,__ATOMIC_RELAXED);
     __atomic_store_n(&proc_block->futex_epoch[t-schedule_tasks],t->futex_epoch,__ATOMIC_RELEASE);
@@ -457,10 +498,15 @@ static pthread_cond_t schedule_idle_cond=PTHREAD_COND_INITIALIZER;
 static unsigned schedule_idle,schedule_polling,schedule_parked;
 static uint64_t schedule_notified_events,schedule_notified_epoch;
 static int schedule_poke[2]={-1,-1},schedule_result;
-static void schedule_kick(void) {
-    if(schedule_idle)(schedule_done?pthread_cond_broadcast:pthread_cond_signal)(&schedule_idle_cond); /* one idle worker per event */
-    if(schedule_polling && schedule_poke[1]>=0) { char c=0;(void)!write(schedule_poke[1],&c,1); }
+/* What waking workers takes, decided under the runtime lock: 1 signal (one idle
+   worker per event), 2 broadcast (the run is over), 4 poke the poller. Signalled
+   after the lock is released, a woken worker does not block on it at once. */
+static unsigned schedule_kick_due(void) { return (schedule_idle?(schedule_done?2u:1u):0u)|(schedule_polling && schedule_poke[1]>=0?4u:0u); }
+static void schedule_kick_now(unsigned due) {
+    if(due&3)((due&2)?pthread_cond_broadcast:pthread_cond_signal)(&schedule_idle_cond);
+    if(due&4) { char c=0;(void)!write(schedule_poke[1],&c,1); }
 }
+static void schedule_kick(void) { schedule_kick_now(schedule_kick_due()); }
 static int schedule_waiting_runnable(void);
 /* In-place waits: a thread whose call blocked (a targeted wait on pipes, eventfds or
    sockets, or a futex) while no thread waits for a worker waits on its own worker,
@@ -496,16 +542,16 @@ static void schedule_inplace_check(int evict) {
         if((woken || leave) && schedule_inplace_end(w,leave?3:2) && leave && evict)evict=0;   /* one worker for the thread that can run */
     }
 }
-static void schedule_notify(void) {
-    if(schedule_events==schedule_notified_events && io_epoch==schedule_notified_epoch)return;
+static unsigned schedule_notify_due(void) {
+    if(schedule_events==schedule_notified_events && io_epoch==schedule_notified_epoch)return 0;
     schedule_notified_events=schedule_events;schedule_notified_epoch=io_epoch;
     /* Only wake an idle worker for a task that can now run: every pipe transfer moves
        io_epoch, and a futile wake costs the lock and a sleep (1.6M of them per 512 MiB
        through a shell pipe). */
     int runnable=-1;
     if(__atomic_load_n(&schedule_inplace_count,__ATOMIC_RELAXED))schedule_inplace_check(!schedule_idle && !schedule_polling && !schedule_done && (runnable=schedule_waiting_runnable()));
-    if(schedule_idle && !schedule_done && !(runnable>=0?runnable:schedule_waiting_runnable()))return;
-    schedule_kick();
+    if(schedule_idle && !schedule_done && !(runnable>=0?runnable:schedule_waiting_runnable()))return 0;
+    return schedule_kick_due();
 }
 #define SCHEDULE_INPLACE_NS 1000000u
 /* How long a thread waiting in place (a futex, a pipe, an eventfd, epoll) spins before
@@ -814,7 +860,7 @@ static int schedule_finish(int current,int result,unsigned terminating) {
     process_children[current-1].live=0;process_children[current-1].status=terminating?terminating:(unsigned)result<<8;schedule_live--;
     proc_publish((uint64_t)current+1);
     ScheduledTask *parent=&schedule_tasks[process_children[current-1].parent-1];
-    schedule_wake(parent);                                                       /* a waiting wait4 */
+    schedule_wake_child_wait(parent);                                            /* a waiting wait4 */
     if(job_control_enabled)schedule_signal(parent,17);
     if((task_sig(parent)->ignored&(UINT64_C(1)<<16)) || (task_sig(parent)->flags[16]&2))process_children[current-1].pid=0;
     return 0;

@@ -71,7 +71,20 @@ _Static_assert((HF_SVC_ESR+1)*8<=512,"frame words outgrew the frame");
 #define HVF_VIEWS (PROCESS_LIMIT+2)                 /* indexed by pid */
 static unsigned char *hvf_tables,*hvf_system;static unsigned hvf_frames_used;
 static unsigned short hvf_table_owner[HVF_TABLES];  /* 0 free, else the pid whose tables use it */
-static unsigned hvf_table_hint;
+static unsigned short hvf_table_link[HVF_TABLES];  /* the next table of the same view, plus one (0: its last) */
+/* Freed tables are reused first, warm in the caches and their host pages in memory.
+   Taken in turn through the pool instead, a new runtime faulted in its 64 MiB a host
+   page per four tables until it wrapped (a Go fork's 40-table copy 18-22 us against 7;
+   Node's 80). But a walk cache may still point into a freed table (the system pages
+   are mapped alike, and global, in every view): reused at once, such a walk read
+   another view's entries (an EL1 routine faulted). So a freed table first waits in
+   hvf_table_waiting until a full TLB invalidation begun after its free has finished
+   (hvf_flush; every fork that holds memory runs one), then joins hvf_table_freed, the
+   latest last. Then tables never used (hvf_table_fresh); with the pool exhausted, the
+   old scan takes any free one. */
+static unsigned short hvf_table_freed[HVF_TABLES],hvf_table_waiting[HVF_TABLES];static uint32_t hvf_table_waiting_since[HVF_TABLES];
+static unsigned hvf_table_nfreed,hvf_table_fresh,hvf_table_wait_head,hvf_table_nwaiting,hvf_table_hint;
+static uint32_t hvf_flushes_begun,hvf_flushes_done;  /* full invalidations begun, and the number of the latest one finished */
 typedef struct { const unsigned char *host;size_t size;uint64_t ipa; } HvfBlock;
 static HvfBlock hvf_blocks[HVF_BLOCKS];
 static unsigned hvf_nblocks,hvf_block_last;
@@ -103,7 +116,7 @@ static _Thread_local int hvf_resume_el1;     /* hvf_unlocked_exit left the vCPU 
 #define HVF_STALE_NEW 2
 typedef struct {
     uint64_t root;unsigned tables;int stale;  /* root 0: no tables */
-    unsigned table_low,table_high;            /* its tables lie in hvf_table_owner[table_low..table_high] */
+    unsigned table_chain;                     /* its first table plus one, the rest through hvf_table_link */
     Segment seg[SEGMENT_LIMIT+1];unsigned nseg;uint64_t map_capacity;
     MemoryBacking *brk_backing,*map_backing;uint64_t brk_base,brk_pages;
     uint64_t layout,arena_rev,generation;
@@ -285,30 +298,42 @@ static void hvf_backing_gone(MemoryBacking *backing) {
    changes whenever table pages are freed, which invalidates every cached one. */
 static uint64_t hvf_table_epoch;
 static _Thread_local struct { uint64_t root,key,epoch;uint64_t *leaf; } hvf_walk;
-/* A table page for view v (zeroed unless the caller fills it), or 0 when the pool is out. */
-static uint64_t hvf_table_of(HvfView *v,int zero) {
-    unsigned owner=(unsigned)(v-hvf_views);
-    pthread_mutex_lock(&hvf_mutex);
-    for(unsigned n=0;n<HVF_TABLES;n++) {
-        unsigned i=(hvf_table_hint+n)%HVF_TABLES;
-        if(hvf_table_owner[i])continue;
-        hvf_table_owner[i]=(unsigned short)owner;hvf_table_hint=i+1;
-        if(!v->tables || i<v->table_low)v->table_low=i;
-        if(!v->tables || i>v->table_high)v->table_high=i;
-        pthread_mutex_unlock(&hvf_mutex);
-        v->tables++;if(zero)memset(hvf_tables+(size_t)i*4096,0,4096);return HVF_IPA_BASE+(uint64_t)i*4096;
+/* Table i, freed when since full invalidations had begun, waits (under hvf_mutex). */
+static void hvf_table_wait(unsigned i,uint32_t since) {
+    if(hvf_table_nwaiting==HVF_TABLES)return;                         /* (only duplicates: the scan finds it) */
+    unsigned at=(hvf_table_wait_head+hvf_table_nwaiting++)%HVF_TABLES;
+    hvf_table_waiting[at]=(unsigned short)i;hvf_table_waiting_since[at]=since;
+}
+/* A table for view v, under hvf_mutex (see hvf_table_freed); HVF_TABLES when none is
+   left. An index listed twice (the scan took it meanwhile) is skipped once owned. */
+static unsigned hvf_table_take_one(HvfView *v) {
+    uint32_t done=__atomic_load_n(&hvf_flushes_done,__ATOMIC_ACQUIRE);
+    while(hvf_table_nwaiting && (int32_t)(done-hvf_table_waiting_since[hvf_table_wait_head])>0) {
+        unsigned w=hvf_table_waiting[hvf_table_wait_head];hvf_table_wait_head=(hvf_table_wait_head+1)%HVF_TABLES;hvf_table_nwaiting--;
+        if(!hvf_table_owner[w] && hvf_table_nfreed<HVF_TABLES)hvf_table_freed[hvf_table_nfreed++]=(unsigned short)w;
     }
-    pthread_mutex_unlock(&hvf_mutex);
-    hvf_exhausted=1;return 0;
+    unsigned i=HVF_TABLES;
+    while(i==HVF_TABLES && hvf_table_nfreed) { i=hvf_table_freed[--hvf_table_nfreed];if(hvf_table_owner[i])i=HVF_TABLES; }
+    if(i==HVF_TABLES && hvf_table_fresh<HVF_TABLES)i=hvf_table_fresh++;
+    for(unsigned n=0;i==HVF_TABLES && n<HVF_TABLES;n++) { unsigned k=(hvf_table_hint+n)%HVF_TABLES;if(!hvf_table_owner[k]) { i=k;hvf_table_hint=k+1; } }
+    if(i==HVF_TABLES)return i;
+    hvf_table_owner[i]=(unsigned short)(v-hvf_views);hvf_table_link[i]=(unsigned short)v->table_chain;v->table_chain=i+1;v->tables++;
+    return i;
+}
+static uint64_t hvf_table_of(HvfView *v,int zero) {
+    pthread_mutex_lock(&hvf_mutex);unsigned i=hvf_table_take_one(v);pthread_mutex_unlock(&hvf_mutex);
+    if(i==HVF_TABLES) { hvf_exhausted=1;return 0; }
+    if(zero)memset(hvf_tables+(size_t)i*4096,0,4096);
+    return HVF_IPA_BASE+(uint64_t)i*4096;
 }
 static uint64_t hvf_table(void) { return hvf_table_of(hvf_view,1); }
 static void hvf_tables_free(HvfView *v) {
-    unsigned owner=(unsigned)(v-hvf_views);
     __atomic_add_fetch(&hvf_table_epoch,1,__ATOMIC_ACQ_REL); /* cached leaf tables may be reused */
     pthread_mutex_lock(&hvf_mutex);
-    if(v->tables)for(unsigned i=v->table_low;i<=v->table_high;i++)if(hvf_table_owner[i]==owner)hvf_table_owner[i]=0;
+    uint32_t since=__atomic_load_n(&hvf_flushes_begun,__ATOMIC_ACQUIRE);
+    for(unsigned i=v->table_chain;i;i=hvf_table_link[i-1]) { hvf_table_owner[i-1]=0;hvf_table_wait(i-1,since); }
     pthread_mutex_unlock(&hvf_mutex);
-    v->tables=0;v->root=0;
+    v->table_chain=0;v->tables=0;v->root=0;
 }
 /* Stage 1 of the current view, 4 KiB granule, four levels. Normal write-back
    memory, inner shareable. flags are ELF-style: 4 read, 2 write, 1 execute. Guest
@@ -502,6 +527,13 @@ static unsigned hvf_asid(HvfView *v) {
     pthread_mutex_unlock(&hvf_mutex);
     return asid;
 }
+/* Whether this vCPU runs v as it stands: its tables, under the ASID v holds now. A
+   view rebuilt on the same root table (freed tables are reused first: a fork's child
+   often gets its predecessor's root) has a fresh ASID to take, or the TLBs still hold
+   the earlier process's translations. */
+static int hvf_view_current(const HvfView *v) {
+    return v==hvf_view && v->root && hvf_cpu->ttbr==v->root && v->asid_generation==__atomic_load_n(&hvf_asid_generation,__ATOMIC_RELAXED);
+}
 static void hvf_activate(HvfView *v) {
     hvf_view=v;hvf_cpu->ttbr=v->root;
     hvf_check(hv_vcpu_set_sys_reg(hvf_vcpu,HV_SYS_REG_TTBR0_EL1,v->root|((uint64_t)hvf_asid(v)<<48)),"set ttbr0");
@@ -661,14 +693,25 @@ static void hvf_backing_moved(MemoryBacking *backing,size_t offset,size_t size) 
     if(v->nmoved<sizeof(v->moved)/sizeof(*v->moved)) { v->moved[v->nmoved].backing=backing;v->moved[v->nmoved].offset=offset;v->moved[v->nmoved].size=size;v->nmoved++; }
     else v->stale=HVF_STALE_COW;                         /* many: every private page again */
 }
-/* A copy for view to of the table at from (level 0 the root) and every table below it. */
-static uint64_t hvf_table_copy(HvfView *to,uint64_t from,int level) {
-    uint64_t copy=hvf_table_of(to,0);if(!copy)return 0;
+/* n tables for view v, taken in one pass under hvf_mutex (their numbers in idx);
+   fewer when the pool runs out. */
+static unsigned hvf_tables_take(HvfView *v,unsigned *idx,unsigned n) {
+    unsigned got=0;
+    pthread_mutex_lock(&hvf_mutex);
+    while(got<n) { unsigned i=hvf_table_take_one(v);if(i==HVF_TABLES)break;idx[got++]=i; }
+    pthread_mutex_unlock(&hvf_mutex);
+    return got;
+}
+/* A copy for view to of the table at from (level 0 the root) and every table below it,
+   into the tables idx names (next: the first unused; n of them). */
+static uint64_t hvf_table_copy(HvfView *to,uint64_t from,int level,const unsigned *idx,unsigned *next,unsigned n) {
+    if(*next==n)return 0;
+    uint64_t copy=HVF_IPA_BASE+(uint64_t)idx[(*next)++]*4096;(void)to;
     const uint64_t *src=(const uint64_t *)(void *)(hvf_tables+(from-HVF_IPA_BASE));uint64_t *dst=(uint64_t *)(void *)(hvf_tables+(copy-HVF_IPA_BASE));
     memcpy(dst,src,4096);
     if(level<3)
         for(unsigned i=0;i<512;i++)if(src[i]&1) {                 /* a table descriptor (no blocks here) */
-            uint64_t below=hvf_table_copy(to,src[i]&UINT64_C(0x0000fffffffff000),level+1);
+            uint64_t below=hvf_table_copy(to,src[i]&UINT64_C(0x0000fffffffff000),level+1,idx,next,n);
             if(!below)return 0;
             dst[i]=below|(src[i]&~UINT64_C(0x0000fffffffff000));
         }
@@ -686,8 +729,18 @@ static int hvf_view_fork(uint64_t pid) {
     const GuestAddressSpace *parent=address_space,*child=&schedule_tasks[pid-1].image.memory;
     if(to==from || !from->root || from->nmoved || from->arena_rev!=parent->arena_rev || !hvf_view_matches(parent) || child->nseg!=parent->nseg)return 0;
     hvf_tables_free(to);hvf_exhausted=0;
-    uint64_t root=hvf_table_copy(to,from->root,0);
+    /* As many tables as the parent's (all in its tree: a view frees them only all at
+       once), taken together: one at a time, each took the pool's lock. */
+    unsigned idx[512],n=from->tables,next=0;
+    if(n>sizeof(idx)/sizeof(*idx) || hvf_tables_take(to,idx,n)!=n) { hvf_tables_free(to);return 0; }
+    uint64_t root=hvf_table_copy(to,from->root,0,idx,&next,n);
     if(!root) { hvf_tables_free(to);return 0; }
+    if(next<n) {           /* fewer in its tree after all: the rest back (the chain's first, as taken last) */
+        pthread_mutex_lock(&hvf_mutex);
+        for(unsigned i=n;i-->next;) { hvf_table_owner[idx[i]]=0;if(hvf_table_nfreed<HVF_TABLES)hvf_table_freed[hvf_table_nfreed++]=(unsigned short)idx[i]; }  /* never walked */
+        to->table_chain=next?idx[next-1]+1:0;to->tables-=n-next;
+        pthread_mutex_unlock(&hvf_mutex);
+    }
     to->root=root;
     HvfView *was=hvf_view;hvf_view=to;                            /* the mapping calls below work on hvf_view */
     hvf_map_page(HVF_FDS_VA,HVF_IPA_BASE+HVF_TABLE_BYTES+HVF_SYSTEM_BYTES+(uint64_t)(to-hvf_views)*4096,0,2); /* its own process page */
@@ -713,7 +766,7 @@ static int hvf_view_fork(uint64_t pid) {
    1 for this view's ASID, 2 for every one (the tables were rebuilt). */
 static int hvf_sync_tables(GuestAddressSpace *space,HvfView *v) {
     if(hvf_view_matches(space)) {
-        if(v!=hvf_view || hvf_cpu->ttbr!=v->root)hvf_activate(v);             /* a process switch */
+        if(!hvf_view_current(v))hvf_activate(v);                                    /* a process switch */
         int stale=0;
         if(v->arena_rev!=space->arena_rev) {
             /* A range that started after this view (or a large table set) rebuilds. */
@@ -755,7 +808,7 @@ rebuild:
    flushed every process's translations on every vCPU. */
 static void hvf_sync_memory(GuestAddressSpace *space) {
     HvfView *v=hvf_own_view;
-    if(v==hvf_view && v->root && hvf_cpu->ttbr==v->root && v->generation==space->generation)return;
+    if(hvf_view_current(v) && v->generation==space->generation)return;
     hvf_stale_code=0;
     int stale=hvf_sync_tables(space,v);
     if(!stale && !hvf_asid_flush)return;
@@ -844,7 +897,7 @@ static int hvf_fault_resume(uint64_t elr,uint64_t spsr) {
 /* A write fault on a page this view already maps writable: a TLB still held its
    read-only entry. Invalidate it on the way back (the caller resumes the guest). */
 static int hvf_spurious_write(uint64_t far) {
-    if(hvf_view!=hvf_own_view || !hvf_view->root || hvf_cpu->ttbr!=hvf_view->root)return 0;
+    if(hvf_view!=hvf_own_view || !hvf_view_current(hvf_view))return 0;
     const uint64_t *leaf=hvf_leaf(hvf_view,far,0);if(!leaf)return 0;
     uint64_t descriptor=leaf[(far>>12)&511];
     if(!(descriptor&1) || (descriptor&(UINT64_C(1)<<7)))return 0;
@@ -976,12 +1029,14 @@ static void hvf_flush(void) {
     hvf_check(hv_vcpu_get_reg(hvf_vcpu,HV_REG_PC,&pc),"get pc");hvf_check(hv_vcpu_get_reg(hvf_vcpu,HV_REG_CPSR,&cpsr),"get cpsr");
     hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_PC,HVF_SYSTEM_VA+HVF_FLUSH_OFFSET),"set pc");
     hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_CPSR,0x3c5),"set cpsr");           /* EL1h, interrupts masked */
+    uint32_t number=__atomic_add_fetch(&hvf_flushes_begun,1,__ATOMIC_ACQ_REL);     /* before its TLBI (hvf_table_freed) */
     /* A preemption requested as the previous guest run ended can still be pending;
        it cancels this run before the routine starts, so simply run again. */
     do hvf_check(hv_vcpu_run(hvf_vcpu),"hv_vcpu_run");
     while(hvf_exit->reason==HV_EXIT_REASON_CANCELED || hvf_exit->reason==HV_EXIT_REASON_VTIMER_ACTIVATED);
     if(hvf_exit->reason!=HV_EXIT_REASON_EXCEPTION || (hvf_exit->exception.syndrome>>26)!=0x16 || (hvf_exit->exception.syndrome&0xffff)!=1)
         fail("Hypervisor TLB/cache maintenance did not complete");
+    for(uint32_t done=__atomic_load_n(&hvf_flushes_done,__ATOMIC_ACQUIRE);(int32_t)(number-done)>0 && !__atomic_compare_exchange_n(&hvf_flushes_done,&done,number,0,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE););
     hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_PC,pc),"set pc");hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_CPSR,cpsr),"set cpsr");
 }
 /* Back to the guest at pc with flags spsr, its registers otherwise unchanged. */
@@ -1817,7 +1872,9 @@ static int hvf_unlocked_exit(void) {
                     /* Another thread's write may have replaced the backing meanwhile (a
                        snapshot under the lock) and freed it: b is used only if the layout held. */
                     kept=address_space->layout==layout;
-                    if(again && kept) { hvf_resume_el1=hvf_fault_resume(elr,spsr);return 1; }   /* the write again */
+                    /* Still frozen (another fork's thaw woke it): the write again. Thawed: its
+                       permission back now (below), not after a second fault. */
+                    if(again && kept && __atomic_load_n(&b->frozen,__ATOMIC_ACQUIRE)) { hvf_resume_el1=hvf_fault_resume(elr,spsr);return 1; }
                 }
                 if(kept && hvf_held_restore(b,elr,spsr)) { hvf_resume_el1=1;return 1; }
             }

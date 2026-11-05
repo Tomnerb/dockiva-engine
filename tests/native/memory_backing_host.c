@@ -36,9 +36,8 @@ int main(void) {
     assert(resource_used==used && backing->refs==3 && address_space->generation==generation);
     assert(copy.generation==123 && !copy.nseg && !copy.map_backing);
     assert(!backing_copy(backing,backing->size,1));assert(resource_used==used);
-    uint64_t flags=MAP_CAP/4096+sizeof(ResourceHeader); /* the arena's page flags are copied */
-    resource_limit=used+flags;assert(address_space_fork_private(&copy,address_space));resource_limit=budget;
-    assert(resource_used==used+flags && backing->refs==6);
+    resource_limit=used;assert(address_space_fork_private(&copy,address_space));resource_limit=budget; /* nothing copied */
+    assert(resource_used==used && backing->refs==6 && copy.map_flags==address_space->map_flags);
     assert(copy.seg[0].backing==backing && copy.seg[0].offset==4096);
     assert(copy.brk_backing==address_space->brk_backing && copy.map_backing==address_space->map_backing);
     GuestAddressSpace *parent=address_space;address_space=&copy;
@@ -47,7 +46,7 @@ int main(void) {
     address_space=parent;
     assert(read_mem(0x10000,8)==11 && read_mem(address_space->brk_base,8)==44 && read_mem(MAP_BASE,8)==55);
     address_space_destroy(&copy);assert(resource_used==used);
-    puts("PASS: COW fork retains offsets/heap/mmap, copying only page flags; reference overflow rolls back");
+    puts("PASS: COW fork retains offsets/heap/mmap and shares page flags, copying nothing; reference overflow rolls back");
 
     GuestAddressSpace retained={.map_capacity=MAP_CAP};
     retained.seg[0]=address_space->seg[0];retained.nseg=1;

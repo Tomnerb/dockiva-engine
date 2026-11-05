@@ -62,6 +62,7 @@ static int file_copy_demote(uint64_t address,uint64_t bytes,int partial) {
         Segment s=address_space->seg[i];
         if(!(s.flags&SEG_FILE_COPY) || s.base>=address+bytes || s.base+s.size<=address)continue;
         if(partial && s.base>=address && s.base+s.size<=address+bytes)continue;
+        if(!map_flags_own(address_space))return 0;
         if(!backing_data(address_space->map_backing)) { address_space->map_backing=backing_reserve(address_space->map_capacity);if(!backing_data(address_space->map_backing))return 0; }
         size_t offset=(size_t)(s.base-MAP_BASE);unsigned first=(unsigned)(offset/4096),pages=(unsigned)(s.size/4096);
         if(!address_space_make_private(address_space,address_space->map_backing,offset,(size_t)s.size))return 0;
@@ -95,7 +96,7 @@ static uint64_t shared_map(uint64_t fixed,uint64_t length,uint64_t prot,MemoryBa
         address_space_changed(address_space);return fixed;
     }
     if(length>address_space->map_capacity)return linux_error(12); /* more than the arena holds: ENOMEM, as Linux */
-    if(!address_space_map_flags(address_space))return linux_error(12);
+    if(!map_flags_own(address_space))return linux_error(12);
     unsigned pages=(unsigned)(page_up(length)/4096),start=0;
     if(fixed) {
         if(fixed%4096 || fixed<MAP_BASE || fixed-MAP_BASE>=address_space->map_capacity || page_up(length)>address_space->map_capacity-(fixed-MAP_BASE))return linux_error(22);
@@ -124,6 +125,7 @@ static uint64_t shared_unmap(uint64_t address,uint64_t bytes) {
         uint64_t low=s->base>address?s->base:address,high=top<end?top:end;
         if(low>s->base && high<top)return linux_error(22);
         if(map_in_arena(low,high-low)) {
+            if(!map_flags_own(address_space))return linux_error(12);
             unsigned first=(unsigned)((low-MAP_BASE)/4096),pages=(unsigned)((high-low)/4096);
             memset(address_space->map_flags+first,0,pages);
             map_freed(address_space,first);
@@ -608,6 +610,7 @@ static uint64_t guest_dynamic_mmap_map(void) {
         if(!e && prot && data && !map_store(addr,data,bytes))e=linux_error(12);
         free(data);return e?e:addr;
     }
+    if(!map_flags_own(address_space)) { free(data);return linux_error(12); }
     if(!backing_data(address_space->map_backing)) { address_space->map_backing=backing_reserve(address_space->map_capacity);if(!backing_data(address_space->map_backing)) { free(data);return linux_error(12); } }
     if(flags&16) { uint64_t e=shared_unmap(addr,bytes);if(e) { free(data);return e; } }   /* MAP_FIXED over shared memory */
     if(data) { /* file contents are written (and charged) now */
@@ -653,6 +656,7 @@ static uint64_t guest_mprotect(void) {
         s->flags=SEG_SHARED|((prot&1)?4:0)|((prot&2)?2:0)|((prot&4)?1:0);address_space_changed(address_space);return 0;
     }
     for(unsigned i=first;i<first+pages;i++)if(!address_space->map_flags[i])return linux_error(12);
+    if(!map_flags_own(address_space))return linux_error(12);
     unsigned char permission=(unsigned char)(8|((prot&1)?4:0)|((prot&2)?2:0)|((prot&4)?1:0));
     unsigned char *flags=address_space->map_flags;                         /* (a local: stores through it may alias the struct) */
     for(unsigned i=first;i<first+pages;i++)flags[i]=(unsigned char)((flags[i]&16)|permission);
@@ -831,7 +835,7 @@ static uint64_t guest_mremap(void) {
     if(!(flags&6) && extra && map_range_free(grow,extra)) {                        /* in place */
         if(arena && map_in_arena(grow,extra)) {
             unsigned first=(unsigned)((grow-MAP_BASE)/4096),pages=(unsigned)(extra/4096);
-            if(!address_space_discard_map(address_space,(size_t)first*4096,(size_t)extra))return linux_error(12);
+            if(!map_flags_own(address_space) || !address_space_discard_map(address_space,(size_t)first*4096,(size_t)extra))return linux_error(12);
             memset(address_space->map_flags+first,(int)f,pages);
             address_space_arena_changed(address_space,first,first+pages);return old;
         }
@@ -839,6 +843,7 @@ static uint64_t guest_mremap(void) {
             int inside=map_in_arena(old,old_size);
             if(inside!=map_in_arena(grow,extra))goto move;
             if(inside) {
+                if(!map_flags_own(address_space))return linux_error(12);
                 memset(address_space->map_flags+(grow-MAP_BASE)/4096,MAP_RESERVED,(size_t)(extra/4096));
                 unsigned end=(unsigned)((grow+extra-MAP_BASE)/4096);if(end>address_space->map_top)address_space->map_top=end;
             }
@@ -869,7 +874,7 @@ move:
     }
     if((int64_t)result<0)return result;
     if(!map_copy(result,old,old_size)) { (void)guest_munmap(result,new_size);return linux_error(12); }
-    if(map_in_arena(result,new_size) && (f&16))                                    /* still file-backed */
+    if(map_in_arena(result,new_size) && (f&16) && map_flags_own(address_space))     /* still file-backed */
         for(uint64_t p=(result-MAP_BASE)/4096;p<(result-MAP_BASE+new_size)/4096;p++)address_space->map_flags[p]|=16;
     if(!(flags&4))return guest_munmap(old,old_size)?linux_error(12):result;
     if(arena) {                                           /* MREMAP_DONTUNMAP: the old range stays, its pages fresh */

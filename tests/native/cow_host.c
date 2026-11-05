@@ -36,12 +36,11 @@ int main(int argc,char **argv) {
     }
     fixture();uint64_t used=resource_used,budget=resource_limit;
     assert(!address_space_fork_private(&parent,&parent) && errno==EINVAL);
-    uint64_t flags=MAP_CAP/4096+sizeof(ResourceHeader); /* each fork copies only the arena's page flags */
-    resource_limit=used+2*flags;
+    resource_limit=used;                     /* a fork copies nothing: the page flags are shared until written */
     assert(address_space_fork_private(&child,&parent));
     assert(address_space_fork_private(&grandchild,&child));
-    assert(resource_used==used+2*flags);used=resource_used;
-    printf("PASS: two private forks add 0 backing bytes to %" PRIu64 " tracked bytes\n",used);
+    assert(resource_used==used && child.map_flags==parent.map_flags && grandchild.map_flags==parent.map_flags);
+    printf("PASS: two private forks add 0 bytes to %" PRIu64 " tracked bytes\n",used);
     activate(&child);uint64_t revision=child.generation;
     assert(read_mem(0x20000,8)==11 && !lookup(0x21000,8,2));
     assert(child.generation==revision && resource_used==used);
@@ -65,7 +64,8 @@ int main(int argc,char **argv) {
     assert(guest_brk(child.brk_base+8192)==child.brk_base+8192);
     assert(read_mem(child.brk_base+4096,8)==0);
     activate(&parent);assert(read_mem(parent.brk_base+4096,8)==44);
-    activate(&child);used=resource_used;revision=child.generation;
+    activate(&child);assert(map_flags_own(&child) && child.map_flags!=parent.map_flags);   /* its own flags first */
+    used=resource_used;revision=child.generation;
     resource_limit=used+sizeof(ResourceHeader)+4096; /* temporary fixed-map bytes only */
     assert(fixed_map()==linux_error(12));resource_limit=budget;
     assert(child.generation==revision && resource_used==used && read_mem(MAP_BASE,8)==55);

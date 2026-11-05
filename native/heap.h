@@ -47,7 +47,7 @@ static uint64_t guest_brk(uint64_t requested) {
 static uint64_t guest_mmap(uint64_t length,uint64_t prot,uint64_t flags,uint64_t offset) {
     if(!length || offset%4096 || prot>3) return linux_error(22);
     if(flags!=0x22) return linux_error(95); /* Only private anonymous, no fixed flags. */
-    if(length>address_space->map_capacity || !address_space_map_flags(address_space)) return linux_error(12);
+    if(length>address_space->map_capacity || !map_flags_own(address_space)) return linux_error(12);
     unsigned pages=(unsigned)(page_up(length)/4096), start=0, free_run=0;
     for(unsigned i=0;i<address_space->map_capacity/4096;i++) {
         if(address_space->map_flags[i]) free_run=0;
@@ -79,6 +79,7 @@ static uint64_t guest_munmap(uint64_t addr,uint64_t length) {
     }
     unsigned first=(unsigned)((addr-MAP_BASE)/4096), pages=(unsigned)(bytes/4096);
     if(!address_space->map_flags) return 0;
+    if(!map_flags_own(address_space)) return linux_error(12);
     if(!file_copy_demote(addr,bytes,1)) return linux_error(12);          /* part of a file copy */
     uint64_t shared=shared_unmap(addr,bytes);if(shared) return shared;
     if(!address_space_discard_map(address_space,(size_t)first*4096,(size_t)pages*4096)) return linux_error(12); /* release the pages */

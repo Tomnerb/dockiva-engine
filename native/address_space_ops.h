@@ -34,6 +34,12 @@ static void address_space_arena_changed(GuestAddressSpace *space,unsigned first,
    per image cost more than clearing the bytes below its map_top. Only arrays the
    budget does not count (resource_metadata's mapped ones). */
 #define MAP_FLAGS_POOL 16u
+/* An array's holder count, in the 64 bytes before it: a fork shares the parent's
+   array with the child until either changes its own (map_flags_own), as most
+   children exec or exit first and Go's arrays are hundreds of KiB. Each holder reads
+   it under its own mm lock, and no holder writes it while another holds it. */
+#define MAP_FLAGS_HEAD 64u
+static unsigned *map_flags_refs(unsigned char *flags) { return (unsigned *)(void *)(flags-MAP_FLAGS_HEAD); }
 static struct { unsigned char *flags;uint64_t capacity; } map_flags_pool[MAP_FLAGS_POOL];
 static unsigned map_flags_pool_count;
 static pthread_mutex_t map_flags_pool_lock=PTHREAD_MUTEX_INITIALIZER;
@@ -42,20 +48,30 @@ static unsigned char *map_flags_new(uint64_t capacity) {
     pthread_mutex_lock(&map_flags_pool_lock);
     for(unsigned i=map_flags_pool_count;i--;)if(map_flags_pool[i].capacity==capacity) { flags=map_flags_pool[i].flags;map_flags_pool[i]=map_flags_pool[--map_flags_pool_count];break; }
     pthread_mutex_unlock(&map_flags_pool_lock);
-    return flags?flags:resource_metadata(capacity/4096);
+    if(!flags) { unsigned char *head=resource_metadata(capacity/4096+MAP_FLAGS_HEAD);if(!head)return NULL;flags=head+MAP_FLAGS_HEAD; }
+    *map_flags_refs(flags)=1;return flags;
 }
 static void map_flags_free(unsigned char *flags,uint64_t capacity,unsigned top) {
-    if(flags && capacity/4096>=(1u<<20) && top<=(1u<<16)) {
+    if(!flags || __atomic_sub_fetch(map_flags_refs(flags),1,__ATOMIC_ACQ_REL))return;   /* another image holds it still */
+    if(capacity/4096>=(1u<<20) && top<=(1u<<16)) {
         memset(flags,0,top);                                /* none set at or above map_top */
         pthread_mutex_lock(&map_flags_pool_lock);
         if(map_flags_pool_count<MAP_FLAGS_POOL) { map_flags_pool[map_flags_pool_count].flags=flags;map_flags_pool[map_flags_pool_count++].capacity=capacity;flags=NULL; }
         pthread_mutex_unlock(&map_flags_pool_lock);
     }
-    free(flags);
+    if(flags)free(flags-MAP_FLAGS_HEAD);
 }
 static int address_space_map_flags(GuestAddressSpace *space) {
     if(!space->map_flags)space->map_flags=map_flags_new(space->map_capacity);
     return space->map_flags!=NULL;
+}
+/* space's flags, its own to change: a copy while a fork shares them. 0: no memory. */
+static int map_flags_own(GuestAddressSpace *space) {
+    if(!space->map_flags)return address_space_map_flags(space);
+    if(__atomic_load_n(map_flags_refs(space->map_flags),__ATOMIC_ACQUIRE)==1)return 1;
+    unsigned char *copy=map_flags_new(space->map_capacity);if(!copy)return 0;
+    memcpy(copy,space->map_flags,space->map_top<space->map_capacity/4096?space->map_top:space->map_capacity/4096); /* none set above map_top */
+    map_flags_free(space->map_flags,space->map_capacity,space->map_top);space->map_flags=copy;return 1;
 }
 /* A copy of source's state: its header and the segments in use only (all of them
    are 41 KiB, and fork, exec and every task switch copy images several times). */
@@ -164,10 +180,7 @@ static int address_space_fork_private(GuestAddressSpace *destination,GuestAddres
     copy.file_data=NULL;copy.brk_backing=copy.map_backing=NULL;copy.map_flags=NULL;copy.reserve=NULL;
     memset(copy.lookup_cache,0,sizeof(copy.lookup_cache));
     for(unsigned i=0;i<copy.nseg;i++)copy.seg[i].backing=NULL;
-    if(source->map_flags) {
-        if(!(copy.map_flags=map_flags_new(source->map_capacity)))goto failed;
-        memcpy(copy.map_flags,source->map_flags,source->map_top<source->map_capacity/4096?source->map_top:source->map_capacity/4096); /* none set above map_top */
-    }
+    if(source->map_flags) { copy.map_flags=source->map_flags;__atomic_add_fetch(map_flags_refs(copy.map_flags),1,__ATOMIC_RELAXED); }  /* shared (map_flags_own) */
     if(source->reserve) {
         if(!(copy.reserve=resource_metadata(RESERVE_LIMIT*sizeof(Reservation))))goto failed;
         memcpy(copy.reserve,source->reserve,source->nreserve*sizeof(Reservation));

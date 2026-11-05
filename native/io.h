@@ -113,7 +113,9 @@ static void io_release(GuestIO *f) {
     }
     memset(f,0,sizeof(*f));
 }
-static void io_cleanup(void) { for(unsigned i=0;i<IO_END;i++)io_release(&io_fds[i]); }
+static void io_cleanup(void) { for(unsigned i=0;i<IO_END;i++)if(io_fds[i].kind)io_release(&io_fds[i]); }
+/* One past the last slot in use (the slots above it are zero). */
+static unsigned io_top(void) { unsigned top=IO_END;while(top && !io_fds[top-1].kind)top--;return top; }
 static int io_copy(GuestIO *out,const GuestIO *source) {
     *out=*source;
     if(source->kind==IO_EPOLL)epoll_ref(source->host,1);
@@ -520,14 +522,16 @@ static uint64_t io_call(uint64_t call) {
     memmove(pipe->data,pipe->data+count,pipe->used);io_pipe_changed(pipe);return count;
 }
 static void io_exec(void) { for(unsigned i=0;i<IO_END;i++)if(io_fds[i].cloexec) { io_release(&io_fds[i]);fd_unbind(io_guest[i]); } }
-static int io_clone(GuestIO saved[IO_END]) {
-    GuestIO child[IO_END]={0};
-    for(unsigned i=0;i<IO_END;i++)if(io_copy(&child[i],&io_fds[i])<0) {
+/* The child's copies of the slots below top (io_top) in place of the parent's, which
+   go to saved; the slots above are zero in both. */
+static int io_clone(GuestIO saved[IO_END],unsigned top) {
+    GuestIO child[IO_END];
+    for(unsigned i=0;i<top;i++)if(io_copy(&child[i],&io_fds[i])<0) {
         for(unsigned j=0;j<i;j++)io_release(&child[j]);return -1;
     }
-    memcpy(saved,io_fds,sizeof(io_fds));memcpy(io_fds,child,sizeof(io_fds));return 0;
+    memcpy(saved,io_fds,top*sizeof(GuestIO));memcpy(io_fds,child,top*sizeof(GuestIO));return 0;
 }
-static void io_restore(GuestIO saved[IO_END]) { io_cleanup();memcpy(io_fds,saved,sizeof(io_fds)); }
+static void io_restore(GuestIO saved[IO_END],unsigned top) { io_cleanup();memcpy(io_fds,saved,top*sizeof(GuestIO)); }
 /* signalfd4(fd, mask, 8, SFD_NONBLOCK|SFD_CLOEXEC): a new descriptor, or a new
    mask for an existing one. SIGKILL and SIGSTOP are ignored in the mask. */
 static uint64_t io_signalfd(void) {

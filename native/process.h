@@ -275,13 +275,13 @@ static uint64_t process_clone(void) {
         if(fd<0) { for(unsigned j=0;j<i;j++)if(child_fds[j] && !fs_packed[j])close(child_fds[j]-1);return linux_error(24); }
         child_fds[i]=fd+1;
     }
-    GuestIO parent_io[IO_END];
-    if(io_clone(parent_io)<0) { for(unsigned i=0;i<FS_SLOTS;i++)if(child_fds[i] && !fs_packed[i])close(child_fds[i]-1);return linux_error(24); }
+    GuestIO parent_io[IO_END];unsigned io_used=io_top();
+    if(io_clone(parent_io,io_used)<0) { for(unsigned i=0;i<FS_SLOTS;i++)if(child_fds[i] && !fs_packed[i])close(child_fds[i]-1);return linux_error(24); }
     GuestCwd *parent_cwd=fs_cwd;
     if(share && !shared_image) {
         shared_image=calloc(1,sizeof(*shared_image));
         if(!shared_image) {
-            io_restore(parent_io);for(unsigned i=0;i<FS_SLOTS;i++)if(child_fds[i] && !fs_packed[i])close(child_fds[i]-1);
+            io_restore(parent_io,io_used);for(unsigned i=0;i<FS_SLOTS;i++)if(child_fds[i] && !fs_packed[i])close(child_fds[i]-1);
             return linux_error(12);
         }
         shared_image->refs=1;
@@ -293,7 +293,7 @@ static uint64_t process_clone(void) {
     else {
         child.shared=NULL;
         if(!address_space_fork_private(&child.memory,&parent.memory)) {
-            io_restore(parent_io);
+            io_restore(parent_io,io_used);
             for(unsigned i=0;i<FS_SLOTS;i++)if(child_fds[i] && !fs_packed[i])close(child_fds[i]-1);
             return linux_error(12);
         }
@@ -314,7 +314,7 @@ static uint64_t process_clone(void) {
     memset(&process_children[slot],0,sizeof(process_children[slot]));
     if(schedule_active) {
         schedule_child(pid);proc_publish(0);if(share)schedule_vfork(pid);fs_cwd=parent_cwd;image_restore(&parent);
-        memcpy(io_fds,parent_io,sizeof(io_fds));memcpy(fs_fd,parent_fds,sizeof(fs_fd));
+        memcpy(io_fds,parent_io,io_used*sizeof(GuestIO));memcpy(fs_fd,parent_fds,sizeof(fs_fd));
         memcpy(fs_cloexec,parent_cloexec,sizeof(fs_cloexec));
         process_children[slot].pid=pid;process_children[slot].parent=process_pid;process_children[slot].live=1;
         if(!vfork && (flags&0x100000))fs_pack(lookup(parent_tid,4,2),0,(unsigned)pid,4);
@@ -328,7 +328,7 @@ static uint64_t process_clone(void) {
     unsigned status=(unsigned)run(0);
     guest_ids=parent_ids; /* the child's identity changes stay in the child */
     fs_cwd_release();fs_cwd=parent_cwd;image_free();image_restore(&parent);
-    io_restore(parent_io);
+    io_restore(parent_io,io_used);
     net_cleanup();memset(net_fd,0,sizeof(net_fd));
     for(unsigned i=0;i<FS_SLOTS;i++) {
         if(fs_dirs[i]) { fs_directory_release(fs_dirs[i]);fs_dirs[i]=NULL; }
