@@ -38,8 +38,7 @@ typedef struct {
     unsigned vfork_child,saved,state,terminate_signal,pgid,sid,input_wait,stop_signal,execed,blocked,worker;uint64_t epoch,wakeups;
     unsigned child_wait;  /* blocked in wait4/waitid (single-threaded): woken by a child's event or a signal, not by I/O */
     unsigned preempted;   /* as Thread's */
-    uint64_t signal_mask,signal_ignored,signal_pending,timer_deadline,timer_interval;
-    uint64_t signal_flags[64],signal_action_mask[64],signal_restorer[64],signal_handler[64];
+    uint64_t signal_mask,signal_pending,timer_deadline,timer_interval; /* signal actions and the ignored set: task_sig */
     unsigned signal_sender[64];
     /* A fault raised as a signal (SIGSEGV, SIGILL): siginfo's si_code and si_addr. */
     unsigned signal_fault_code[64];uint64_t signal_fault_addr[64];
@@ -63,6 +62,7 @@ static size_t task_slot(const ScheduledTask *t) {
 }
 #define task_fs(t) (&proc_block->fs[task_slot(t)])
 #define task_fds(t) (&proc_block->fds[task_slot(t)])
+#define task_sig(t) (&proc_block->sig[task_slot(t)])           /* its signal actions, shared with EL1 (hvf_el1.h) */
 /* Workers (--cpus N): N host threads run tasks at once, each on its own CPU
    backend context (a vCPU). Guest code runs in parallel; everything else (system
    calls, faults, scheduling) holds runtime_mutex. The lock holder's current-process
@@ -112,7 +112,7 @@ static int task_must_stop(ScheduledTask *t,Thread *th) {
     if(th && !th->state)return 1;
     if(!job_control_enabled)return 0;
     uint64_t mask=th?th->signal_mask:t->signal_mask;
-    return ((t->signal_pending|(th?th->signal_pending:0))&~mask&~t->signal_ignored)!=0;
+    return ((t->signal_pending|(th?th->signal_pending:0))&~mask&~task_sig(t)->ignored)!=0;
 }
 static void schedule_inplace_check(int evict);
 static unsigned schedule_inplace_count;
@@ -263,10 +263,10 @@ static void schedule_signal_apply(ScheduledTask *task,unsigned signal) {
     }
     if(job_control_enabled && signal>=19 && signal<=22)task->signal_pending&=~(UINT64_C(1)<<17);
     if(job_control_enabled && signal==19) { task->stop_signal=19;io_epoch++;schedule_wake(task);return; }
-    if(signal!=9 && (task->signal_ignored&bit))return;
+    if(signal!=9 && (task_sig(task)->ignored&bit))return;
     if(job_control_enabled && task->state==3 && signal!=9 && signal!=18) { task->signal_pending|=bit;return; }
     task->signal_sender[signal-1]=(unsigned)process_pid;
-    if(signal!=9 && ((task_signals_blocked(task)&bit) || task->signal_handler[signal-1] || (task->sigwaiting && (task->sigwait_set&bit)))) {
+    if(signal!=9 && ((task_signals_blocked(task)&bit) || task_sig(task)->handler[signal-1] || (task->sigwaiting && (task->sigwait_set&bit)))) {
         task->signal_pending|=bit;io_epoch++;schedule_wake(task);
         if(task->threads)for(unsigned i=0;i<task->threads->top;i++) {    /* a futex wait that can take it ends (EINTR) */
             Thread *th=&task->threads->thread[i];
@@ -303,7 +303,7 @@ static int memory_exhausted(void) {
 }
 static void schedule_pending(ScheduledTask *task) {
     uint64_t blocked=task==&schedule_tasks[process_pid-1]?*signal_mask_now():task_signals_blocked(task);
-    uint64_t ready=task->signal_pending & ~blocked & ~task->signal_ignored;
+    uint64_t ready=task->signal_pending & ~blocked & ~task_sig(task)->ignored;
     for(unsigned i=0;i<64;i++)if(ready&(UINT64_C(1)<<i)) {
         task->signal_pending&=~(UINT64_C(1)<<i);schedule_signal(task,i+1);
     }
@@ -321,10 +321,10 @@ static void schedule_vfork_done(uint64_t pid) {
 static void schedule_exec_reset(void) {
     ScheduledTask *task=&schedule_tasks[process_pid-1];
     task->execed=1;task->mm_owner=0;schedule_vfork_done(process_pid);
-    memset(task->signal_handler,0,sizeof(task->signal_handler));
-    memset(task->signal_flags,0,sizeof(task->signal_flags));
-    memset(task->signal_action_mask,0,sizeof(task->signal_action_mask));
-    memset(task->signal_restorer,0,sizeof(task->signal_restorer));
+    memset(task_sig(task)->handler,0,sizeof(task_sig(task)->handler));
+    memset(task_sig(task)->flags,0,sizeof(task_sig(task)->flags));
+    memset(task_sig(task)->mask,0,sizeof(task_sig(task)->mask));
+    memset(task_sig(task)->restorer,0,sizeof(task_sig(task)->restorer));
 }
 /* Guest IDs only: never pass a guest PID or signal to a host kill API. */
 static uint64_t process_kill(void) {
@@ -409,11 +409,11 @@ static void schedule_child(uint64_t pid) {
     task_save(t);if(fd_mirror_base)memcpy(fd_mirror_base+pid*4096,fd_mirror_base+process_pid*4096,4096); /* the same descriptors */
     t->state=1;t->pgid=schedule_tasks[process_pid-1].pgid;t->sid=schedule_tasks[process_pid-1].sid;
     ScheduledTask *parent=&schedule_tasks[process_pid-1];
-    t->signal_mask=*signal_mask_now();t->signal_ignored=parent->signal_ignored; /* the forking thread's mask */
-    memcpy(t->signal_flags,parent->signal_flags,sizeof(t->signal_flags));
-    memcpy(t->signal_action_mask,parent->signal_action_mask,sizeof(t->signal_action_mask));
-    memcpy(t->signal_restorer,parent->signal_restorer,sizeof(t->signal_restorer));
-    memcpy(t->signal_handler,parent->signal_handler,sizeof(t->signal_handler));
+    t->signal_mask=*signal_mask_now();task_sig(t)->ignored=task_sig(parent)->ignored; /* the forking thread's mask */
+    memcpy(task_sig(t)->flags,task_sig(parent)->flags,sizeof(task_sig(t)->flags));
+    memcpy(task_sig(t)->mask,task_sig(parent)->mask,sizeof(task_sig(t)->mask));
+    memcpy(task_sig(t)->restorer,task_sig(parent)->restorer,sizeof(task_sig(t)->restorer));
+    memcpy(task_sig(t)->handler,task_sig(parent)->handler,sizeof(task_sig(t)->handler));
     schedule_live++;
     /* A runnable task: the lock's release wakes an idle worker for it (schedule_notify).
        Without this a fork's child waited for some worker to come free on its own, the
@@ -816,7 +816,7 @@ static int schedule_finish(int current,int result,unsigned terminating) {
     ScheduledTask *parent=&schedule_tasks[process_children[current-1].parent-1];
     schedule_wake(parent);                                                       /* a waiting wait4 */
     if(job_control_enabled)schedule_signal(parent,17);
-    if((parent->signal_ignored&(UINT64_C(1)<<16)) || (parent->signal_flags[16]&2))process_children[current-1].pid=0;
+    if((task_sig(parent)->ignored&(UINT64_C(1)<<16)) || (task_sig(parent)->flags[16]&2))process_children[current-1].pid=0;
     return 0;
 }
 #define THREAD_EXIT (-4)  /* run(): the current thread ended, other threads of the process live on */
@@ -861,7 +861,7 @@ static int schedule_loop(int current) {
            that first, as waiting here for the mm lock (a sibling thread in a long
            unlocked call) holds up every worker. */
         if(job_control_enabled && !t->terminate_signal && !t->stop_signal && !t->exit_pending &&
-           ((t->signal_pending|(th?th->signal_pending:0))&~*signal_mask_now()&~t->signal_ignored)) { mm_lock(t);signal_deliver((int)*blocked_call);mm_unlock(t); }
+           ((t->signal_pending|(th?th->signal_pending:0))&~*signal_mask_now()&~task_sig(t)->ignored)) { mm_lock(t);signal_deliver((int)*blocked_call);mm_unlock(t); }
         if(th)th->state=1;else t->state=1;
         *blocked_call=0;
         if(th)th->child_wait=0;else t->child_wait=0;              /* set again if it blocks in wait4 once more */
@@ -911,7 +911,7 @@ static int schedule_loop(int current) {
                 process_children[current-1].event_status=(t->stop_signal<<8)|127;
                 ScheduledTask *parent=&schedule_tasks[process_children[current-1].parent-1];
                 schedule_wake(parent);                                               /* a waiting wait4 */
-                if(!(parent->signal_flags[16]&1))schedule_signal(parent,17);
+                if(!(task_sig(parent)->flags[16]&1))schedule_signal(parent,17);
             }
             t->stop_signal=0;io_epoch++;
         }

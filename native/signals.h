@@ -36,16 +36,16 @@ static uint64_t signal_call(uint64_t call) {
     }
     unsigned index=(unsigned)signal-1;uint64_t bit=UINT64_C(1)<<index;
     if(out) {
-        fs_pack(out,0,(task->signal_ignored&bit)?1:task->signal_handler[index],8);
-        fs_pack(out,8,task->signal_flags[index],8);fs_pack(out,16,task->signal_restorer[index],8);
-        fs_pack(out,24,task->signal_action_mask[index],8);
+        fs_pack(out,0,(task_sig(task)->ignored&bit)?1:task_sig(task)->handler[index],8);
+        fs_pack(out,8,task_sig(task)->flags[index],8);fs_pack(out,16,task_sig(task)->restorer[index],8);
+        fs_pack(out,24,task_sig(task)->mask[index],8);
     }
     if(in) {
-        if(action[0]==1) { task->signal_ignored|=bit;task->signal_pending&=~bit; }
-        else task->signal_ignored&=~bit;
-        task->signal_handler[index]=action[0]>1?action[0]:0;
-        task->signal_flags[index]=action[1];task->signal_restorer[index]=action[2];
-        task->signal_action_mask[index]=action[3];
+        if(action[0]==1) { task_sig(task)->ignored|=bit;task->signal_pending&=~bit; }
+        else task_sig(task)->ignored&=~bit;
+        task_sig(task)->handler[index]=action[0]>1?action[0]:0;
+        task_sig(task)->flags[index]=action[1];task_sig(task)->restorer[index]=action[2];
+        task_sig(task)->mask[index]=action[3];
     }
     return 0;
 }
@@ -75,7 +75,7 @@ static int signal_wait_mask(uint64_t mask) {
     if(!*masked) { *saved=*now;*masked=1; }                                         /* a retried wait keeps the first */
     *now=mask&~((UINT64_C(1)<<8)|(UINT64_C(1)<<18));
     ScheduledTask *task=&schedule_tasks[process_pid-1];Thread *th=thread_current();
-    return (((task->signal_pending|(th?th->signal_pending:0))&~*now&~task->signal_ignored))!=0;
+    return (((task->signal_pending|(th?th->signal_pending:0))&~*now&~task_sig(task)->ignored))!=0;
 }
 static void signal_wait_unmask(void) {
     if(!job_control_enabled || !schedule_active)return;
@@ -131,10 +131,10 @@ static void signal_deliver(int blocked) {
     if(!job_control_enabled || !schedule_active)return;
     ScheduledTask *task=&schedule_tasks[process_pid-1];Thread *th=thread_current();
     uint64_t *mask=signal_mask_now(),own=th?th->signal_pending:0;     /* own: signals sent to this thread */
-    uint64_t pending=(task->signal_pending|own) & ~*mask & ~task->signal_ignored;
+    uint64_t pending=(task->signal_pending|own) & ~*mask & ~task_sig(task)->ignored;
     if(!pending)return;
     unsigned index=0;while(!(pending&(UINT64_C(1)<<index)))index++;
-    uint64_t bit=UINT64_C(1)<<index,handler=task->signal_handler[index],flags=task->signal_flags[index];
+    uint64_t bit=UINT64_C(1)<<index,handler=task_sig(task)->handler[index],flags=task_sig(task)->flags[index];
     int from_thread=(own&bit)!=0;
     if(from_thread)th->signal_pending&=~bit;else task->signal_pending&=~bit;
     if(task->sigwaiting && (task->sigwait_set&bit)) {          /* rt_sigtimedwait takes it */
@@ -147,7 +147,7 @@ static void signal_deliver(int blocked) {
     uint64_t base=(flags&UINT64_C(0x08000000)) && cpu->altstack_size && !on_altstack?cpu->altstack_sp+cpu->altstack_size:cpu->sp;
     uint64_t frame=base>=SIGNAL_FRAME_SIZE?(base-SIGNAL_FRAME_SIZE)&~UINT64_C(15):0;
     unsigned char *out=frame?lookup(frame,SIGNAL_FRAME_SIZE,2):NULL;
-    uint64_t restorer=(flags&UINT64_C(0x04000000))?task->signal_restorer[index]:VDSO_SIGRETURN;
+    uint64_t restorer=(flags&UINT64_C(0x04000000))?task_sig(task)->restorer[index]:VDSO_SIGRETURN;
     if(!out || (handler&3) || !lookup(handler,4,1) || !lookup(restorer,4,1)) {
         task->terminate_signal=11;return;
     }
@@ -181,10 +181,10 @@ static void signal_deliver(int blocked) {
     fs_pack(out,4688,cpu->gpr[29],8);fs_pack(out,4696,cpu->gpr[30],8);
     cpu->gpr[0]=index+1;cpu->gpr[1]=frame;cpu->gpr[2]=frame+128;
     cpu->gpr[29]=frame+4688;cpu->gpr[30]=restorer;cpu->sp=frame;cpu->pc=handler;
-    *mask|=task->signal_action_mask[index];
+    *mask|=task_sig(task)->mask[index];
     if(!(flags&UINT64_C(0x40000000)))*mask|=bit;
     *mask&=~((UINT64_C(1)<<8)|(UINT64_C(1)<<18));
-    if(flags&UINT64_C(0x80000000))task->signal_handler[index]=0;
+    if(flags&UINT64_C(0x80000000))task_sig(task)->handler[index]=0;
     cpu->exclusive_valid=0;
 }
 static void signal_return(void) {

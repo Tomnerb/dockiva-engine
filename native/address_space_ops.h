@@ -133,7 +133,7 @@ static MemoryBacking *address_space_fork_backing(const GuestAddressSpace *source
     int own=!address_space_shared(source,backing) && address_space_writable_backing(source,backing) && backing->refs==address_space_backing_refs(source,backing);
     if(fork_copy_pages && *copied<8 && !backing->frozen && own) {
         size_t owned=0;
-        for(size_t i=0;i<backing->used && owned<=fork_copy_pages;i++)owned+=backing->pages[i]!=NULL;
+        for(size_t i=backing_next(backing,0,backing->used);i<backing->used && owned<=fork_copy_pages;i=backing_next(backing,i+1,backing->used))owned++;
         MemoryBacking *copy=owned<=fork_copy_pages?backing_clone(backing,owned):NULL;
         if(copy) { from[*copied]=backing;to[(*copied)++]=copy;return copy; }
     }

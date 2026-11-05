@@ -41,6 +41,11 @@ static inline uint32_t hvf_el1_futex_slot(uint64_t pid,uint64_t address) {
    gen changes with every wait: a slot read between two waits never matches. */
 #define HVF_EL1_SPINNERS 64u
 typedef struct { uint64_t address,epoch;uint32_t pid,bits,state,pad; } HvfSpinner;
+/* A process's signal actions, by signal: handler (0 the default; SIG_IGN is the ignored
+   bit instead), flags, restorer and mask. EL1 installs a handler or the default under
+   the process's mm lock (el1_sigaction); the runtime changes them and delivers signals
+   under it too, and senders read single words. */
+typedef struct { uint64_t handler[64],flags[64],restorer[64],mask[64],ignored; } HvfSignals;
 /* An entry of the pack's index (pack.h), sorted by inode. */
 typedef struct { uint64_t ino,size,offset;int64_t mtime,mtime_ns;uint32_t path,path_length; } HvfPackEntry;
 typedef struct {
@@ -62,5 +67,6 @@ typedef struct {
     uint32_t b_mmc;                                   /* the block's HvfMmCache array, by mm lock index */
     uint32_t b_futex;                                 /* the block's futex counts: HVF_EL1_FUTEX_SLOTS, then the shared one */
     uint32_t b_spin,b_epoch;                          /* the block's HvfSpinner array and each task's futex epoch (uint64) */
+    uint32_t b_sig,sig_size,sig_ok;                   /* each task's HvfSignals; sig_ok: 1 handlers allowed (job control), 2 a vDSO restorer */
 } HvfEl1Context;
 #endif

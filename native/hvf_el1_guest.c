@@ -355,6 +355,34 @@ static long el1_futex(uint64_t *frame,const HvfEl1Context *c) {
     return 0;
 }
 
+/* rt_sigaction (134) installing the default action or a handler, the old action written
+   back when asked: the runtime's checks (signals.h signal_call), under the process's mm
+   lock. SIG_IGN drops the signal's pending instances, which only the runtime holds, and
+   anything the runtime refuses is its to answer. Go's and libuv's children reset every
+   handler they inherited (56 and 31 calls) between fork and exec. */
+static long el1_sigaction(uint64_t *frame,const HvfEl1Context *c) {
+    uint64_t signal=frame[0],act=frame[1]&USER_MASK,old=frame[2]&USER_MASK,task=frame[HF_TASK],mm=frame[HF_MM];
+    if(frame[3]!=8 || !signal || signal>64 || signal==9 || signal==19 || task>UINT32_MAX || !c->sig_size)return 0;
+    uint64_t a[4]={0,0,0,0};
+    if(frame[1]) {
+        if(!user_ok(act,0) || !user_ok(act+31,0))return 0;
+        for(unsigned i=0;i<4;i++)a[i]=load64((const volatile unsigned char *)act+8*i);
+        a[1]&=UINT64_C(0xffffffff);                                     /* sa_flags is an int (musl sign-extends it) */
+        if(a[0]==1 || (a[1]&~UINT64_C(0xdc000007)))return 0;           /* SIG_IGN; flags the runtime refuses */
+        if(a[0]>1 && (!(c->sig_ok&1) || ((a[1]&UINT64_C(0x04000000))?!a[2]:!(c->sig_ok&2))))return 0;   /* a handler it cannot return from */
+    }
+    if(frame[2] && (!user_ok(old,1) || !user_ok(old+31,1)))return 0;
+    if(!el1_lock(frame,c,mm))return 0;
+    volatile HvfSignals *s=(volatile HvfSignals *)(volatile void *)at(c,c->b_sig+task*c->sig_size);
+    unsigned i=(unsigned)signal-1;uint64_t bit=UINT64_C(1)<<i;
+    if(frame[2]) {                                                      /* before any change: a fault here changes nothing */
+        volatile unsigned char *o=(volatile unsigned char *)old;
+        put64(o,(s->ignored&bit)?1:s->handler[i]);put64(o+8,s->flags[i]);put64(o+16,s->restorer[i]);put64(o+24,s->mask[i]);
+    }
+    if(frame[1]) { s->ignored&=~bit;s->handler[i]=a[0]>1?a[0]:0;s->flags[i]=a[1];s->restorer[i]=a[2];s->mask[i]=a[3]; }
+    el1_unlock(frame,c,mm);
+    frame[0]=0;return 1;
+}
 long el1_entry(uint64_t *frame,const HvfEl1Context *c) {
     uint64_t call=frame[8];
     if(call==79 || call==291)return el1_stat(frame,c);
@@ -363,5 +391,6 @@ long el1_entry(uint64_t *frame,const HvfEl1Context *c) {
     if(call==222)return el1_mmap(frame,c);
     if(call==215)return el1_munmap(frame,c);
     if(call==98)return el1_futex(frame,c);
+    if(call==134)return el1_sigaction(frame,c);
     return 0;
 }

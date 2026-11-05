@@ -103,8 +103,8 @@ static unsigned guest_thread_list(uint64_t pid,unsigned *tids,char *states,uint6
 static void guest_signal_sets(uint64_t pid,uint64_t sets[4]) {
     if(!schedule_active || !pid || pid>PROCESS_LIMIT+1)return;
     ScheduledTask *t=&schedule_tasks[pid-1];
-    sets[0]=t->signal_pending;sets[1]=pid==process_pid?*signal_mask_now():t->signal_mask;sets[2]=t->signal_ignored;
-    for(unsigned i=0;i<64;i++)if(t->signal_handler[i] && !(t->signal_ignored&(UINT64_C(1)<<i)))sets[3]|=UINT64_C(1)<<i;
+    sets[0]=t->signal_pending;sets[1]=pid==process_pid?*signal_mask_now():t->signal_mask;sets[2]=task_sig(t)->ignored;
+    for(unsigned i=0;i<64;i++)if(task_sig(t)->handler[i] && !(task_sig(t)->ignored&(UINT64_C(1)<<i)))sets[3]|=UINT64_C(1)<<i;
 }
 static int guest_process_exists(uint64_t pid) { return pid==process_pid || (schedule_active && pid && pid<=PROCESS_LIMIT+1 && schedule_tasks[pid-1].state); }
 static uint64_t io_signals_pending(void) { return schedule_active?schedule_tasks[process_pid-1].signal_pending:0; }
@@ -884,7 +884,7 @@ static int guest_syscall_unlocked(void) {
         if(call==135 && in && cpu->gpr[3]==8) {
             uint64_t value=le(in,8)&~((UINT64_C(1)<<8)|(UINT64_C(1)<<18)),next=*signal_mask_now();
             if(cpu->gpr[0]==0)next|=value;else if(cpu->gpr[0]==1)next&=~value;else if(cpu->gpr[0]==2)next=value;
-            if(task->signal_pending&~next&~task->signal_ignored)locked=1;
+            if(task->signal_pending&~next&~task_sig(task)->ignored)locked=1;
         }
         uint64_t result=locked || syscall_abort?0:call==132?signal_altstack():signal_call(call);
         syscall_unlocked=0;

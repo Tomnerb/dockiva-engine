@@ -42,6 +42,7 @@
 #define HVF_EL1_BLOCK (UINT64_C(32)<<20)             /* proc_block (fs.h) */
 #define HVF_EL1_PACK (UINT64_C(128)<<20)             /* the pack's index (pack.h) */
 #define HVF_EL1_HEAD (2u<<20)                       /* context page, stacks, then (at 1 MiB) the upper half's tables */
+_Static_assert(HVF_EL1_BLOCK+((sizeof(ProcBlock)+16383)&~(uint64_t)16383)<=HVF_EL1_PACK,"the process block outgrew its room in the EL1 region");
 #define HVF_EL1_STACK 8192u
 #define HVF_EL1_TABLES (1u<<20)
 #define HVF_EL1_STUB 0xc00u                         /* in the code page: the vector's way in */
@@ -229,9 +230,9 @@ static int hvf_hold(HvfView *v,const GuestAddressSpace *space,MemoryBacking *bac
         else { const Segment *g=&space->seg[r-2];if(g->backing!=backing)continue;base=g->base;size=g->size;offset=g->offset;flags=g->flags; }
         if(!(flags&2) || (flags&SEG_SHARED))continue;
         size_t end=offset+size,last=(end+ps-1)/ps;if(last>backing->used)last=backing->used;
-        for(size_t h=offset/ps;h<last;h++) {
+        for(size_t h=backing_next(backing,offset/ps,last);h<last;h=backing_next(backing,h+1,last)) {
             const BackingPage *p=backing->pages[h];
-            if(!p || (!protect && p->refs!=1))continue;
+            if(!protect && p->refs!=1)continue;
             for(size_t off=h*ps;off<(h+1)*ps;off+=4096) {
                 if(off<offset || off>=end)continue;
                 uint64_t va=base+(off-offset);
@@ -284,21 +285,23 @@ static void hvf_backing_gone(MemoryBacking *backing) {
    changes whenever table pages are freed, which invalidates every cached one. */
 static uint64_t hvf_table_epoch;
 static _Thread_local struct { uint64_t root,key,epoch;uint64_t *leaf; } hvf_walk;
-static uint64_t hvf_table(void) {
-    unsigned owner=(unsigned)(hvf_view-hvf_views);
+/* A table page for view v (zeroed unless the caller fills it), or 0 when the pool is out. */
+static uint64_t hvf_table_of(HvfView *v,int zero) {
+    unsigned owner=(unsigned)(v-hvf_views);
     pthread_mutex_lock(&hvf_mutex);
     for(unsigned n=0;n<HVF_TABLES;n++) {
         unsigned i=(hvf_table_hint+n)%HVF_TABLES;
         if(hvf_table_owner[i])continue;
         hvf_table_owner[i]=(unsigned short)owner;hvf_table_hint=i+1;
-        if(!hvf_view->tables || i<hvf_view->table_low)hvf_view->table_low=i;
-        if(!hvf_view->tables || i>hvf_view->table_high)hvf_view->table_high=i;
+        if(!v->tables || i<v->table_low)v->table_low=i;
+        if(!v->tables || i>v->table_high)v->table_high=i;
         pthread_mutex_unlock(&hvf_mutex);
-        hvf_view->tables++;memset(hvf_tables+(size_t)i*4096,0,4096);return HVF_IPA_BASE+(uint64_t)i*4096;
+        v->tables++;if(zero)memset(hvf_tables+(size_t)i*4096,0,4096);return HVF_IPA_BASE+(uint64_t)i*4096;
     }
     pthread_mutex_unlock(&hvf_mutex);
     hvf_exhausted=1;return 0;
 }
+static uint64_t hvf_table(void) { return hvf_table_of(hvf_view,1); }
 static void hvf_tables_free(HvfView *v) {
     unsigned owner=(unsigned)(v-hvf_views);
     __atomic_add_fetch(&hvf_table_epoch,1,__ATOMIC_ACQ_REL); /* cached leaf tables may be reused */
@@ -657,6 +660,54 @@ static void hvf_backing_moved(MemoryBacking *backing,size_t offset,size_t size) 
     HvfView *v=hvf_own_view;if(!v->root)return;
     if(v->nmoved<sizeof(v->moved)/sizeof(*v->moved)) { v->moved[v->nmoved].backing=backing;v->moved[v->nmoved].offset=offset;v->moved[v->nmoved].size=size;v->nmoved++; }
     else v->stale=HVF_STALE_COW;                         /* many: every private page again */
+}
+/* A copy for view to of the table at from (level 0 the root) and every table below it. */
+static uint64_t hvf_table_copy(HvfView *to,uint64_t from,int level) {
+    uint64_t copy=hvf_table_of(to,0);if(!copy)return 0;
+    const uint64_t *src=(const uint64_t *)(void *)(hvf_tables+(from-HVF_IPA_BASE));uint64_t *dst=(uint64_t *)(void *)(hvf_tables+(copy-HVF_IPA_BASE));
+    memcpy(dst,src,4096);
+    if(level<3)
+        for(unsigned i=0;i<512;i++)if(src[i]&1) {                 /* a table descriptor (no blocks here) */
+            uint64_t below=hvf_table_copy(to,src[i]&UINT64_C(0x0000fffffffff000),level+1);
+            if(!below)return 0;
+            dst[i]=below|(src[i]&~UINT64_C(0x0000fffffffff000));
+        }
+    return copy;
+}
+/* A fork's child starts on a copy of its parent's tables (Node's: some 80 pages) instead
+   of a build that maps every page again (Node's text and heap, 38k entries: ~140 us of
+   the child's start). They are right for it: memory it shares maps the same, an
+   overlay's pages read the parent's backing (read-only since the fork's hold), and only
+   the memory the fork copied (a small backing's clone, an overlay's pages copied
+   already) is mapped again. 0 when the parent's tables lag its memory (or the pool ran
+   out): the child builds its own. Under the parent's locks, after its fork. */
+static int hvf_view_fork(uint64_t pid) {
+    HvfView *from=hvf_own_view,*to=&hvf_views[pid];
+    const GuestAddressSpace *parent=address_space,*child=&schedule_tasks[pid-1].image.memory;
+    if(to==from || !from->root || from->nmoved || from->arena_rev!=parent->arena_rev || !hvf_view_matches(parent) || child->nseg!=parent->nseg)return 0;
+    hvf_tables_free(to);hvf_exhausted=0;
+    uint64_t root=hvf_table_copy(to,from->root,0);
+    if(!root) { hvf_tables_free(to);return 0; }
+    to->root=root;
+    HvfView *was=hvf_view;hvf_view=to;                            /* the mapping calls below work on hvf_view */
+    hvf_map_page(HVF_FDS_VA,HVF_IPA_BASE+HVF_TABLE_BYTES+HVF_SYSTEM_BYTES+(uint64_t)(to-hvf_views)*4096,0,2); /* its own process page */
+    for(unsigned r=0;r<child->nseg+2 && !hvf_exhausted;r++) {
+        MemoryBacking *c=r==0?child->map_backing:r==1?child->brk_backing:child->seg[r-2].backing;
+        MemoryBacking *p=r==0?parent->map_backing:r==1?parent->brk_backing:parent->seg[r-2].backing;
+        if(c==p || !c)continue;                                    /* shared as it is */
+        if(c->base==p) {                                          /* an overlay: pages it copied already (the fork's own writes) */
+            for(size_t i=backing_next(c,0,c->used);i<c->used;i=backing_next(c,i+1,c->used))hvf_remap_backing(child,to,c,i*c->page_size,c->page_size);
+            continue;
+        }
+        if(r==0)hvf_map_arena_all((GuestAddressSpace *)child);   /* a clone */
+        else if(r==1)hvf_map_range(child,child->brk_base,child->brk_pages,6,c,0);
+        else hvf_map_range(child,child->seg[r-2].base,child->seg[r-2].size,child->seg[r-2].flags,c,child->seg[r-2].offset);
+    }
+    hvf_view=was;
+    if(hvf_exhausted) { hvf_tables_free(to);return 0; }
+    hvf_view_record(to,child);to->arena_rev=child->arena_rev;to->asid_generation=0;  /* a fresh ASID: nothing of an earlier process's in the TLBs */
+    PROFILE_ADD(profile_view_copies,1);
+    return 1;
 }
 /* Bring the current process's tables up to date; returns whether TLBs need maintenance:
    1 for this view's ASID, 2 for every one (the tables were rebuilt). */
@@ -1107,6 +1158,7 @@ static void hvf_el1_setup(void) {
     c->host_block=(uint64_t)(uintptr_t)proc_block;
     c->b_mm=offsetof(ProcBlock,mm);c->b_locks=offsetof(ProcBlock,locks_held);c->b_hint=offsetof(ProcBlock,pack_hint);
     c->b_fs=offsetof(ProcBlock,fs);c->b_fds=offsetof(ProcBlock,fds);c->b_pack=offsetof(ProcBlock,pack);c->b_mmc=offsetof(ProcBlock,mm_cache);c->b_futex=offsetof(ProcBlock,futex_waiters);c->b_spin=offsetof(ProcBlock,spinners);c->b_epoch=offsetof(ProcBlock,futex_epoch);
+    c->b_sig=offsetof(ProcBlock,sig);c->sig_size=sizeof(HvfSignals);c->sig_ok=(job_control_enabled?1u:0u)|(vdso_backing?2u:0u);
     c->fs_size=sizeof(FsTable);c->fds_size=sizeof(FdTable);
     c->t_fd=offsetof(FsTable,fd);c->t_cloexec=offsetof(FsTable,cloexec);c->t_ro=offsetof(FsTable,ro);c->t_dev=offsetof(FsTable,dev);c->t_sole=offsetof(FsTable,sole);
     c->t_dirs=offsetof(FsTable,dirs);c->t_guest=offsetof(FsTable,guest);c->t_pack=offsetof(FsTable,pack);c->d_kind=offsetof(FdTable,kind);c->d_index=offsetof(FdTable,index);
@@ -1202,7 +1254,7 @@ static void hvf_init(void) {
         w[0x42c/4]=a64_b19(0x42c,HVF_EL1_STUB,0x54000008);              /* b.hi: no longer straight to save */
         unsigned at=HVF_EL1_STUB,give_up,taken;
 #define EMIT(x) (w[at/4]=(x),at+=4)
-        static const unsigned answered[]={79,291,56,57,222,215,98};       /* newfstatat, statx, openat, close, mmap, munmap, futex */
+        static const unsigned answered[]={79,291,56,57,222,215,98,134};   /* newfstatat, statx, openat, close, mmap, munmap, futex, rt_sigaction */
         unsigned taken_at[8],calls=sizeof(answered)/sizeof(*answered);
         for(unsigned k=0;k+1<calls;k++) { EMIT(0xf100001fu|(answered[k]<<10)|(8u<<5));taken_at[k]=at;at+=4; }   /* cmp x8, #call; b.eq (below) */
         EMIT(0xf100001fu|(answered[calls-1]<<10)|(8u<<5));EMIT(a64_b19(at,HVF_SAVE_OFFSET,0x54000001));      /* the last: b.ne save */
@@ -1339,8 +1391,8 @@ static uint64_t hvf_thread_signal(ScheduledTask *t,uint64_t tid,uint64_t signal)
     if(!th)return linux_error(3);
     if(!signal)return 0;
     uint64_t bit=UINT64_C(1)<<(signal-1);
-    if(signal==9 || signal==19 || (!t->signal_handler[signal-1] && !(th->signal_mask&bit))) { schedule_signal(t,(unsigned)signal);return 0; }
-    if(t->signal_ignored&bit)return 0;
+    if(signal==9 || signal==19 || (!task_sig(t)->handler[signal-1] && !(th->signal_mask&bit))) { schedule_signal(t,(unsigned)signal);return 0; }
+    if(task_sig(t)->ignored&bit)return 0;
     th->signal_pending|=bit;t->signal_sender[signal-1]=(unsigned)process_pid;
     if(!(th->signal_mask&bit)) {
         if(th->state==2) { th->state=1;th->regs.gpr[0]=linux_error(4); }
@@ -1503,7 +1555,7 @@ static uint64_t hvf_futex(int *waiting) {
     /* Even a single-threaded process waits (until its timeout, as on Linux). */
     ThreadTable *p=hvf_threads_ensure();if(!p) { hvf_futex_count_down(count);return linux_error(12); }
     ScheduledTask *task=hvf_task();Thread *t=&p->thread[thread_now];
-    if(job_control_enabled && ((task->signal_pending|t->signal_pending)&~t->signal_mask&~task->signal_ignored)) { hvf_futex_count_down(count);return linux_error(4); }
+    if(job_control_enabled && ((task->signal_pending|t->signal_pending)&~t->signal_mask&~task_sig(task)->ignored)) { hvf_futex_count_down(count);return linux_error(4); }
     t->state=2;t->futex_address=cpu->gpr[0];t->deadline_ns=deadline;t->realtime=(unsigned)realtime;t->bitset=bits;t->private_wait=(op&128)!=0;
     t->futex_backing=shared;t->futex_offset=shared_offset;
     if(t->futex_count)hvf_futex_count_down(t->futex_count);
@@ -1593,7 +1645,7 @@ static int hvf_fault(unsigned signal,uint64_t pc,uint64_t address,unsigned ec) {
     if(schedule_active && schedule_tasks[process_pid-1].terminate_signal==9)return -1; /* OOM-killed: the fault was the page it could not get */
     if(schedule_active) {
         ScheduledTask *task=&schedule_tasks[process_pid-1];unsigned index=signal-1;uint64_t bit=UINT64_C(1)<<index;
-        if(job_control_enabled && task->signal_handler[index] && !(*signal_mask_now()&bit) && !(task->signal_ignored&bit)) {
+        if(job_control_enabled && task_sig(task)->handler[index] && !(*signal_mask_now()&bit) && !(task_sig(task)->ignored&bit)) {
             /* ILL_ILLOPC at the instruction; BUS_ADRALN, and SEGV_ACCERR on a mapped page, else SEGV_MAPERR, at the address. */
             /* Per thread: JVM safepoints fault many threads at once, and each handler
                needs its own si_code and si_addr. */
@@ -1618,7 +1670,7 @@ static int hvf_fault(unsigned signal,uint64_t pc,uint64_t address,unsigned ec) {
 static int signal_deliverable(void) {
     if(!job_control_enabled || !schedule_active)return 0;
     ScheduledTask *task=&schedule_tasks[process_pid-1];Thread *th=thread_current();
-    return ((task->signal_pending|(th?th->signal_pending:0)) & ~*signal_mask_now() & ~task->signal_ignored)!=0;
+    return ((task->signal_pending|(th?th->signal_pending:0)) & ~*signal_mask_now() & ~task_sig(task)->ignored)!=0;
 }
 /* nanosleep and relative clock_nanosleep shorter than a millisecond: sleep on the
    host, holding no lock. Through the scheduler a sleep lasts at least its poll
@@ -1973,7 +2025,8 @@ static int hvf_slice_run(void) {
                 result=guest_syscall();
                 if((call>=143 && call<=147) || call==149 || call==277)hvf_fast_push(); /* set*id, seccomp: sibling threads' answers change */
                 if(result==-3 && fork && (int64_t)cpu->gpr[0]>0) {     /* the child starts single-threaded, on new tables */
-                    hvf_main_clear_tid[cpu->gpr[0]]=0;hvf_views[cpu->gpr[0]].stale=HVF_STALE_NEW;
+                    hvf_main_clear_tid[cpu->gpr[0]]=0;
+                    if(share || fork_shared_private || !hvf_view_fork(cpu->gpr[0]))hvf_views[cpu->gpr[0]].stale=HVF_STALE_NEW; /* else a copy of the parent's */
                     if(fork_shared_private)hvf_own_view->stale=HVF_STALE_COW; /* the fork shared this process's private pages */
                 }
                 if(exec && process_exec_count!=execs)hvf_exec_threads();

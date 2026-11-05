@@ -26,10 +26,31 @@ static MemoryBacking *backing_descriptor(size_t size) {
     size_t page=(size_t)vm_page_size;
     if(!size || size>SIZE_MAX-(page-1)) { errno=ENOMEM;return NULL; }
     size_t mapped=(size+page-1)/page*page,count=mapped/page;
-    if(count>(SIZE_MAX-sizeof(MemoryBacking))/sizeof(BackingPage *)) { errno=ENOMEM;return NULL; }
-    MemoryBacking *backing=resource_metadata(sizeof(*backing)+count*sizeof(BackingPage *));
+    if(count>(SIZE_MAX-sizeof(MemoryBacking))/(sizeof(BackingPage *)+1)) { errno=ENOMEM;return NULL; }
+    MemoryBacking *backing=resource_metadata(sizeof(*backing)+count*sizeof(BackingPage *)+(count+63)/64*sizeof(uint16_t));
     if(backing) { backing->refs=1;backing->size=size;backing->mapped_size=mapped;backing->page_size=page; }
     return backing;
+}
+/* Owned host pages counted per 64 (after pages[] in the descriptor), so walks of a
+   backing's pages skip what it does not own: Go's heap lies gigabytes into its 12 GiB
+   arena, so used reached ~300k pages while it owned a few hundred, and every walk to
+   used (a fork's overlay and hold, a restore, the reaper's release) cost 30-40 us. */
+static uint16_t *backing_groups(const MemoryBacking *b) { return (uint16_t *)(void *)((unsigned char *)(uintptr_t)b+sizeof(*b)+b->mapped_size/b->page_size*sizeof(BackingPage *)); }
+/* pages[i] = page, counted. */
+static void backing_set(MemoryBacking *b,size_t i,BackingPage *page) {
+    uint16_t *g=&backing_groups(b)[i/64];
+    if(!b->pages[i] && page)(*g)++;else if(b->pages[i] && !page)(*g)--;
+    b->pages[i]=page;
+}
+/* The first owned page of b in [i, end), or end. */
+static size_t backing_next(const MemoryBacking *b,size_t i,size_t end) {
+    const uint16_t *g=backing_groups(b);
+    while(i<end) {
+        if(!g[i/64]) { i=(i/64+1)*64;continue; }
+        if(b->pages[i])return i;
+        i++;
+    }
+    return end;
 }
 /* Sources with live snapshots (by address and a serial, as freed addresses are
    reused): when the last snapshot's host memory is deallocated the source thaws.
@@ -96,7 +117,7 @@ static long backing_materialize(MemoryBacking *b,size_t first,size_t last) {
     for(size_t i=first;i<=last;i++)if(backing_inherits(b,i)) {
         memcpy(b->bytes+i*ps,base->bytes+i*ps,ps);b->inherit[i>>6]&=~(UINT64_C(1)<<(i&63));
         if(b->pages[i])backing_page_release(b->pages[i],ps);
-        b->pages[i]=&group->pages[next++];if(i+1>b->used)b->used=i+1;
+        backing_set(b,i,&group->pages[next++]);if(i+1>b->used)b->used=i+1;
     }
     PROFILE_ADD(profile_overlay_copies,count);
     return (long)count;
@@ -120,8 +141,8 @@ static void backing_vm_release(MemoryBacking *backing) {
     }
     if(backing->bytes && mach_vm_deallocate(mach_task_self(),(mach_vm_address_t)backing->bytes,backing->mapped_size)!=KERN_SUCCESS)
         fail("Cannot release guest VM backing");
-    for(size_t i=0;i<backing->used;i++)
-        if(backing->pages[i])backing_page_release(backing->pages[i],backing->page_size);
+    for(size_t i=backing_next(backing,0,backing->used);i<backing->used;i=backing_next(backing,i+1,backing->used))
+        backing_page_release(backing->pages[i],backing->page_size);
     free(backing);
 }
 static void backing_free_now(MemoryBacking *backing) {
@@ -185,20 +206,20 @@ static void *backing_reaper(void *unused) {
         while(dead) {
             MemoryBacking *next=dead->reap_next;
             if(dead->recycle) {
-                size_t marked=0;
-                for(size_t i=0;i<dead->used;i++)marked+=dead->pages[i]!=NULL;
+                size_t marked=0,used=dead->used;
+                for(size_t i=backing_next(dead,0,used);i<used;i=backing_next(dead,i+1,used))marked++;
                 size_t warm=marked>BACKING_POOL_PAGES/256?marked*dead->page_size:0;   /* a few pages: kept as before, untimed */
                 pthread_mutex_lock(&backing_reap_lock);               /* a place first: no zeroing for memory that is freed */
                 int kept=backing_pool_count+backing_pool_reserved<BACKING_POOL && (!backing_large(dead) || backing_pool_large<BACKING_POOL_LARGE) && backing_pool_warm+warm<=BACKING_POOL_WARM;
                 if(kept) { backing_pool_reserved++;backing_pool_large+=(unsigned)backing_large(dead);backing_pool_warm+=warm; }
                 pthread_mutex_unlock(&backing_reap_lock);
                 if(kept) {
-                    for(size_t i=0;i<dead->used;i++)if(dead->pages[i]) { memset(dead->bytes+i*dead->page_size,0,dead->page_size);dead->pages[i]=NULL; }
+                    for(size_t i=backing_next(dead,0,used);i<used;i=backing_next(dead,i+1,used)) { memset(dead->bytes+i*dead->page_size,0,dead->page_size);backing_set(dead,i,NULL); }
                     dead->used=0;dead->warm=warm;
                     pthread_mutex_lock(&backing_reap_lock);
                     backing_pool_reserved--;backing_pool[backing_pool_count++]=dead;dead=NULL;backing_pool_used_ns=backing_now_ns();
                     pthread_mutex_unlock(&backing_reap_lock);
-                } else { for(size_t i=0;i<dead->used;i++)dead->pages[i]=NULL;dead->used=0; }   /* zero marks only: freed below */
+                } else { for(size_t i=backing_next(dead,0,used);i<used;i=backing_next(dead,i+1,used))backing_set(dead,i,NULL);dead->used=0; }   /* zero marks only: freed below */
             }
             if(dead)backing_free_now(dead);            /* its pages went already: used is 0 */
             dead=next;
@@ -211,11 +232,11 @@ static void *backing_reaper(void *unused) {
 static int backing_reap(MemoryBacking *backing) {
     static int started;
     if(!backing_reaping)return 0;
-    size_t owned=0;
-    for(size_t i=0;i<backing->used;i++)owned+=backing->pages[i]!=NULL;
+    size_t owned=0,used=backing->used;
+    for(size_t i=backing_next(backing,0,used);i<used;i=backing_next(backing,i+1,used))owned++;
     backing->recycle=backing_dead_image && !__atomic_load_n(&backing->unpooled,__ATOMIC_RELAXED) && !backing->frozen && !backing->cow_copy && backing->bytes && owned<=BACKING_POOL_PAGES;
-    for(size_t i=0;i<backing->used;i++)if(backing->pages[i]) {
-        backing_page_release(backing->pages[i],backing->page_size);backing->pages[i]=backing->recycle?&backing_zero_mark:NULL;
+    for(size_t i=backing_next(backing,0,used);i<used;i=backing_next(backing,i+1,used)) {
+        backing_page_release(backing->pages[i],backing->page_size);backing_set(backing,i,backing->recycle?&backing_zero_mark:NULL);
     }
     if(!backing->recycle)backing->used=0;
     /* A dead image's snapshot: nothing reads it again (no guest code runs on it, it is
@@ -275,7 +296,7 @@ static MemoryBacking *backing_overlay(MemoryBacking *base) {
     if(base->base && backing_materialize(base,0,SIZE_MAX)<0)return NULL;    /* a base reads nothing from another */
     size_t pages=base->used,words=(pages+63)/64;
     uint64_t *bits=words?calloc(words,sizeof(uint64_t)):NULL;if(words && !bits)return NULL;
-    for(size_t i=0;i<pages;i++)if(base->pages[i])bits[i>>6]|=UINT64_C(1)<<(i&63);
+    for(size_t i=backing_next(base,0,pages);i<pages;i=backing_next(base,i+1,pages))bits[i>>6]|=UINT64_C(1)<<(i&63);
     MemoryBacking *copy=backing_region(base->size);if(!copy) { free(bits);return NULL; }
     copy->inherit=bits;copy->inherit_pages=pages;copy->base=base;
     pthread_mutex_lock(&backing_thaw_lock);__atomic_add_fetch(&base->based,1,__ATOMIC_ACQ_REL);pthread_mutex_unlock(&backing_thaw_lock);
@@ -290,7 +311,7 @@ static MemoryBacking *backing_alloc_charged(size_t size,int charge) {
     size_t count=backing->mapped_size/backing->page_size;
     BackingPageGroup *group=backing_page_group(count,backing->page_size,charge);
     if(!group) { backing_free_now(backing);return NULL; }
-    for(size_t i=0;i<count;i++)backing->pages[i]=&group->pages[i];
+    for(size_t i=0;i<count;i++)backing_set(backing,i,&group->pages[i]);
     backing->used=count;return backing;
 }
 static MemoryBacking *backing_alloc(size_t size,int clear) { (void)clear;return backing_alloc_charged(size,1); } /* Mach pages start zero */
@@ -314,7 +335,7 @@ static void backing_discard(MemoryBacking *backing,size_t offset,size_t size) {
         unsigned char *bytes=backing->bytes+i*backing->page_size;size_t length=(run-i)*backing->page_size;
         memset(bytes,0,length);
         if(!keep)(void)madvise(bytes,length,MADV_FREE_REUSABLE);
-        for(;i<run;i++) { backing_page_release(backing->pages[i],backing->page_size);backing->pages[i]=NULL; }
+        for(;i<run;i++) { backing_page_release(backing->pages[i],backing->page_size);backing_set(backing,i,NULL); }
     }
 }
 static MemoryBacking *backing_snapshot(MemoryBacking *source) {
@@ -322,14 +343,14 @@ static MemoryBacking *backing_snapshot(MemoryBacking *source) {
     if(source->base && backing_materialize(source,0,SIZE_MAX)<0) { errno=ENOMEM;return NULL; }   /* an overlay's host memory lacks its base's pages */
     MemoryBacking *copy=backing_descriptor(source->size);if(!copy)return NULL;
     size_t count=source->used;
-    for(size_t i=0;i<count;i++)if(source->pages[i] && source->pages[i]->refs==SIZE_MAX) { free(copy);errno=ENOMEM;return NULL; }
+    for(size_t i=backing_next(source,0,count);i<count;i=backing_next(source,i+1,count))if(source->pages[i]->refs==SIZE_MAX) { free(copy);errno=ENOMEM;return NULL; }
     mach_vm_address_t address=0;vm_prot_t current=0,maximum=0;
     source->frozen=1;
     kern_return_t result=mach_vm_remap(mach_task_self(),&address,source->mapped_size,0,
         VM_FLAGS_ANYWHERE,mach_task_self(),(mach_vm_address_t)source->bytes,TRUE,&current,&maximum,VM_INHERIT_NONE);
     if(result!=KERN_SUCCESS) { free(copy);errno=ENOMEM;return NULL; }
     copy->bytes=(unsigned char *)address;copy->cow_copy=1;
-    for(size_t i=0;i<count;i++) { copy->pages[i]=source->pages[i];if(copy->pages[i])__atomic_fetch_add(&copy->pages[i]->refs,1,__ATOMIC_ACQ_REL); }
+    for(size_t i=backing_next(source,0,count);i<count;i=backing_next(source,i+1,count)) { backing_set(copy,i,source->pages[i]);__atomic_fetch_add(&copy->pages[i]->refs,1,__ATOMIC_ACQ_REL); }
     copy->used=count;backing_thaw_register(source,copy);
     if(profiling) { PROFILE_ADD(profile_snapshots,1);PROFILE_ADD(profile_snapshot_ns,profile_now_ns()-profile_at); }
     return copy;
@@ -339,13 +360,13 @@ static MemoryBacking *backing_snapshot(MemoryBacking *source) {
 static MemoryBacking *backing_clone(const MemoryBacking *source,size_t owned) {
     if(source->base) {                                  /* an overlay: its base's pages first (then more are owned) */
         if(backing_materialize((MemoryBacking *)source,0,SIZE_MAX)<0)return NULL;
-        owned=0;for(size_t i=0;i<source->used;i++)owned+=source->pages[i]!=NULL;
+        owned=0;for(size_t i=backing_next(source,0,source->used);i<source->used;i=backing_next(source,i+1,source->used))owned++;
     }
     MemoryBacking *copy=backing_region(source->size);if(!copy)return NULL;
     BackingPageGroup *group=owned?backing_page_group(owned,source->page_size,1):NULL;
     if(owned && !group) { backing_free_now(copy);return NULL; }
-    for(size_t i=0,next=0;i<source->used;i++)if(source->pages[i]) {
-        copy->pages[i]=&group->pages[next++];copy->used=i+1;
+    for(size_t i=backing_next(source,0,source->used),next=0;i<source->used;i=backing_next(source,i+1,source->used)) {
+        backing_set(copy,i,&group->pages[next++]);copy->used=i+1;
         memcpy(copy->bytes+i*copy->page_size,source->bytes+i*copy->page_size,copy->page_size);
     }
     return copy;
@@ -362,7 +383,7 @@ static MemoryBacking *backing_map_file(int fd,off_t offset,size_t size) {
     if(!group) { free(backing);return NULL; }
     void *bytes=mmap(NULL,backing->mapped_size,PROT_READ|PROT_WRITE,MAP_PRIVATE,fd,offset);
     if(bytes==MAP_FAILED) { free(group);free(backing);return NULL; }
-    for(size_t i=0;i<count;i++)backing->pages[i]=&group->pages[i];
+    for(size_t i=0;i<count;i++)backing_set(backing,i,&group->pages[i]);
     backing->used=count;backing->bytes=bytes;backing->cow_copy=1;return backing;
 }
 /* Stage the entire charge before changing metadata. A failed multi-page range
@@ -381,7 +402,7 @@ static int backing_prepare(MemoryBacking *backing,size_t offset,size_t size,int 
     size_t next=0;
     for(size_t i=first;i<=last;i++)if(!backing->pages[i] || backing->pages[i]->refs>1) {
         if(backing->pages[i])backing_page_release(backing->pages[i],backing->page_size);
-        backing->pages[i]=&group->pages[next++];
+        backing_set(backing,i,&group->pages[next++]);
     }
     if(last+1>backing->used)backing->used=last+1;
     *changed=1;return 1;

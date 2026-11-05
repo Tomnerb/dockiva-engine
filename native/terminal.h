@@ -68,7 +68,7 @@ static void terminal_pump(int wait) {
 static uint64_t terminal_read(unsigned char *data,size_t count) {
     ScheduledTask *current=&schedule_tasks[process_pid-1];
     if(current->pgid!=terminal_foreground) {
-        if(!job_control_enabled || ((current->signal_ignored|current->signal_mask)&(UINT64_C(1)<<20)))return linux_error(5);
+        if(!job_control_enabled || ((task_sig(current)->ignored|current->signal_mask)&(UINT64_C(1)<<20)))return linux_error(5);
         for(unsigned i=0;i<=process_count;i++)if(schedule_tasks[i].state && schedule_tasks[i].pgid==current->pgid)
             schedule_signal(&schedule_tasks[i],21);
         return IO_BLOCK;
@@ -139,7 +139,7 @@ static uint64_t terminal_ioctl(GuestIO *fd) {
             if(!group || group>INT32_MAX)return linux_error(22);
             if(!terminal_group_exists(group))return linux_error(3);
             ScheduledTask *current=&schedule_tasks[process_pid-1];
-            if(current->pgid!=terminal_foreground && terminal_group_exists(terminal_foreground) && !((current->signal_ignored|current->signal_mask)&(UINT64_C(1)<<21))) {
+            if(current->pgid!=terminal_foreground && terminal_group_exists(terminal_foreground) && !((task_sig(current)->ignored|current->signal_mask)&(UINT64_C(1)<<21))) {
                 if(!job_control_enabled)return linux_error(5);
                 for(unsigned i=0;i<=process_count;i++)if(schedule_tasks[i].state && schedule_tasks[i].pgid==current->pgid)
                     schedule_signal(&schedule_tasks[i],22);
