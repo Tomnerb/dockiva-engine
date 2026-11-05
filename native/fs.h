@@ -350,11 +350,15 @@ static int fs_add_mount(const char *host,const char *guest,int readonly) {
         p=*q?q+1:q;
     }
     if(fs_mount_index(guest)>=0) { errno=EEXIST;return -1; }
-    int fd=open(host,O_RDONLY|O_CLOEXEC);if(fd<0)return -1;
-    struct stat st;if(fstat(fd,&st)) { int saved=errno;close(fd);errno=saved;return -1; }
+    struct stat st;int fd=-1;
+    if(stat(host,&st))return -1;
+    if(!S_ISSOCK(st.st_mode)) {                            /* (a socket cannot be opened) */
+        if((fd=open(host,O_RDONLY|O_CLOEXEC))<0)return -1;
+        if(fstat(fd,&st)) { int saved=errno;close(fd);errno=saved;return -1; }
+    }
     char name[256]="";
-    if(S_ISREG(st.st_mode)) {                              /* a file: keep its directory and name */
-        close(fd);
+    if(S_ISREG(st.st_mode) || S_ISSOCK(st.st_mode)) {      /* a file or a socket (an SSH agent's): its directory and name */
+        if(fd>=0)close(fd);
         char real[PATH_MAX];if(!realpath(host,real))return -1;
         char *slash=strrchr(real,'/');if(!slash || strlen(slash+1)>255) { errno=EINVAL;return -1; }
         strcpy(name,slash+1);

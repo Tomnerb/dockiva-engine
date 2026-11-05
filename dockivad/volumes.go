@@ -151,7 +151,9 @@ func (b *engine) parseMounts(host, body obj, declared []string) []any {
 		if e != nil {
 			panic(apiError{400, "Bind source path does not exist: " + source})
 		}
-		reject(st.IsDir() || st.Mode().IsRegular(), "Bind source must be a directory or a regular file: "+source)
+		// A socket too, as Docker binds them (an SSH agent's, a server's): the container
+		// connects to the Mac's socket through it.
+		reject(st.IsDir() || st.Mode().IsRegular() || st.Mode()&os.ModeSocket != 0, "Bind source must be a directory, a regular file or a socket: "+source)
 		return source
 	}
 	if host["Binds"] != nil {
