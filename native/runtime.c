@@ -1085,21 +1085,43 @@ static int run(uint64_t steps) {
 /* "prestart": started (under its guard) before its container is known, so a start
    does not wait for this process's launch, about 4 ms. Fd 4 then brings the run: a
    4-byte length and the arguments as NUL-terminated strings (argv[0] first), with
-   its standard output and error as SCM_RIGHTS. The guard set the 1 TiB file-size
-   cap; the run's own (--file-limit-mib, else 16 MiB as the guard's) is set here. */
+   its standard output and error as SCM_RIGHTS, and optionally an exit-report pipe
+   (prestart_report). The guard set the 1 TiB file-size cap; the run's own
+   (--file-limit-mib, else 16 MiB as the guard's) is set here. */
 #include <sys/resource.h>
 #include <sys/socket.h>
+/* The exit report: once main's run has ended and cleanup() is done (the upper
+   layer written back), this process closes its output and writes the exit status
+   as one byte, so the supervisor ends the run without waiting for this process's
+   teardown (about 1 ms: the VM and its mappings) and its guard. Only main's own
+   return reports: exit() from elsewhere (fail, an OOM kill) and signals do not,
+   and the supervisor then waits for the guard as before. */
+static int prestart_report_fd=-1,prestart_exit_code=-1;
+static pid_t prestart_pid;
+static void prestart_report(void) {
+    if(prestart_report_fd<0 || prestart_exit_code<0 || getpid()!=prestart_pid)return; /* a forked guest process inherits atexit */
+    fflush(stdout);fflush(stderr);
+    close(1);close(2);
+    unsigned char code=(unsigned char)prestart_exit_code;
+    (void)!write(prestart_report_fd,&code,1);
+    close(prestart_report_fd);
+}
 static void prestart_receive(int *argc,char ***argv) {
     static char job[1u<<20];static char *args[EXEC_ENTRIES*2+256];
-    uint32_t len=0;char control[CMSG_SPACE(2*sizeof(int))];
+    uint32_t len=0;char control[CMSG_SPACE(3*sizeof(int))];
     struct iovec iov={&len,sizeof len};struct msghdr m={0};
     m.msg_iov=&iov;m.msg_iovlen=1;m.msg_control=control;m.msg_controllen=sizeof control;
     ssize_t n;
     do n=recvmsg(4,&m,MSG_WAITALL); while(n<0 && errno==EINTR);
     if(n==0)_exit(0);                                                          /* not needed: the engine went on without it */
     struct cmsghdr *c=n==(ssize_t)sizeof len?CMSG_FIRSTHDR(&m):NULL;
-    if(!c || c->cmsg_level!=SOL_SOCKET || c->cmsg_type!=SCM_RIGHTS || c->cmsg_len!=CMSG_LEN(2*sizeof(int)) || (m.msg_flags&MSG_CTRUNC))fail("prestart: invalid run");
-    int fds[2];memcpy(fds,CMSG_DATA(c),sizeof fds);
+    if(!c || c->cmsg_level!=SOL_SOCKET || c->cmsg_type!=SCM_RIGHTS || (c->cmsg_len!=CMSG_LEN(2*sizeof(int)) && c->cmsg_len!=CMSG_LEN(3*sizeof(int))) || (m.msg_flags&MSG_CTRUNC))fail("prestart: invalid run");
+    int fds[3]={-1,-1,-1};memcpy(fds,CMSG_DATA(c),c->cmsg_len-CMSG_LEN(0));
+    if(fds[2]>=0) {
+        if(fcntl(fds[2],F_SETFD,FD_CLOEXEC)<0)fail("prestart: exit report");
+        prestart_report_fd=fds[2];prestart_pid=getpid();
+        atexit(prestart_report);                                               /* before main's atexit(cleanup): runs after it */
+    }
     if(!len || len>sizeof job)fail("prestart: invalid run length");
     for(uint32_t got=0;got<len;) {
         ssize_t r=read(4,job+got,len-got);
@@ -1348,7 +1370,7 @@ int main(int argc,char **argv) {
         io_fds[0]=(GuestIO){IO_INPUT,0,0,NULL,NULL,NULL,NULL,NULL,NULL};
     }
 #ifdef VMFREE_HVF
-    if(use_hvf)return hvf_run(steps);
+    if(use_hvf)return prestart_exit_code=hvf_run(steps)&255;
 #endif
     return run(steps);
 }

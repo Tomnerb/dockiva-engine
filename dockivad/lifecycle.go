@@ -205,22 +205,33 @@ func (b *engine) start(name string) {
 	ready, readyEnd, e := os.Pipe()
 	check(e)
 	defer ready.Close()
+	// And this one once its last status is saved and the container's lock let go:
+	// the container is the engine's again before the supervisor's process is gone.
+	over, overEnd, e := os.Pipe()
+	if e != nil {
+		readyEnd.Close()
+		check(e)
+	}
 	args := []string{p, b.Native, b.Worker, generation}
-	env := []string{"DOCKIVA_DEFAULT_BIND_IP=" + b.BindIP, "DOCKIVA_PROBES=" + knownProbes(), "DOCKIVA_READY_FD=4"}
-	cmd := b.takeSpare(args, env, f, readyEnd, log)
+	env := []string{"DOCKIVA_DEFAULT_BIND_IP=" + b.BindIP, "DOCKIVA_PROBES=" + knownProbes(), "DOCKIVA_READY_FD=4", "DOCKIVA_OVER_FD=5"}
+	cmd := b.takeSpare(args, env, f, readyEnd, log, overEnd)
 	if cmd == nil {
 		cmd = exec.Command(b.Self, append([]string{"_supervise"}, args...)...)
-		cmd.ExtraFiles = []*os.File{f, readyEnd}
+		cmd.ExtraFiles = []*os.File{f, readyEnd, overEnd}
 		cmd.Stdout = log
 		cmd.Stderr = log
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 		cmd.Env = append(os.Environ(), env...)
 		if e = cmd.Start(); e != nil {
 			readyEnd.Close()
+			overEnd.Close()
+			over.Close()
 			check(e)
 		}
 	}
 	readyEnd.Close()
+	overEnd.Close()
+	go func() { _, _ = over.Read(make([]byte, 1)); over.Close(); notifyChanged() }() // EOF
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait(); notifyChanged() }() // its runs are over (a restart keeps it)
 	signaled := make(chan struct{})
@@ -793,6 +804,14 @@ func supervise(p, native, worker, generation string) (result error) {
 			ready.Close()
 		}
 	}()
+	// And fd 5 once the last status is saved, after letting go of the container's
+	// lock: the engine may remove or start the container again while this process
+	// (and, after an exit report, the run's guard) is still on its way out.
+	var over *os.File
+	if os.Getenv("DOCKIVA_OVER_FD") == "5" {
+		syscall.CloseOnExec(5)
+		over = os.NewFile(5, "over")
+	}
 	var listener net.Listener
 	var cmd *exec.Cmd
 	var writer *os.File
@@ -820,6 +839,10 @@ func supervise(p, native, worker, generation string) (result error) {
 		_ = os.Remove(filepath.Join(p, "control.json"))
 		if e := safeRun(func() { store(filepath.Join(p, "status.json"), status, final) }); e != nil {
 			result = e
+		}
+		if over != nil {
+			_ = syscall.Flock(3, syscall.LOCK_UN) // also the guard's copy: one open file
+			over.Close()
 		}
 	}()
 	c := readObject(filepath.Join(p, "config.json"))
@@ -864,6 +887,7 @@ func supervise(p, native, worker, generation string) (result error) {
 	// output, which it appends to stdout.log; attach and resize reach it by control.
 	var input, terminal *os.File
 	var copied, healthStop chan struct{}
+	reported := -1 // the run's exit status from the runtime's exit report; -1: from its guard
 	var started time.Time
 	// launchWorker starts the run's guard, which starts the runtime.
 	launchWorker := func() {
@@ -911,13 +935,34 @@ func supervise(p, native, worker, generation string) (result error) {
 		finished = false
 		_ = os.Remove(filepath.Join(p, "oom"))    // OOMKilled describes the latest run
 		_ = os.Remove(filepath.Join(p, "paused")) // left by a run that ended frozen
-		if guard, liveness, drained := prestartedRun(invocation, c, out, errout); guard != nil {
+		reported = -1
+		if guard, liveness, drained, report := prestartedRun(invocation, c, out, errout); guard != nil {
 			// A spare supervisor's first run: its guard and runtime are already started.
+			// The run is over at the runtime's exit report, or else at its guard's exit;
+			// after a report, the guard and runtime are reaped in the background.
 			cmd, writer = guard, liveness
 			copied = make(chan struct{})
 			close(copied)
 			done = make(chan error, 1)
-			go func(cmd *exec.Cmd, done chan error) { e := cmd.Wait(); drained(); done <- e }(cmd, done)
+			waited := make(chan error, 1)
+			go func(cmd *exec.Cmd) { waited <- cmd.Wait() }(cmd)
+			go func(done chan error) {
+				select {
+				case code, ok := <-report:
+					if ok {
+						drained()
+						reported = code
+						done <- nil
+						return
+					}
+					e := <-waited
+					drained()
+					done <- e
+				case e := <-waited:
+					drained()
+					done <- e
+				}
+			}(done)
 		} else {
 			launchWorker()
 		}
@@ -947,9 +992,13 @@ func supervise(p, native, worker, generation string) (result error) {
 		case <-copied:
 		case <-time.After(2 * time.Second):
 		}
-		// Also cover an externally killed guard: no worker may outlive its run.
+		// Also cover an externally killed guard: no worker may outlive its run (after
+		// an exit report, the runtime is only tearing itself down).
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		code := cmd.ProcessState.ExitCode()
+		code := reported
+		if code < 0 {
+			code = cmd.ProcessState.ExitCode()
+		}
 		if code < 0 {
 			code = 128 + int(cmd.ProcessState.Sys().(syscall.WaitStatus).Signal())
 		}

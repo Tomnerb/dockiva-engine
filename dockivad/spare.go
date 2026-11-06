@@ -81,9 +81,10 @@ func (s *spare) discard() {
 }
 
 // takeSpare hands a container to the waiting spare, which then runs
-// supervise(args...) with lock as fd 3, ready as fd 4 and log as its output.
-// nil: no spare, or it could not take it; the caller starts a supervisor itself.
-func (b *engine) takeSpare(args, env []string, lock, ready, log *os.File) *exec.Cmd {
+// supervise(args...) with lock as fd 3, ready as fd 4, over as fd 5 and log as
+// its output. nil: no spare, or it could not take it; the caller starts a
+// supervisor itself.
+func (b *engine) takeSpare(args, env []string, lock, ready, log, over *os.File) *exec.Cmd {
 	b.spares.Lock()
 	s := b.spares.next
 	b.spares.next = nil
@@ -95,7 +96,7 @@ func (b *engine) takeSpare(args, env []string, lock, ready, log *os.File) *exec.
 	defer b.refillSpare()
 	msg, e := json.Marshal(spareJob{args, env})
 	if e == nil {
-		rights := syscall.UnixRights(int(lock.Fd()), int(ready.Fd()), int(log.Fd()))
+		rights := syscall.UnixRights(int(lock.Fd()), int(ready.Fd()), int(log.Fd()), int(over.Fd()))
 		var n int
 		n, _, e = s.conn.WriteMsgUnix(msg, rights, nil)
 		if e == nil && n != len(msg) {
@@ -183,55 +184,56 @@ func (r *prestart) end() {
 
 // prestartedRun hands a run to the spare's prestarted runtime when it runs the
 // same runtime, without a terminal or input (those need the launch's own stdio).
-// It returns the guard, its liveness pipe and a wait for the run's output to be
-// copied; nil when the run is to be launched as usual.
-func prestartedRun(invocation []string, c obj, out, errout io.Writer) (*exec.Cmd, *os.File, func()) {
+// It returns the guard, its liveness pipe, a wait for the run's output to be
+// copied, and the runtime's exit report: one exit status, sent once the run is over
+// and before the runtime's own teardown, or closed without one (it then ends
+// another way: the guard's exit tells). nil when the run is to be launched as usual.
+func prestartedRun(invocation []string, c obj, out, errout io.Writer) (*exec.Cmd, *os.File, func(), <-chan int) {
 	r := prestarted
 	prestarted = nil
 	if r == nil {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	if invocation[0] != r.runtime || c["tty"] == true || c["open_stdin"] == true {
 		r.end()
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
-	var outR, outW, errR, errW *os.File
-	var e error
-	if outR, outW, e = os.Pipe(); e == nil {
-		if errR, errW, e = os.Pipe(); e != nil {
-			outR.Close()
-			outW.Close()
+	var reads, writes []*os.File
+	closeAll := func(files []*os.File) {
+		for _, f := range files {
+			f.Close()
 		}
+	}
+	var e error
+	for range 3 { // stdout, stderr, the exit report
+		var rd, wr *os.File
+		if rd, wr, e = os.Pipe(); e != nil {
+			break
+		}
+		reads, writes = append(reads, rd), append(writes, wr)
 	}
 	if e == nil {
 		payload := []byte(strings.Join(invocation, "\x00") + "\x00")
 		msg := binary.NativeEndian.AppendUint32(nil, uint32(len(payload)))
 		msg = append(msg, payload...)
-		e = syscall.Sendmsg(r.job, msg[:4], syscall.UnixRights(int(outW.Fd()), int(errW.Fd())), nil, 0)
+		e = syscall.Sendmsg(r.job, msg[:4], syscall.UnixRights(int(writes[0].Fd()), int(writes[1].Fd()), int(writes[2].Fd())), nil, 0)
 		for sent := 4; e == nil && sent < len(msg); {
 			var n int
 			n, e = syscall.Write(r.job, msg[sent:])
 			sent += n
 		}
-		outW.Close()
-		errW.Close()
-		if e != nil {
-			outR.Close()
-			errR.Close()
-		}
 	}
+	closeAll(writes)
 	if e != nil {
+		closeAll(reads)
 		r.end()
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	syscall.Close(r.job)
 	var copies sync.WaitGroup
-	for _, p := range []struct {
-		to   io.Writer
-		from *os.File
-	}{{out, outR}, {errout, errR}} {
+	for i, to := range []io.Writer{out, errout} {
 		copies.Add(1)
-		go func() { defer copies.Done(); defer p.from.Close(); _, _ = io.Copy(p.to, p.from) }()
+		go func() { defer copies.Done(); defer reads[i].Close(); _, _ = io.Copy(to, reads[i]) }()
 	}
 	drained := func() { // as cmd.WaitDelay: output a leftover process holds does not delay the run's end
 		ch := make(chan struct{})
@@ -241,11 +243,25 @@ func prestartedRun(invocation []string, c obj, out, errout io.Writer) (*exec.Cmd
 		case <-time.After(time.Second):
 		}
 	}
-	return r.cmd, r.liveness, drained
+	report := make(chan int, 1)
+	go func() {
+		defer reads[2].Close()
+		var b [1]byte
+		if n, _ := reads[2].Read(b[:]); n == 1 {
+			report <- int(b[0])
+		}
+		close(report)
+	}()
+	return r.cmd, r.liveness, drained, report
 }
 
 // superviseSpare is a spare's life: wait for a container, then supervise it.
 func superviseSpare(native, worker string) error {
+	// Hold fds 4 and 5 (on /dev/null, its standard input) until the container's
+	// ready and over pipes replace them below, so nothing opened meanwhile, the Go
+	// runtime's kqueue among them, takes those numbers.
+	check(syscall.Dup2(0, 4))
+	check(syscall.Dup2(0, 5))
 	prestarted = startPrestart(native, worker)
 	f := os.NewFile(3, "spare")
 	c, e := net.FileConn(f)
@@ -253,7 +269,7 @@ func superviseSpare(native, worker string) error {
 	check(e)
 	conn := c.(*net.UnixConn)
 	buf := make([]byte, 1<<20)
-	oob := make([]byte, syscall.CmsgSpace(3*4))
+	oob := make([]byte, syscall.CmsgSpace(4*4))
 	n, oobn, _, _, e := conn.ReadMsgUnix(buf, oob)
 	conn.Close()
 	if e != nil || n == 0 {
@@ -268,7 +284,7 @@ func superviseSpare(native, worker string) error {
 	reject(len(msgs) == 1, "Spare supervisor: expected one control message")
 	fds, e := syscall.ParseUnixRights(&msgs[0])
 	check(e)
-	reject(len(fds) == 3, "Spare supervisor: expected three descriptors")
+	reject(len(fds) == 4, "Spare supervisor: expected four descriptors")
 	var job spareJob
 	check(json.Unmarshal(buf[:n], &job))
 	reject(len(job.Args) == 4, "Invalid supervisor arguments")
@@ -282,8 +298,9 @@ func superviseSpare(native, worker string) error {
 		high[i] = int(r)
 		syscall.Close(fd)
 	}
-	for i, target := range []int{3, 4, 1, 2} { // as the exec'd supervisor gets them
-		check(syscall.Dup2(high[min(i, 2)], target))
+	// As the exec'd supervisor gets them: lock 3, ready 4, log 1 and 2, over 5.
+	for i, target := range []int{3, 4, 1, 2, 5} {
+		check(syscall.Dup2(high[[]int{0, 1, 2, 2, 3}[i]], target))
 	}
 	for _, fd := range high {
 		syscall.Close(fd)
