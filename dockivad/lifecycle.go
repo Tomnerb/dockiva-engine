@@ -1263,16 +1263,15 @@ func upperSync(p string, ended <-chan struct{}) {
 	}
 	f.Close()
 	defer os.Remove(request) // when the run did not
-	tick := time.NewTicker(2 * time.Millisecond)
-	defer tick.Stop()
 	deadline := time.After(3 * time.Second)
-	for exists(request) {
+	// The run answers at once when it has nothing to write: look again soon, then less often.
+	for wait := 100 * time.Microsecond; exists(request); wait = min(2*wait, 2*time.Millisecond) {
 		select {
 		case <-ended:
 			return
 		case <-deadline:
 			return
-		case <-tick.C:
+		case <-time.After(wait):
 		}
 	}
 }

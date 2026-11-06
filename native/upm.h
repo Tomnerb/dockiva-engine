@@ -344,15 +344,41 @@ static unsigned upm_pass(int force,uint64_t age) {
     return written;
 }
 /* The background writer: aged files every quarter second, everything closed on a sync
-   request (the file dockivad makes, removed once done), and early when memory fills. */
+   request (the file dockivad makes, removed once done), and early when memory fills.
+   A request wakes it at once (kqueue: an entry made in the request's directory). It was
+   a 20 ms sleep at utility QoS, which macOS stretches: requests waited 4-163 ms, docker
+   exec took ~135 ms more than without the memory layer and docker kill up to ~400 ms.
+   It waits at user-initiated QoS, as someone waits on a request, and passes over aged
+   files at utility. */
 static void *upm_writer(void *unused) {
     (void)unused;
-    pthread_set_qos_class_self_np(QOS_CLASS_UTILITY,0);
-    for(unsigned tick=0;!__atomic_load_n(&upm_stop,__ATOMIC_ACQUIRE);tick++) {
-        usleep(20000);
-        if(upm_sync[0] && !access(upm_sync,F_OK)) { (void)upm_pass(0,0);(void)unlink(upm_sync); }
-        else if(tick%12==0 && __atomic_load_n(&upm_files,__ATOMIC_RELAXED))(void)upm_pass(0,upm_fs->used>upm_bytes_max/2?0:UPM_AGE_NS);
+    char dir[1025];snprintf(dir,sizeof dir,"%s",upm_sync);
+    char *slash=strrchr(dir,'/');if(slash)*slash=0;
+    int kq=kqueue(),fd=slash?open(dir,O_EVTONLY|O_CLOEXEC):-1;
+    struct kevent change;EV_SET(&change,fd,EVFILT_VNODE,EV_ADD|EV_CLEAR,NOTE_WRITE,0,NULL);
+    if(kq>=0 && (fd<0 || kevent(kq,&change,1,NULL,0,NULL)<0)) { close(kq);kq=-1; }   /* then a 20 ms poll */
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED,0);
+    struct timespec now;clock_gettime(CLOCK_MONOTONIC,&now);
+    uint64_t aged=upm_ns(&now)+250000000;
+    while(!__atomic_load_n(&upm_stop,__ATOMIC_ACQUIRE)) {
+        if(!access(upm_sync,F_OK)) { (void)upm_pass(0,0);(void)unlink(upm_sync);continue; }   /* one made before the watch too */
+        clock_gettime(CLOCK_MONOTONIC,&now);
+        if(upm_ns(&now)>=aged) {
+            aged=upm_ns(&now)+250000000;
+            if(__atomic_load_n(&upm_files,__ATOMIC_RELAXED)) {
+                pthread_set_qos_class_self_np(QOS_CLASS_UTILITY,0);
+                (void)upm_pass(0,upm_fs->used>upm_bytes_max/2?0:UPM_AGE_NS);
+                pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED,0);
+            }
+            continue;
+        }
+        uint64_t left=aged-upm_ns(&now);
+        struct timespec wait={(time_t)(left/1000000000),(long)(left%1000000000)};
+        struct kevent event;
+        if(kq<0 || kevent(kq,NULL,0,&event,1,&wait)<0)usleep(20000);
     }
+    if(kq>=0)close(kq);
+    if(fd>=0)close(fd);
     return NULL;
 }
 /* --upper-memory SYNC: start; the root and its layers are open. */
