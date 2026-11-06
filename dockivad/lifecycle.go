@@ -798,6 +798,7 @@ func supervise(p, native, worker, generation string) (result error) {
 	var writer *os.File
 	var done chan error
 	finished := false
+	final := durable // how the last status is saved
 	defer func() {
 		if v := recover(); v != nil {
 			status["state"] = "failed"
@@ -817,11 +818,17 @@ func supervise(p, native, worker, generation string) (result error) {
 			listener.Close()
 		}
 		_ = os.Remove(filepath.Join(p, "control.json"))
-		if e := safeRun(func() { save(filepath.Join(p, "status.json"), status) }); e != nil {
+		if e := safeRun(func() { store(filepath.Join(p, "status.json"), status, final) }); e != nil {
 			result = e
 		}
 	}()
 	c := readObject(filepath.Join(p, "config.json"))
+	if c["auto_remove"] == true {
+		// docker run --rm: the container is removed right after this status, which
+		// only has to be whole. A power loss before the removal can leave it behind,
+		// stopped (as a --rm container can be after a Docker daemon crash).
+		final = whole
+	}
 	learnProbes(os.Getenv("DOCKIVA_PROBES"))
 	command := stringsOf(c["command"])
 	env := stringsOf(c["env"])
