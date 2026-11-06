@@ -491,12 +491,7 @@ func (b *engine) watch(stop <-chan struct{}) {
 	defer tick.Stop()
 	for {
 		wake := changed()
-		if remove := b.watchPass(); len(remove) > 0 {
-			for _, name := range remove {
-				_ = safeRun(func() { b.autoRemove(name) })
-			}
-			b.watchPass() // their destroy events
-		}
+		b.watchAndRemove()
 		select {
 		case <-stop:
 			return
@@ -504,6 +499,19 @@ func (b *engine) watch(stop <-chan struct{}) {
 		case <-watchNow:
 		case <-wake:
 		}
+	}
+}
+
+// watchAndRemove is a pass (events: an exited --rm container's die among them),
+// the removal of the exited --rm containers, and a pass for their destroy events.
+// The watcher runs it on every change; start's goroutine also runs it as soon as
+// a --rm container's supervisor is over, rather than through the watcher's wake.
+func (b *engine) watchAndRemove() {
+	if remove := b.watchPass(); len(remove) > 0 {
+		for _, name := range remove {
+			_ = safeRun(func() { b.autoRemove(name) })
+		}
+		b.watchPass() // their destroy events
 	}
 }
 

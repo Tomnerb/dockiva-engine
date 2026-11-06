@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -295,6 +296,30 @@ func (b *engine) createWith(name string, body obj, prepared *image) obj {
 	if exists(p) {
 		panic(apiError{409, "Container name already exists"})
 	}
+	// The stage first, and its status (the same for every container) written and
+	// synced while the config is worked out: after even a short idle moment (the
+	// docker CLI's own start), the first sync waits ~1-3 ms for the drive to wake.
+	// The stage is private until the rename below publishes it, so its files go
+	// straight to their names.
+	stage, err := os.MkdirTemp(b.State, ".creating-")
+	check(err)
+	statusDone := make(chan error, 1)
+	go func() {
+		statusDone <- safeRun(func() { writeSynced(filepath.Join(stage, "status.json"), obj{"state": "created"}) })
+	}()
+	statusSynced := sync.OnceValue(func() error { return <-statusDone })
+	var filesDone chan struct{} // once started: closed when the container's own files are made
+	var filesFailed any         // a panic making them, raised again below
+	committed := false
+	defer func() {
+		if !committed {
+			_ = statusSynced() // not removing the stage under its writers
+			if filesDone != nil {
+				<-filesDone
+			}
+			_ = os.RemoveAll(stage)
+		}
+	}()
 	allowed := map[string]bool{}
 	for _, k := range []string{"Image", "Cmd", "Entrypoint", "Env", "Labels", "HostConfig", "WorkingDir", "AttachStdout", "AttachStderr", "NetworkingConfig", "ExposedPorts", "Volumes", "User", "Tty", "OpenStdin", "StdinOnce", "AttachStdin", "Healthcheck", "Hostname", "Domainname", "StopTimeout", "StopSignal"} {
 		allowed[k] = true
@@ -391,6 +416,27 @@ func (b *engine) createWith(name string, body obj, prepared *image) obj {
 		reject(strings.HasPrefix(wd, "/"), "WorkingDir must be absolute")
 		pathName(wd[1:])
 		im.WorkingDir = wd
+	}
+	// Its own files over its image's (layers), unless it runs a build step on the
+	// stage's files or the engine runs with --rootfs copy: then a clone of them. A
+	// layered container's start empty, and are made from here on while the rest of
+	// this create and its syncs go on: the directories Docker creates (its working
+	// directory, the image's volumes), then what its runs need (prepareRun).
+	layered := prepared == nil && os.Getenv("DOCKIVA_ROOTFS") != "copy"
+	if layered {
+		own := *im
+		own.Root, own.Lower = filepath.Join(stage, "rootfs"), im.Root
+		check(mkdirGuest(own.Root))
+		dirs := append([]string{im.WorkingDir}, im.Volumes...)
+		filesDone = make(chan struct{})
+		go func() {
+			defer close(filesDone)
+			defer func() { filesFailed = recover() }()
+			for _, d := range dirs {
+				own.ensureDir(d)
+			}
+			_ = safeRun(func() { prepareRun(stage, own.files()) })
+		}()
 	}
 	if body["Entrypoint"] != nil {
 		im.Entry = stringsOf(body["Entrypoint"])
@@ -519,30 +565,26 @@ func (b *engine) createWith(name string, body obj, prepared *image) obj {
 	profile.apply(config)
 	validateLaunchProfile(config, b.Native)
 	reject(config["mounts"] == nil || config["host_sandbox"] != true, "Mounts are not supported for host-sandboxed containers")
-	stage, err := os.MkdirTemp(b.State, ".creating-")
-	check(err)
-	committed := false
-	defer func() {
-		if !committed {
-			_ = os.RemoveAll(stage)
-		}
-	}()
-	// Its own files over its image's (layers), unless it runs a build step on the
-	// stage's files or the engine runs with --rootfs copy: then a clone of them.
-	if prepared == nil && os.Getenv("DOCKIVA_ROOTFS") != "copy" {
-		check(mkdirGuest(filepath.Join(stage, "rootfs")))
+	if layered {
 		config["lower"], im.Lower = im.Root, im.Root
 	} else {
 		cloneTree(im.Root, filepath.Join(stage, "rootfs"))
 	}
 	im.Root = filepath.Join(stage, "rootfs")
-	for _, d := range append([]string{im.WorkingDir}, im.Volumes...) { // Docker creates them
-		im.ensureDir(d)
+	if !layered {
+		for _, d := range append([]string{im.WorkingDir}, im.Volumes...) { // Docker creates them
+			im.ensureDir(d)
+		}
 	}
-	// The stage is private until the rename publishes it: its files go straight to
-	// their names with their data on disk, and the rename is made durable after.
+	// Its config with its data on disk too, then the rename made durable.
 	writeSynced(filepath.Join(stage, "config.json"), config)
-	writeSynced(filepath.Join(stage, "status.json"), obj{"state": "created"})
+	check(statusSynced())
+	if filesDone != nil {
+		<-filesDone
+		if filesFailed != nil {
+			panic(filesFailed)
+		}
+	}
 	check(os.Rename(stage, p))
 	committed = true
 	syncDir(b.State)

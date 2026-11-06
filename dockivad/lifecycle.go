@@ -238,7 +238,15 @@ func (b *engine) start(name string) {
 	}
 	readyEnd.Close()
 	overEnd.Close()
-	go func() { _, _ = over.Read(make([]byte, 1)); over.Close(); notifyChanged() }() // EOF
+	removeOver := c["auto_remove"] == true
+	go func() {
+		_, _ = over.Read(make([]byte, 1)) // EOF
+		over.Close()
+		if removeOver { // docker run --rm: its die event and removal now, not at the watcher's wake
+			b.watchAndRemove()
+		}
+		notifyChanged()
+	}()
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait(); notifyChanged() }() // its runs are over (a restart keeps it)
 	signaled := make(chan struct{})
@@ -677,18 +685,8 @@ func runtimeCommand(p, native string, c obj, command []string, argv0 string, env
 		args = append(args, "--fsync", mode)
 	}
 	reject(c["network"] == nil || c["network"] == "none" || c["network"] == "outbound", "Invalid network mode")
-	// Docker gives every container /dev/shm (POSIX shared memory and semaphores) and
-	// /proc; these directories stand in (the runtime serves /proc/self/fd/N itself).
-	for _, d := range []string{"dev/shm", "proc/self/fd"} {
-		_ = safeRun(func() { r.mountPoint(d, true) })
-	}
-	_ = safeRun(func() {
-		if host, ok := r.find("dev/shm"); ok && isDir(host) {
-			if st, e := os.Lstat(host); e == nil && st.Mode()&(os.ModeSticky|os.ModePerm) != os.ModeSticky|0o777 {
-				check(os.Chmod(r.upperDir("dev/shm", true), os.ModeSticky|0o777))
-			}
-		}
-	})
+	// A container created by this engine has them already (prepareRun).
+	mountPoints(r)
 	home := filepath.Dir(filepath.Dir(p)) // <home>/containers/<name>
 	if c["network"] != "none" {
 		name := filepath.Base(p)
@@ -743,6 +741,37 @@ func runtimeCommand(p, native string, c obj, command []string, argv0 string, env
 		return sandboxArgs(native, args, r, c["writable"] == true)
 	}
 	return append([]string{native}, args...)
+}
+
+// mountPoints makes the directories Docker gives every container: /dev/shm (POSIX
+// shared memory and semaphores, sticky and world-writable) and /proc (the runtime
+// serves /proc/self/fd/N itself).
+func mountPoints(r layers) {
+	for _, d := range []string{"dev/shm", "proc/self/fd"} {
+		_ = safeRun(func() { r.mountPoint(d, true) })
+	}
+	_ = safeRun(func() {
+		if host, ok := r.find("dev/shm"); ok && isDir(host) {
+			if st, e := os.Lstat(host); e == nil && st.Mode()&(os.ModeSticky|os.ModePerm) != os.ModeSticky|0o777 {
+				check(os.Chmod(r.upperDir("dev/shm", true), os.ModeSticky|0o777))
+			}
+		}
+	})
+}
+
+// prepareRun makes in a new container's directory (create's stage) what each of
+// its runs would otherwise make at start: the mountPoints, the abstract socket
+// directory and the four empty logs (the supervisor then opens them, not creates
+// them). Create runs it while it waits for its syncs, so it costs no time there and
+// takes ~1 ms off the first start. Best effort: start makes anything missing.
+func prepareRun(dir string, r layers) {
+	mountPoints(r)
+	_ = os.Mkdir(filepath.Join(dir, "abstract"), 0o700)
+	for _, name := range []string{"stdout.log", "stdout.idx", "stderr.log", "stderr.idx"} {
+		if f, e := os.OpenFile(filepath.Join(dir, name), os.O_CREATE|os.O_WRONLY, 0o600); e == nil {
+			f.Close()
+		}
+	}
 }
 
 // processName runs a container as a macOS process named after it, so Activity
