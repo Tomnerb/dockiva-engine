@@ -28,12 +28,21 @@ FEXServer's lock and socket, telemetry) stay out of built and committed images. 
 platform per build: the image store keeps one image per tag. `docker buildx ls`
 lists linux/amd64 once the bundle is installed.
 
-The bundle holds `bin/FEX`, `bin/FEXServer` and `lib/` with their arm64 glibc
+The bundle holds `bin/FEX`, `bin/FEXServer`, `lib/` with their arm64 glibc
 (`ld-linux-aarch64.so.1`, `libc.so.6`, `libm.so.6`, `libgcc_s.so.1`,
-`libstdc++.so.6`). It is looked for at `$DOCKIVA_X86`, in an `x86` directory beside
+`libstdc++.so.6`), and `share/` with the packages' copyright files and `SOURCES`
+(each package, its SHA-256 and where its source is). `scripts/build_x86.py`
+assembles it into `build/x86` from pinned packages, each checked against its size
+and SHA-256: FEX 2610 from the fex-emu PPA (`fex-emu-armv8.4`, built for Ubuntu
+24.04) and the libraries from Ubuntu 24.04's libc6 2.39-0ubuntu8.9 and gcc-14
+14.2.0-4ubuntu2~24.04.1, the ones the ubuntu:24.04 image ships. Unpacking needs
+zstd (Python 3.14+, or the `zstd` command). `scripts/bundle_dockiva_engine.py` puts
+the bundle in the engine bundle at `_internal/build/x86` (about 10 MB), so the app
+ships it. The engine looks for it at `$DOCKIVA_X86`, in an `x86` directory beside
 the runtime binary, then in `~/.dockiva-engine/x86`; without one, an amd64 container
-does not start and says where to put it. Tested: FEX 2610 (Ubuntu's
-`fex-emu-armv8.4` package) with Ubuntu 24.04's libraries. On an M2 Max, Debian,
+does not start and says where to put it. Launchpad may expire a PPA's superseded
+files, so the FEX package needs a stable mirror before FEX's next release replaces
+2610. Tested with FEX 2610 and those libraries. On an M2 Max, Debian,
 Alpine and Python 3.12 amd64 images pass shell, fork and exec, signal, thread,
 multiprocessing, ssl, sqlite, subprocess and published-port HTTP checks; a Python
 loop runs about 1.5x slower than on the arm64 image, and a container starts in

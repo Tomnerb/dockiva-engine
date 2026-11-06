@@ -39,8 +39,9 @@ func imageArch(im *image) string {
 	return im.Arch
 }
 
-// x86Bundle is FEX's directory on the Mac: $DOCKIVA_X86, beside the runtime (an
-// app's Resources/x86), or <home>/x86; "" when none holds bin/FEX.
+// x86Bundle is FEX's directory on the Mac: $DOCKIVA_X86, beside the runtime (build/x86
+// from scripts/build_x86.py; the engine bundle's _internal/build/x86, which the app
+// ships), or <home>/x86; "" when none holds bin/FEX.
 func x86Bundle(native, home string) string {
 	for _, dir := range []string{os.Getenv("DOCKIVA_X86"), filepath.Join(filepath.Dir(native), "x86"), filepath.Join(home, "x86")} {
 		if dir == "" {
@@ -127,7 +128,7 @@ func removeFexState(root string, made []string) {
 // and named as the translator.
 func x86Args(r layers, native, home string) []string {
 	bundle := x86Bundle(native, home)
-	reject(bundle != "", "linux/amd64 images run through FEX, which is not installed: put its bundle (bin/FEX, bin/FEXServer, lib/) in "+filepath.Join(home, "x86")+" or set DOCKIVA_X86")
+	reject(bundle != "", "linux/amd64 images run through FEX, which is not installed: put its bundle (bin/FEX, bin/FEXServer, lib/; scripts/build_x86.py builds one) in "+filepath.Join(home, "x86")+" or set DOCKIVA_X86")
 	_ = safeRun(func() { r.mountPoint(strings.TrimPrefix(x86Guest, "/"), true) })
 	return []string{"--bind-ro", bundle, x86Guest, "--x86-translator", x86Guest}
 }

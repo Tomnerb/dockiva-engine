@@ -37,6 +37,9 @@ def main():
     subprocess.run(['go', 'build', '-trimpath', '-ldflags=-linkmode=external', '-o', str(ROOT/'build/dockivad'), '.'], cwd=ROOT/'dockivad', check=True)
     subprocess.run(['cc', '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror', '-pedantic',
                     str(ROOT/'native/worker_launcher.c'), '-o', str(ROOT/'build/dockiva-worker')], check=True)
+    # FEX and its arm64 glibc, for linux/amd64 images: build/x86 (Linux ELF files,
+    # not signed). The engine finds it beside the runtime.
+    subprocess.run([sys.executable, '-I', str(ROOT/'scripts/build_x86.py')], check=True)
     output = args.output.absolute()
     output.mkdir(parents=True, exist_ok=True)
     target = output/'dockiva-engine'
@@ -50,6 +53,7 @@ def main():
         shutil.copy2(stage/'dockivad', stage/'dockiva-engine')
         for name in ('dockiva-runtime', 'dockiva-hvf', 'dockiva-worker'):
             shutil.copy2(ROOT/'build'/name, stage/'_internal/build'/name)
+        shutil.copytree(ROOT/'build/x86', stage/'_internal/build/x86')
         for relative in ('examples/m19/shell-image', 'examples/m11_17/http-image', 'examples/redis-preview'):
             shutil.copytree(ROOT/relative, stage/'_internal'/relative)
         for executable in (stage/'dockivad', stage/'dockiva-engine', stage/'_internal/build/dockiva-runtime', stage/'_internal/build/dockiva-worker'):
@@ -58,7 +62,7 @@ def main():
         subprocess.run(['codesign', '--force', '--sign', '-', '--options', 'runtime',
                         '--entitlements', str(ROOT/'native/hvf.entitlements.plist'),
                         str(stage/'_internal/build/dockiva-hvf')], check=True)
-        for executable in (stage/'dockivad', stage/'dockiva-engine', *list((stage/'_internal/build').iterdir())):
+        for executable in (stage/'dockivad', stage/'dockiva-engine', *(p for p in (stage/'_internal/build').iterdir() if p.is_file())):
             subprocess.run(['codesign', '--verify', '--strict', str(executable)], check=True)
         forbidden = [p for p in stage.rglob('*') if p.suffix in ('.py', '.pyc') or 'python' in p.name.lower()]
         if forbidden:
