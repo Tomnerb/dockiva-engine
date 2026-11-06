@@ -431,7 +431,47 @@ type watcher struct {
 	mu    sync.Mutex
 	known map[string]seen
 	ready bool // a first pass has run: containers it found are not new
+	files map[string]watched
 }
+
+// watched is what a pass read of a container, by its files' identities: the API
+// runs a pass inside every create, start, stop and removal, and reading and parsing
+// each container's status and config made every request O(containers), 0.15 ms
+// each (50 stopped containers: docker run --rm 9 -> 21 ms). Both files are only
+// ever replaced by a rename, so the same identity is the same content.
+type watched struct {
+	config, status fileIdentity
+	c, s           obj
+	id             string
+}
+type fileIdentity struct {
+	ino         uint64
+	size, mtime int64
+}
+
+// stoppedStatuses are the status files' identities of the containers the watcher
+// last saw stopped (not live), by name.
+func (b *engine) stoppedStatuses() map[string]fileIdentity {
+	w := &b.watched
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	out := make(map[string]fileIdentity, len(w.files))
+	for name, f := range w.files {
+		if !live(f.s) {
+			out[name] = f.status
+		}
+	}
+	return out
+}
+
+func identityOf(path string) (fileIdentity, bool) {
+	st, e := os.Stat(path)
+	if e != nil {
+		return fileIdentity{}, false
+	}
+	return fileIdentity{st.Sys().(*syscall.Stat_t).Ino, st.Size(), st.ModTime().UnixNano()}, true
+}
+
 type seen struct {
 	name       string
 	live       bool
@@ -475,19 +515,36 @@ func (b *engine) watchPass() (remove []string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	current := map[string]seen{}
+	files := map[string]watched{}
 	var names []string
 	_ = safeRun(func() { names = b.names() })
 	for _, name := range names {
 		// Each container on its own: one unreadable container must not stall the rest.
 		_ = safeRun(func() {
 			p := filepath.Join(b.State, name)
-			s := b.statusOf(p)
-			if s == nil {
+			// Identities first, then content: a file replaced in between is read
+			// again next pass. A live container's status is read every pass anyway
+			// (status() checks its supervisor's lock).
+			sid, sok := identityOf(filepath.Join(p, "status.json"))
+			cid, cok := identityOf(filepath.Join(p, "config.json"))
+			was, cached := w.files[name]
+			cached = cached && sok && cok && was.config == cid
+			var s, c obj
+			var id string
+			if cached && was.status == sid && !live(was.s) {
+				s = was.s
+			} else if s = b.statusOf(p); s == nil {
 				return
 			}
-			c := readObject(filepath.Join(p, "config.json"))
+			if cached {
+				c, id = was.c, was.id
+			} else {
+				c, id = readObject(filepath.Join(p, "config.json")), b.idOf(name)
+			}
+			if sok && cok {
+				files[name] = watched{cid, sid, c, s, id}
+			}
 			image, _ := c["image_name"].(string)
-			id := b.idOf(name)
 			cur := seen{name, live(s), s["generation"], image, object(c["labels"]), ""}
 			if c["healthcheck"] != nil && cur.live && exists(filepath.Join(p, "health.json")) {
 				if h := text(readObject(filepath.Join(p, "health.json"))["Status"]); h == "healthy" || h == "unhealthy" {
@@ -523,7 +580,7 @@ func (b *engine) watchPass() (remove []string) {
 			b.events.publish(containerEvent("destroy", id, before.name, before.image, labelAttributes(before.labels, obj{})))
 		}
 	}
-	w.known, w.ready = current, true
+	w.known, w.ready, w.files = current, true, files
 	return remove
 }
 

@@ -110,10 +110,8 @@ func (b *engine) names() []string {
 	return out
 }
 func (b *engine) resolve(id string) string {
-	for _, n := range b.names() {
-		if n == id {
-			return n
-		}
+	if namePattern.MatchString(id) && exists(filepath.Join(b.State, id, "status.json")) { // a name (as names() finds them)
+		return id
 	}
 	out := []string{}
 	if len(id) >= 12 {
@@ -178,11 +176,20 @@ func (b *engine) start(name string) {
 	count := 1
 	c := readObject(filepath.Join(p, "config.json"))
 	validateLaunchProfile(c, b.Native)
+	stopped := b.stoppedStatuses()
 	for _, other := range b.names() {
 		if other == name {
 			continue
 		}
 		q := b.container(other)
+		// Stopped when the watcher last read it and its status not replaced since: no
+		// run (a start writes its status under this gate before letting it go; a
+		// restart under its policy writes "restarting" first).
+		if was, ok := stopped[other]; ok {
+			if now, ok := identityOf(filepath.Join(q, "status.json")); ok && now == was {
+				continue
+			}
+		}
 		held, e := lockFile(filepath.Join(q, "lock"), true)
 		if e == nil {
 			held.Close()
