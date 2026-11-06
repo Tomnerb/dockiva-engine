@@ -1243,7 +1243,28 @@ static uint32_t a64_b(unsigned from,unsigned to,uint32_t op) { return op|(((uint
 static uint32_t a64_b19(unsigned from,unsigned to,uint32_t op) { return op|((((uint32_t)((int)to-(int)from)/4)&0x7ffffu)<<5); }
 static uint32_t a64_sp(uint32_t op,unsigned offset,unsigned rt) { return op|((offset/8)<<10)|(31u<<5)|rt; }      /* ldr/str xT, [sp, #offset] */
 static uint32_t a64_pair(uint32_t op,unsigned offset,unsigned a,unsigned b) { return op|((offset/8)<<15)|(b<<10)|(31u<<5)|a; }
+/* hvf_init_vm is the part of hvf_init that depends on no option: the VM, its tables,
+   frames and descriptor mirror, and the system code. A prestarted runtime (runtime.c)
+   does it, and makes the main thread's vCPU, before its run is known (hvf_preinit):
+   about 0.6 ms of a run's start. */
+static int hvf_preinitialized;
+static void hvf_init_vm(void);
 static void hvf_init(void) {
+    if(!hvf_preinitialized)hvf_init_vm();
+    uint32_t vcpus=0;
+    if(hv_vm_get_max_vcpu_count(&vcpus)==HV_SUCCESS && vcpus && worker_count>vcpus)worker_count=vcpus;
+    hvf_el1_setup();                                  /* the lookup cache and pack (--layers-gen, --lower-pack): the run's */
+    if(!hvf_preinitialized)worker->backend=hvf_cpu_new(1);
+    if(vdso_backing)vdso_start(hvf_vtimer_offset);
+    pthread_t watchdog;
+    if(pthread_create(&watchdog,NULL,hvf_watchdog,NULL) || pthread_detach(watchdog))fail("Cannot start hypervisor watchdog");
+}
+static void hvf_preinit(void) {
+    hvf_init_vm();
+    worker->backend=hvf_cpu_new(1);                   /* the main thread's: the run's first process runs on it */
+    hvf_preinitialized=1;
+}
+static void hvf_init_vm(void) {
     /* Every process's memory stays mapped: ask for the largest guest-physical space (up to the 40-bit TCR_EL1.IPS). */
     hv_vm_config_t config=hv_vm_config_create();uint32_t bits=0;
     if(config && hv_vm_config_get_max_ipa_size(&bits)==HV_SUCCESS && bits>=36) {
@@ -1252,8 +1273,6 @@ static void hvf_init(void) {
     }
     hvf_check(hv_vm_create(config),"hv_vm_create");
     if(config)os_release(config);
-    uint32_t vcpus=0;
-    if(hv_vm_get_max_vcpu_count(&vcpus)==HV_SUCCESS && vcpus && worker_count>vcpus)worker_count=vcpus;
     backing_release_hook=hvf_backing_gone;backing_hold_hook=hvf_backing_hold;backing_moved_hook=hvf_backing_moved;worker_interrupt=hvf_interrupt;workers_supported=1;
     hvf_futex_init();
     hvf_tables=hvf_host_pages(HVF_TABLE_BYTES);hvf_system=hvf_host_pages(HVF_SYSTEM_BYTES);fd_mirror_base=hvf_host_pages(HVF_FDS_BYTES);
@@ -1384,11 +1403,6 @@ static void hvf_init(void) {
     memcpy(hvf_system+0xb00,fds,sizeof(fds));
     const uint32_t flush[]={UINT32_C(0xd508711f),UINT32_C(0xd508831f),UINT32_C(0xd5033b9f),UINT32_C(0xd5033fdf),UINT32_C(0xd4000022),UINT32_C(0x17ffffff)};
     memcpy(hvf_system+HVF_FLUSH_OFFSET,flush,sizeof(flush));
-    hvf_el1_setup();
-    worker->backend=hvf_cpu_new(1);
-    if(vdso_backing)vdso_start(hvf_vtimer_offset);
-    pthread_t watchdog;
-    if(pthread_create(&watchdog,NULL,hvf_watchdog,NULL) || pthread_detach(watchdog))fail("Cannot start hypervisor watchdog");
 }
 /* ---- Threads (CLONE_THREAD) ----
    The scheduler runs every thread of a process on its own (scheduler.h), so

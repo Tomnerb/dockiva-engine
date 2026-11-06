@@ -1108,6 +1108,9 @@ static void prestart_report(void) {
 }
 static void prestart_receive(int *argc,char ***argv) {
     static char job[1u<<20];static char *args[EXEC_ENTRIES*2+256];
+#ifdef VMFREE_HVF
+    hvf_preinit();                                                             /* the VM and this thread's vCPU while no run waits */
+#endif
     uint32_t len=0;char control[CMSG_SPACE(3*sizeof(int))];
     struct iovec iov={&len,sizeof len};struct msghdr m={0};
     m.msg_iov=&iov;m.msg_iovlen=1;m.msg_control=control;m.msg_controllen=sizeof control;
