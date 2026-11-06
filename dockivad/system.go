@@ -288,7 +288,7 @@ func (b *engine) stopAll() {
 				f, e := settledContainerLock(p) // the supervisor has finished with status.json
 				check(e)
 				defer f.Close()
-				s := readObject(filepath.Join(p, "status.json"))
+				s := readStatus(p)
 				delete(s, "stopped_by_user")
 				save(filepath.Join(p, "status.json"), s)
 			}); e != nil {

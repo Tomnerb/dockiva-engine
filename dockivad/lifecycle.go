@@ -76,7 +76,7 @@ func workerAlive(s obj) bool {
 	return pid > 0 && syscall.Kill(int(pid), 0) == nil
 }
 func (b *engine) status(p string) obj {
-	s := readObject(filepath.Join(p, "status.json"))
+	s := readStatus(p)
 	if !live(s) {
 		return s
 	}
@@ -88,7 +88,7 @@ func (b *engine) status(p string) obj {
 	defer f.Close()
 	// Never signal a PID read from stale disk state. A Go worker's liveness pipe
 	// closes when its supervisor dies. A legacy live worker needs manual recovery.
-	s = readObject(filepath.Join(p, "status.json"))
+	s = readStatus(p)
 	if live(s) {
 		s["state"] = "failed"
 		s["exit_code"] = 125
@@ -144,7 +144,7 @@ func settledContainerLock(p string) (*os.File, error) {
 		if err != syscall.EWOULDBLOCK && err != syscall.EAGAIN {
 			return f, err
 		}
-		if live(readObject(filepath.Join(p, "status.json"))) || time.Now().After(deadline) {
+		if live(readStatus(p)) || time.Now().After(deadline) {
 			return nil, err
 		}
 		// Terminal status precedes final descriptor/lock cleanup (the supervisor's exit).
@@ -158,7 +158,7 @@ func (b *engine) start(name string) {
 	p := b.container(name)
 	f, e := settledContainerLock(p)
 	if e == syscall.EWOULDBLOCK || e == syscall.EAGAIN {
-		s := readObject(filepath.Join(p, "status.json"))
+		s := readStatus(p)
 		if live(s) {
 			return
 		}
@@ -166,7 +166,7 @@ func (b *engine) start(name string) {
 	}
 	check(e)
 	defer f.Close()
-	s := readObject(filepath.Join(p, "status.json"))
+	s := readStatus(p)
 	if workerAlive(s) {
 		panic(apiError{409, "Previous worker is still alive; refusing duplicate launch"})
 	}
@@ -246,7 +246,7 @@ func (b *engine) start(name string) {
 	deadline := time.Now().Add(10 * time.Second)
 	pace := newBackoff(time.Millisecond, 4*time.Millisecond) // only if the pipe says nothing
 	for time.Now().Before(deadline) {
-		s = readObject(filepath.Join(p, "status.json"))
+		s = readStatus(p)
 		if s["generation"] == generation {
 			if s["state"] == "failed" {
 				panic(apiError{409, text(s["error"])})
@@ -257,7 +257,7 @@ func (b *engine) start(name string) {
 		case <-done:
 			// A short run can start, end and take its supervisor with it between two
 			// reads: it started if its status names this generation.
-			if s = readObject(filepath.Join(p, "status.json")); s["generation"] == generation && s["state"] != "failed" {
+			if s = readStatus(p); s["generation"] == generation && s["state"] != "failed" {
 				return
 			}
 			if s["generation"] == generation {
@@ -467,7 +467,7 @@ func (b *engine) rename(name, to string) {
 		panic(apiError{409, "Conflict. The container name \"/" + to + "\" is already in use"})
 	}
 	f, e := settledContainerLock(p)
-	if e != nil || workerAlive(readObject(filepath.Join(p, "status.json"))) {
+	if e != nil || workerAlive(readStatus(p)) {
 		panic(apiError{409, "Container " + name + " is running: Dockiva Engine renames stopped containers (docker stop it first)"})
 	}
 	defer f.Close()
@@ -547,7 +547,7 @@ func (b *engine) remove(name string) {
 		panic(apiError{409, "Container is active"})
 	}
 	defer f.Close()
-	s := readObject(filepath.Join(p, "status.json"))
+	s := readStatus(p)
 	reject(!workerAlive(s), "Previous worker is still alive")
 	c := readObject(filepath.Join(p, "config.json"))
 	network := text(c["net_name"])
@@ -855,9 +855,10 @@ func supervise(p, native, worker, generation string) (result error) {
 	c := readObject(filepath.Join(p, "config.json"))
 	if c["auto_remove"] == true {
 		// docker run --rm: the container is removed right after this status, which
-		// only has to be whole. A power loss before the removal can leave it behind,
-		// stopped (as a --rm container can be after a Docker daemon crash).
-		final = whole
+		// needs no sync. A power loss before the removal can leave it behind,
+		// stopped or (its status not on disk) failed, as a --rm container can be
+		// after a Docker daemon crash.
+		final = volatile
 	}
 	learnProbes(os.Getenv("DOCKIVA_PROBES"))
 	command := stringsOf(c["command"])
@@ -977,9 +978,10 @@ func supervise(p, native, worker, generation string) (result error) {
 		status["state"] = "running"
 		status["pid"] = cmd.Process.Pid
 		status["started_at"] = now()
-		// Lost in a crash, the run reads as its previous state; status() also
-		// reports a running one without its supervisor as failed.
-		store(filepath.Join(p, "status.json"), status, whole)
+		// Not synced: after a power loss the run reads as its previous state, or as
+		// failed (readStatus) if this file was cut short; status() also reports a
+		// running one without its supervisor as failed.
+		store(filepath.Join(p, "status.json"), status, volatile)
 		if ready != nil {
 			ready.Close()
 			ready = nil

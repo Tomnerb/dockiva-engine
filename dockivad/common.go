@@ -208,6 +208,19 @@ func readBounded(root, relative string, limit int64) []byte {
 func readObject(path string) obj {
 	return decode(readBounded(filepath.Dir(path), filepath.Base(path), 1<<20), 1<<20)
 }
+
+// readStatus is container p's status.json. The statuses of a run in progress are
+// written without a sync, so after a power loss one may not decode: it reads as a
+// failed run, which is then restarted or removed like any other. A missing file
+// still panics (the container is gone).
+func readStatus(p string) obj {
+	data := readBounded(p, "status.json", 1<<20)
+	var s obj
+	if safeRun(func() { s = decode(data, 1<<20) }) != nil {
+		return obj{"state": "failed", "exit_code": 125, "error": "Status unreadable after a crash"}
+	}
+	return s
+}
 func save(path string, v any) { store(path, v, durable) }
 
 // How much of a crash a state file survives. Each barrier is about 0.3 ms, and a
