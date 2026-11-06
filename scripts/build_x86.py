@@ -4,10 +4,11 @@
 and share/ with the packages' copyright files and where their sources are.
 
 Everything comes from pinned Ubuntu 24.04 packages (FEX from the fex-emu PPA, built
-for noble), each checked against its size and SHA-256 before it is read. The bundle
-goes to build/x86, beside build/dockiva-runtime, where the engine looks for it.
-Downloads are kept in build/x86-cache. Unpacking needs zstd: Python 3.14+, or the
-zstd command.
+for noble), each checked against its size and SHA-256 before it is read. FEX's is
+kept in third_party/fex, as Launchpad expires a PPA's files once superseded; the
+others are downloaded once into build/x86-cache. The bundle goes to build/x86,
+beside build/dockiva-runtime, where the engine looks for it. Unpacking needs zstd:
+Python 3.14+, or the zstd command.
 """
 import argparse
 import hashlib
@@ -24,11 +25,12 @@ import urllib.request
 ROOT = Path(__file__).resolve().parents[1]
 LP = 'https://launchpad.net/ubuntu/+archive/primary/+files/'
 LIB = 'usr/lib/aarch64-linux-gnu/'
+VENDORED = ROOT/'third_party/fex'
 
 # (file, url, size, sha256, source, {member: bundle path}). The libraries are the
-# ones the ubuntu:24.04 arm64 image ships, which FEX 2610 was tested with.
-# ponytail: PPA files can expire from Launchpad once superseded (FEX releases
-# monthly); mirror this .deb somewhere stable before the URL stops answering.
+# ones the ubuntu:24.04 arm64 image ships, which FEX 2610 was tested with. To move
+# to a newer FEX: put its .deb in third_party/fex (and remove the old one), pin it
+# here, and run the amd64 checks again.
 PACKAGES = [
     ('fex-emu-armv8.4_2610-1~n_arm64.deb',
      'https://launchpad.net/~fex-emu/+archive/ubuntu/fex/+files/fex-emu-armv8.4_2610-1~n_arm64.deb',
@@ -57,12 +59,13 @@ PACKAGES = [
 
 
 def fetch(name, url, size, sha256, cache):
-    """The package's bytes: the cached copy, else downloaded; either must match."""
+    """The package's bytes: the repository's or cached copy, else downloaded; any must match."""
     path = cache/name
-    if path.exists():
-        data = path.read_bytes()
-        if len(data) == size and hashlib.sha256(data).hexdigest() == sha256:
-            return data
+    for kept in (VENDORED/name, path):
+        if kept.exists():
+            data = kept.read_bytes()
+            if len(data) == size and hashlib.sha256(data).hexdigest() == sha256:
+                return data
     print('Downloading', url, file=sys.stderr)
     request = urllib.request.Request(url, headers={'User-Agent': 'dockiva-engine-build'})
     with urllib.request.urlopen(request, timeout=120) as response:

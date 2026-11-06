@@ -38,11 +38,12 @@ and SHA-256: FEX 2610 from the fex-emu PPA (`fex-emu-armv8.4`, built for Ubuntu
 14.2.0-4ubuntu2~24.04.1, the ones the ubuntu:24.04 image ships. Unpacking needs
 zstd (Python 3.14+, or the `zstd` command). `scripts/bundle_dockiva_engine.py` puts
 the bundle in the engine bundle at `_internal/build/x86` (about 10 MB), so the app
-ships it. The engine looks for it at `$DOCKIVA_X86`, in an `x86` directory beside
-the runtime binary, then in `~/.dockiva-engine/x86`; without one, an amd64 container
-does not start and says where to put it. Launchpad may expire a PPA's superseded
-files, so the FEX package needs a stable mirror before FEX's next release replaces
-2610. Tested with FEX 2610 and those libraries. On an M2 Max, Debian,
+ships it. FEX's package is kept in `third_party/fex`, as Launchpad expires a PPA's
+files once superseded; the Ubuntu packages are downloaded once into
+`build/x86-cache`. The engine looks for the bundle at `$DOCKIVA_X86`, in an `x86`
+directory beside the runtime binary, then in `~/.dockiva-engine/x86`; without one,
+an amd64 container does not start and says where to put it. Tested with FEX 2610
+and those libraries. On an M2 Max, Debian,
 Alpine and Python 3.12 amd64 images pass shell, fork and exec, signal, thread,
 multiprocessing, ssl, sqlite, subprocess and published-port HTTP checks; a Python
 loop runs about 1.5x slower than on the arm64 image, and a container starts in
