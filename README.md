@@ -15,8 +15,18 @@ translator that is itself an arm64 Linux program (MIT). The runtime acts as
 binfmt_misc with FEX registered: an exec of an x86-64 ELF starts FEX with the
 program's descriptor (`AT_EXECFD`), and FEX and its arm64 libraries come from a
 bundle mounted read-only at `/.dockiva/x86`. `docker pull`, `create` and `run` with
-`--platform linux/amd64`, and `docker load` of amd64 archives, work; `docker build`
-still targets linux/arm64 only.
+`--platform linux/amd64`, and `docker load` of amd64 archives, work.
+
+`docker build --platform linux/amd64` (BuildKit or the classic builder) builds an
+amd64 image: `RUN` steps go through FEX, `TARGETPLATFORM`/`TARGETARCH` say
+linux/amd64, and `BUILDPLATFORM` stays linux/arm64, so `FROM --platform=$BUILDPLATFORM`
+stages cross-compile natively. `FROM --platform=linux/amd64` works in any build. A
+base image of another architecture than its local tag (amd64 alpine where `alpine`
+is arm64) is pulled into the build cache, not the tag, as BuildKit leaves tags
+alone; `docker builder prune` removes it. FEX's own files (its config,
+FEXServer's lock and socket, telemetry) stay out of built and committed images. One
+platform per build: the image store keeps one image per tag. `docker buildx ls`
+lists linux/amd64 once the bundle is installed.
 
 The bundle holds `bin/FEX`, `bin/FEXServer` and `lib/` with their arm64 glibc
 (`ld-linux-aarch64.so.1`, `libc.so.6`, `libm.so.6`, `libgcc_s.so.1`,
@@ -27,7 +37,9 @@ does not start and says where to put it. Tested: FEX 2610 (Ubuntu's
 Alpine and Python 3.12 amd64 images pass shell, fork and exec, signal, thread,
 multiprocessing, ssl, sqlite, subprocess and published-port HTTP checks; a Python
 loop runs about 1.5x slower than on the arm64 image, and a container starts in
-about 0.23 s (0.06 s for arm64).
+about 0.23 s (0.06 s for arm64). amd64 builds of Alpine (`apk add`), Debian and
+Python (`pip install`) images, and a Go cross-compile with an amd64 final stage,
+build and run with the classic builder and BuildKit.
 
 ## History
 

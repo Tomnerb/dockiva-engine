@@ -26,9 +26,7 @@ var stepLine = regexp.MustCompile(`(?s)^Step (\d+/\d+) : (.*)$`)
 // bkBuild runs the Dockerfile frontend's options (FrontendOpt) and returns the image ID.
 func (b *engine) bkBuild(ctx context.Context, st *bkSolve, opts map[string]string) string {
 	reject(opts["requestid"] == "", "docker build --call, --check and --print need BuildKit; Dockiva Engine's builder does not support them")
-	for _, p := range strings.Split(opts["platform"], ",") {
-		reject(p == "" || p == "linux/arm64" || p == "linux/arm64/v8", "Only linux/arm64 builds are supported, not "+p)
-	}
+	platform := buildPlatform(opts["platform"])
 	// --pull needs nothing: FROM pulls only missing images. buildx sends "no-cache"
 	// (empty for every stage) for --no-cache.
 	_, nocache := opts["no-cache"]
@@ -40,10 +38,7 @@ func (b *engine) bkBuild(ctx context.Context, st *bkSolve, opts map[string]strin
 	check(e)
 	defer func() { go os.RemoveAll(work) }()
 	bd := &builder{b: b, ctx: ctx, work: work, context: filepath.Join(work, "context"), network: opts["force-network-mode"],
-		args: map[string]string{}, used: map[string]bool{}, global: map[string]string{}, nocache: nocache, named: map[string]namedContext{}}
-	for k, v := range platformArgs {
-		bd.global[k] = v
-	}
+		args: map[string]string{}, used: map[string]bool{}, global: platformArgs(platform), platform: platform, nocache: nocache, named: map[string]namedContext{}}
 	bd.secret = func(id string) (value []byte, e error) { // RUN --mount=type=secret: the session's Secrets service
 		e = safeRun(func() {
 			value = grpcUnary(ctx, bkSessionFor(ctx, st.session).rt, "/moby.buildkit.secrets.v1.Secrets/GetSecret", nil, pbuf{}.str(1, id)).last(1).b

@@ -111,6 +111,64 @@ func (bd *builder) store(st *buildStage, in instruction, id, dir string) {
 	})
 }
 
+// basePull is a build's image of arch where the tag holds another architecture (or,
+// for amd64, nothing): pulled once and kept as a build cache entry (its layout and
+// files beside entry.json), which docker builder prune removes. The build holds the
+// entry until it ends (buildCacheInUse): its commit reads the blobs and files.
+func (bd *builder) basePull(ref, arch string) *image {
+	id := key("image\x00" + arch + "\x00" + shortName(ref))
+	dir := filepath.Join(bd.b.buildCacheDir(), id)
+	use := func() bool { // the caller holds buildCacheMu
+		if safeRun(func() {
+			entry := readObject(filepath.Join(dir, "entry.json"))
+			entry["LastUsedAt"], entry["UsageCount"] = time.Now().UTC().Format(time.RFC3339Nano), integer(entry["UsageCount"])+1
+			save(filepath.Join(dir, "entry.json"), entry)
+		}) != nil {
+			return false
+		}
+		buildCacheInUse[id]++
+		bd.held = append(bd.held, id)
+		return true
+	}
+	buildCacheMu.Lock()
+	ok := use()
+	buildCacheMu.Unlock()
+	if !ok {
+		bd.say("Pulling " + ref + " (linux/" + arch + ")\n")
+		pullFor(ref, arch, bd.work, bd.b.Insecure, credentials{}, func(name, layout string) string {
+			stage, e := os.MkdirTemp(bd.work, "image-")
+			check(e)
+			entry := filepath.Dir(commitImage(stage, name, layout))
+			now := time.Now().UTC().Format(time.RFC3339Nano)
+			save(filepath.Join(entry, "entry.json"), obj{"ID": id, "Type": "regular", "Description": "pulled from " + name + " (linux/" + arch + ")", "InUse": false, "Shared": false,
+				"Size": integer(readObject(filepath.Join(entry, "image.json"))["size"]), "CreatedAt": now, "LastUsedAt": now, "UsageCount": 0})
+			buildCacheMu.Lock()
+			defer buildCacheMu.Unlock()
+			if !exists(filepath.Join(dir, "entry.json")) { // else a concurrent build pulled it first
+				bd.b.discard(dir)
+				check(os.Rename(entry, dir))
+			}
+			reject(use(), "The build cache lost "+ref+" (linux/"+arch+")")
+			return filepath.Join(dir, "layout")
+		})
+	}
+	im := loadImage(noLinks(dir, "layout"))
+	im.Root = noLinks(dir, "rootfs")
+	return im
+}
+
+// release lets go of the build cache entries the build held (basePull).
+func (bd *builder) release() {
+	buildCacheMu.Lock()
+	defer buildCacheMu.Unlock()
+	for _, id := range bd.held {
+		if buildCacheInUse[id]--; buildCacheInUse[id] <= 0 {
+			delete(buildCacheInUse, id)
+		}
+	}
+	bd.held = nil
+}
+
 // changedSize is the bytes of root's files that differ from base's (by size and
 // mtime): what a cached root holds beyond the image it is cloned from.
 // ponytail: an estimate; entries of one build share the blocks of the files they all

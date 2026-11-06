@@ -239,8 +239,9 @@ func (b *engine) export(w http.ResponseWriter, name string) {
 }
 
 // engineFiles are what the engine writes into every container (Docker bind-mounts
-// them) and the mount points it makes: docker diff leaves them out.
-var engineFiles = map[string]bool{"etc/hosts": true, "etc/resolv.conf": true, "etc/hostname": true, "dev": true, "proc": true, "sys": true}
+// them) and the mount points it makes (.dockiva: FEX's, x86.go): docker diff and
+// docker commit leave them out.
+var engineFiles = map[string]bool{"etc/hosts": true, "etc/resolv.conf": true, "etc/hostname": true, "dev": true, "proc": true, "sys": true, ".dockiva": true}
 
 // changes is docker diff: a layered container's own files (its upper layer) against
 // its image's: Kind 1 added, 0 changed, 2 deleted (a whiteout). A directory of the

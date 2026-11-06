@@ -157,8 +157,16 @@ func TestBuildKitDockerfileBuild(t *testing.T) {
 	go serveH2(session, fileSyncServer(files))
 	rt := h2Client(dialUpgrade(t, addr, "/grpc", nil))
 	ctx := context.Background()
-	if w := grpcUnary(ctx, rt, bkControl+"ListWorkers", nil, nil).sub(1); w.sub(3).str(1) != "arm64" || w.sub(2).str(1) == "org.mobyproject.buildkit.worker.snapshotter" {
-		t.Fatalf("worker: %v", w)
+	worker := grpcUnary(ctx, rt, bkControl+"ListWorkers", nil, nil).sub(1)
+	platforms, expected := []string{}, []string{"arm64"}
+	for _, p := range worker[3] {
+		platforms = append(platforms, pbDecode(p.b).str(1))
+	}
+	if x86Bundle(b.Native, b.Home) != "" { // FEX installed (build/x86 beside the runtime)
+		expected = append(expected, "amd64")
+	}
+	if !slices.Equal(platforms, expected) || worker.sub(2).str(1) == "org.mobyproject.buildkit.worker.snapshotter" {
+		t.Fatalf("worker platforms %v, want %v: %v", platforms, expected, worker)
 	}
 
 	build := func(ref, dockerfile string) (solve pbFields, gateway, solveErr error, vertexes []string) {

@@ -494,7 +494,7 @@ func (b *engine) buildkitMethod(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case bkControl + "ListWorkers":
 		grpcRequest(r)
-		grpcWrite(w, pbuf{}.msg(1, bkWorker()))
+		grpcWrite(w, pbuf{}.msg(1, b.bkWorker()))
 	case bkControl + "Info":
 		grpcRequest(r)
 		grpcWrite(w, pbuf{}.msg(1, bkVersion()))
@@ -538,7 +538,7 @@ func (b *engine) buildkitMethod(w http.ResponseWriter, r *http.Request) {
 		for _, id := range llbCaps {
 			caps = caps.msg(2, pbuf{}.str(1, id).flag(2, true))
 		}
-		grpcWrite(w, caps.msg(3, bkWorker()))
+		grpcWrite(w, caps.msg(3, b.bkWorker()))
 	case bkGateway + "Solve":
 		grpcWrite(w, b.bkGatewaySolve(ctx, r.Header.Get("Buildkit-Controlapi-Buildid"), grpcRequest(r)))
 	case bkGateway + "StatFile": // StatFileRequest{Ref, path}
@@ -561,10 +561,15 @@ func bkVersion() pbuf {
 }
 
 // bkWorker has no snapshotter label: buildx then treats the engine as Docker's
-// classic image store (no multi-platform, OCI export or attestations).
-func bkWorker() pbuf {
-	return pbuf{}.str(1, "dockiva").strMap(2, map[string]string{"org.mobyproject.buildkit.worker.executor": "dockiva-engine"}).
-		msg(3, pbuf{}.str(1, "arm64").str(2, "linux")).msg(5, bkVersion())
+// classic image store (no multi-platform, OCI export or attestations). Its
+// platforms are linux/arm64, and linux/amd64 when FEX is installed (x86.go).
+func (b *engine) bkWorker() pbuf {
+	w := pbuf{}.str(1, "dockiva").strMap(2, map[string]string{"org.mobyproject.buildkit.worker.executor": "dockiva-engine"}).
+		msg(3, pbuf{}.str(1, "arm64").str(2, "linux"))
+	if x86Bundle(b.Native, b.Home) != "" {
+		w = w.msg(3, pbuf{}.str(1, "amd64").str(2, "linux"))
+	}
+	return w.msg(5, bkVersion())
 }
 
 // bkSolve is one build (a Control.Solve "Ref"): buildx sends Control.Solve, then

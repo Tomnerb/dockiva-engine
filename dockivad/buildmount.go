@@ -265,7 +265,7 @@ func (bd *builder) resolveMount(st *buildStage, m *runMount) (part string, ok bo
 			root, where, base = s.root, "stage "+m.from, "stage "+s.cacheID
 			ok = s.cacheID != ""
 		} else {
-			im := bd.pull(m.from)
+			im := bd.pull(m.from, bd.platform)
 			root, where, base, ok = im.Root, m.from, "image "+im.Digest, true
 		}
 	}

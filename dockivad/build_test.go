@@ -270,3 +270,49 @@ func TestBuildDirectoriesAreWorldReadable(t *testing.T) {
 		}
 	}
 }
+
+// TestBuildPlatform builds for linux/amd64 and the default: the image's
+// architecture and the TARGET and BUILD ARGs follow --platform; others are refused.
+func TestBuildPlatform(t *testing.T) {
+	b := testEngine(t)
+	dockerfile := "FROM scratch\nARG TARGETPLATFORM\nARG BUILDARCH\nENV T=$TARGETPLATFORM B=$BUILDARCH\nCOPY a.txt /a.txt\n"
+	for platform, want := range map[string]string{"linux/amd64": "amd64", "": "arm64"} {
+		ctx := tarOf(t, map[string]string{"Dockerfile": dockerfile, "a.txt": "a"})
+		if _, _, failure := buildResult(t, buildMessages(t, b, "t=plat:"+want+"&platform="+platform, ctx)); failure != "" {
+			t.Fatal(failure)
+		}
+		im := b.image("plat:" + want)
+		if im.Arch != want || !strings.Contains(strings.Join(im.Env, " "), "T=linux/"+want+" B=arm64") {
+			t.Fatalf("--platform %q: arch %q env %v", platform, im.Arch, im.Env)
+		}
+	}
+	ctx := tarOf(t, map[string]string{"Dockerfile": dockerfile, "a.txt": "a"})
+	if r := request(t, b.socketHandler(), "POST", "/v1.45/build?platform=linux/s390x", ctx.String(), ""); r.Code != 400 || !strings.Contains(r.Body.String(), "linux/amd64 (through FEX)") {
+		t.Fatalf("s390x: %d %s", r.Code, r.Body.String())
+	}
+}
+
+// TestFexState: what FEX made under a home as an amd64 step ran goes; the step's
+// own files, and what was there before, stay.
+func TestFexState(t *testing.T) {
+	root := t.TempDir()
+	write := func(p, content string) {
+		check(os.MkdirAll(filepath.Dir(filepath.Join(root, p)), 0o755))
+		check(os.WriteFile(filepath.Join(root, p), []byte(content), 0o644))
+	}
+	write("etc/passwd", "root:x:0:0:root:/root:/bin/sh\napp:x:1000:1000::/home/app:/bin/sh\n")
+	write("root/.config/before.txt", "kept")
+	check(os.Symlink("loop", filepath.Join(root, "loop")))
+	write("etc/passwd", "root:x:0:0:root:/root:/bin/sh\napp:x:1000:1000::/home/app:/bin/sh\nodd:x:1001:1001::/loop/x:/bin/sh\n")
+	made := missingIn(root, fexState(root, []string{"HOME=/srv"}))
+	for _, p := range []string{"root/.config/fex-emu/AppConfig/", "root/.local/share/fex-emu/Server/Server.lock", "home/app/.config/fex-emu/Telemetry/sh.telem", "home/app/.config/mine.txt", "srv/.local/share/fex-emu/x", ".local"} {
+		write(strings.TrimSuffix(p, "/")+map[bool]string{true: "/.keep"}[strings.HasSuffix(p, "/")], "")
+	}
+	removeFexState(root, made)
+	for p, want := range map[string]bool{"root/.config/before.txt": true, "root/.config/fex-emu": false, "root/.local": false,
+		"home/app/.config/mine.txt": true, "home/app/.config/fex-emu": false, "srv/.local": false, "srv": true, ".local": true} {
+		if exists(filepath.Join(root, p)) != want {
+			t.Fatalf("%s exists: %v", p, !want)
+		}
+	}
+}

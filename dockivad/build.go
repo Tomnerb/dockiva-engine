@@ -10,6 +10,7 @@ package main
 import (
 	"archive/tar"
 	"bufio"
+	"cmp"
 	"compress/bzip2"
 	"compress/gzip"
 	"context"
@@ -46,36 +47,51 @@ type buildStage struct {
 	args        map[string]string // ARGs declared in the stage
 	cmdSet      bool              // CMD given in this stage (ENTRYPOINT keeps it)
 	cacheID     string            // the build cache's state: the base image, then each step; "" once a step is uncached
+	arch        string            // "arm64", or "amd64": its RUN steps go through FEX (x86.go)
 }
 
 type builder struct {
-	b       *engine
-	ctx     context.Context
-	say     func(string)
-	work    string
-	context string
-	escape  byte
-	network string
-	args    map[string]string // --build-arg values
-	used    map[string]bool
-	global  map[string]string // ARGs declared before the first FROM
-	stages  []*buildStage
-	nocache bool                                    // run every step (--no-cache); results are still cached
-	secret  func(id string) ([]byte, error)         // the client's secrets (buildx --secret); nil in the classic API
-	ssh     func(id string) (func(net.Conn), error) // the client's SSH agents (buildx --ssh): a forwarder per connection; nil in the classic API
-	named   map[string]namedContext                 // --build-context (buildx)
+	b        *engine
+	ctx      context.Context
+	say      func(string)
+	work     string
+	context  string
+	escape   byte
+	network  string
+	args     map[string]string // --build-arg values
+	used     map[string]bool
+	global   map[string]string // ARGs declared before the first FROM
+	stages   []*buildStage
+	nocache  bool                                    // run every step (--no-cache); results are still cached
+	secret   func(id string) ([]byte, error)         // the client's secrets (buildx --secret); nil in the classic API
+	ssh      func(id string) (func(net.Conn), error) // the client's SSH agents (buildx --ssh): a forwarder per connection; nil in the classic API
+	named    map[string]namedContext                 // --build-context (buildx)
+	platform string                                  // --platform's architecture; "" when none is given
+	held     []string                                // build cache entries the build reads until it ends (basePull)
 }
 
-// Builders predefine these, as BuildKit does; a Dockerfile still declares them with ARG.
-var platformArgs = map[string]string{"TARGETPLATFORM": "linux/arm64", "TARGETOS": "linux", "TARGETARCH": "arm64", "TARGETVARIANT": "",
-	"BUILDPLATFORM": "linux/arm64", "BUILDOS": "linux", "BUILDARCH": "arm64", "BUILDVARIANT": ""}
+// platformArgs are the ARGs builders predefine, as BuildKit does (a Dockerfile still
+// declares them with ARG): the build runs on linux/arm64 and targets --platform's
+// architecture, arm64 when none is given.
+func platformArgs(target string) map[string]string {
+	target = cmp.Or(target, "arm64")
+	return map[string]string{"TARGETPLATFORM": "linux/" + target, "TARGETOS": "linux", "TARGETARCH": target, "TARGETVARIANT": "",
+		"BUILDPLATFORM": "linux/arm64", "BUILDOS": "linux", "BUILDARCH": "arm64", "BUILDVARIANT": ""}
+}
+
+// buildPlatform is a build's --platform: its architecture, "" when none is given.
+// One per build, as the image store keeps one image per tag.
+func buildPlatform(p string) string {
+	reject(!strings.Contains(p, ","), "Dockiva Engine builds one platform at a time, not "+p)
+	return platformArch(p)
+}
 
 var buildTagPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._/-]*(:[0-9]+/[a-z0-9._/-]+)?(:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?$`)
 var argName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // build serves POST /build: progress as JSON messages, as the docker CLI expects.
 func (b *engine) build(w http.ResponseWriter, r *http.Request, q url.Values) {
-	reject(q.Get("platform") == "" || q.Get("platform") == "linux/arm64", "Only linux/arm64 builds are supported")
+	platform := buildPlatform(q.Get("platform"))
 	tags := []string{}
 	for _, t := range q["t"] {
 		tags = append(tags, normalizeTag(t))
@@ -103,14 +119,11 @@ func (b *engine) build(w http.ResponseWriter, r *http.Request, q url.Values) {
 	defer func() { go os.RemoveAll(work) }()
 	quiet := q.Get("q") == "1" || q.Get("q") == "true"
 	bd := &builder{b: b, ctx: r.Context(), work: work, context: filepath.Join(work, "context"), network: q.Get("networkmode"),
-		args: map[string]string{}, used: map[string]bool{}, global: map[string]string{}, nocache: q.Get("nocache") == "1" || q.Get("nocache") == "true"}
+		args: map[string]string{}, used: map[string]bool{}, global: platformArgs(platform), platform: platform, nocache: q.Get("nocache") == "1" || q.Get("nocache") == "true"}
 	bd.say = func(s string) {
 		if !quiet {
 			send(obj{"stream": s})
 		}
-	}
-	for k, v := range platformArgs {
-		bd.global[k] = v
 	}
 	if raw := q.Get("buildargs"); raw != "" {
 		for k, v := range decode([]byte(raw), maxJSON) {
@@ -248,6 +261,7 @@ func extractContext(dir string, r io.Reader) {
 
 // run executes the Dockerfile and commits the target stage (the last by default).
 func (bd *builder) run(text, target string, tags []string, labels obj) string {
+	defer bd.release()
 	instrs, escape := parseDockerfile(text)
 	bd.escape = escape
 	reject(len(instrs) > 0, "The Dockerfile has no instructions")
@@ -509,9 +523,9 @@ func (bd *builder) arg(in instruction) {
 }
 
 func (bd *builder) from(in instruction) {
+	arch := bd.platform // FROM --platform, else the build's
 	if p := in.flags["platform"]; p != "" {
-		p = processWords(p, bd.global, bd.escape, false)[0]
-		reject(p == "linux/arm64" || p == "linux/arm64/v8", "Only linux/arm64 builds are supported, not "+p)
+		arch = platformArch(processWords(p, bd.global, bd.escape, false)[0])
 	}
 	words := processWords(in.rest, bd.global, bd.escape, true)
 	reject(len(words) == 1 || len(words) == 3 && strings.EqualFold(words[1], "AS"), "FROM needs an image, optionally followed by AS name")
@@ -537,7 +551,11 @@ func (bd *builder) from(in instruction) {
 		ref = named.image
 		fallthrough
 	case parent == nil && !strings.EqualFold(ref, "scratch"):
-		im := bd.pull(ref)
+		im := bd.pull(ref, arch)
+		st.arch = imageArch(im)
+		if arch != "" && st.arch != arch { // a single-platform image: BuildKit warns too
+			bd.say(" ---> " + ref + " is a linux/" + st.arch + " image, not linux/" + arch + "\n")
+		}
 		cloneTree(im.Root, st.root)
 		manifest, config := imageDocs(im.layout)
 		st.config = cloneObj(object(config["config"]))
@@ -549,7 +567,7 @@ func (bd *builder) from(in instruction) {
 		bd.say(" ---> " + im.Digest[7:19] + "\n")
 	case parent != nil:
 		cloneTree(parent.root, st.root)
-		st.config, st.cacheID = cloneObj(parent.config), parent.cacheID
+		st.config, st.cacheID, st.arch = cloneObj(parent.config), parent.cacheID, parent.arch
 		st.digest, st.baseRoot, st.baseLayout = parent.digest, parent.baseRoot, parent.baseLayout
 		st.baseLayers, st.baseDiffs, st.baseHistory = parent.baseLayers, parent.baseDiffs, parent.baseHistory
 	default: // scratch
@@ -557,20 +575,31 @@ func (bd *builder) from(in instruction) {
 		st.digest = "sha256:" + strings.Repeat("0", 64)
 		st.cacheID = st.digest
 	}
+	if st.arch == "" { // scratch or a directory: the platform asked for
+		if st.arch = cmp.Or(arch, "arm64"); st.arch != "arm64" {
+			st.cacheID += " " + st.arch
+		}
+	}
 	bd.stages = append(bd.stages, st)
 }
 
-// pull is a cached image, pulled first when missing (FROM, COPY --from).
-func (bd *builder) pull(ref string) *image {
+// pull is an image for FROM, COPY --from or RUN --mount from=, of arch ("" when no
+// platform is asked for: the tag's): the cached tag, pulled first when missing. An
+// amd64 image, or any where the tag holds another architecture, is a build cache
+// entry instead (basePull), so the tag keeps its image, as BuildKit leaves tags.
+func (bd *builder) pull(ref, arch string) *image {
 	if !strings.Contains(ref, "@") && !strings.Contains(ref[strings.LastIndex(ref, "/")+1:], ":") {
 		ref += ":latest"
 	}
 	var im *image
-	if safeRun(func() { im = bd.b.image(ref) }) == nil {
+	if safeRun(func() { im = bd.b.image(ref) }) == nil && (arch == "" || imageArch(im) == arch) {
 		return im
 	}
+	if im != nil || arch == "amd64" {
+		return bd.basePull(ref, arch)
+	}
 	bd.say("Pulling " + ref + "\n")
-	pullImage(ref, bd.b.Cache, bd.b.Insecure, "") // -insecure-local: FROM a localhost registry
+	pullFor(ref, arch, bd.b.Cache, bd.b.Insecure, credentials{}, func(name, layout string) string { return commitImage(bd.b.Cache, name, layout) }) // -insecure-local: FROM a localhost registry
 	return bd.b.image(ref)
 }
 
@@ -592,8 +621,13 @@ func (bd *builder) runStep(st *buildStage, o runOptions) {
 	sort.Strings(argEnv)
 	binds, secretEnv, targets, release := bd.mountSources(o.mounts)
 	defer release()
+	var fex []string
+	if st.arch == "amd64" { // FEX's mount point (x86Args) and the state it writes stay out of the image
+		targets = append(targets, x86Guest)
+		fex = missingIn(st.root, fexState(st.root, stringsOfAny(st.config["Env"])))
+	}
 	stubs := mountStubs(st.root, targets)
-	im := &image{Root: st.root, Env: stringsOfAny(st.config["Env"]), WorkingDir: stageWorkdir(st), User: validUser(text(st.config["User"])), StopSignal: "SIGTERM", Digest: st.digest}
+	im := &image{Root: st.root, Env: stringsOfAny(st.config["Env"]), WorkingDir: stageWorkdir(st), User: validUser(text(st.config["User"])), StopSignal: "SIGTERM", Digest: st.digest, Arch: st.arch}
 	host := obj{}
 	if o.network == "host" || o.network == "none" {
 		host["NetworkMode"] = o.network
@@ -652,6 +686,7 @@ func (bd *builder) runStep(st *buildStage, o runOptions) {
 	bd.discardRoot(st)
 	check(os.Rename(filepath.Join(p, "rootfs"), st.root))
 	bd.restoreNetworkFiles(st.root, saved)
+	removeFexState(st.root, fex)
 	removeStubs(st.root, stubs)
 }
 
@@ -802,7 +837,7 @@ func (bd *builder) copyArgs(st *buildStage, in instruction, env map[string]strin
 			reject(s != st, in.cmd+" --from cannot name the current stage")
 			root = s.root
 		} else {
-			root = bd.pull(from).Root
+			root = bd.pull(from, bd.platform).Root
 		}
 	}
 	return args, root
@@ -992,13 +1027,14 @@ func (bd *builder) commit(st *buildStage, tags []string) string {
 	} else {
 		history = append(history, obj{"created": created, "created_by": "dockiva-engine build", "empty_layer": true})
 	}
-	config := obj{"architecture": "arm64", "os": "linux", "created": created, "config": st.config,
+	arch := cmp.Or(st.arch, "arm64")
+	config := obj{"architecture": arch, "os": "linux", "created": created, "config": st.config,
 		"rootfs": obj{"type": "layers", "diff_ids": diffs}, "history": history}
 	configDigest, configSize := writeJSONBlob(blobs, config)
 	manifest := obj{"schemaVersion": 2, "mediaType": manifestMedia, "config": obj{"mediaType": configMedia, "digest": configDigest, "size": configSize}, "layers": layers}
 	id, manifestSize := writeJSONBlob(blobs, manifest)
 	save(filepath.Join(layout, "oci-layout"), obj{"imageLayoutVersion": "1.0.0"})
-	save(filepath.Join(layout, "index.json"), obj{"schemaVersion": 2, "manifests": []any{obj{"mediaType": manifestMedia, "digest": id, "size": manifestSize, "platform": obj{"architecture": "arm64", "os": "linux"}}}})
+	save(filepath.Join(layout, "index.json"), obj{"schemaVersion": 2, "manifests": []any{obj{"mediaType": manifestMedia, "digest": id, "size": manifestSize, "platform": obj{"architecture": arch, "os": "linux"}}}})
 	loadImage(layout) // the checks every cached image passes
 	check(os.Rename(st.root, filepath.Join(out, "rootfs")))
 	save(filepath.Join(out, "image.json"), obj{"name": "", "digest": id, "size": treeSize(filepath.Join(out, "rootfs"))})

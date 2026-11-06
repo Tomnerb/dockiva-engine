@@ -159,7 +159,7 @@ func (bd *builder) namedRoot(name string) (root, cacheID string, ok bool) {
 		return "", "", false
 	}
 	if n.image != "" {
-		im := bd.pull(n.image)
+		im := bd.pull(n.image, bd.platform)
 		return im.Root, im.Digest, true
 	}
 	return n.dir, "context " + treeHash(n.dir), true
