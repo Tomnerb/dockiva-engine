@@ -75,17 +75,22 @@ func (b *engine) volumeNames() []string {
 // volumeUsers lists the containers that mount a volume.
 func (b *engine) volumeUsers(name string) []string {
 	users := []string{}
-	for _, c := range b.names() {
-		var config obj
-		if safeRun(func() { config = readObject(filepath.Join(b.container(c), "config.json")) }) != nil {
-			continue
-		}
+	uses := func(c string, config obj) {
 		for _, m := range savedMounts(config) {
 			if m["type"] == "volume" && m["source"] == name {
 				users = append(users, c)
 				break
 			}
 		}
+	}
+	for _, c := range b.names() {
+		var config obj
+		if safeRun(func() { config = readObject(filepath.Join(b.container(c), "config.json")) }) == nil {
+			uses(c, config)
+		}
+	}
+	for c, config := range b.creating {
+		uses(c, config)
 	}
 	return users
 }

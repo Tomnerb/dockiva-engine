@@ -1087,7 +1087,11 @@ static int run(uint64_t steps) {
    4-byte length and the arguments as NUL-terminated strings (argv[0] first), with
    its standard output and error as SCM_RIGHTS, and optionally an exit-report pipe
    (prestart_report). The guard set the 1 TiB file-size cap; the run's own
-   (--file-limit-mib, else 16 MiB as the guard's) is set here. */
+   (--file-limit-mib, else 16 MiB as the guard's) is set here. A named container's
+   run names another path for this program (argv[0]: the engine's hard link named
+   after the container, so Activity Monitor shows it by name): this process then
+   execs itself by that path, after its start was answered, and the run has no exit
+   report (its descriptor closes on exec): its supervisor waits for its guard. */
 #include <sys/resource.h>
 #include <sys/socket.h>
 /* The exit report: once main's run has ended and cleanup() is done (the upper
@@ -1146,6 +1150,13 @@ static void prestart_receive(int *argc,char ***argv) {
     for(int i=1;i+1<count;i++)if(!strcmp(args[i],"--file-limit-mib")) { long long mib=atoll(args[i+1]);if(mib>0 && mib<=1048576)file_size=(rlim_t)mib<<20; }
     struct rlimit lim={file_size,file_size};
     if(setrlimit(RLIMIT_FSIZE,&lim))fail("prestart: file size limit");
+    if(strcmp(args[0],(*argv)[0])) {
+#ifdef VMFREE_HVF
+        hvf_unpreinit();
+#endif
+        execv(args[0],args);
+        fail("prestart: cannot run as the container's process");
+    }
     *argc=count;*argv=args;
 }
 int main(int argc,char **argv) {

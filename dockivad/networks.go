@@ -138,11 +138,23 @@ func membersOn(home, network string) []obj {
 	return out
 }
 
+// claims is members with the creates under way on the network (engine.creating):
+// what an address, or the network's removal, must not collide with.
+func (b *engine) claims(network string) []obj {
+	out := b.members(network)
+	for name, c := range b.creating {
+		if c["net_name"] == network {
+			out = append(out, obj{"name": name, "ip": c["ip"]})
+		}
+	}
+	return out
+}
+
 // assignIP gives a container the lowest free address on a network (.2 to .254).
 func (b *engine) assignIP(network string) string {
 	prefix := strings.TrimSuffix(str(b.network(network)["subnet"]), "0/24")
 	used := map[string]bool{}
-	for _, m := range b.members(network) {
+	for _, m := range b.claims(network) {
 		used[str(m["ip"])] = true
 	}
 	for i := 2; i < 255; i++ {
@@ -201,8 +213,10 @@ func hostsFile(home, name string, c obj, members []obj) string {
 	return out
 }
 
-// refreshHosts rewrites /etc/hosts in every container on a user network (after one
-// joins or leaves); a running container sees the change on its next lookup.
+// refreshHosts rewrites /etc/hosts in every running container on a user network
+// (after one joins or leaves); it sees the change on its next lookup. One not
+// running writes its own when it starts (networkFiles): docker compose creates all
+// its services before it starts any, and each create refreshed them all.
 func (b *engine) refreshHosts(network string) {
 	if network == "" || network == "bridge" {
 		return
@@ -211,8 +225,13 @@ func (b *engine) refreshHosts(network string) {
 	for _, m := range members {
 		name := str(m["name"])
 		p := b.container(name)
-		c := readObject(filepath.Join(p, "config.json"))
-		_ = safeRun(func() { containerLayers(p, c).writeFile("etc/hosts", hostsFile(b.Home, name, c, members)) })
+		_ = safeRun(func() {
+			if !live(readStatus(p)) {
+				return
+			}
+			c := readObject(filepath.Join(p, "config.json"))
+			containerLayers(p, c).writeFile("etc/hosts", hostsFile(b.Home, name, c, members))
+		})
 	}
 }
 
@@ -322,7 +341,7 @@ func (b *engine) networksAPI(w http.ResponseWriter, method, path string, q map[s
 			meta := b.network(name)
 			created, e := time.Parse(time.RFC3339Nano, timestamp(meta["created"]))
 			check(e)
-			if name != "bridge" && len(b.members(name)) == 0 && keep(created, object(meta["labels"])) {
+			if name != "bridge" && len(b.claims(name)) == 0 && keep(created, object(meta["labels"])) {
 				check(os.RemoveAll(filepath.Join(networksDir(b.Home), name)))
 				deleted = append(deleted, name)
 			}
@@ -341,7 +360,7 @@ func (b *engine) networksAPI(w http.ResponseWriter, method, path string, q map[s
 			if name == "bridge" || name == "host" || name == "none" {
 				panic(apiError{403, name + " is a pre-defined network and cannot be removed"})
 			}
-			if m := b.members(name); len(m) > 0 {
+			if m := b.claims(name); len(m) > 0 {
 				panic(apiError{409, "error while removing network: network " + name + " has active endpoints (" + str(m[0]["name"]) + ")"})
 			}
 			check(os.RemoveAll(filepath.Join(networksDir(b.Home), name)))

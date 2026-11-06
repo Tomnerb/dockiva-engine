@@ -186,6 +186,9 @@ func (b *engine) pruneImages(danglingOnly bool, keep func(time.Time, obj) bool) 
 	for _, name := range b.names() {
 		_ = safeRun(func() { used[str(readObject(filepath.Join(b.container(name), "config.json"))["image"])] = true })
 	}
+	for _, c := range b.creating {
+		used[str(c["image"])] = true
+	}
 	groups, order := map[string][]cachedImage{}, []string{}
 	for _, c := range b.cachedImages() {
 		if groups[c.digest] == nil {

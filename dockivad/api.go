@@ -135,10 +135,16 @@ func (b *engine) removeImage(ref string, force bool) []obj {
 	reject(len(dirs) == 1 || force, "Image "+ref+" has several names; remove them by name or use --force")
 	last := tags == len(dirs)
 	if last && !force {
-		for _, name := range b.names() {
-			if readObject(filepath.Join(b.container(name), "config.json"))["image"] == digest {
+		using := func(name string, c obj) {
+			if c["image"] == digest {
 				panic(apiError{409, "conflict: unable to remove image " + ref + " (must force) - container " + name + " is using it"})
 			}
+		}
+		for _, name := range b.names() {
+			using(name, readObject(filepath.Join(b.container(name), "config.json")))
+		}
+		for name, c := range b.creating {
+			using(name, c)
 		}
 	}
 	out := []obj{}
@@ -287,33 +293,41 @@ func workdir(c obj) string {
 	return "/"
 }
 
-func (b *engine) create(name string, body obj) obj { return b.createWith(name, body, nil) }
+// create makes a container from the cached image body names, under the engine
+// lock but for its syncs (createWith).
+func (b *engine) create(name string, body obj) obj {
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+	return b.createWith(name, body, nil)
+}
 
-// createWith is create from a prepared image (a build step's root and settings)
-// instead of the cached image body names.
+// createWith is create from a prepared image (a build step's root and settings),
+// or from the cached image body names when nil. Its caller holds the engine lock;
+// createWith lets it go while the container's files sync and has it again when it
+// returns or panics.
 func (b *engine) createWith(name string, body obj, prepared *image) obj {
 	p := b.container(name)
-	if exists(p) {
+	if exists(p) || b.creating[name] != nil {
 		panic(apiError{409, "Container name already exists"})
 	}
 	// The stage first, and its status (the same for every container) written and
-	// synced while the config is worked out: after even a short idle moment (the
-	// docker CLI's own start), the first sync waits ~1-3 ms for the drive to wake.
+	// flushed while the config is worked out: after even a short idle moment (the
+	// docker CLI's own start), the first flush waits ~1-3 ms for the drive to wake.
 	// The stage is private until the rename below publishes it, so its files go
 	// straight to their names.
 	stage, err := os.MkdirTemp(b.State, ".creating-")
 	check(err)
 	statusDone := make(chan error, 1)
 	go func() {
-		statusDone <- safeRun(func() { writeSynced(filepath.Join(stage, "status.json"), obj{"state": "created"}) })
+		statusDone <- safeRun(func() { writeFlushed(filepath.Join(stage, "status.json"), obj{"state": "created"}) })
 	}()
-	statusSynced := sync.OnceValue(func() error { return <-statusDone })
+	statusWritten := sync.OnceValue(func() error { return <-statusDone })
 	var filesDone chan struct{} // once started: closed when the container's own files are made
 	var filesFailed any         // a panic making them, raised again below
 	committed := false
 	defer func() {
 		if !committed {
-			_ = statusSynced() // not removing the stage under its writers
+			_ = statusWritten() // not removing the stage under its writers
 			if filesDone != nil {
 				<-filesDone
 			}
@@ -578,18 +592,33 @@ func (b *engine) createWith(name string, body obj, prepared *image) obj {
 			im.ensureDir(d)
 		}
 	}
-	// Its config with its data on disk too, then the rename made durable.
-	writeSynced(filepath.Join(stage, "config.json"), config)
-	check(statusSynced())
+	// The syncs without the engine lock (the caller's), so creates overlap: docker
+	// compose sends its services' together. Meanwhile b.creating holds this config,
+	// which other requests check like a container's on disk: its name, its address
+	// on its network, its image's and volumes' use.
+	if b.creating == nil {
+		b.creating = map[string]obj{}
+	}
+	b.creating[name] = config
+	defer delete(b.creating, name) // deferred calls run last first: after the relock
+	b.Mu.Unlock()
+	relock := sync.OnceFunc(b.Mu.Lock)
+	defer relock()
+	// Its config flushed too, then one barrier for the stage's files, the rename
+	// that publishes them, and a barrier that makes the rename survive.
+	writeFlushed(filepath.Join(stage, "config.json"), config)
+	check(statusWritten())
 	if filesDone != nil {
 		<-filesDone
 		if filesFailed != nil {
 			panic(filesFailed)
 		}
 	}
-	check(os.Rename(stage, p))
+	syncDir(stage)
+	check(os.Rename(stage, p)) // nothing else makes p: its name is held in b.creating
 	committed = true
 	syncDir(b.State)
+	relock()
 	b.refreshHosts(text(config["net_name"]))
 	return obj{"Id": key(name), "Warnings": []string{}}
 }
@@ -775,8 +804,6 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 			if len(raw) > 0 {
 				body = decode(raw, maxJSON)
 			}
-			b.Mu.Lock()
-			defer b.Mu.Unlock()
 			created := b.create(name, body)
 			// Its create event after the reply: passes are serialized, and one that
 			// comes first (a start's) publishes create before start anyway.

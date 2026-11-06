@@ -255,10 +255,12 @@ func store(path string, v any, level int) {
 	check(barrierSync(dir))
 }
 
-// writeSynced writes a new state file into a directory nothing reads yet (create's
-// stage): no temporary name, only its data on disk before the directory is
-// published. syncDir then makes the publishing rename survive.
-func writeSynced(path string, v any) {
+// writeFlushed writes a new state file into a directory nothing reads yet (create's
+// stage), no temporary name, and hands its data to the drive: fsync(2), without
+// the barrier (about 0.8 ms). The caller's one barrier for all the stage's files
+// (syncDir of the stage) orders them before the rename that publishes it, and
+// syncDir of its parent makes that rename survive.
+func writeFlushed(path string, v any) {
 	b, e := json.MarshalIndent(v, "", "  ")
 	check(e)
 	f, e := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
@@ -266,7 +268,7 @@ func writeSynced(path string, v any) {
 	defer f.Close()
 	_, e = f.Write(append(b, '\n'))
 	check(e)
-	check(barrierSync(f))
+	check(syscall.Fsync(int(f.Fd()))) // not File.Sync: F_FULLFSYNC on macOS
 	check(f.Close())
 }
 func syncDir(dir string) {

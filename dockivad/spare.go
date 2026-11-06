@@ -16,7 +16,13 @@ import (
 
 // A spare is a supervisor process started ahead of time. A container's start
 // hands it the container over a socket instead of starting this 13 MB binary
-// then (about 5 ms on an idle Mac, more under load). One waits at a time.
+// then (about 5 ms on an idle Mac, more under load). sparePool wait at a time:
+// docker compose starts its services one after another, a few ms apart, and one
+// spare took ~6 ms to replace, so every other start found none.
+// ponytail: a fixed pool; each idle spare is ~9 MB (supervisor, guard, runtime) and
+// one of the Mac's ~128 hypervisor VMs. Size it by recent starts if bursts grow.
+const sparePool = 2
+
 type spare struct {
 	cmd  *exec.Cmd
 	conn *net.UnixConn
@@ -24,29 +30,34 @@ type spare struct {
 
 type spareSlot struct {
 	sync.Mutex
-	on   bool // set by main: tests run supervisors by exec, from the binary they built
-	next *spare
+	on      bool // set by main: tests run supervisors by exec, from the binary they built
+	ready   []*spare
+	filling int // spares being started
 }
 
-// refillSpare starts the next spare in the background, unless one waits.
+// refillSpare starts spares in the background until sparePool wait or are on the way.
 func (b *engine) refillSpare() {
 	if !b.spares.on {
 		return
 	}
-	go func() {
-		s := b.newSpare()
-		if s == nil {
-			return
-		}
-		b.spares.Lock()
-		if b.spares.next == nil {
-			b.spares.next, s = s, nil
-		}
-		b.spares.Unlock()
-		if s != nil {
-			s.discard()
-		}
-	}()
+	b.spares.Lock()
+	missing := sparePool - len(b.spares.ready) - b.spares.filling
+	b.spares.filling += max(missing, 0)
+	b.spares.Unlock()
+	for range missing {
+		go func() {
+			s := b.newSpare()
+			b.spares.Lock()
+			b.spares.filling--
+			if s != nil && len(b.spares.ready) < sparePool {
+				b.spares.ready, s = append(b.spares.ready, s), nil
+			}
+			b.spares.Unlock()
+			if s != nil {
+				s.discard()
+			}
+		}()
+	}
 }
 
 func (b *engine) newSpare() *spare {
@@ -86,8 +97,10 @@ func (s *spare) discard() {
 // supervisor itself.
 func (b *engine) takeSpare(args, env []string, lock, ready, log, over *os.File) *exec.Cmd {
 	b.spares.Lock()
-	s := b.spares.next
-	b.spares.next = nil
+	var s *spare
+	if len(b.spares.ready) > 0 {
+		s, b.spares.ready = b.spares.ready[0], b.spares.ready[1:] // the oldest: the likeliest to have its VM ready
+	}
 	b.spares.Unlock()
 	if s == nil {
 		b.refillSpare()
@@ -157,6 +170,15 @@ func startPrestart(native, worker string) *prestart {
 	return &prestart{cmd: cmd, runtime: runtime, liveness: highFile(writer), job: highFd(pair[0])}
 }
 
+func sameFile(a, b string) bool {
+	if a == b {
+		return true
+	}
+	x, e := os.Stat(a)
+	y, f := os.Stat(b)
+	return e == nil && f == nil && os.SameFile(x, y)
+}
+
 func highFd(fd int) int {
 	r, _, errno := syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), syscall.F_DUPFD_CLOEXEC, 100)
 	if errno != 0 {
@@ -184,6 +206,8 @@ func (r *prestart) end() {
 
 // prestartedRun hands a run to the spare's prestarted runtime when it runs the
 // same runtime, without a terminal or input (those need the launch's own stdio).
+// A named container's runtime is a hard link to it (processName): the prestarted
+// one then execs itself by that name once it has the run.
 // It returns the guard, its liveness pipe, a wait for the run's output to be
 // copied, and the runtime's exit report: one exit status, sent once the run is over
 // and before the runtime's own teardown, or closed without one (it then ends
@@ -194,7 +218,7 @@ func prestartedRun(invocation []string, c obj, out, errout io.Writer) (*exec.Cmd
 	if r == nil {
 		return nil, nil, nil, nil
 	}
-	if invocation[0] != r.runtime || c["tty"] == true || c["open_stdin"] == true {
+	if !sameFile(invocation[0], r.runtime) || c["tty"] == true || c["open_stdin"] == true {
 		r.end()
 		return nil, nil, nil, nil
 	}

@@ -1264,6 +1264,13 @@ static void hvf_preinit(void) {
     worker->backend=hvf_cpu_new(1);                   /* the main thread's: the run's first process runs on it */
     hvf_preinitialized=1;
 }
+/* hvf_unpreinit gives them back before this process execs another image of itself
+   (a named container's run, runtime.c): a VM and a vCPU belong to the process and
+   its thread, which exec keeps. */
+static void hvf_unpreinit(void) {
+    hvf_check(hv_vcpu_destroy(hvf_cpu->vcpu),"hv_vcpu_destroy");
+    hvf_check(hv_vm_destroy(),"hv_vm_destroy");
+}
 static void hvf_init_vm(void) {
     /* Every process's memory stays mapped: ask for the largest guest-physical space (up to the 40-bit TCR_EL1.IPS). */
     hv_vm_config_t config=hv_vm_config_create();uint32_t bits=0;

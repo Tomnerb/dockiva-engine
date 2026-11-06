@@ -34,12 +34,13 @@ type engine struct {
 	BindIP                                           string // -default-bind-ip: where -p HOST:GUEST publishes ("": 127.0.0.1)
 	Mu                                               sync.Mutex
 	events                                           events
-	exits                                            sync.Map      // exit status of auto-removed containers, by name, for a minute
-	execs                                            sync.Map      // *execJob by ID
-	pausing                                          sync.Mutex    // pause and unpause, and an exec starting meanwhile
-	quit                                             chan struct{} // POST /dockiva/shutdown asks main to exit
-	watched                                          watcher       // what engine.watch last saw
-	spares                                           spareSlot     // a supervisor started ahead of the next start
+	exits                                            sync.Map       // exit status of auto-removed containers, by name, for a minute
+	execs                                            sync.Map       // *execJob by ID
+	pausing                                          sync.Mutex     // pause and unpause, and an exec starting meanwhile
+	quit                                             chan struct{}  // POST /dockiva/shutdown asks main to exit
+	watched                                          watcher        // what engine.watch last saw
+	spares                                           spareSlot      // a supervisor started ahead of the next start
+	creating                                         map[string]obj // under Mu: the configs of creates syncing without it, by name (createWith)
 }
 
 // memoryMiB is a container's guest memory limit: docker run -m, else its profile's.
@@ -493,7 +494,7 @@ func (b *engine) rename(name, to string) {
 		panic(apiError{409, "Renaming a container with the same name as its current name"})
 	}
 	p, q := b.container(name), b.container(to)
-	if exists(q) {
+	if exists(q) || b.creating[to] != nil {
 		panic(apiError{409, "Conflict. The container name \"/" + to + "\" is already in use"})
 	}
 	f, e := settledContainerLock(p)

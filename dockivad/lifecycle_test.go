@@ -154,3 +154,45 @@ func TestProcessNameLinks(t *testing.T) {
 		t.Fatal("prune keeps current links and drops an older runtime's")
 	}
 }
+
+// A create syncing without the engine lock waits in engine.creating: its name,
+// address, network, image and volume stay taken as a container's on disk would.
+func TestCreatingHoldsItsClaims(t *testing.T) {
+	b := testEngine(t)
+	h := b.socketHandler()
+	for path, body := range map[string]string{"/networks/create": `{"Name":"n"}`, "/volumes/create": `{"Name":"v"}`} {
+		if r := request(t, h, "POST", path, body, ""); r.Code != 201 {
+			t.Fatalf("%s: %d %s", path, r.Code, r.Body.String())
+		}
+	}
+	ip := b.assignIP("n")
+	b.creating = map[string]obj{"pending": {"image": b.image("dockiva/shell:demo").Digest, "net_name": "n", "ip": ip,
+		"mounts": []any{obj{"type": "volume", "source": "v", "target": "/data"}}}}
+	if b.assignIP("n") == ip {
+		t.Fatal("an address under way given again")
+	}
+	for _, step := range []struct {
+		method, path, body string
+		code               int
+	}{
+		{"DELETE", "/networks/n", "", 409},
+		{"DELETE", "/volumes/v", "", 409},
+		{"DELETE", "/images/dockiva/shell:demo", "", 409},
+		{"POST", "/networks/prune", "", 200},
+		{"POST", "/volumes/prune?filters=%7B%22all%22%3A%5B%22true%22%5D%7D", "", 200},
+		{"POST", "/images/prune?filters=%7B%22dangling%22%3A%5B%22false%22%5D%7D", "", 200},
+		{"POST", "/containers/create?name=pending", `{"Image":"dockiva/shell:demo"}`, 409},
+		{"POST", "/containers/create?name=kept", `{"Image":"dockiva/shell:demo"}`, 201},
+		{"POST", "/containers/kept/rename?name=pending", "", 409},
+	} {
+		if r := request(t, h, step.method, step.path, step.body, ""); r.Code != step.code {
+			t.Fatalf("%s %s: %d %s", step.method, step.path, r.Code, r.Body.String())
+		}
+	}
+	if !exists(filepath.Join(networksDir(b.Home), "n")) || !exists(filepath.Join(volumesDir(b.Home), "v")) || safeRun(func() { b.image("dockiva/shell:demo") }) != nil {
+		t.Fatal("pruned what a create under way uses")
+	}
+	if len(b.creating) != 1 {
+		t.Fatalf("a finished create left its claims: %v", b.creating)
+	}
+}
