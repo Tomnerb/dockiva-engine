@@ -410,7 +410,8 @@ func layerDir(root, dir string, create bool) (string, bool) {
 
 // cloneTree copies an unpacked root for a container: one APFS clone of the whole
 // tree (clonefileat), sharing blocks until written; a plain copy elsewhere. A clone
-// turns setuid and setgid off on regular files, so they are set again.
+// turns setuid and setgid off on files and directories (Debian's /var/mail is
+// 2775), so they are set again.
 func cloneTree(src, dst string) {
 	s, e := syscall.BytePtrFromString(src)
 	check(e)
@@ -423,7 +424,7 @@ func cloneTree(src, dst string) {
 		// setuid files, kept at unpack, would spare it.
 		check(filepath.WalkDir(src, func(p string, entry fs.DirEntry, err error) error {
 			check(err)
-			if !entry.Type().IsRegular() {
+			if !entry.Type().IsRegular() && !entry.IsDir() {
 				return nil
 			}
 			info, e := entry.Info()

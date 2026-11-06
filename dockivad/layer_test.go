@@ -275,15 +275,22 @@ func TestSpecialModes(t *testing.T) {
 	}
 }
 
-// An APFS clone turns setuid and setgid off; cloneTree sets them again.
+// An APFS clone turns setuid and setgid off, on files and directories; cloneTree
+// sets them again.
 func TestCloneKeepsSetuid(t *testing.T) {
 	src, dst := filepath.Join(t.TempDir(), "src"), filepath.Join(t.TempDir(), "dst")
 	check(os.MkdirAll(filepath.Join(src, "bin"), 0o755))
+	check(os.MkdirAll(filepath.Join(src, "var/mail"), 0o755))
 	check(os.WriteFile(filepath.Join(src, "bin/sudo"), []byte("ELF"), 0o755))
 	check(setMode(filepath.Join(src, "bin/sudo"), 0o755|fs.ModeSetuid|fs.ModeSetgid))
+	check(setMode(filepath.Join(src, "var/mail"), 0o775|fs.ModeSetgid))
 	cloneTree(src, dst)
-	if st, e := os.Lstat(filepath.Join(dst, "bin/sudo")); e != nil || st.Mode() != 0o755|fs.ModeSetuid|fs.ModeSetgid {
-		t.Fatalf("clone: %v %v", st.Mode(), e)
+	for name, want := range map[string]fs.FileMode{"bin/sudo": 0o755 | fs.ModeSetuid | fs.ModeSetgid, "var/mail": fs.ModeDir | 0o775 | fs.ModeSetgid} {
+		st, e := os.Lstat(filepath.Join(dst, name))
+		check(e)
+		if st.Mode() != want {
+			t.Fatalf("clone of %s: %v, want %v", name, st.Mode(), want)
+		}
 	}
 }
 
