@@ -963,7 +963,12 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 				return
 			case (action == "start" || action == "stop" || action == "restart") && method == "POST":
 				b.Mu.Lock()
-				defer b.Mu.Unlock()
+				locked := true
+				defer func() {
+					if locked {
+						b.Mu.Unlock()
+					}
+				}()
 				unbounded(w) // a long stop grace period
 				if action == "stop" || action == "restart" {
 					// Docker's events for a stop: kill (the stop signal), die, stop.
@@ -971,16 +976,24 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 					if wasLive {
 						b.emit("kill", name, obj{"signal": strconv.Itoa(int(stopSignalNumber(readObject(filepath.Join(b.container(name), "config.json")))))})
 					}
+					seconds := []int{}
 					if t := q.Get("t"); t != "" {
 						n, e := strconv.Atoi(t)
 						reject(e == nil && n >= -1 && n <= 3600, "Invalid stop timeout")
 						if n < 0 {
 							n = 3600 // -1: wait for the container
 						}
-						b.stop(name, n)
-					} else {
-						b.stop(name)
+						seconds = append(seconds, n)
 					}
+					// Its run's end (up to the grace period) is waited for without the engine
+					// lock: other containers' stops, starts and creates go on meanwhile, as in
+					// Docker (docker compose down stops its services at once). The container's
+					// own lock keeps it its supervisor's.
+					b.Mu.Unlock()
+					locked = false
+					b.stop(name, seconds...)
+					b.Mu.Lock()
+					locked = true
 					if wasLive {
 						b.watchPass() // die
 						b.emit("stop", name, obj{})
@@ -1137,10 +1150,21 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 				return
 			case action == "" && method == "DELETE":
 				b.Mu.Lock()
-				defer b.Mu.Unlock()
+				locked := true
+				defer func() {
+					if locked {
+						b.Mu.Unlock()
+					}
+				}()
 				if yes("force") && live(b.status(b.container(name))) { // events: kill, die, destroy
 					b.emit("kill", name, obj{"signal": "9"})
-					b.stop(name)
+					// docker rm -f kills at once, as Docker does (it waited out the 10 s stop grace
+					// period for a container that ignores SIGTERM), without the engine lock.
+					b.Mu.Unlock()
+					locked = false
+					b.stop(name, 0)
+					b.Mu.Lock()
+					locked = true
 					b.watchPass()
 				}
 				mounts := savedMounts(readObject(filepath.Join(b.container(name), "config.json")))

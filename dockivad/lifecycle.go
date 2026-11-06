@@ -875,6 +875,7 @@ func supervise(p, native, worker, generation string) (result error) {
 	var cmd *exec.Cmd
 	var writer *os.File
 	var done chan error
+	var ended chan struct{} // closed when the run in progress is over (before its done)
 	finished := false
 	final := durable // how the last status is saved
 	defer func() {
@@ -981,8 +982,8 @@ func supervise(p, native, worker, generation string) (result error) {
 		} else {
 			close(copied)
 		}
-		done = make(chan error, 1)
-		go func(cmd *exec.Cmd, done chan error) { done <- cmd.Wait() }(cmd, done)
+		done, ended = make(chan error, 1), make(chan struct{})
+		go func(cmd *exec.Cmd, done chan error, ended chan struct{}) { e := cmd.Wait(); close(ended); done <- e }(cmd, done, ended)
 	}
 	// launch starts a run: the first, or a restart under the container's policy.
 	launch := func() {
@@ -997,26 +998,27 @@ func supervise(p, native, worker, generation string) (result error) {
 			cmd, writer = guard, liveness
 			copied = make(chan struct{})
 			close(copied)
-			done = make(chan error, 1)
+			done, ended = make(chan error, 1), make(chan struct{})
 			waited := make(chan error, 1)
 			go func(cmd *exec.Cmd) { waited <- cmd.Wait() }(cmd)
-			go func(done chan error) {
+			go func(done chan error, ended chan struct{}) {
+				over := func(e error) { close(ended); done <- e }
 				select {
 				case code, ok := <-report:
 					if ok {
 						drained()
 						reported = code
-						done <- nil
+						over(nil)
 						return
 					}
 					e := <-waited
 					drained()
-					done <- e
+					over(e)
 				case e := <-waited:
 					drained()
-					done <- e
+					over(e)
 				}
-			}(done)
+			}(done, ended)
 		} else {
 			launchWorker()
 		}
@@ -1079,7 +1081,9 @@ func supervise(p, native, worker, generation string) (result error) {
 		select {
 		case <-done:
 		case <-time.After(grace):
-			upperSync(p) // the files the run keeps in memory, before nothing can write them
+			if c["auto_remove"] != true { // a --rm container's files go with it
+				upperSync(p, ended) // the files the run keeps in memory, before nothing can write them
+			}
 			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 			<-done
 		}
@@ -1189,8 +1193,8 @@ func supervise(p, native, worker, generation string) (result error) {
 			for _, s := range stopSignals {
 				allowed = allowed || (err == nil && s == syscall.Signal(n) && s != syscall.SIGWINCH)
 			}
-			if allowed && syscall.Signal(n) == syscall.SIGKILL {
-				upperSync(p) // docker kill: the run's files in memory first
+			if allowed && syscall.Signal(n) == syscall.SIGKILL && c["auto_remove"] != true {
+				upperSync(p, ended) // docker kill: the run's files in memory first (a --rm container's go with it)
 			}
 			if allowed && syscall.Kill(-cmd.Process.Pid, syscall.Signal(n)) == nil {
 				_, _ = conn.Write([]byte("OK"))
@@ -1241,7 +1245,13 @@ func resolvConf(host []byte) string {
 // directory itself: docker cp, export, diff and commit, an exec or healthcheck run (a
 // runtime of its own, on the same directory), a SIGKILL. The run removes the request
 // file once done; a run that ended meanwhile cannot, so the wait is bounded.
-func upperSync(p string) {
+//
+// ended, when the caller has it, is closed when the run is over: its own end wrote the
+// files back (or discarded them), so the wait stops there too. Without that, a
+// run already on its way out (docker stop -t 0: the stop signal, then this at
+// once) left every stop waiting out the 3 s, and docker compose down -t 0 3 s per
+// service.
+func upperSync(p string, ended <-chan struct{}) {
 	if !exists(filepath.Join(p, "upper-memory")) {
 		return
 	}
@@ -1251,18 +1261,25 @@ func upperSync(p string) {
 		return
 	}
 	f.Close()
-	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(2 * time.Millisecond) {
-		if !exists(request) {
+	defer os.Remove(request) // when the run did not
+	tick := time.NewTicker(2 * time.Millisecond)
+	defer tick.Stop()
+	deadline := time.After(3 * time.Second)
+	for exists(request) {
+		select {
+		case <-ended:
 			return
+		case <-deadline:
+			return
+		case <-tick.C:
 		}
 	}
-	_ = os.Remove(request)
 }
 
 // upperSync for an API request: only a running container's run holds files in memory.
 func (b *engine) upperSync(p string) {
 	if live(b.status(p)) {
-		upperSync(p)
+		upperSync(p, nil)
 	}
 }
 
