@@ -746,7 +746,7 @@ func (b *engine) kill(name string, sig syscall.Signal) {
 		}
 		b.unpause(name)
 	}
-	control := readObject(filepath.Join(p, "control.json"))
+	control := readControl(p)
 	port := integer(control["port"])
 	reject(port > 0 && port <= 65535, "Invalid control port")
 	conn, e := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.FormatInt(port, 10)), 5*time.Second)

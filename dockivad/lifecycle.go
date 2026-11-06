@@ -306,7 +306,7 @@ func (b *engine) stop(name string, seconds ...int) {
 			panic(failure)
 		}
 	}()
-	control := readObject(filepath.Join(p, "control.json"))
+	control := readControl(p)
 	port := integer(control["port"])
 	reject(port > 0 && port <= 65535, "Invalid control port")
 	conn, e := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.FormatInt(port, 10)), 5*time.Second)
@@ -408,7 +408,7 @@ func (b *engine) restartOnBoot() {
 
 // control opens a command connection to a running container's supervisor.
 func (b *engine) control(p, command string) net.Conn {
-	control := readObject(filepath.Join(p, "control.json"))
+	control := readControl(p)
 	port := integer(control["port"])
 	reject(port > 0 && port <= 65535, "Invalid control port")
 	conn, e := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.FormatInt(port, 10)), 5*time.Second)
@@ -434,6 +434,23 @@ func (b *engine) resize(name string, rows, columns int64) {
 	})
 }
 
+// readControl is a live run's control.json. Its supervisor writes it just after the
+// run starts (start does not wait for it): a request that comes sooner waits for
+// it, up to a second, while the container's status is live.
+func readControl(p string) obj {
+	deadline := time.Now().Add(time.Second)
+	for {
+		var c obj
+		if safeRun(func() { c = readObject(filepath.Join(p, "control.json")) }) == nil {
+			return c
+		}
+		if time.Now().After(deadline) || !live(readStatus(p)) {
+			return readObject(filepath.Join(p, "control.json")) // its own error
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 // feedStdin waits for the container's run (the one in progress, or the next) and
 // copies in to its standard input, then ends the input with a half-close.
 func (b *engine) feedStdin(ctx context.Context, p string, initial obj, in io.Reader) error {
@@ -442,13 +459,18 @@ func (b *engine) feedStdin(ctx context.Context, p string, initial obj, in io.Rea
 		if s == nil {
 			return nil
 		}
-		if live(s) && (live(initial) || s["generation"] != initial["generation"]) && exists(filepath.Join(p, "control.json")) {
+		running := live(s) && (live(initial) || s["generation"] != initial["generation"])
+		if running && exists(filepath.Join(p, "control.json")) {
 			break
+		}
+		pause := 20 * time.Millisecond
+		if running {
+			pause = time.Millisecond // its control.json follows its start by about 0.3 ms
 		}
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-time.After(20 * time.Millisecond):
+		case <-time.After(pause):
 		}
 	}
 	var conn net.Conn
@@ -501,6 +523,7 @@ func (b *engine) update(name string, body obj) obj {
 		case k == "RestartPolicy" && !idle(object(v)["Name"]): // the CLI always sends one, empty without --restart
 			reject(restartPolicyOK(object(v)), "Invalid restart policy")
 			setRestart(c, object(v))
+			reject(c["restart"] == nil || c["auto_remove"] != true, "Restart policy cannot be updated because AutoRemove is enabled for the container") // as Docker
 		case k == "Memory" || k == "NanoCpus":
 			limits = limits || !idle(v)
 		case k == "MemorySwap":
@@ -903,12 +926,6 @@ func supervise(p, native, worker, generation string) (result error) {
 	invocation := runtimeCommand(p, native, c, command, command[0], env, true, extra...)
 	invocation[0] = processName(p, invocation[0])
 	stop := stopSignalNumber(c)
-	listenerErr := error(nil)
-	listener, listenerErr = net.Listen("tcp", "127.0.0.1:0")
-	check(listenerErr)
-	secret := token()
-	// Read only while this supervisor holds the lock (status turns a lost one into failed).
-	store(filepath.Join(p, "control.json"), obj{"port": listener.Addr().(*net.TCPAddr).Port, "token": secret}, volatile)
 	out := openStampedLog(p, "stdout") // through pipes: each line's time is indexed
 	defer out.Close()
 	errout := openStampedLog(p, "stderr")
@@ -1069,6 +1086,14 @@ func supervise(p, native, worker, generation string) (result error) {
 		finish()
 	}
 	launch()
+	// The control port after the run has started and start has its answer (about
+	// 0.3 ms): docker stop, kill and attach wait for control.json (readControl).
+	listenerErr := error(nil)
+	listener, listenerErr = net.Listen("tcp", "127.0.0.1:0")
+	check(listenerErr)
+	secret := token()
+	// Read only while this supervisor holds the lock (status turns a lost one into failed).
+	store(filepath.Join(p, "control.json"), obj{"port": listener.Addr().(*net.TCPAddr).Port, "token": secret}, volatile)
 	restarts, delay := 0, time.Duration(0)
 	var restartAt <-chan time.Time
 	// Control connections arrive on a channel, so the loop below waits for them, the
@@ -1090,7 +1115,9 @@ func supervise(p, native, worker, generation string) (result error) {
 		select {
 		case <-done:
 			code := finish()
-			_ = safeRun(func() { c["restart"] = readObject(filepath.Join(p, "config.json"))["restart"] }) // docker update --restart
+			if c["auto_remove"] != true { // a --rm container has no restart policy, nor can be given one
+				_ = safeRun(func() { c["restart"] = readObject(filepath.Join(p, "config.json"))["restart"] }) // docker update --restart
+			}
 			var again bool
 			if delay, again = restartDelay(c, code, restarts, time.Since(started), delay); !again {
 				return nil

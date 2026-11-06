@@ -533,6 +533,8 @@ func (b *engine) createWith(name string, body obj, prepared *image) obj {
 		config["extra_hosts"] = pairs
 	}
 	setRestart(config, object(host["RestartPolicy"]))
+	// As Docker: a --rm container is removed when it exits, so it cannot restart.
+	reject(config["restart"] == nil || host["AutoRemove"] != true, "Conflicting options: cannot both set AutoRemove and RestartPolicy")
 	if body["Tty"] == true { // docker run -t: the container's stdio is a terminal
 		config["tty"] = true
 		if a, ok := host["ConsoleSize"].([]any); ok && !idle(a[0]) {
@@ -561,7 +563,7 @@ func (b *engine) createWith(name string, body obj, prepared *image) obj {
 			config["binds"] = stringsOf(host["Binds"])
 		}
 	}
-	profile := loadProfileCatalog(profileCatalogJSON).selectForHost(im.Digest, b.Native)
+	profile := profileCatalogParsed().selectForHost(im.Digest, b.Native)
 	profile.apply(config)
 	validateLaunchProfile(config, b.Native)
 	reject(config["mounts"] == nil || config["host_sandbox"] != true, "Mounts are not supported for host-sandboxed containers")
@@ -776,7 +778,9 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 			b.Mu.Lock()
 			defer b.Mu.Unlock()
 			created := b.create(name, body)
-			b.watchPass() // its create event
+			// Its create event after the reply: passes are serialized, and one that
+			// comes first (a start's) publishes create before start anyway.
+			go b.watchPass()
 			send(w, 201, created)
 			return
 		case b.systemAPI(w, method, path, q): // before /containers/NAME: /containers/prune
@@ -984,7 +988,11 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 				}
 				if action == "start" || action == "restart" {
 					b.start(name)
-					b.watchPass() // start
+					if action == "start" {
+						go b.watchPass() // its start event after the reply (passes keep their order)
+					} else {
+						b.watchPass() // start, before restart's own event
+					}
 				}
 				if action == "restart" {
 					b.emit("restart", name, obj{})

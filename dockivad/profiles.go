@@ -22,6 +22,27 @@ const runtimeABI = "dockiva-native-v1"
 //go:embed profiles.json
 var profileCatalogJSON []byte
 
+// profileCatalogParsed is the catalog, parsed and checked once per catalog (it was
+// on every create, ~0.04 ms): again only when profileCatalogJSON is another slice
+// (tests swap it). A catalog that does not load is not kept, so it fails each time;
+// main loads it at start, so a bad one still stops the engine.
+var catalogCache struct {
+	sync.Mutex
+	raw []byte
+	c   profileCatalog
+}
+
+func profileCatalogParsed() profileCatalog {
+	catalogCache.Lock()
+	defer catalogCache.Unlock()
+	raw := profileCatalogJSON
+	if catalogCache.raw == nil || len(raw) != len(catalogCache.raw) || len(raw) > 0 && &raw[0] != &catalogCache.raw[0] {
+		catalogCache.c = loadProfileCatalog(raw)
+		catalogCache.raw = raw
+	}
+	return catalogCache.c
+}
+
 type executionProfile struct {
 	ID                   string   `json:"id"`
 	Revision             int      `json:"revision"`

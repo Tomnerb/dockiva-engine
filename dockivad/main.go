@@ -94,7 +94,7 @@ func run() {
 	b.Native = regularExecutable(*native)
 	b.Worker = regularExecutable(*worker)
 	pruneProcessNames(b.Home, b.Native, filepath.Join(filepath.Dir(b.Native), "dockiva-hvf"))
-	loadProfileCatalog(profileCatalogJSON)
+	profileCatalogParsed() // checked at start: a bad catalog stops the engine
 	for _, seed := range [][2]string{{"dockiva/shell:demo", "examples/m19/shell-image"}, {"dockiva/server:demo", "examples/m11_17/http-image"}, {"dockiva/redis:preview", "examples/redis-preview/image"}} {
 		source := filepath.Join(b.Assets, seed[1])
 		if exists(source) && !exists(filepath.Join(b.Cache, key(seed[0]))) {
