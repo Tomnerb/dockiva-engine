@@ -10,7 +10,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unicode/utf8"
@@ -238,6 +240,37 @@ func store(path string, v any, level int) {
 	check(e)
 	defer dir.Close()
 	check(barrierSync(dir))
+}
+
+// writeSynced writes a new state file into a directory nothing reads yet (create's
+// stage): no temporary name, only its data on disk before the directory is
+// published. syncDir then makes the publishing rename survive.
+func writeSynced(path string, v any) {
+	b, e := json.MarshalIndent(v, "", "  ")
+	check(e)
+	f, e := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	check(e)
+	defer f.Close()
+	_, e = f.Write(append(b, '\n'))
+	check(e)
+	check(barrierSync(f))
+	check(f.Close())
+}
+func syncDir(dir string) {
+	d, e := os.Open(dir)
+	check(e)
+	defer d.Close()
+	check(barrierSync(d))
+}
+
+// freeLater returns memory to the OS soon after a reply instead of before it (a
+// forced GC took about 0.6 ms of every docker create); requests in a burst share one.
+var freeing atomic.Bool
+
+func freeLater() {
+	if freeing.CompareAndSwap(false, true) {
+		time.AfterFunc(100*time.Millisecond, func() { debug.FreeOSMemory(); freeing.Store(false) })
+	}
 }
 
 // barrierSync orders a file's writes before everything written after it

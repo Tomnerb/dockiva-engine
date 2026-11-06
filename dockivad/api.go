@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"runtime/debug"
 	"slices"
 	"sort"
 	"strconv"
@@ -540,10 +539,13 @@ func (b *engine) createWith(name string, body obj, prepared *image) obj {
 	for _, d := range append([]string{im.WorkingDir}, im.Volumes...) { // Docker creates them
 		im.ensureDir(d)
 	}
-	save(filepath.Join(stage, "config.json"), config)
-	save(filepath.Join(stage, "status.json"), obj{"state": "created"})
+	// The stage is private until the rename publishes it: its files go straight to
+	// their names with their data on disk, and the rename is made durable after.
+	writeSynced(filepath.Join(stage, "config.json"), config)
+	writeSynced(filepath.Join(stage, "status.json"), obj{"state": "created"})
 	check(os.Rename(stage, p))
 	committed = true
+	syncDir(b.State)
 	b.refreshHosts(text(config["net_name"]))
 	return obj{"Id": key(name), "Warnings": []string{}}
 }
@@ -713,7 +715,7 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 			send(w, 200, obj{"ID": "dockiva-engine", "Name": "dockiva-engine", "ServerVersion": "0.18.0", "OSType": "linux", "Architecture": "aarch64", "OperatingSystem": "Dockiva Engine on " + runtime.GOOS, "Driver": "private-copy", "Containers": len(b.names()), "NCPU": min(runtime.NumCPU(), 64), "MemTotal": 0, "SecurityOptions": []any{}, "Warnings": []string{"Not a production isolation boundary"}})
 			return
 		case path == "/containers/create" && method == "POST":
-			defer debug.FreeOSMemory()
+			defer freeLater()
 			if arch := platformArch(q.Get("platform")); arch != "" && len(raw) > 0 { // docker run --platform
 				var im *image
 				ref := text(decode(raw, maxJSON)["Image"])
@@ -796,7 +798,7 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 			send(w, 200, rows)
 			return
 		case path == "/images/json" && method == "GET":
-			defer debug.FreeOSMemory()
+			defer freeLater()
 			filters := obj{}
 			if q.Get("filters") != "" {
 				filters = decode([]byte(q.Get("filters")), maxJSON)
@@ -822,7 +824,7 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 			send(w, 200, rows)
 			return
 		case strings.HasPrefix(path, "/images/") && strings.HasSuffix(path, "/json") && method == "GET":
-			defer debug.FreeOSMemory()
+			defer freeLater()
 			send(w, 200, b.imageInfo(strings.TrimSuffix(strings.TrimPrefix(path, "/images/"), "/json")))
 			return
 		case strings.HasPrefix(path, "/images/") && strings.HasSuffix(path, "/tag") && method == "POST":
@@ -865,7 +867,7 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 		case strings.HasPrefix(path, "/networks") && b.networksAPI(w, method, path, q, raw):
 			return
 		case path == "/images/create" && method == "POST":
-			defer debug.FreeOSMemory()
+			defer freeLater()
 			reference := q.Get("fromImage")
 			if tag := q.Get("tag"); tag != "" && !strings.Contains(reference, "@") {
 				reference += ":" + tag
