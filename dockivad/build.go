@@ -624,7 +624,7 @@ func (bd *builder) runStep(st *buildStage, o runOptions) {
 	var fex []string
 	if st.arch == "amd64" { // FEX's mount point (x86Args) and the state it writes stay out of the image
 		targets = append(targets, x86Guest)
-		fex = missingIn(st.root, fexState(st.root, stringsOfAny(st.config["Env"])))
+		fex = missingIn(st.root, fexState(layers{upper: st.root}, stringsOfAny(st.config["Env"])))
 	}
 	stubs := mountStubs(st.root, targets)
 	im := &image{Root: st.root, Env: stringsOfAny(st.config["Env"]), WorkingDir: stageWorkdir(st), User: validUser(text(st.config["User"])), StopSignal: "SIGTERM", Digest: st.digest, Arch: st.arch}

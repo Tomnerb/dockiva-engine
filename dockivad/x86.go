@@ -58,16 +58,17 @@ func x86Bundle(native, home string) string {
 // its config; .local/share/fex-emu: FEXServer's lock and telemetry) with their
 // parents, children first, for each home a RUN step's programs may have: "/", /root,
 // the stage's HOME and /etc/passwd's. Those missing before an amd64 step are gone
-// after it (removeFexState), so its layer holds the step's own files only.
+// after it (removeFexState), so its layer holds the step's own files only; docker
+// diff leaves them out (changes).
 // ponytail: a step that sets XDG_CONFIG_HOME or XDG_DATA_HOME keeps FEX's files there.
-func fexState(root string, env []string) []string {
+func fexState(root layers, env []string) []string {
 	homes := []string{"/", "/root"}
 	for _, kv := range env {
 		if h, ok := strings.CutPrefix(kv, "HOME="); ok {
 			homes = append(homes, h)
 		}
 	}
-	for _, f := range passwdEntries(layers{upper: root}, filepath.Join("etc", "passwd")) {
+	for _, f := range passwdEntries(root, filepath.Join("etc", "passwd")) {
 		if len(f) >= 6 {
 			homes = append(homes, f[5])
 		}
@@ -96,12 +97,15 @@ func missingIn(root string, guest []string) []string {
 	return out
 }
 
+// fexSocket ends the name of FEXServer's socket, /tmp/<uid>.FEXServer.Socket.
+const fexSocket = ".FEXServer.Socket"
+
 // removeFexState removes what fexState listed that a step made: FEX's directories
 // with what is in them, the others when empty (the step's own files keep them),
-// and FEXServer's sockets (/tmp/<uid>.FEXServer.Socket), left as its process ends.
+// and FEXServer's sockets, left as its process ends.
 func removeFexState(root string, made []string) {
 	_ = safeRun(func() {
-		sockets, _ := filepath.Glob(filepath.Join(noLinks(root, "tmp"), "*.FEXServer.Socket"))
+		sockets, _ := filepath.Glob(filepath.Join(noLinks(root, "tmp"), "*"+fexSocket))
 		for _, s := range sockets {
 			if st, e := os.Lstat(s); e == nil && st.Mode()&os.ModeSocket != 0 {
 				_ = os.Remove(s)

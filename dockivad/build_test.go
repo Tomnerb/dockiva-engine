@@ -304,7 +304,7 @@ func TestFexState(t *testing.T) {
 	write("root/.config/before.txt", "kept")
 	check(os.Symlink("loop", filepath.Join(root, "loop")))
 	write("etc/passwd", "root:x:0:0:root:/root:/bin/sh\napp:x:1000:1000::/home/app:/bin/sh\nodd:x:1001:1001::/loop/x:/bin/sh\n")
-	made := missingIn(root, fexState(root, []string{"HOME=/srv"}))
+	made := missingIn(root, fexState(layers{upper: root}, []string{"HOME=/srv"}))
 	for _, p := range []string{"root/.config/fex-emu/AppConfig/", "root/.local/share/fex-emu/Server/Server.lock", "home/app/.config/fex-emu/Telemetry/sh.telem", "home/app/.config/mine.txt", "srv/.local/share/fex-emu/x", ".local"} {
 		write(strings.TrimSuffix(p, "/")+map[bool]string{true: "/.keep"}[strings.HasSuffix(p, "/")], "")
 	}

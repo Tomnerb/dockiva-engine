@@ -246,7 +246,8 @@ var engineFiles = map[string]bool{"etc/hosts": true, "etc/resolv.conf": true, "e
 // changes is docker diff: a layered container's own files (its upper layer) against
 // its image's: Kind 1 added, 0 changed, 2 deleted (a whiteout). A directory of the
 // image shows as changed when something beneath it did, or it was emptied (opaque);
-// one the engine made (for its files, or a mount point) only for what is in it.
+// one the engine made (for its files, or a mount point) only for what is in it. An
+// amd64 container's FEX files (x86.go) are left out, as docker commit leaves them out.
 func (b *engine) changes(name string) []obj {
 	p := b.container(name)
 	b.upperSync(p)
@@ -257,6 +258,16 @@ func (b *engine) changes(name string) []obj {
 	out, quiet := []obj{}, map[string]bool{"etc": true, "tmp": os.Getenv("DOCKIVA_TMP") == "memory"}
 	for _, m := range savedMounts(c) {
 		quiet[pathName(mountTarget(str(m["target"]))[1:])] = true
+	}
+	x86, fex := c["arch"] == "amd64", map[string]bool{}
+	if x86 {
+		for _, g := range missingIn(r.lower, fexState(r, stringsOfAny(c["env"]))) {
+			if rel := strings.TrimPrefix(g, "/"); path.Base(rel) == "fex-emu" {
+				fex[rel] = true
+			} else {
+				quiet[rel] = true // a parent FEX made: shown for the program's own files in it
+			}
+		}
 	}
 	var visit func(rel string) bool
 	visit = func(rel string) bool {
@@ -269,7 +280,8 @@ func (b *engine) changes(name string) []obj {
 			case name == opaqueMarker || strings.HasPrefix(name, whiteoutPrefix+whiteoutPrefix):
 			case strings.HasPrefix(name, whiteoutPrefix):
 				out, changed = append(out, obj{"Path": "/" + path.Join(rel, strings.TrimPrefix(name, whiteoutPrefix)), "Kind": 2}), true
-			case engineFiles[child]:
+			case engineFiles[child] || fex[child]:
+			case x86 && rel == "tmp" && strings.HasSuffix(name, fexSocket) && entry.Type()&fs.ModeSocket != 0:
 			default:
 				_, old := image.find(child)
 				below := entry.IsDir() && visit(child)

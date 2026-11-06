@@ -433,7 +433,7 @@ func (b *engine) commitContainer(name string, q url.Values) obj {
 	cloneTree(r.lower, merged)
 	applyUpper(r.upper, merged)
 	if imageArch(im) == "amd64" { // FEX's own files stay out of the image, as in a build (x86.go)
-		removeFexState(merged, missingIn(r.lower, fexState(merged, stringsOfAny(c["env"]))))
+		removeFexState(merged, missingIn(r.lower, fexState(layers{upper: merged}, stringsOfAny(c["env"]))))
 	}
 	st := &buildStage{root: merged, config: settings, digest: im.Digest, arch: imageArch(im), baseRoot: r.lower, baseLayout: im.layout,
 		baseLayers: array(manifest["layers"]), baseDiffs: array(object(config["rootfs"])["diff_ids"]), baseHistory: anyList(config["history"])}
