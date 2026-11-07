@@ -1551,7 +1551,8 @@ static uint64_t fs_transfer(int fd,uint64_t call) { return fs_transfer_at(fd,cal
    or 0 for the descriptors' positions. */
 static uint64_t fs_copy_between(uint64_t in_guest,uint64_t out_guest,uint64_t in_at,uint64_t out_at,uint64_t count) {
     int in=fs_host(in_guest),out=fs_host(out_guest),in_slot=fs_slot(in_guest),out_slot=fs_slot(out_guest);
-    if(in<0 || out<0)return linux_error(9);
+    /* An open pipe or socket: EINVAL, as Linux, on which callers (Go's io.Copy) read and write. */
+    if(in<0 || out<0)return in_guest<GUEST_FD_LIMIT && out_guest<GUEST_FD_LIMIT && fd_kind[in_guest] && fd_kind[out_guest]?linux_error(22):linux_error(9);
     if(fs_dirs[in_slot] || fs_dirs[out_slot])return linux_error(21);
     if(fs_ro[out_slot])return linux_error(30);
     unsigned char *pin=in_at?lookup(in_at,8,6):NULL,*pout=out_at?lookup(out_at,8,6):NULL;
