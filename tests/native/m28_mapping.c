@@ -18,11 +18,11 @@ int main(void) {
     assert(!lookup(a,1,2));cpu->gpr[2]=7;assert(guest_mprotect()==linux_error(22));
     assert(guest_munmap(a,4096)==0);cpu->gpr[0]=a;cpu->gpr[1]=8192;cpu->gpr[2]=3;
     assert(guest_mprotect()==linux_error(12));assert(!lookup(a+4096,1,2));
-    FILE *f=tmpfile();assert(f);assert(fwrite("hello",1,5,f)==5);fflush(f);fs_fd[0]=dup(fileno(f))+1;fs_guest[0]=64;fd_bind(64,FD_FILE,0); /* guest fd 64 names file slot 0 */
+    FILE *f=tmpfile();assert(f);assert(fwrite("hello",1,5,f)==5);fflush(f);FS(0).fd=dup(fileno(f))+1;FS(0).guest=64;fd_bind(64,FD_FILE,0); /* guest fd 64 names file slot 0 */
     assert(mapping(a,4096,1,18|0x1800,64,0)==a);assert(!memcmp(lookup(a,5,4),"hello",5));assert(!lookup(a,1,2));
     assert(lookup(a+5,1,4)[0]==0);
     assert(mapping(0,4096,1,2,64,UINT64_C(0x7ffffffffffff000))==linux_error(22));
-    close(fs_fd[0]-1);fs_fd[0]=0;fd_unbind(64);fclose(f);address_space_destroy(address_space);
+    close(FS(0).fd-1);FS(0).fd=0;fd_unbind(64);fclose(f);address_space_destroy(address_space);
     address_space->map_capacity=32u*1024u*1024u;
     /* The arena is charged as pages are written: a mapping at its end succeeds under
        a budget smaller than the arena, and only touching it costs memory. */

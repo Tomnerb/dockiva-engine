@@ -56,15 +56,15 @@ int main(void) {
     assert(dups+2*pipes+3==IO_END && io_free_slot(0)==-1);io_cleanup(); /* every slot the pipes and stdio left */
     for(unsigned i=0;i<PIPE_SLOTS;i++)assert(!io_pipes[i].data);
     memset(fd_kind+3,0,sizeof(fd_kind)-3); /* io_cleanup released every slot */
-    FILE *file=tmpfile();assert(file);fs_fd[0]=dup(fileno(file))+1;assert(fs_fd[0]>0);
+    FILE *file=tmpfile();assert(file);FS(0).fd=dup(fileno(file))+1;assert(FS(0).fd>0);
     IO(1)=(GuestIO){IO_FILE,1,dup(fileno(file)),NULL,NULL,NULL,NULL,NULL,NULL};assert(IO(1).host>=0);assert(invoke(25,1,1,0)==1);
     assert(invoke(25,1,2,0)==0);assert(invoke(25,1,1,0)==0);
     fs_writable=0;assert(invoke(64,1,0x2000,2)==linux_error(30));
     fs_writable=1;fs_written=64u*1024u*1024u-1;assert(invoke(64,1,0x2000,2)==linux_error(27));
     fs_written=0;assert(invoke(64,1,0x2000,2)==2);assert(fs_written==2);
-    assert(lseek(fs_fd[0]-1,0,SEEK_CUR)==2);
+    assert(lseek(FS(0).fd-1,0,SEEK_CUR)==2);
     assert(invoke(62,1,FS_FILE_LIMIT,0)==FS_FILE_LIMIT);assert(invoke(64,1,0x2000,1)==linux_error(27));
     assert(invoke(62,1,0,0)==0);assert(invoke(63,1,0x2000,2)==2);
-    io_cleanup();close(fs_fd[0]-1);fs_fd[0]=0;fclose(file);
+    io_cleanup();close(FS(0).fd-1);FS(0).fd=0;fclose(file);
     image_free();puts("PASS M20 pipe bounds, EOF, EAGAIN, EPIPE, atomic writev, dup ownership, clone, exec and reclamation");return 0;
 }

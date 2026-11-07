@@ -243,9 +243,9 @@ static uint64_t process_exec_at(uint64_t dir,unsigned r) {
     if(process_pid<=PROCESS_LIMIT+1)snprintf(proc_exe[process_pid],sizeof(proc_exe[0]),"%s",strlen(stage->exe)<sizeof(proc_exe[0])?stage->exe:"");
     ProcessImage next;image_save(&next);image_restore(&old);image_free();image_restore(&next);
     /* M19 preserves regular guest descriptors. CLOEXEC is tracked by the FS adapter. */
-    for(unsigned i=0;i<FS_SLOTS;i++)if(fs_fd[i] && fs_cloexec[i]) {
-        if(fs_dirs[i]) { fs_directory_release(fs_dirs[i]);fs_dirs[i]=NULL; }
-        if(!fs_pack_drop(i))close(fs_fd[i]-1);fs_fd[i]=0;fs_cloexec[i]=0;fd_unbind(fs_guest[i]);
+    for(unsigned i=0;i<fs_top;i++)if(FS(i).fd && FS(i).cloexec) {
+        if(FS(i).dir) { fs_directory_release(FS(i).dir);FS(i).dir=NULL; }
+        if(!fs_pack_drop(i))close(FS(i).fd-1);FS(i).fd=0;FS(i).cloexec=0;fd_unbind(FS(i).guest);
     }
     if(stage->execfd) { /* binfmt_misc's O flag: the x86 program's descriptor, the lowest free one, into AT_EXECFD */
         uint64_t guest=fs_install(stage->execfd-1,0,1,0,NULL);stage->execfd=0;
@@ -257,11 +257,16 @@ static uint64_t process_exec_at(uint64_t dir,unsigned r) {
     if(guest_uid)cap_held[0]=cap_held[1]=0; /* no file capabilities: a non-root exec loses them */
     else if(caller.uid) { cap_held[0]=UINT32_MAX;cap_held[1]=0x1ffu; } /* a set-user-ID-root exec gains them all */
     /* Sockets survive exec unless SOCK_CLOEXEC/FD_CLOEXEC is set, as on Linux. */
-    for(unsigned i=0;i<NET_SLOTS;i++)if(net_fd[i] && (net_flags[i]&524288))(void)net_release(i);
+    for(unsigned i=0;i<net_top;i++)if(net_fd[i] && (net_flags[i]&524288))(void)net_release(i);
     net_wait.active=0;
     io_exec();
     if(schedule_active)schedule_exec_reset();
     return 0;
+}
+/* fork's undo: close the child's duplicates of the parent's files (the pack's
+   placeholder is shared, never duplicated). */
+static void process_close_files(const int *child_fds,unsigned files) {
+    for(unsigned i=0;i<files;i++)if(child_fds[i] && !FS(i).pack)close(child_fds[i]-1);
 }
 /* Whether a vfork shares this process's memory with the child (else a private copy). */
 static int process_vfork_shares(void) { return !process_threaded() || (shared_image && shared_image->owner==process_pid); }
@@ -290,27 +295,30 @@ static uint64_t process_clone(void) {
     /* A scheduled child keeps its own socket table (task_save) sharing each open
        description; the unscheduled path runs the child inline and then clears the
        socket table, so it still refuses sockets. */
-    if(!schedule_active)for(unsigned i=0;i<NET_SLOTS;i++)if(net_fd[i])return linux_error(95);
+    if(!schedule_active)for(unsigned i=0;i<net_top;i++)if(net_fd[i])return linux_error(95);
     if(!share)mm_cache_range(MAP_BASE,address_space->map_capacity);       /* parked regions are unmapped before anything is copied */
     /* Every file slot holds a regular file, a directory with its shared cursor
        (fs_open) or a device (fs_dev): the child can share each as it is, with no
        host call per descriptor under the lock (a go command holds dozens). */
-    GuestDirectory *parent_dirs[FS_SLOTS];memcpy(parent_dirs,fs_dirs,sizeof(fs_dirs));
-    int parent_fds[FS_SLOTS],child_fds[FS_SLOTS]={0};unsigned char parent_cloexec[FS_SLOTS];
-    memcpy(parent_fds,fs_fd,sizeof(fs_fd));memcpy(parent_cloexec,fs_cloexec,sizeof(fs_cloexec));
-    memset(fs_sole,0,sizeof(fs_sole));                                  /* parent and child share each description */
-    for(unsigned i=0;i<FS_SLOTS;i++)if(fs_fd[i]) {
-        int fd=fs_packed[i]?fs_fd[i]-1:dup(fs_fd[i]-1);                    /* the pack's placeholder: shared */
-        if(fd<0) { for(unsigned j=0;j<i;j++)if(child_fds[j] && !fs_packed[j])close(child_fds[j]-1);return linux_error(24); }
+    /* The parent's slots while the child's stand in, on the heap (a whole table would
+       not fit a worker's stack) and only below the tables' tops. */
+    unsigned files=fs_top,io_used=io_top();
+    size_t files_bytes=files*sizeof(FsSlot),io_bytes=io_used*sizeof(GuestIO);
+    unsigned char *saved=malloc(files_bytes+io_bytes+files*sizeof(int));if(!saved)return linux_error(12);
+    FsSlot *parent_files=(FsSlot *)(void *)saved;GuestIO *parent_io=(GuestIO *)(void *)(saved+files_bytes);int *child_fds=(int *)(void *)(saved+files_bytes+io_bytes);
+    memcpy(parent_files,fs_table->slot,files_bytes);memset(child_fds,0,files*sizeof(int));
+    for(unsigned i=0;i<files;i++)FS(i).sole=0;                         /* parent and child share each description */
+    for(unsigned i=0;i<files;i++)if(FS(i).fd) {
+        int fd=FS(i).pack?FS(i).fd-1:dup(FS(i).fd-1);                    /* the pack's placeholder: shared */
+        if(fd<0) { process_close_files(child_fds,i);free(saved);return linux_error(24); }
         child_fds[i]=fd+1;
     }
-    GuestIO parent_io[IO_END];unsigned io_used=io_top();
-    if(io_clone(parent_io,io_used)<0) { for(unsigned i=0;i<FS_SLOTS;i++)if(child_fds[i] && !fs_packed[i])close(child_fds[i]-1);return linux_error(24); }
+    if(io_clone(parent_io,io_used)<0) { process_close_files(child_fds,files);free(saved);return linux_error(24); }
     GuestCwd *parent_cwd=fs_cwd;
     if(share && !shared_image) {
         shared_image=calloc(1,sizeof(*shared_image));
         if(!shared_image) {
-            io_restore(parent_io,io_used);for(unsigned i=0;i<FS_SLOTS;i++)if(child_fds[i] && !fs_packed[i])close(child_fds[i]-1);
+            io_restore(parent_io,io_used);process_close_files(child_fds,files);free(saved);
             return linux_error(12);
         }
         shared_image->refs=1;
@@ -322,17 +330,16 @@ static uint64_t process_clone(void) {
     else {
         child.shared=NULL;
         if(!address_space_fork_private(&child.memory,&parent.memory)) {
-            io_restore(parent_io,io_used);
-            for(unsigned i=0;i<FS_SLOTS;i++)if(child_fds[i] && !fs_packed[i])close(child_fds[i]-1);
+            io_restore(parent_io,io_used);process_close_files(child_fds,files);free(saved);
             return linux_error(12);
         }
     }
     if(schedule_active)net_retain_all();
     if(fs_cwd)fs_cwd->refs++;
-    for(unsigned i=0;i<FS_SLOTS;i++) { if(fs_dirs[i])fs_dirs[i]->refs++;if(fs_packed[i])pack_ref(fs_packed[i]); }   /* the child shares each description */
+    for(unsigned i=0;i<files;i++) { if(FS(i).dir)FS(i).dir->refs++;if(FS(i).pack)pack_ref(FS(i).pack); }   /* the child shares each description */
     image_restore(&child);
     if(vfork && child_stack)cpu->sp=child_stack;
-    memset(address_space->lookup_cache,0,sizeof(address_space->lookup_cache));memcpy(fs_fd,child_fds,sizeof(fs_fd));
+    memset(address_space->lookup_cache,0,sizeof(address_space->lookup_cache));for(unsigned i=0;i<files;i++)FS(i).fd=child_fds[i];
     uint64_t pid=2+slot;cpu->gpr[0]=0;
     memcpy(proc_exe[pid],proc_exe[process_pid],sizeof(proc_exe[0])); /* /proc/<pid>/exe and cmdline are inherited */
     memcpy(proc_cmdline[pid],proc_cmdline[process_pid],sizeof(proc_cmdline[0]));proc_cmdline_size[pid]=proc_cmdline_size[process_pid];
@@ -343,30 +350,33 @@ static uint64_t process_clone(void) {
     memset(&process_children[slot],0,sizeof(process_children[slot]));
     if(schedule_active) {
         schedule_child(pid);proc_publish(0);if(share)schedule_vfork(pid);fs_cwd=parent_cwd;image_restore(&parent);
-        memcpy(io_fds,parent_io,io_used*sizeof(GuestIO));memcpy(fs_fd,parent_fds,sizeof(fs_fd));
-        memcpy(fs_cloexec,parent_cloexec,sizeof(fs_cloexec));
+        memcpy(io_fds,parent_io,io_bytes);
+        for(unsigned i=0;i<files;i++) { FS(i).fd=parent_files[i].fd;FS(i).cloexec=parent_files[i].cloexec; }
+        free(saved);
         process_children[slot].pid=pid;process_children[slot].parent=process_pid;process_children[slot].live=1;
         if(!vfork && (flags&0x100000))fs_pack(lookup(parent_tid,4,2),0,(unsigned)pid,4);
         return pid;
     }
     process_depth=1;process_pid=pid;
     GuestIds parent_ids=guest_ids;
-    static unsigned char parent_kind[GUEST_FD_LIMIT];static unsigned short parent_index[GUEST_FD_LIMIT],parent_net[NET_SLOTS],parent_fs[FS_SLOTS],parent_io_guest[IO_END];
+    static unsigned char parent_kind[GUEST_FD_LIMIT];static unsigned short parent_index[GUEST_FD_LIMIT],parent_net[NET_SLOTS],parent_io_guest[IO_END];
     memcpy(parent_kind,fd_kind,sizeof(fd_kind));memcpy(parent_index,fd_index,sizeof(fd_index));
-    memcpy(parent_net,net_guest,sizeof(net_guest));memcpy(parent_fs,fs_guest,sizeof(fs_guest));memcpy(parent_io_guest,io_guest,sizeof(io_guest));
+    memcpy(parent_net,net_guest,sizeof(net_guest));memcpy(parent_io_guest,io_guest,sizeof(io_guest));
     unsigned status=(unsigned)run(0);
     guest_ids=parent_ids; /* the child's identity changes stay in the child */
     fs_cwd_release();fs_cwd=parent_cwd;image_free();image_restore(&parent);
     io_restore(parent_io,io_used);
-    net_cleanup();memset(net_fd,0,sizeof(net_fd));
-    for(unsigned i=0;i<FS_SLOTS;i++) {
-        if(fs_dirs[i]) { fs_directory_release(fs_dirs[i]);fs_dirs[i]=NULL; }
-        if(!fs_pack_drop(i) && fs_fd[i])close(fs_fd[i]-1);
-
+    net_cleanup();memset(net_fd,0,net_top*sizeof(net_fd[0]));
+    unsigned used=fs_top;                                                 /* the child's files too */
+    for(unsigned i=0;i<used;i++) {
+        if(FS(i).dir) { fs_directory_release(FS(i).dir);FS(i).dir=NULL; }
+        if(!fs_pack_drop(i) && FS(i).fd)close(FS(i).fd-1);
+        FS(i).fd=0;FS(i).cloexec=0;
     }
-    memcpy(fs_fd,parent_fds,sizeof(fs_fd));memcpy(fs_cloexec,parent_cloexec,sizeof(fs_cloexec));memcpy(fs_dirs,parent_dirs,sizeof(fs_dirs));
+    for(unsigned i=0;i<files;i++) { FS(i).fd=parent_files[i].fd;FS(i).cloexec=parent_files[i].cloexec;FS(i).dir=parent_files[i].dir;FS(i).guest=parent_files[i].guest; }
+    free(saved);
     memcpy(fd_kind,parent_kind,sizeof(fd_kind));memcpy(fd_index,parent_index,sizeof(fd_index));
-    memcpy(net_guest,parent_net,sizeof(net_guest));memcpy(fs_guest,parent_fs,sizeof(fs_guest));memcpy(io_guest,parent_io_guest,sizeof(io_guest));
+    memcpy(net_guest,parent_net,sizeof(net_guest));memcpy(io_guest,parent_io_guest,sizeof(io_guest));
     process_depth=0;process_pid=1;
     process_children[slot].pid=pid;process_children[slot].parent=1;process_children[slot].status=status<<8;
     if(flags&0x100000)fs_pack(lookup(parent_tid,4,2),0,(unsigned)pid,4);

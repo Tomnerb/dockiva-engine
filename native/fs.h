@@ -10,9 +10,10 @@
 #ifdef __APPLE__
 #include <mach/mach.h>
 #endif
-#define FS_SLOTS 1024u /* open files and directories per process */
+#define FS_SLOTS GUEST_FD_LIMIT /* open files and directories per process */
 /* Open files and directories of the current process (see the descriptor map in
-   net.h); guest: slot -> guest descriptor. */
+   net.h); guest: slot -> guest descriptor; top: as the socket table's (net.h), which
+   the EL1 handlers' opens raise too (hvf_el1_guest.c). */
 /* ro: the file lives where writes are refused (a read-only root or bind mount).
    dev: it is a character device (fs_device), so reads and writes need no fstat:
    FS_DEV_NULL or FS_DEV_ZERO, plus FS_DEV_READ/FS_DEV_WRITE for its access mode
@@ -26,17 +27,23 @@
    detached reads and writes in flight, each on a duplicate of a slot's descriptor.
    pack: an image file served from the image's pack (pack.h), its fd a placeholder. */
 #include "hvf_el1.h"
-typedef struct { int fd[FS_SLOTS];unsigned char cloexec[FS_SLOTS],ro[FS_SLOTS],dev[FS_SLOTS],sole[FS_SLOTS];struct GuestDirectory *dirs[FS_SLOTS];unsigned short guest[FS_SLOTS];int transfers;HvfPackOpen *pack[FS_SLOTS]; } FsTable;
+/* A slot's fields together (32 bytes): the first few hundred slots of a process share
+   one host page, where an array per field put each field's first entries on a page
+   of its own (four pages for a process holding a handful of files). */
+typedef struct { int fd;unsigned char cloexec,ro,dev,sole;unsigned short guest;struct GuestDirectory *dir;HvfPackOpen *pack; } FsSlot;
+typedef struct { unsigned top;int transfers;FsSlot slot[FS_SLOTS]; } FsTable;
 static FsTable fs_table_first;
 static _Thread_local FsTable *fs_table=&fs_table_first;
-#define fs_fd (fs_table->fd)
-#define fs_cloexec (fs_table->cloexec)
-#define fs_dirs (fs_table->dirs)
-#define fs_ro (fs_table->ro)
-#define fs_dev (fs_table->dev)
-#define fs_sole (fs_table->sole)
-#define fs_guest (fs_table->guest)
-#define fs_packed (fs_table->pack)
+#define FS(i) (fs_table->slot[i])
+#define fs_top (fs_table->top)
+static int fs_claim(void) {
+    for(unsigned i=0;i<FS_SLOTS;i++)if(!FS(i).fd) { if(i>=fs_top)fs_top=i+1;return (int)i; }
+    return -1;
+}
+static void fs_table_copy(FsTable *to,const FsTable *from) {
+    unsigned top=from->top,old=to->top>top?to->top:top;
+    TABLE_COPY(to,from,slot,top,old);to->transfers=from->transfers;to->top=top;
+}
 /* What a process's own EL1 handlers may change (hvf_el1_guest.c), in one block mapped
    into them: each task's descriptor tables and mm lock word (scheduler.h), each
    process's count of record locks held, and the pool of pack open descriptions. */
@@ -182,14 +189,14 @@ static void fs_cwd_release(void) {
     fs_cwd=NULL;
 }
 static void fs_cleanup(void) {
-    for(unsigned i=0;i<FS_SLOTS;i++) { fs_directory_release(fs_dirs[i]);if(!fs_pack_drop(i) && fs_fd[i])close(fs_fd[i]-1); }
+    for(unsigned i=0;i<fs_top;i++) { fs_directory_release(FS(i).dir);if(!fs_pack_drop(i) && FS(i).fd)close(FS(i).fd-1); }
     fs_cwd_release();
     if(fs_root>=0) close(fs_root);
 }
 static int fs_host(uint64_t n) {
-    int slot=fs_slot(n);if(slot<0 || !fs_fd[slot])return -1;
-    if(fs_packed[slot])fs_pack_real((unsigned)slot);                    /* a call the pack cannot serve: the real file */
-    return fs_fd[slot]-1;
+    int slot=fs_slot(n);if(slot<0 || !FS(slot).fd)return -1;
+    if(FS(slot).pack)fs_pack_real((unsigned)slot);                    /* a call the pack cannot serve: the real file */
+    return FS(slot).fd-1;
 }
 static uint64_t fs_error(void) {
     switch(errno) {
@@ -640,7 +647,7 @@ static int fs_lookup(uint64_t dir,uint64_t ptr,char leaf[1025],int follow,char c
         else if((int32_t)dir==-100) { base=fs_cwd?fs_cwd->fd:fs_root;base_path=fs_cwd?fs_cwd->path:"/"; }
         else {
             base=fs_host(dir);
-            base_path=fs_slot(dir)>=0 && fs_dirs[fs_slot(dir)]?fs_dirs[fs_slot(dir)]->path:"";
+            base_path=fs_slot(dir)>=0 && FS(fs_slot(dir)).dir?FS(fs_slot(dir)).dir->path:"";
         }
     }
     if(base<0) { errno=EBADF;return -1; }
@@ -663,7 +670,7 @@ static const char *fs_device(const char *canon) {
    reads and writes, dd bs=1, paid an fstat each), else asked of the host. */
 static int fs_is_device(int fd) {
     if(fs_detached.on)return 0;                                            /* only regular files detach */
-    int slot=fs_slot(cpu->gpr[0]);if(slot>=0 && fs_fd[slot]==fd+1)return fs_dev[slot];
+    int slot=fs_slot(cpu->gpr[0]);if(slot>=0 && FS(slot).fd==fd+1)return FS(slot).dev;
     struct stat st;return !fstat(fd,&st) && S_ISCHR(st.st_mode);
 }
 static uint64_t fs_fchdir(void) {
@@ -671,7 +678,7 @@ static uint64_t fs_fchdir(void) {
     struct stat st;if(fstat(fd,&st)<0)return fs_error();if(!S_ISDIR(st.st_mode))return linux_error(20);
     GuestCwd *next=calloc(1,sizeof(*next));if(!next)return linux_error(12);
     next->fd=dup(fd);if(next->fd<0) { free(next);return fs_error(); }next->refs=1;
-    if(fs_dirs[fs_slot(cpu->gpr[0])])strcpy(next->path,fs_dirs[fs_slot(cpu->gpr[0])]->path);
+    if(FS(fs_slot(cpu->gpr[0])).dir)strcpy(next->path,FS(fs_slot(cpu->gpr[0])).dir->path);
     fs_cwd_release();fs_cwd=next;return 0;
 }
 /* Working directories remain descriptor anchored and record the canonical
@@ -761,12 +768,12 @@ static uint64_t fs_memfd(void) {
     uint64_t flags=cpu->gpr[1];
     if(flags&~UINT64_C(3))return linux_error(22);
     char name[1025];if(fs_string(cpu->gpr[0],name)<0)return fs_error();
-    unsigned slot=0;while(slot<FS_SLOTS && fs_fd[slot])slot++;
-    if(slot==FS_SLOTS || fd_lowest(0)<0)return linux_error(24);
+    int slot=fs_claim();
+    if(slot<0 || fd_lowest(0)<0)return linux_error(24);
     char path[]="/tmp/dockiva-memfd-XXXXXX";int fd=mkstemp(path);if(fd<0)return fs_error();
     unlink(path);(void)fcntl(fd,F_SETFD,FD_CLOEXEC);
-    fs_fd[slot]=fd+1;fs_cloexec[slot]=(flags&1)!=0;fs_ro[slot]=0;fs_dev[slot]=0;fs_sole[slot]=0;fs_packed[slot]=NULL;
-    int guest=fd_lowest(0);fs_guest[slot]=(unsigned short)guest;fd_bind((uint64_t)guest,FD_FILE,slot);return (uint64_t)guest;
+    FS(slot).fd=fd+1;FS(slot).cloexec=(flags&1)!=0;FS(slot).ro=0;FS(slot).dev=0;FS(slot).sole=0;FS(slot).pack=NULL;
+    int guest=fd_lowest(0);FS(slot).guest=(unsigned short)guest;fd_bind((uint64_t)guest,FD_FILE,(unsigned)slot);return (uint64_t)guest;
 }
 static unsigned guest_cpus(void); /* scheduler.h */
 static uint64_t io_text_open(const void *data,size_t size,int cloexec,int directory,const char *path); /* io.h: path, to read it again */
@@ -1312,12 +1319,11 @@ static void fs_spare_put(int fd) {
 static uint64_t fs_install(int fd,uint64_t flags,int read_only,int device,GuestDirectory *directory) {
     PackOpen *pack=fs_install_pack;fs_install_pack=NULL;
     if(fs_detached.on) { fs_detached.fd=fd;fs_detached.flags=flags;fs_detached.opened_ro=read_only;fs_detached.opened_device=device;fs_detached.directory=directory;fs_detached.pack=pack;return 0; }
-    unsigned slot=0;while(slot<FS_SLOTS && fs_fd[slot]) slot++;
-    int guest=slot<FS_SLOTS?fd_lowest(0):-1;
+    int slot=fs_claim(),guest=slot>=0?fd_lowest(0):-1;
     if(guest<0) { if(pack)pack_unref(pack);else close(fd);fs_directory_release(directory);return linux_error(24); }
-    fs_fd[slot]=fd+1;fs_cloexec[slot]=(flags&524288)!=0;fs_ro[slot]=(unsigned char)read_only;fs_dev[slot]=(unsigned char)device;fs_dirs[slot]=directory;
-    fs_sole[slot]=!(flags&(3|64|512|1024|4096|65536)) && !device && !directory && !pack;fs_packed[slot]=pack;   /* opened read-only, plainly */
-    fs_guest[slot]=(unsigned short)guest;fd_bind((uint64_t)guest,FD_FILE,slot);return (uint64_t)guest;
+    FS(slot).fd=fd+1;FS(slot).cloexec=(flags&524288)!=0;FS(slot).ro=(unsigned char)read_only;FS(slot).dev=(unsigned char)device;FS(slot).dir=directory;
+    FS(slot).sole=!(flags&(3|64|512|1024|4096|65536)) && !device && !directory && !pack;FS(slot).pack=pack;   /* opened read-only, plainly */
+    FS(slot).guest=(unsigned short)guest;fd_bind((uint64_t)guest,FD_FILE,(unsigned)slot);return (uint64_t)guest;
 }
 static uint64_t fs_open(void) {
     uint64_t flags=cpu->gpr[2];
@@ -1335,7 +1341,7 @@ static uint64_t fs_open(void) {
     if(flags&UINT64_C(0x200000))flags&=UINT64_C(16384|32768|524288);              /* O_DIRECTORY, O_NOFOLLOW, O_CLOEXEC */
     flags&=allowed;
     if(!fs_detached.on) {                                  /* detached: checked under the lock, installed there */
-        unsigned slot=0;while(slot<FS_SLOTS && fs_fd[slot]) slot++;
+        unsigned slot=0;while(slot<FS_SLOTS && FS(slot).fd) slot++;
         if(slot==FS_SLOTS || fd_lowest(0)<0) return linux_error(24);
     }
     char path[1025];int named=fs_proc_path(cpu->gpr[0],cpu->gpr[1],path)==0;
@@ -1344,26 +1350,27 @@ static uint64_t fs_open(void) {
     if(named && (!strcmp(path,"/proc") || !strcmp(path,"/proc/") || (proc && (!*rest || (!tid && (!strcmp(rest,"task") || !strcmp(rest,"fd"))))))) {
         /* /proc, /proc/PID, its task directory and a thread's: the container's processes and our files (ps, pgrep, top, htop). */
         if(flags&(3|64|512|1024))return linux_error(flags&64?17:21);
-        static _Thread_local char list[16384];size_t used=0;char name[24];
-        used=fs_dirent(list,used,sizeof(list),1,".",4);used=fs_dirent(list,used,sizeof(list),1,"..",4);
+        static _Thread_local Scratch room;const size_t list_bytes=131072;    /* 24-byte entries: GUEST_FD_LIMIT descriptors, PROCESS_LIMIT processes */
+        char *list=scratch_room(&room,list_bytes),name[24];size_t used=0;if(!list)return linux_error(12);
+        used=fs_dirent(list,used,list_bytes,1,".",4);used=fs_dirent(list,used,list_bytes,1,"..",4);
         if(!proc) {
-            for(unsigned i=0;i<sizeof(fs_proc_root_files)/sizeof(*fs_proc_root_files);i++)used=fs_dirent(list,used,sizeof(list),2+i,fs_proc_root_files[i],8);
-            used=fs_dirent(list,used,sizeof(list),20,"self",10);
+            for(unsigned i=0;i<sizeof(fs_proc_root_files)/sizeof(*fs_proc_root_files);i++)used=fs_dirent(list,used,list_bytes,2+i,fs_proc_root_files[i],8);
+            used=fs_dirent(list,used,list_bytes,20,"self",10);
             proc_peer_load();
-            for(unsigned i=0;i<proc_npeers;i++) { snprintf(name,sizeof(name),"%llu",(unsigned long long)proc_peers[i].pid);used=fs_dirent(list,used,sizeof(list),100+proc_peers[i].pid,name,4); }
-            for(uint64_t p=1;p<=process_count+1;p++)if(guest_process_exists(p)) { snprintf(name,sizeof(name),"%llu",(unsigned long long)p);used=fs_dirent(list,used,sizeof(list),100+p,name,4); }
+            for(unsigned i=0;i<proc_npeers;i++) { snprintf(name,sizeof(name),"%llu",(unsigned long long)proc_peers[i].pid);used=fs_dirent(list,used,list_bytes,100+proc_peers[i].pid,name,4); }
+            for(uint64_t p=1;p<=process_count+1;p++)if(guest_process_exists(p)) { snprintf(name,sizeof(name),"%llu",(unsigned long long)p);used=fs_dirent(list,used,list_bytes,100+p,name,4); }
         } else if(!strcmp(rest,"fd")) {          /* fd: this process's descriptors (another's are not at hand: none) */
-            for(unsigned fd=0;proc==process_pid && fd<GUEST_FD_LIMIT;fd++)if(fd_kind[fd]) { snprintf(name,sizeof(name),"%u",fd);used=fs_dirent(list,used,sizeof(list),3000000+fd,name,10); }
+            for(unsigned fd=0;proc==process_pid && fd<GUEST_FD_LIMIT;fd++)if(fd_kind[fd]) { snprintf(name,sizeof(name),"%u",fd);used=fs_dirent(list,used,list_bytes,3000000+fd,name,10); }
         } else if(*rest) {                                                     /* task: the threads */
             static unsigned tids[1024];static char states[1024];static uint64_t times[1024][2];
             int64_t own=proc_resolve(proc);unsigned n=own>0?guest_thread_list((uint64_t)own,tids,states,times,1024):0;
             if(own<0) { tids[0]=(unsigned)proc;n=1; }
-            for(unsigned i=0;i<n;i++) { snprintf(name,sizeof(name),"%u",tids[i]);used=fs_dirent(list,used,sizeof(list),2000000+tids[i],name,4); }
+            for(unsigned i=0;i<n;i++) { snprintf(name,sizeof(name),"%u",tids[i]);used=fs_dirent(list,used,list_bytes,2000000+tids[i],name,4); }
         } else {
             uint64_t base=1000*(tid?tid:proc);
-            for(unsigned i=0;i<sizeof(fs_proc_pid_files)/sizeof(*fs_proc_pid_files);i++)used=fs_dirent(list,used,sizeof(list),base+i,fs_proc_pid_files[i],8);
-            used=fs_dirent(list,used,sizeof(list),base+99,"exe",10);
-            if(!tid) { used=fs_dirent(list,used,sizeof(list),base+98,"task",4);used=fs_dirent(list,used,sizeof(list),base+97,"fd",4); }
+            for(unsigned i=0;i<sizeof(fs_proc_pid_files)/sizeof(*fs_proc_pid_files);i++)used=fs_dirent(list,used,list_bytes,base+i,fs_proc_pid_files[i],8);
+            used=fs_dirent(list,used,list_bytes,base+99,"exe",10);
+            if(!tid) { used=fs_dirent(list,used,list_bytes,base+98,"task",4);used=fs_dirent(list,used,list_bytes,base+97,"fd",4); }
         }
         return io_text_open(list,used,(flags&524288)!=0,1,path);
     }
@@ -1506,7 +1513,7 @@ static uint64_t fs_transfer_chunk(int fd,uint64_t call,int64_t offset) {
         uint64_t previous_size=0,write_position=0;
         if(call==64) {
             int slot=fs_detached.on?-1:fs_slot(cpu->gpr[0]); /* a file slot knows its location; stdio files follow the root */
-            if(fs_detached.on?fs_detached.read_only:slot>=0?fs_ro[slot]:!fs_writable) return linux_error(30);
+            if(fs_detached.on?fs_detached.read_only:slot>=0?FS(slot).ro:!fs_writable) return linux_error(30);
             /* The size only for an append or the storage budget (fstat was a third of a
                small write's host time); the engine sets no storage budget. */
             int append=offset<0 && (fcntl(fd,F_GETFL)&O_APPEND);
@@ -1553,8 +1560,8 @@ static uint64_t fs_copy_between(uint64_t in_guest,uint64_t out_guest,uint64_t in
     int in=fs_host(in_guest),out=fs_host(out_guest),in_slot=fs_slot(in_guest),out_slot=fs_slot(out_guest);
     /* An open pipe or socket: EINVAL, as Linux, on which callers (Go's io.Copy) read and write. */
     if(in<0 || out<0)return in_guest<GUEST_FD_LIMIT && out_guest<GUEST_FD_LIMIT && fd_kind[in_guest] && fd_kind[out_guest]?linux_error(22):linux_error(9);
-    if(fs_dirs[in_slot] || fs_dirs[out_slot])return linux_error(21);
-    if(fs_ro[out_slot])return linux_error(30);
+    if(FS(in_slot).dir || FS(out_slot).dir)return linux_error(21);
+    if(FS(out_slot).ro)return linux_error(30);
     unsigned char *pin=in_at?lookup(in_at,8,6):NULL,*pout=out_at?lookup(out_at,8,6):NULL;
     if((in_at && !pin) || (out_at && !pout))return linux_error(14);
     off_t from=pin?(off_t)le(pin,8):lseek(in,0,SEEK_CUR);if(from<0)return pin?linux_error(22):fs_error();
@@ -1666,7 +1673,7 @@ static uint64_t fs_call(uint64_t call) {
     if(call==52 || call==53 || call==452) {
         uint64_t mode=cpu->gpr[call==52?1:2]&UINT64_C(07777); /* Linux ignores other bits (libuv passes st_mode); setuid/setgid/sticky allowed */
         int fd=fs_host(cpu->gpr[0]),own=-1;
-        if(call==52 && fs_slot(cpu->gpr[0])>=0 && fs_ro[fs_slot(cpu->gpr[0])] && (fd=own=ov_fd_upper(fs_slot(cpu->gpr[0])))<0)return linux_error(30);
+        if(call==52 && fs_slot(cpu->gpr[0])>=0 && FS(fs_slot(cpu->gpr[0])).ro && (fd=own=ov_fd_upper(fs_slot(cpu->gpr[0])))<0)return linux_error(30);
         if(call!=52) {
             /* By path, never opening the file (an open costs ~12 us and needs read permission).
                fchmodat2 (452): AT_SYMLINK_NOFOLLOW on a symlink is EOPNOTSUPP, as Linux; glibc
@@ -1751,7 +1758,7 @@ static uint64_t fs_call(uint64_t call) {
         }
         if(!cpu->gpr[1]) {
             int fd=fs_host(cpu->gpr[0]),own=-1;if(fd<0)return linux_error(9);
-            if(fs_ro[fs_slot(cpu->gpr[0])] && (fd=own=ov_fd_upper(fs_slot(cpu->gpr[0])))<0)return linux_error(30);
+            if(FS(fs_slot(cpu->gpr[0])).ro && (fd=own=ov_fd_upper(fs_slot(cpu->gpr[0])))<0)return linux_error(30);
             int result=futimens(fd,times);if(own>=0) { int saved=errno;close(own);errno=saved; }
             return result<0?fs_error():0;
         }
@@ -1847,7 +1854,7 @@ static uint64_t fs_call(uint64_t call) {
         if(resolve&0x20)return linux_error(11);                 /* RESOLVE_CACHED: no cache to answer from; callers retry */
         if(resolve&0x18) {
             int dir=(int32_t)cpu->gpr[0]==-100?(fs_cwd?fs_cwd->fd:fs_root):fs_host(cpu->gpr[0]);if(dir<0)return linux_error(9);
-            fs_scope.root=dir;fs_scope.path=(int32_t)cpu->gpr[0]==-100?(fs_cwd?fs_cwd->path:"/"):fs_slot(cpu->gpr[0])>=0 && fs_dirs[fs_slot(cpu->gpr[0])]?fs_dirs[fs_slot(cpu->gpr[0])]->path:"";
+            fs_scope.root=dir;fs_scope.path=(int32_t)cpu->gpr[0]==-100?(fs_cwd?fs_cwd->path:"/"):fs_slot(cpu->gpr[0])>=0 && FS(fs_slot(cpu->gpr[0])).dir?FS(fs_slot(cpu->gpr[0])).dir->path:"";
         }
         fs_scope.resolve=(unsigned)resolve;
         uint64_t keep2=cpu->gpr[2],keep3=cpu->gpr[3];cpu->gpr[2]=flags;cpu->gpr[3]=mode;
@@ -1909,8 +1916,8 @@ static uint64_t fs_call(uint64_t call) {
     int fd=fs_host(cpu->gpr[0]);if(fd<0) return linux_error(9);
     unsigned slot=(unsigned)fs_slot(cpu->gpr[0]);
     if(call==25) {
-        if(cpu->gpr[1]==1)return fs_cloexec[slot];
-        if(cpu->gpr[1]==2) { if(cpu->gpr[2]>1)return linux_error(22);fs_cloexec[slot]=(unsigned char)cpu->gpr[2];fd_mirror(cpu->gpr[0]);return 0; }
+        if(cpu->gpr[1]==1)return FS(slot).cloexec;
+        if(cpu->gpr[1]==2) { if(cpu->gpr[2]>1)return linux_error(22);FS(slot).cloexec=(unsigned char)cpu->gpr[2];fd_mirror(cpu->gpr[0]);return 0; }
         if(cpu->gpr[1]==3) { int flags=fcntl(fd,F_GETFL);if(flags<0)return fs_error();
             return (unsigned)(flags&O_ACCMODE)|((flags&O_APPEND)?1024:0)|131072;
         }
@@ -1926,11 +1933,11 @@ static uint64_t fs_call(uint64_t call) {
     if(call==61) {
         uint64_t count=cpu->gpr[2];if(count<24 || count>1024*1024)return linux_error(22);
         unsigned char *out=lookup(cpu->gpr[1],count,2);if(!out)return linux_error(14);
-        if(!fs_dirs[slot]) {
+        if(!FS(slot).dir) {
             struct stat st;if(fstat(fd,&st)<0)return fs_error();if(!S_ISDIR(st.st_mode))return linux_error(20);
-            fs_dirs[slot]=calloc(1,sizeof(*fs_dirs[slot]));if(!fs_dirs[slot])return linux_error(12);fs_dirs[slot]->refs=1;
+            FS(slot).dir=calloc(1,sizeof(*FS(slot).dir));if(!FS(slot).dir)return linux_error(12);FS(slot).dir->refs=1;
         }
-        GuestDirectory *dir=fs_dirs[slot];
+        GuestDirectory *dir=FS(slot).dir;
         /* The root's image layers (overlay.h): a directory both hold lists them merged. */
         int layers=fs_lower>=0 && dir->path[0] && !(fs_mount_count && fs_mount_of(dir->path));
         if(!dir->stream && !dir->merged) {
@@ -1968,20 +1975,20 @@ static uint64_t fs_call(uint64_t call) {
         }
     }
     if(call==57) { struct stat closing;if(!fstat(fd,&closing)) { fs_locks_release(closing.st_dev,closing.st_ino,process_pid_now());fs_locks_release(closing.st_dev,closing.st_ino,FS_FLOCK_OWNER|(uint64_t)fd); }
-        if(fs_dirs[slot]) { fs_directory_release(fs_dirs[slot]);fs_dirs[slot]=NULL; }fs_pack_drop(slot);fs_fd[slot]=0;fd_unbind(cpu->gpr[0]);return close(fd)<0?fs_error():0; }
+        if(FS(slot).dir) { fs_directory_release(FS(slot).dir);FS(slot).dir=NULL; }fs_pack_drop(slot);FS(slot).fd=0;fd_unbind(cpu->gpr[0]);return close(fd)<0?fs_error():0; }
     if(call==80) {
         unsigned char *out=lookup(cpu->gpr[1],128,2);if(!out) return linux_error(14);
         struct stat st;if(fstat(fd,&st)<0) return fs_error();
         fs_stat_pack(out,&st);return 0;
     }
     if(call==62) {
-        if(fs_dirs[slot]) { if(cpu->gpr[1] || cpu->gpr[2])return linux_error(22);if(fs_dirs[slot]->stream)rewinddir(fs_dirs[slot]->stream);ov_list_free(fs_dirs[slot]->merged);fs_dirs[slot]->merged=NULL;fs_dirs[slot]->count=0;return 0; }
+        if(FS(slot).dir) { if(cpu->gpr[1] || cpu->gpr[2])return linux_error(22);if(FS(slot).dir->stream)rewinddir(FS(slot).dir->stream);ov_list_free(FS(slot).dir->merged);FS(slot).dir->merged=NULL;FS(slot).dir->count=0;return 0; }
         if(cpu->gpr[2]>2) return linux_error(22);
         off_t result=lseek(fd,(off_t)(int64_t)cpu->gpr[1],(int)cpu->gpr[2]);
         return result<0?fs_error():(uint64_t)result;
     }
     if(call==46) {
-        if(fs_ro[slot]) return linux_error(30);
+        if(FS(slot).ro) return linux_error(30);
         if(cpu->gpr[1]>fs_file_limit || (fs_write_limit && cpu->gpr[1]>fs_write_limit-fs_written)) return linux_error(27);
         struct stat st;if(fstat(fd,&st)<0)return fs_error();
         uint64_t growth=cpu->gpr[1]>(uint64_t)st.st_size?cpu->gpr[1]-(uint64_t)st.st_size:0;
@@ -2021,7 +2028,7 @@ static uint64_t fs_call(uint64_t call) {
         return (cpu->gpr[3]&4) && fs_sync(fd)<0?fs_error():0;
     }
     if(call==47) { /* fallocate: mode 0 grows the file (zero-filled); other modes are unsupported */
-        if(fs_ro[slot])return linux_error(30);
+        if(FS(slot).ro)return linux_error(30);
         if(cpu->gpr[1])return linux_error(95);
         uint64_t offset=cpu->gpr[2],length=cpu->gpr[3];
         if((int64_t)offset<0 || (int64_t)length<=0 || length>UINT64_MAX-offset)return linux_error(22);

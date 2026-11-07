@@ -89,7 +89,7 @@ static int upm_lexical(uint64_t dir,const char *input,char out[1025]) {
     size_t n=strlen(input);if(!n || n>1024 || input[n-1]=='/' || fs_scope.root>=0)return 0;
     if(input[0]=='/')strcpy(out,"/");
     else if((int32_t)dir==-100) { if(!fs_cwd || !fs_cwd->path[0] || fs_cwd->mem)return 0;strcpy(out,fs_cwd->path); }
-    else { int slot=fs_slot(dir);if(slot<0 || !fs_fd[slot] || !fs_dirs[slot] || !fs_dirs[slot]->path[0])return 0;strcpy(out,fs_dirs[slot]->path); }
+    else { int slot=fs_slot(dir);if(slot<0 || !FS(slot).fd || !FS(slot).dir || !FS(slot).dir->path[0])return 0;strcpy(out,FS(slot).dir->path); }
     for(const char *p=input;*p;) {
         while(*p=='/')p++;
         if(!*p)break;

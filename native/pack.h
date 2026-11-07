@@ -80,13 +80,13 @@ static void pack_unref(PackOpen *o) {
 /* Slot slot no longer refers to its PackOpen (closed, or holding the real file now).
    1 when it did: its descriptor is the shared placeholder, which stays open. */
 static int fs_pack_drop(unsigned slot) {
-    if(!fs_packed[slot])return 0;
-    pack_unref(fs_packed[slot]);fs_packed[slot]=NULL;return 1;
+    if(!FS(slot).pack)return 0;
+    pack_unref(FS(slot).pack);FS(slot).pack=NULL;return 1;
 }
 /* The real file in place of slot's placeholder: one host open for the description
    (at its offset), then each of its slots takes a duplicate as it is next used. */
 static void fs_pack_real(unsigned slot) {
-    PackOpen *o=fs_packed[slot];
+    PackOpen *o=FS(slot).pack;
     pthread_mutex_lock(&pack_lock);
     if(o->real<0) {
         int fd=openat(fs_lower,pack_path(pack_entry(o)),O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_NONBLOCK);
@@ -97,7 +97,7 @@ static void fs_pack_real(unsigned slot) {
     pthread_mutex_unlock(&pack_lock);
     if(real<0)return;                                      /* the placeholder stays: calls on it fail */
     int fd=fcntl(real,F_DUPFD_CLOEXEC,0);if(fd<0)return;
-    fs_pack_drop(slot);fs_fd[slot]=fd+1;
+    fs_pack_drop(slot);FS(slot).fd=fd+1;
 }
 
 /* ---- Building <lower>.pack ---- */

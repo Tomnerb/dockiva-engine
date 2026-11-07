@@ -16,11 +16,12 @@ static _Thread_local unsigned schedule_slice;
 static uint64_t io_epoch,io_read_blocks,io_write_blocks;
 /* Pipes, epoll, signalfd, standard I/O and their duplicates: io_fds is indexed by
    slot (0..2 are standard I/O), IO(fd) by guest descriptor. */
-#define IO_END 512u /* slots */
+#define IO_END GUEST_FD_LIMIT /* slots */
 static int io_slot(uint64_t fd) { return fd_slot(fd,FD_IO); }
 #define IO(fd) io_fds[io_slot(fd)] /* a managed descriptor's entry */
 #define PIPE_CAP (1024u*1024u)
-#define PIPE_SLOTS 1024 /* pipes and eventfds in the container: each .NET process holds several */
+#define PIPE_START 4096u /* a pipe's first buffer: it grows toward PIPE_CAP as data waits in it */
+#define PIPE_SLOTS 8192 /* pipes and eventfds in the container: each .NET process holds several */
 #define IO_FILE 1
 #define IO_OUTPUT 2
 #define IO_EOF 3
@@ -43,8 +44,11 @@ static void inotify_retain(struct GuestInotify *in);
 static void epoll_ref(int slot,int change);
 static void epoll_forget_socket(int host);
 static void epoll_forget_pipe(void *pipe,unsigned kind);
-/* waiters: scheduler task slots blocked in epoll_wait on this pipe (woken by its next change). */
-static struct GuestPipe { unsigned char *data;size_t used;unsigned readers,writers,read_nonblock,write_nonblock,reads,writes,semaphore,fifo,had_writer;uint64_t waiters,want_read[PROCESS_WORDS],want_write[PROCESS_WORDS]; } io_pipes[PIPE_SLOTS]; /* waiters: PROCESS_BITs; want_*: the processes waiting to open a FIFO */
+/* waiters: scheduler task slots blocked in epoll_wait on this pipe (woken by its next change).
+   data: capacity bytes, charged to the memory budget as Linux charges a pipe's pages:
+   only once data waits there (an empty pipe of a 1 MiB buffer cost 1 MiB of it). */
+static struct GuestPipe { unsigned char *data;size_t used,capacity;unsigned readers,writers,read_nonblock,write_nonblock,reads,writes,semaphore,fifo,had_writer;uint64_t waiters,want_read[PROCESS_WORDS],want_write[PROCESS_WORDS]; } io_pipes[PIPE_SLOTS]; /* waiters: PROCESS_BITs; want_*: the processes waiting to open a FIFO */
+static int io_pipe_grow(struct GuestPipe *pipe,size_t need);
 /* Named pipes (mkfifo): every open of one FIFO node in the container shares a pipe slot. */
 #define IO_FIFOS 64
 static struct { dev_t dev;ino_t ino;struct GuestPipe *pipe; } io_fifos[IO_FIFOS];
@@ -81,12 +85,21 @@ typedef struct { unsigned kind,cloexec;int host;struct GuestPipe *pipe;struct Gu
 static uint64_t io_signals_pending(void);            /* the calling process's pending signals */
 static unsigned io_signal_take(unsigned signal);     /* consume one; returns its sender's pid */
 static uint64_t terminal_ioctl(GuestIO *fd);
-/* The current process's I/O slots; guest: slot -> guest descriptor. */
-typedef struct { GuestIO fds[IO_END];unsigned short guest[IO_END]; } IoTable;
-static IoTable io_table_first={{[0]={IO_EOF,0,0,NULL,NULL,NULL,NULL,NULL,NULL},[1]={IO_OUTPUT,0,1,NULL,NULL,NULL,NULL,NULL,NULL},[2]={IO_OUTPUT,0,2,NULL,NULL,NULL,NULL,NULL,NULL}},{0,1,2}};
+/* The current process's I/O slots; guest: slot -> guest descriptor; top: as the
+   socket table's (net.h). */
+typedef struct { unsigned top;GuestIO fds[IO_END];unsigned short guest[IO_END]; } IoTable;
+static IoTable io_table_first={3,{[0]={IO_EOF,0,0,NULL,NULL,NULL,NULL,NULL,NULL},[1]={IO_OUTPUT,0,1,NULL,NULL,NULL,NULL,NULL,NULL},[2]={IO_OUTPUT,0,2,NULL,NULL,NULL,NULL,NULL,NULL}},{0,1,2}};
 static _Thread_local IoTable *io_table=&io_table_first;
 #define io_fds (io_table->fds)
 #define io_guest (io_table->guest)
+static int io_claim(void) {                         /* from 3: 0..2 are standard I/O's */
+    for(unsigned i=3;i<IO_END;i++)if(!io_fds[i].kind) { if(i>=io_table->top)io_table->top=i+1;return (int)i; }
+    return -1;
+}
+static void io_table_copy(IoTable *to,const IoTable *from) {
+    unsigned top=from->top,old=to->top>top?to->top:top;
+    TABLE_COPY(to,from,fds,top,old);TABLE_COPY(to,from,guest,top,old);to->top=top;
+}
 static int io_managed(uint64_t fd) { return io_slot(fd)>=0; }
 /* A host descriptor to poll like a socket for this guest one: --stdin's, or a timerfd's kqueue. */
 static int io_poll_host(uint64_t guest) {
@@ -113,9 +126,9 @@ static void io_release(GuestIO *f) {
     }
     memset(f,0,sizeof(*f));
 }
-static void io_cleanup(void) { for(unsigned i=0;i<IO_END;i++)if(io_fds[i].kind)io_release(&io_fds[i]); }
+static void io_cleanup(void) { for(unsigned i=0;i<io_table->top;i++)if(io_fds[i].kind)io_release(&io_fds[i]); }
 /* One past the last slot in use (the slots above it are zero). */
-static unsigned io_top(void) { unsigned top=IO_END;while(top && !io_fds[top-1].kind)top--;return top; }
+static unsigned io_top(void) { unsigned top=io_table->top;while(top && !io_fds[top-1].kind)top--;return top; }
 static int io_copy(GuestIO *out,const GuestIO *source) {
     *out=*source;
     if(source->kind==IO_EPOLL)epoll_ref(source->host,1);
@@ -131,9 +144,8 @@ static int io_copy(GuestIO *out,const GuestIO *source) {
 }
 /* Claim the lowest free descriptor >= min for a free I/O slot; the caller fills IO(fd). */
 static int io_free_slot(unsigned min) {
-    int guest=fd_lowest(min);if(guest<0)return -1;
-    for(unsigned i=3;i<IO_END;i++)if(!io_fds[i].kind) { io_guest[i]=(unsigned short)guest;fd_bind((uint64_t)guest,FD_IO,i);return guest; }
-    return -1;
+    int guest=fd_lowest(min),slot=guest>=0?io_claim():-1;if(slot<0)return -1;
+    io_guest[slot]=(unsigned short)guest;fd_bind((uint64_t)guest,FD_IO,(unsigned)slot);return guest;
 }
 static int io_poll_ready(uint64_t guest,unsigned events) {
     unsigned in=(events&1)?1:0,out=(events&4)?4:0;
@@ -179,8 +191,8 @@ static uint64_t io_pipe(void) {
     if(w<0) { fd_unbind((uint64_t)r);return linux_error(24); }
     unsigned i=0;while(i<PIPE_SLOTS && io_pipes[i].data)i++;
     if(i==PIPE_SLOTS) { fd_unbind((uint64_t)r);fd_unbind((uint64_t)w);return linux_error(24); }
-    struct GuestPipe *p=&io_pipes[i];p->data=malloc(PIPE_CAP);if(!p->data) { fd_unbind((uint64_t)r);fd_unbind((uint64_t)w);return linux_error(12); }
-    p->used=0;p->readers=p->writers=1;p->read_nonblock=p->write_nonblock=(cpu->gpr[1]&2048)!=0;
+    struct GuestPipe *p=&io_pipes[i];p->data=malloc(PIPE_START);if(!p->data) { fd_unbind((uint64_t)r);fd_unbind((uint64_t)w);return linux_error(12); }
+    p->used=0;p->capacity=PIPE_START;p->readers=p->writers=1;p->read_nonblock=p->write_nonblock=(cpu->gpr[1]&2048)!=0;
     unsigned cloexec=(cpu->gpr[1]&524288)!=0;
     IO(r)=(GuestIO){IO_READ,cloexec,-1,p,NULL,NULL,NULL,NULL,NULL};IO(w)=(GuestIO){IO_WRITE,cloexec,-1,p,NULL,NULL,NULL,NULL,NULL};
     fs_pack(out,0,(unsigned)r,4);fs_pack(out,4,(unsigned)w,4);return 0;
@@ -232,8 +244,8 @@ static uint64_t io_fifo_open(dev_t dev,ino_t ino,uint64_t flags) {
         if(entry==IO_FIFOS)return linux_error(23);
         unsigned i=0;while(i<PIPE_SLOTS && io_pipes[i].data)i++;
         if(i==PIPE_SLOTS)return linux_error(23);
-        p=&io_pipes[i];if(!(p->data=malloc(PIPE_CAP)))return linux_error(12);
-        p->used=0;p->readers=p->writers=0;p->fifo=1;p->had_writer=0;p->waiters=0;memset(p->want_read,0,sizeof(p->want_read));memset(p->want_write,0,sizeof(p->want_write));
+        p=&io_pipes[i];if(!(p->data=malloc(PIPE_START)))return linux_error(12);
+        p->used=0;p->capacity=PIPE_START;p->readers=p->writers=0;p->fifo=1;p->had_writer=0;p->waiters=0;memset(p->want_read,0,sizeof(p->want_read));memset(p->want_write,0,sizeof(p->want_write));
         io_fifos[entry].dev=dev;io_fifos[entry].ino=ino;io_fifos[entry].pipe=p;
     }
     unsigned mode=(unsigned)(flags&3);int reading=mode!=1,writing=mode!=0;
@@ -514,6 +526,10 @@ static uint64_t io_call(uint64_t call) {
         size_t free_bytes=PIPE_CAP-pipe->used;
         if(!free_bytes || (count<=4096 && count>free_bytes))return io_would_block(f);
         if(count>free_bytes)count=free_bytes;
+        if(pipe->used+count>pipe->capacity && !io_pipe_grow(pipe,pipe->used+(size_t)count)) {
+            if(count<=4096 || pipe->used==pipe->capacity)return linux_error(12);   /* the memory budget is spent, as Linux's ENOMEM */
+            count=pipe->capacity-pipe->used;
+        }
         memcpy(pipe->data+pipe->used,p,(size_t)count);pipe->used+=(size_t)count;io_pipe_changed(pipe);return count;
     }
     if(!pipe->used)return pipe_hung_up(pipe)?0:io_would_block(f);
@@ -521,17 +537,24 @@ static uint64_t io_call(uint64_t call) {
     memcpy(p,pipe->data,(size_t)count);pipe->used-=(size_t)count;
     memmove(pipe->data,pipe->data+count,pipe->used);io_pipe_changed(pipe);return count;
 }
-static void io_exec(void) { for(unsigned i=0;i<IO_END;i++)if(io_fds[i].cloexec) { io_release(&io_fds[i]);fd_unbind(io_guest[i]); } }
-/* The child's copies of the slots below top (io_top) in place of the parent's, which
-   go to saved; the slots above are zero in both. */
-static int io_clone(GuestIO saved[IO_END],unsigned top) {
-    GuestIO child[IO_END];
-    for(unsigned i=0;i<top;i++)if(io_copy(&child[i],&io_fds[i])<0) {
-        for(unsigned j=0;j<i;j++)io_release(&child[j]);return -1;
-    }
-    memcpy(saved,io_fds,top*sizeof(GuestIO));memcpy(io_fds,child,top*sizeof(GuestIO));return 0;
+/* Room for need bytes (at most PIPE_CAP): doubling, so a stream grows a few times once. */
+static int io_pipe_grow(struct GuestPipe *pipe,size_t need) {
+    size_t capacity=pipe->capacity;while(capacity<need)capacity*=2;if(capacity>PIPE_CAP)capacity=PIPE_CAP;
+    unsigned char *data=malloc(capacity);if(!data)return 0;          /* malloc is the budget's: no realloc */
+    memcpy(data,pipe->data,pipe->used);free(pipe->data);pipe->data=data;pipe->capacity=capacity;return 1;
 }
-static void io_restore(GuestIO saved[IO_END],unsigned top) { io_cleanup();memcpy(io_fds,saved,top*sizeof(GuestIO)); }
+static void io_exec(void) { for(unsigned i=0;i<io_table->top;i++)if(io_fds[i].cloexec) { io_release(&io_fds[i]);fd_unbind(io_guest[i]); } }
+/* The child's copies of the slots below top (io_top) in place of the parent's, which
+   go to saved (top entries); the slots above are zero in both. */
+static int io_clone(GuestIO *saved,unsigned top) {
+    memcpy(saved,io_fds,top*sizeof(GuestIO));
+    for(unsigned i=0;i<top;i++)if(io_copy(&io_fds[i],&saved[i])<0) {
+        for(unsigned j=0;j<i;j++)io_release(&io_fds[j]);
+        memcpy(io_fds,saved,top*sizeof(GuestIO));return -1;
+    }
+    return 0;
+}
+static void io_restore(const GuestIO *saved,unsigned top) { io_cleanup();memcpy(io_fds,saved,top*sizeof(GuestIO)); }
 /* signalfd4(fd, mask, 8, SFD_NONBLOCK|SFD_CLOEXEC): a new descriptor, or a new
    mask for an existing one. SIGKILL and SIGSTOP are ignored in the mask. */
 static uint64_t io_signalfd(void) {

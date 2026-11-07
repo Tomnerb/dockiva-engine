@@ -249,7 +249,7 @@ static void net_abstract_release(const struct NetDescription *d) {
     if(net_abstract_fd>=0 && !fstatat(net_abstract_fd,leaf,&st,AT_SYMLINK_NOFOLLOW) && st.st_ino==d->abstract_ino)unlinkat(net_abstract_fd,leaf,0);
 }
 static uint64_t net_abstract_address(int fd,const unsigned char *name,unsigned length,int binding,struct NetDescription *d) {
-    if(binding)for(unsigned i=0;i<NET_DESCRIPTIONS;i++) {           /* this run's own names */
+    if(binding)for(unsigned i=0;i<net_descriptions_top;i++) {       /* this run's own names */
         const struct NetDescription *o=&net_descriptions[i];
         if(o->refs && o->named==2 && o->abstract==length && !memcmp(o->path,name,length))return linux_error(98);
     }

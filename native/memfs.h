@@ -352,8 +352,8 @@ static int mem_resolve(uint64_t dir,const char *input,int follow,int probe,MemPa
         if(o) { if(!mem_is(o->node,MEM_DIR))return -20;cur=o->node;mem_dir_path(cur,canon); }
         else {
             int slot=fs_slot(dir);
-            if(slot<0 || !fs_fd[slot])return dir<GUEST_FD_LIMIT && fd_kind[dir]?-20:-9;
-            if(fs_dirs[slot] && fs_dirs[slot]->path[0])strcpy(canon,fs_dirs[slot]->path);else canon[0]=0;  /* unknown: the host walk decides */
+            if(slot<0 || !FS(slot).fd)return dir<GUEST_FD_LIMIT && fd_kind[dir]?-20:-9;
+            if(FS(slot).dir && FS(slot).dir->path[0])strcpy(canon,FS(slot).dir->path);else canon[0]=0;  /* unknown: the host walk decides */
         }
     }
     size_t pos=0;
@@ -853,10 +853,10 @@ static uint64_t mem_copy(uint64_t in_fd,uint64_t in_at,uint64_t out_fd,uint64_t 
     MemOpen *in=mem_fd(in_fd),*out=mem_fd(out_fd);
     int in_host=in?-1:fs_host(in_fd),out_host=out?-1:fs_host(out_fd);
     if((!in && in_host<0) || (!out && out_host<0))return in_fd<GUEST_FD_LIMIT && out_fd<GUEST_FD_LIMIT && fd_kind[in_fd] && fd_kind[out_fd]?linux_error(22):linux_error(9);
-    if((in_host>=0 && fs_dirs[fs_slot(in_fd)]) || (out_host>=0 && fs_dirs[fs_slot(out_fd)]))return linux_error(21);
+    if((in_host>=0 && FS(fs_slot(in_fd)).dir) || (out_host>=0 && FS(fs_slot(out_fd)).dir))return linux_error(21);
     if((in && (in->flags&0x200000 || (in->flags&3)==1)) || (out && (out->flags&0x200000 || !(out->flags&3))))return linux_error(9);
     if((in && !mem_is(in->node,MEM_REG)) || (out && !mem_is(out->node,MEM_REG)))return linux_error(in && mem_is(in->node,MEM_DIR)?21:22);
-    if(out_host>=0 && fs_ro[fs_slot(out_fd)])return linux_error(30);
+    if(out_host>=0 && FS(fs_slot(out_fd)).ro)return linux_error(30);
     unsigned char *pin=in_at?lookup(in_at,8,6):NULL,*pout=out_at?lookup(out_at,8,6):NULL;
     if((in_at && !pin) || (out_at && !pout))return linux_error(14);
     if(count>1024*1024)count=1024*1024;

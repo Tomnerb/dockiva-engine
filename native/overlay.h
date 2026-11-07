@@ -758,6 +758,6 @@ static void ov_list_free(struct OvList *list) { if(list) { free(list->data);free
    directory is copied up by its path and changed there. ponytail: a lower file says
    EROFS (Linux copies it up; its descriptor then still reads the lower file). */
 static int ov_fd_upper(int slot) {
-    if(fs_ro[slot]!=2 || !fs_dirs[slot] || !fs_dirs[slot]->path[0] || !fs_writable) { errno=EROFS;return -1; }
-    return ov_upper(fs_dirs[slot]->path);
+    if(FS(slot).ro!=2 || !FS(slot).dir || !FS(slot).dir->path[0] || !fs_writable) { errno=EROFS;return -1; }
+    return ov_upper(FS(slot).dir->path);
 }

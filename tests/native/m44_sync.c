@@ -5,7 +5,7 @@
 int main(void) {
     unsigned char memory[4096]={0};seg[0]=(Segment){0x1000,sizeof(memory),6,memory};nseg=1;
     char path[]="/tmp/vmfree-sync-XXXXXX";assert(mkdtemp(path));fs_root=open(path,O_RDONLY|O_DIRECTORY);assert(fs_root>=0);
-    int fd=openat(fs_root,"data",O_CREAT|O_RDWR,0600);assert(fd>=0);fs_fd[0]=fd+1;
+    int fd=openat(fs_root,"data",O_CREAT|O_RDWR,0600);assert(fd>=0);FS(0).fd=fd+1;
     strcpy((char *)memory,"/data");regs[0]=(uint64_t)-100;regs[1]=0x1000;regs[2]=0;
     assert(fs_call(48)==0);regs[2]=1;assert(fs_call(48)==linux_error(13));
     regs[2]=2;assert(fs_call(48)==linux_error(30));fs_writable=1;assert(fs_call(48)==0);

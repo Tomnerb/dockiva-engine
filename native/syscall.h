@@ -114,9 +114,9 @@ static unsigned io_signal_take(unsigned signal) {
 static void fd_mirror(uint64_t fd) {
     if(!fd_mirror_base || fd>=GUEST_FD_LIMIT || !process_pid || process_pid>PROCESS_LIMIT+1)return;
     unsigned slot=fd_index[fd],m=0;
-    if(fd_kind[fd]==FD_FILE && fs_fd[slot]) {
-        int flags=fcntl(fs_fd[slot]-1,F_GETFL);
-        if(flags>=0)m=FD_MIRROR_FILE|(unsigned)(flags&O_ACCMODE)|((flags&O_APPEND)?4u:0)|(fs_cloexec[slot]?FD_MIRROR_CLOEXEC:0);
+    if(fd_kind[fd]==FD_FILE && FS(slot).fd) {
+        int flags=fcntl(FS(slot).fd-1,F_GETFL);
+        if(flags>=0)m=FD_MIRROR_FILE|(unsigned)(flags&O_ACCMODE)|((flags&O_APPEND)?4u:0)|(FS(slot).cloexec?FD_MIRROR_CLOEXEC:0);
     } else if(fd_kind[fd]==FD_IO && io_fds[slot].kind==IO_EPOLL)m=FD_MIRROR_EPOLL;
     __atomic_store_n(&fd_mirror_base[process_pid*4096+fd],(unsigned char)m,__ATOMIC_RELEASE);
 }
@@ -126,9 +126,9 @@ static uint64_t guest_close(uint64_t fd) {
     if(slot<0 || !fd_kind[fd])return linux_error(9);
     if(fd_kind[fd]==FD_NET)return net_release((unsigned)slot)<0?net_error():0;
     if(fd_kind[fd]==FD_FILE) {
-        if(fs_dirs[slot]) { fs_directory_release(fs_dirs[slot]);fs_dirs[slot]=NULL; }
+        if(FS(slot).dir) { fs_directory_release(FS(slot).dir);FS(slot).dir=NULL; }
         int packed=fs_pack_drop((unsigned)slot);                           /* the pack's placeholder stays open */
-        int host=fs_fd[slot]-1;fs_fd[slot]=0;fs_cloexec[slot]=0;fd_unbind(fd);return packed || close(host)>=0?0:fs_error();
+        int host=FS(slot).fd-1;FS(slot).fd=0;FS(slot).cloexec=0;fd_unbind(fd);return packed || close(host)>=0?0:fs_error();
     }
     io_release(&io_fds[slot]);fd_unbind(fd);return 0;
 }
@@ -139,19 +139,17 @@ static uint64_t guest_dup(uint64_t oldfd,int64_t target,uint64_t min,int cloexec
     if(oldfd>=GUEST_FD_LIMIT || !fd_kind[oldfd])return linux_error(9);
     unsigned kind=fd_kind[oldfd],from=fd_index[oldfd];int slot=-1;
     if(target>=0 && (uint64_t)target==oldfd)return (uint64_t)target;
-    if(kind==FD_NET) { for(unsigned i=0;i<NET_SLOTS && slot<0;i++)if(!net_fd[i])slot=(int)i; }
-    else if(kind==FD_FILE) { for(unsigned i=0;i<FS_SLOTS && slot<0;i++)if(!fs_fd[i])slot=(int)i; }
-    else for(unsigned i=3;i<IO_END && slot<0;i++)if(!io_fds[i].kind)slot=(int)i;
+    slot=kind==FD_NET?net_claim():kind==FD_FILE?fs_claim():io_claim();
     int64_t fd=target>=0?target:fd_lowest(min);
     if(slot<0 || fd<0)return linux_error(24);
     if(kind==FD_FILE) {
-        int host=fs_packed[from]?fs_fd[from]-1:dup(fs_fd[from]-1);if(host<0)return fs_error();   /* the pack's placeholder: shared */
+        int host=FS(from).pack?FS(from).fd-1:dup(FS(from).fd-1);if(host<0)return fs_error();   /* the pack's placeholder: shared */
         if(target>=0 && fd_kind[fd])(void)guest_close((uint64_t)fd);
-        fs_fd[slot]=host+1;fs_cloexec[slot]=(unsigned char)(cloexec!=0);fs_ro[slot]=fs_ro[from];fs_dev[slot]=fs_dev[from];fs_dirs[slot]=fs_dirs[from];
-        fs_sole[slot]=fs_sole[from]=0;
-        if(fs_dirs[slot])fs_dirs[slot]->refs++;
-        if((fs_packed[slot]=fs_packed[from]))pack_ref(fs_packed[slot]);     /* one description, as Linux's dup */
-        fs_guest[slot]=(unsigned short)fd;
+        FS(slot).fd=host+1;FS(slot).cloexec=(unsigned char)(cloexec!=0);FS(slot).ro=FS(from).ro;FS(slot).dev=FS(from).dev;FS(slot).dir=FS(from).dir;
+        FS(slot).sole=FS(from).sole=0;
+        if(FS(slot).dir)FS(slot).dir->refs++;
+        if((FS(slot).pack=FS(from).pack))pack_ref(FS(slot).pack);     /* one description, as Linux's dup */
+        FS(slot).guest=(unsigned short)fd;
     } else if(kind==FD_NET) {
         if(target>=0 && fd_kind[fd])(void)guest_close((uint64_t)fd);
         net_fd[slot]=net_fd[from];net_description((unsigned)slot)->refs++;net_flags[slot]=cloexec?524288:0;
@@ -185,10 +183,10 @@ static int fd_carry_send(uint64_t guestfd) {
     struct FdCarry *c=&fd_carries[i];unsigned from=fd_index[guestfd];
     *c=(struct FdCarry){0};c->kind=fd_kind[guestfd];
     if(c->kind==FD_FILE) {
-        if(fs_packed[from])fs_pack_real(from);                              /* another process takes it: the real file */
-        c->host=dup(fs_fd[from]-1);if(c->host<0) { c->kind=0;return -24; }
-        fs_sole[from]=0;
-        c->ro=fs_ro[from];c->dev=fs_dev[from];c->dir=fs_dirs[from];if(c->dir)c->dir->refs++;
+        if(FS(from).pack)fs_pack_real(from);                              /* another process takes it: the real file */
+        c->host=dup(FS(from).fd-1);if(c->host<0) { c->kind=0;return -24; }
+        FS(from).sole=0;
+        c->ro=FS(from).ro;c->dev=FS(from).dev;c->dir=FS(from).dir;if(c->dir)c->dir->refs++;
     } else if(c->kind==FD_NET) { c->host=net_fd[from];net_description(from)->refs++; }
     else if(io_copy(&c->io,&io_fds[from])<0) { c->kind=0;return -24; }
     int ends[2];
@@ -207,11 +205,9 @@ static void fd_carry_cancel(int carrier) { struct FdCarry *c=fd_carry_take(carri
 static int64_t fd_carry_receive(int carrier,int cloexec) {
     struct FdCarry *c=fd_carry_take(carrier);if(!c)return -1;
     int slot=-1,fd=fd_lowest(0);
-    if(c->kind==FD_NET) { for(unsigned i=0;i<NET_SLOTS && slot<0;i++)if(!net_fd[i])slot=(int)i; }
-    else if(c->kind==FD_FILE) { for(unsigned i=0;i<FS_SLOTS && slot<0;i++)if(!fs_fd[i])slot=(int)i; }
-    else for(unsigned i=3;i<IO_END && slot<0;i++)if(!io_fds[i].kind)slot=(int)i;
+    if(fd>=0)slot=c->kind==FD_NET?net_claim():c->kind==FD_FILE?fs_claim():io_claim();
     if(slot<0 || fd<0) { fd_carry_drop(c);return -1; }
-    if(c->kind==FD_FILE) { fs_fd[slot]=c->host+1;fs_cloexec[slot]=(unsigned char)(cloexec!=0);fs_ro[slot]=c->ro;fs_dev[slot]=c->dev;fs_sole[slot]=0;fs_packed[slot]=NULL;fs_dirs[slot]=c->dir;fs_guest[slot]=(unsigned short)fd; }
+    if(c->kind==FD_FILE) { FS(slot).fd=c->host+1;FS(slot).cloexec=(unsigned char)(cloexec!=0);FS(slot).ro=c->ro;FS(slot).dev=c->dev;FS(slot).sole=0;FS(slot).pack=NULL;FS(slot).dir=c->dir;FS(slot).guest=(unsigned short)fd; }
     else if(c->kind==FD_NET) { net_fd[slot]=c->host;net_flags[slot]=cloexec?524288:0;net_guest[slot]=(unsigned short)fd; }
     else { c->io.cloexec=(unsigned)(cloexec!=0);io_fds[slot]=c->io;io_guest[slot]=(unsigned short)fd; }
     fd_bind((uint64_t)fd,c->kind,(unsigned)slot);memset(c,0,sizeof(*c));
@@ -231,7 +227,7 @@ static uint64_t guest_sendfile(void) {
     int in=fs_host(cpu->gpr[1]),out=net_host(cpu->gpr[0]);
     if(in>=0 && fs_host(cpu->gpr[0])>=0)return fs_copy_between(cpu->gpr[1],cpu->gpr[0],cpu->gpr[2],0,cpu->gpr[3]);
     if(in<0 || (out<0 && !fd_kind[cpu->gpr[0]<GUEST_FD_LIMIT?cpu->gpr[0]:0]))return linux_error(9);
-    if(out<0 || fs_dirs[fs_slot(cpu->gpr[1])])return linux_error(22);
+    if(out<0 || FS(fs_slot(cpu->gpr[1])).dir)return linux_error(22);
     unsigned slot=(unsigned)net_slot(cpu->gpr[0]);
     unsigned char *at=cpu->gpr[2]?lookup(cpu->gpr[2],8,6):NULL;if(cpu->gpr[2] && !at)return linux_error(14);
     off_t offset=at?(off_t)le(at,8):lseek(in,0,SEEK_CUR);if(offset<0)return at?linux_error(22):fs_error();
@@ -320,11 +316,11 @@ static int guest_syscall_dispatch(void) {
                     if(!fd_kind[fd])continue;
                     unsigned slot=fd_index[fd];
                     if(flags&4) {
-                        if(fd_kind[fd]==FD_FILE)fs_cloexec[slot]=1;else if(fd_kind[fd]==FD_NET)net_flags[slot]|=524288;else io_fds[slot].cloexec=1;
+                        if(fd_kind[fd]==FD_FILE)FS(slot).cloexec=1;else if(fd_kind[fd]==FD_NET)net_flags[slot]|=524288;else io_fds[slot].cloexec=1;
                         fd_mirror(fd);continue;
                     }
                     struct stat closing;
-                    if(fd_kind[fd]==FD_FILE && !fstat(fs_fd[slot]-1,&closing)) { fs_locks_release(closing.st_dev,closing.st_ino,process_pid_now());fs_locks_release(closing.st_dev,closing.st_ino,FS_FLOCK_OWNER|fd); }
+                    if(fd_kind[fd]==FD_FILE && !fstat(FS(slot).fd-1,&closing)) { fs_locks_release(closing.st_dev,closing.st_ino,process_pid_now());fs_locks_release(closing.st_dev,closing.st_ino,FS_FLOCK_OWNER|fd); }
                     (void)guest_close(fd);
                 }
                 cpu->gpr[0]=0;return -3;
@@ -360,7 +356,7 @@ static int guest_syscall_dispatch(void) {
                    identity), so a valid request by root succeeds without effect. */
                 int fd=-1;struct stat st;
                 int writable;
-                if(call==55) { fd=fs_host(cpu->gpr[0]);if(fd<0) { cpu->gpr[0]=linux_error(9);return -3; }writable=fs_ro[fs_slot(cpu->gpr[0])]!=1; } /* 2: a lower file (overlay.h), no change to make */
+                if(call==55) { fd=fs_host(cpu->gpr[0]);if(fd<0) { cpu->gpr[0]=linux_error(9);return -3; }writable=FS(fs_slot(cpu->gpr[0])).ro!=1; } /* 2: a lower file (overlay.h), no change to make */
                 else {
                     if(cpu->gpr[4]&~UINT64_C(256|4096)) { cpu->gpr[0]=linux_error(22);return -3; }
                     char leaf[1025];int parent=fs_lookup(cpu->gpr[0],cpu->gpr[1],leaf,!(cpu->gpr[4]&256)|FS_DIRECT,NULL);
@@ -476,7 +472,7 @@ static int guest_syscall_dispatch(void) {
             if(call==29) { /* ioctl: sockets; close-on-exec and nonblocking (no effect) on files */
                 uint64_t fd=cpu->gpr[0],request=cpu->gpr[1];
                 if(net_host(fd)>=0)cpu->gpr[0]=net_ioctl();
-                else if(fs_host(fd)>=0 && (request==0x5451 || request==0x5450)) { fs_cloexec[fs_slot(fd)]=request==0x5451;fd_mirror(fd);cpu->gpr[0]=0; }
+                else if(fs_host(fd)>=0 && (request==0x5451 || request==0x5450)) { FS(fs_slot(fd)).cloexec=request==0x5451;fd_mirror(fd);cpu->gpr[0]=0; }
                 else if(fs_host(fd)>=0 && request==0x5421)cpu->gpr[0]=0;
                 else cpu->gpr[0]=(fd<=2 || fs_host(fd)>=0)?linux_error(25):linux_error(9);
                 return -3;
@@ -684,13 +680,13 @@ static int fs_call_detached(uint64_t call,const char *path,uint64_t *result,int 
     uint64_t in=0,out=0,size=0;
     if(transfer) {
         int slot=fs_slot(cpu->gpr[0]);size=sync?0:cpu->gpr[2];
-        if(slot<0 || !fs_fd[slot] || fs_dirs[slot] || (!sync && (fs_dev[slot] || !size || size>FS_DETACHED_BUFFER || ((call==67 || call==68) && (int64_t)cpu->gpr[3]<0))))return 0;
+        if(slot<0 || !FS(slot).fd || FS(slot).dir || (!sync && (FS(slot).dev || !size || size>FS_DETACHED_BUFFER || ((call==67 || call==68) && (int64_t)cpu->gpr[3]<0))))return 0;
         if(call==63 || call==67) { if(!lookup(cpu->gpr[1],size,2))return 0;out=cpu->gpr[1]; } else if(!sync)in=cpu->gpr[1];
-        fs_detached.read_only=fs_ro[slot];
+        fs_detached.read_only=FS(slot).ro;
     } else {
         if(!path)return 0;
         if(call==56) {                                                     /* /sys: synthetic files, in io tables */
-            unsigned slot=0;while(slot<FS_SLOTS && fs_fd[slot])slot++;
+            unsigned slot=0;while(slot<FS_SLOTS && FS(slot).fd)slot++;
             if(!strncmp(path,"/sys/",5) || slot==FS_SLOTS || fd_lowest(0)<0)return 0;
         }
         else if(call==79) { out=cpu->gpr[2];size=statx?256:128; }
@@ -708,7 +704,7 @@ static int fs_call_detached(uint64_t call,const char *path,uint64_t *result,int 
         fs_detached.at[i]=at;fs_detached.dir[i]=dir;
         if(fs_detached.path[i][0]=='/')continue;
         int host=(int32_t)dir==-100?(fs_cwd?fs_cwd->fd:fs_root):fs_host(dir),slot=fs_slot(dir);
-        const char *base_path=(int32_t)dir==-100?(fs_cwd?fs_cwd->path:"/"):slot>=0 && fs_dirs[slot]?fs_dirs[slot]->path:"";
+        const char *base_path=(int32_t)dir==-100?(fs_cwd?fs_cwd->path:"/"):slot>=0 && FS(slot).dir?FS(slot).dir->path:"";
         if(host<0 || (fs_detached.base[i]=dup(host))<0)break;
         strcpy(fs_detached.base_path[i],base_path);
     }
@@ -785,12 +781,12 @@ static int fs_pack_call(uint64_t call) {
         if(!name || *name)return 0;
     }
     uint64_t fd=cpu->gpr[0];int slot=fs_slot(fd);
-    if(slot<0 || !fs_fd[slot] || !fs_packed[slot])return 0;
-    PackOpen *o=fs_packed[slot];
+    if(slot<0 || !FS(slot).fd || !FS(slot).pack)return 0;
+    PackOpen *o=FS(slot).pack;
     if(__atomic_load_n(&o->real,__ATOMIC_ACQUIRE)>=0)return 0;
     const PackEntry *e=pack_entry(o);const unsigned char *data=pack_base+e->offset;
     if(call==57) {                                                            /* the placeholder stays open */
-        fs_fd[slot]=0;fs_cloexec[slot]=0;fs_sole[slot]=0;fs_pack_drop((unsigned)slot);fd_unbind(fd);
+        FS(slot).fd=0;FS(slot).cloexec=0;FS(slot).sole=0;fs_pack_drop((unsigned)slot);fd_unbind(fd);
         cpu->gpr[0]=0;return 1;
     }
     if(call==80 || call==79 || call==291) {
@@ -828,7 +824,7 @@ static int guest_syscall_unlocked(void) {
     if(trace)return 0;
     if(mem_active) { int r=mem_route_unlocked(call);if(r>=0)return r; }        /* memfs.h: its own lock */
     if(fs_pack_call(call))return 1;
-    int file=fs_host(fd)>=0 && !fs_dirs[fs_slot(fd)],socket=!file && net_host(fd)>=0;
+    int file=fs_host(fd)>=0 && !FS(fs_slot(fd)).dir,socket=!file && net_host(fd)>=0;
     int epoll=call==22 && io_managed(fd) && IO(fd).kind==IO_EPOLL && epolls[IO(fd).host].refs==1;
     /* Calls by path, except under /proc (process tables) and /dev: openat, newfstatat,
        statx, faccessat(2), readlinkat, mkdirat, unlinkat, renameat (both paths) and
@@ -903,9 +899,9 @@ static int guest_syscall_unlocked(void) {
        drops the last reference after the number is free; a local file's close
        cannot fail. */
     if(call==57 && file && !__atomic_load_n(&fs_locks_held[process_pid_now()],__ATOMIC_ACQUIRE)) {
-        int slot=fs_slot(fd),host=fs_fd[slot]-1;
-        fs_close_pending();fs_close_keep=fs_sole[slot] && !fs_table->transfers;   /* no duplicate in flight */
-        fs_fd[slot]=0;fs_cloexec[slot]=0;fs_sole[slot]=0;fd_unbind(fd);
+        int slot=fs_slot(fd),host=FS(slot).fd-1;
+        fs_close_pending();fs_close_keep=FS(slot).sole && !fs_table->transfers;   /* no duplicate in flight */
+        FS(slot).fd=0;FS(slot).cloexec=0;FS(slot).sole=0;fd_unbind(fd);
         if(!fs_pack_drop((unsigned)slot))fs_close_later=host;                 /* the pack's placeholder stays open */
         cpu->gpr[0]=0;return 1;
     }

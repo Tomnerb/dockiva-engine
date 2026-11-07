@@ -29,7 +29,13 @@ int main(int argc,char **argv) {
     /* The host file-size cap follows the runtime's --file-limit-mib (16 MiB by default). */
     rlim_t file_size=16*1024*1024;
     for(int i=2;i+1<argc;i++)if(!strcmp(argv[i],"--file-limit-mib")) { long long mib=atoll(argv[i+1]);if(mib>0 && mib<=1048576)file_size=(rlim_t)mib<<20; }
-    limit(RLIMIT_CORE,0);limit(RLIMIT_FSIZE,file_size);limit(RLIMIT_NOFILE,4096); /* guest sockets and files of every process; at most NET_DESCRIPTIONS */
+    limit(RLIMIT_CORE,0);limit(RLIMIT_FSIZE,file_size);
+    /* Guest files and sockets of every process together: NET_DESCRIPTIONS (net.h), or
+       as many as macOS lets one process hold (kern.maxfilesperproc, lower on Macs with
+       less memory: setrlimit refuses more). */
+    rlim_t files=65536;
+    while(files>4096 && setrlimit(RLIMIT_NOFILE,&(struct rlimit){files,files}))files-=4096;
+    limit(RLIMIT_NOFILE,files);
     struct sigaction action={0};action.sa_handler=stop;sigemptyset(&action.sa_mask);
     if(sigaction(SIGTERM,&action,NULL))return 125;
     /* On a terminal (docker exec -t) ^C, ^\ and hangup are the runtime's: it gives them

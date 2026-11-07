@@ -20,7 +20,7 @@ int main(void) {
     assert(entries==3 && found==1);
     regs[1]=0;regs[2]=0;assert(fs_call(62)==0);
     regs[1]=0x1100;regs[2]=24;assert(fs_call(61)==24);
-    assert(fs_call(57)==0);assert(!fs_dirs[0]);assert(fs_call(61)==linux_error(9));
+    assert(fs_call(57)==0);assert(!FS(0).dir);assert(fs_call(61)==linux_error(9));
     strcpy((char *)memory,"/a");regs[0]=(uint64_t)-100;regs[1]=0x1000;regs[2]=0;regs[3]=0;
     assert(fs_call(79)==linux_error(14));regs[2]=0x1100;assert(fs_call(79)==0);assert(le(memory+256+48,8)==3);
     regs[3]=1;assert(fs_call(79)==linux_error(95));regs[3]=256;

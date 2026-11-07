@@ -15,7 +15,6 @@ typedef struct {
     uint32_t bitset;
     uint64_t clear_tid,futex_address,deadline_ns,epoch,wakeups;
     GuestCpuState regs;           /* while it is not running */
-    NetWait network;
     uint64_t signal_pending,signal_mask;
     unsigned fault_signal,fault_code;uint64_t fault_addr; /* a synchronous fault of this thread awaiting delivery */
     unsigned wait_masked;uint64_t wait_saved_mask;       /* ppoll/pselect6 with a mask: the thread's own, to restore */
@@ -23,6 +22,7 @@ typedef struct {
     size_t futex_offset;
     uint32_t *futex_count;        /* its waiter count while parked on a futex (hvf_el1.h) */
     uint64_t cpu_ns[2];           /* CPU time it used (user, system), for /proc/PID/task */
+    NetWait network;              /* last: its socket list is touched only as far as a wait uses it */
 } Thread;
 typedef struct { unsigned cursor,top;Thread thread[THREAD_LIMIT]; } ThreadTable; /* top: 1 + the highest slot ever used */
 /* Scheduled execution: one root plus at most PROCESS_LIMIT live children; reaped
@@ -403,10 +403,10 @@ static void task_save(ScheduledTask *t) {
     else image_save(&t->image);
     t->saved=1;
     if(proc_now!=&t->ps)t->ps=*proc_now;
-    if(io_table!=&t->io)t->io=*io_table;
-    if(net_table!=&t->net)t->net=*net_table;
-    if(net_wait_now!=&t->network_wait)t->network_wait=net_wait;
-    if(fs_table!=task_fs(t))*task_fs(t)=*fs_table;
+    if(io_table!=&t->io)io_table_copy(&t->io,io_table);
+    if(net_table!=&t->net)net_table_copy(&t->net,net_table);
+    if(net_wait_now!=&t->network_wait)net_wait_copy(&t->network_wait,&net_wait);
+    if(fs_table!=task_fs(t))fs_table_copy(task_fs(t),fs_table);
     if(fd_table!=task_fds(t))*task_fds(t)=*fd_table;
 }
 static void task_load(ScheduledTask *t) {
@@ -424,12 +424,12 @@ static void task_load(ScheduledTask *t) {
 static void seccomp_forget(uint64_t pid); /* seccomp.h */
 static void task_free(void) {
     seccomp_forget(process_pid);fs_cwd_release();image_free();io_cleanup();net_cleanup();fs_locks_release(0,0,process_pid);io_fifo_forget(process_pid);
-    for(unsigned i=0;i<FS_SLOTS;i++) {
-        fs_directory_release(fs_dirs[i]);
-        if(!fs_pack_drop(i) && fs_fd[i])close(fs_fd[i]-1);
+    unsigned files=fs_top;
+    for(unsigned i=0;i<files;i++) {
+        fs_directory_release(FS(i).dir);
+        if(!fs_pack_drop(i) && FS(i).fd)close(FS(i).fd-1);
     }
-    memset(fs_dirs,0,sizeof(fs_dirs));memset(fs_fd,0,sizeof(fs_fd));
-    memset(fs_cloexec,0,sizeof(fs_cloexec));
+    for(unsigned i=0;i<files;i++) { FS(i).dir=NULL;FS(i).fd=0;FS(i).cloexec=0; }
 }
 static void schedule_cleanup(void) {
     static ScheduledTask active;task_save(&active); /* static: the tables stay in use afterwards */
@@ -442,7 +442,7 @@ static void schedule_cleanup(void) {
 static void schedule_child(uint64_t pid) {
     ScheduledTask *t=&schedule_tasks[pid-1];
     /* A reused slot starts clean: task_save below writes its image (but segments past
-       nseg, never read) and tables whole, about 100 KiB not cleared first. */
+       nseg, never read) and its tables (below the larger of their tops, net.h). */
     memset(&t->vfork_child,0,sizeof(*t)-offsetof(ScheduledTask,vfork_child));
     memset(&proc_block->mm_cache[t-schedule_tasks],0,sizeof(HvfMmCache));
     __atomic_store_n(&proc_block->mm[t-schedule_tasks],0,__ATOMIC_RELEASE);t->futex_epoch=__atomic_add_fetch(&schedule_futex_epochs,1,__ATOMIC_RELAXED);
@@ -626,7 +626,8 @@ static int schedule_inplace_wait(ScheduledTask *t) {
     if(th && th->state!=1)return 0;                                          /* a futex wait */
     const NetWait *nw=&net_wait;
     if(!nw->active || !nw->targeted || nw->at_pc!=cpu->pc+4)return 0;
-    static _Thread_local struct pollfd fds[NET_FD_LIMIT+1];unsigned sockets=0;
+    if(nw->count>NET_DIRECT_FDS)return 0;                                    /* a large wait parks: the pump polls it */
+    static _Thread_local struct pollfd fds[NET_DIRECT_FDS+1];unsigned sockets=0;
     for(unsigned k=0;k<nw->count;k++)if(nw->fds[k].fd>=0) { fds[sockets]=nw->fds[k];fds[sockets++].revents=0; }
     uint64_t *wakeups=th?&th->wakeups:&t->wakeups,now=net_now(),deadline=nw->deadline;
     if(*wakeups!=schedule_wakeups_seen || deadline<=now || task_must_stop(t,th))return 0; /* an event meanwhile: it retries */
@@ -681,7 +682,7 @@ static int thread_runnable(const Thread *th) {
    deadline passes, or the poke pipe is written. Returns the number of tasks (and
    threads) in a network wait or a timed futex wait. Only one worker waits here at
    a time. Owners are task*(THREAD_LIMIT+1) plus 1+thread for a thread. */
-#define NETWORK_PUMP_FDS ((PROCESS_LIMIT+1)*NET_FD_LIMIT)
+#define NETWORK_PUMP_FDS (1u<<20) /* sockets polled at once (the rest wait for the next pump) */
 static int network_pump(int wait) {
     if(!net_scheduled)return 0;
     static struct pollfd now_fds[NETWORK_PUMP_FDS+1],wait_fds[NETWORK_PUMP_FDS+1];
@@ -833,7 +834,7 @@ static void schedule_idle_step(void) {
     }
     if(terminal_enabled && input) { terminal_pump(1);return; }
     /* Remove the current globals' non-owning alias before fatal cleanup. */
-    fs_cwd=NULL;image_clear();memset(net_fd,0,sizeof(net_fd));memset(&net_wait,0,sizeof(net_wait));memset(io_fds,0,sizeof(io_fds));memset(fs_fd,0,sizeof(fs_fd));memset(fs_dirs,0,sizeof(fs_dirs));
+    fs_cwd=NULL;image_clear();memset(net_fd,0,sizeof(net_fd));memset(&net_wait,0,sizeof(net_wait));memset(io_fds,0,sizeof(io_fds));memset(fs_table->slot,0,sizeof(fs_table->slot));
     fail("Guest process deadlock: no runnable task");
 }
 /* An empty task: a worker without a task loads it, so its globals never alias a
