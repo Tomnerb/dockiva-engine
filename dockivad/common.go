@@ -63,7 +63,7 @@ func stringsOf(v any) []string {
 		return []string{}
 	}
 	a := array(v)
-	reject(len(a) <= 64, "Too many strings")
+	reject(len(a) <= execEntries, "Too many strings")
 	out := []string{}
 	for _, v := range a {
 		s := str(v)
