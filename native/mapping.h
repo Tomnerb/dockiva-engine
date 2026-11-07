@@ -214,7 +214,7 @@ static uint64_t file_share_map(uint64_t fixed,uint64_t length,uint64_t prot,uint
         memset(&st,0,sizeof(st));st.st_dev=(dev_t)mdev;st.st_ino=(ino_t)mino;st.st_size=(off_t)msize;
     } else {
         fd=fs_host(guestfd);if(fd<0)return linux_error(9);
-        if((prot&2) && fs_ro[fs_slot(guestfd)])return linux_error(13);
+        if((prot&2) && FS(fs_slot(guestfd)).ro)return linux_error(13);
         if(fstat(fd,&st)<0)return fs_error();if(!S_ISREG(st.st_mode))return linux_error(19);
     }
     size_t end=(size_t)page_up(offset+length);
@@ -559,7 +559,7 @@ static uint64_t guest_dynamic_mmap_map(void) {
            through, so a private copy is equivalent, unless the file is or can be mapped
            shared and writable: then it must see those writes. JITs map a memfd twice,
            asmjit (Erlang's BEAM) the executable view first. */
-        file_share_find(cpu->gpr[4]) || (fs_host(cpu->gpr[4])>=0 && !fs_ro[fs_slot(cpu->gpr[4])]) || map_mem_writable(cpu->gpr[4]));
+        file_share_find(cpu->gpr[4]) || (fs_host(cpu->gpr[4])>=0 && !FS(fs_slot(cpu->gpr[4])).ro) || map_mem_writable(cpu->gpr[4]));
     if(shared && ((flags&32) || share_file) && fixed) {
         uint64_t e=outside?map_outside_clear(addr,bytes):map_in_arena(addr,bytes)?guest_munmap(addr,bytes):0;
         if(e)return e;

@@ -11,6 +11,6 @@ int main(int argc,char **argv) {
     assert(!schedule_live);
     for(unsigned i=0;i<=PROCESS_LIMIT;i++)assert(!schedule_tasks[i].saved && !schedule_tasks[i].state && !schedule_tasks[i].terminate_signal);
     for(unsigned i=0;i<PIPE_SLOTS;i++)assert(!io_pipes[i].data);
-    for(unsigned i=0;i<FS_SLOTS;i++)assert(!fs_fd[i] && !fs_dirs[i]);
+    for(unsigned i=0;i<FS_SLOTS;i++)assert(!FS(i).fd && !FS(i).dir);
     puts("PASS cancelled task released memory, descriptors and pipe references");return 0;
 }

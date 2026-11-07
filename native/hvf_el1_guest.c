@@ -186,7 +186,7 @@ static long el1_open(uint64_t *frame,const HvfEl1Context *c) {
     if(!el1_lock(frame,c,mm))return 0;
     uint64_t fs=c->b_fs+task*c->fs_size,fds=c->b_fds+task*c->fds_size;
     unsigned slot=0,fd=0;
-    while(slot<c->fs_slots && load32(at(c,fs+c->t_fd+4*slot)))slot++;
+    while(slot<c->fs_slots && load32(at(c,fs+c->t_fd+c->slot_size*slot)))slot++;
     while(fd<c->fd_limit && at(c,fds+c->d_kind+fd)[0])fd++;
     long done=0;
     if(slot<c->fs_slots && fd<c->fd_limit) {
@@ -198,10 +198,11 @@ static long el1_open(uint64_t *frame,const HvfEl1Context *c) {
             for(unsigned k=0;k<18;k++)o->st[k]=st[k];
             __atomic_store_n(&o->refs,1,__ATOMIC_RELEASE);
             int cloexec=(flags&524288)!=0;                              /* fs_install */
-            put32(at(c,fs+c->t_fd+4*slot),c->marker);at(c,fs+c->t_cloexec+slot)[0]=(unsigned char)cloexec;
-            at(c,fs+c->t_ro+slot)[0]=2;at(c,fs+c->t_dev+slot)[0]=0;at(c,fs+c->t_sole+slot)[0]=0;
-            put64(at(c,fs+c->t_dirs+8*slot),0);put16(at(c,fs+c->t_guest+2*slot),fd);
-            put64(at(c,fs+c->t_pack+8*slot),c->host_block+c->b_pack+(uint64_t)i*sizeof(HvfPackOpen));
+            put32(at(c,fs+c->t_fd+c->slot_size*slot),c->marker);at(c,fs+c->t_cloexec+c->slot_size*slot)[0]=(unsigned char)cloexec;
+            at(c,fs+c->t_ro+c->slot_size*slot)[0]=2;at(c,fs+c->t_dev+c->slot_size*slot)[0]=0;at(c,fs+c->t_sole+c->slot_size*slot)[0]=0;
+            put64(at(c,fs+c->t_dirs+c->slot_size*slot),0);put16(at(c,fs+c->t_guest+c->slot_size*slot),fd);
+            put64(at(c,fs+c->t_pack+c->slot_size*slot),c->host_block+c->b_pack+(uint64_t)i*sizeof(HvfPackOpen));
+            if(load32(at(c,fs+c->t_top))<=slot)put32(at(c,fs+c->t_top),slot+1);   /* the table's top (fs.h) */
             put16(at(c,fds+c->d_index+2*fd),slot);                       /* fd_bind */
             __atomic_store_n((unsigned char *)(void *)at(c,fds+c->d_kind+fd),(unsigned char)c->fd_file,__ATOMIC_RELEASE);
             __atomic_store_n((unsigned char *)(mirror+fd),(unsigned char)(c->mirror_file|(cloexec?c->mirror_cloexec:0)),__ATOMIC_RELEASE);
@@ -223,13 +224,13 @@ static long el1_close(uint64_t *frame,const HvfEl1Context *c) {
     long done=0;
     if(at(c,fds+c->d_kind+fd)[0]==c->fd_file) {
         unsigned slot=(unsigned)load16(at(c,fds+c->d_index+2*fd));
-        uint64_t pack=slot<c->fs_slots?load64(at(c,fs+c->t_pack+8*slot)):0;
-        if(pack && load32(at(c,fs+c->t_fd+4*slot))==c->marker && pack>=c->host_block+c->b_pack &&
+        uint64_t pack=slot<c->fs_slots?load64(at(c,fs+c->t_pack+c->slot_size*slot)):0;
+        if(pack && load32(at(c,fs+c->t_fd+c->slot_size*slot))==c->marker && pack>=c->host_block+c->b_pack &&
            pack<c->host_block+c->b_pack+(uint64_t)HVF_EL1_PACK_OPENS*sizeof(HvfPackOpen)) {
             HvfPackOpen *o=(HvfPackOpen *)(void *)at(c,pack-c->host_block);
             if(__atomic_load_n(&o->real,__ATOMIC_ACQUIRE)<0) {
-                put32(at(c,fs+c->t_fd+4*slot),0);at(c,fs+c->t_cloexec+slot)[0]=0;at(c,fs+c->t_sole+slot)[0]=0;
-                put64(at(c,fs+c->t_pack+8*slot),0);
+                put32(at(c,fs+c->t_fd+c->slot_size*slot),0);at(c,fs+c->t_cloexec+c->slot_size*slot)[0]=0;at(c,fs+c->t_sole+c->slot_size*slot)[0]=0;
+                put64(at(c,fs+c->t_pack+c->slot_size*slot),0);
                 put16(at(c,fds+c->d_index+2*fd),0);                      /* fd_unbind */
                 __atomic_store_n((unsigned char *)(void *)at(c,fds+c->d_kind+fd),0,__ATOMIC_RELEASE);
                 __atomic_store_n((unsigned char *)(mirror+fd),0,__ATOMIC_RELEASE);

@@ -36,14 +36,14 @@
    read, in the upper half of the address space (TTBR1, EL1-only, the same for every
    process): the context page, each vCPU's stack, then the lookup cache's counters
    (at 2 MiB) and entries (at 4 MiB), the process block (32 MiB) and the pack's index
-   (128 MiB), shared with the runtime. */
+   (192 MiB), shared with the runtime. */
 #include "hvf_el1.h"
 #include "hvf_el1_code.h"
 #define HVF_EL1_VA UINT64_C(0xffff000000000000)
 #define HVF_EL1_IPA (HVF_IPA_BASE+HVF_TABLE_BYTES+HVF_SYSTEM_BYTES+HVF_FDS_BYTES)
-#define HVF_EL1_BYTES (UINT64_C(256)<<20)
+#define HVF_EL1_BYTES (UINT64_C(320)<<20)
 #define HVF_EL1_BLOCK (UINT64_C(32)<<20)             /* proc_block (fs.h) */
-#define HVF_EL1_PACK (UINT64_C(128)<<20)             /* the pack's index (pack.h) */
+#define HVF_EL1_PACK (UINT64_C(192)<<20)             /* the pack's index (pack.h) */
 #define HVF_EL1_HEAD (2u<<20)                       /* context page, stacks, then (at 1 MiB) the upper half's tables */
 _Static_assert(HVF_EL1_BLOCK+((sizeof(ProcBlock)+16383)&~(uint64_t)16383)<=HVF_EL1_PACK,"the process block outgrew its room in the EL1 region");
 #define HVF_EL1_STACK 8192u
@@ -1218,10 +1218,11 @@ static void hvf_el1_setup(void) {
     c->b_fs=offsetof(ProcBlock,fs);c->b_fds=offsetof(ProcBlock,fds);c->b_pack=offsetof(ProcBlock,pack);c->b_mmc=offsetof(ProcBlock,mm_cache);c->b_futex=offsetof(ProcBlock,futex_waiters);c->b_spin=offsetof(ProcBlock,spinners);c->b_epoch=offsetof(ProcBlock,futex_epoch);
     c->b_sig=offsetof(ProcBlock,sig);c->sig_size=sizeof(HvfSignals);c->sig_ok=(job_control_enabled?1u:0u)|(vdso_backing?2u:0u);
     c->fs_size=sizeof(FsTable);c->fds_size=sizeof(FdTable);
-    c->t_fd=offsetof(FsTable,fd);c->t_cloexec=offsetof(FsTable,cloexec);c->t_ro=offsetof(FsTable,ro);c->t_dev=offsetof(FsTable,dev);c->t_sole=offsetof(FsTable,sole);
-    c->t_dirs=offsetof(FsTable,dirs);c->t_guest=offsetof(FsTable,guest);c->t_pack=offsetof(FsTable,pack);c->d_kind=offsetof(FdTable,kind);c->d_index=offsetof(FdTable,index);
+#define FS_FIELD(f) (uint32_t)(offsetof(FsTable,slot)+offsetof(FsSlot,f))
+    c->t_fd=FS_FIELD(fd);c->t_cloexec=FS_FIELD(cloexec);c->t_ro=FS_FIELD(ro);c->t_dev=FS_FIELD(dev);c->t_sole=FS_FIELD(sole);
+    c->t_dirs=FS_FIELD(dir);c->t_guest=FS_FIELD(guest);c->t_pack=FS_FIELD(pack);c->t_top=offsetof(FsTable,top);c->slot_size=sizeof(FsSlot);c->d_kind=offsetof(FdTable,kind);c->d_index=offsetof(FdTable,index);
     c->fd_file=FD_FILE;c->mirror_file=FD_MIRROR_FILE;c->mirror_cloexec=FD_MIRROR_CLOEXEC;c->fs_slots=FS_SLOTS;c->fd_limit=GUEST_FD_LIMIT;c->file_limit=fs_file_limit;
-    _Static_assert(sizeof(((FsTable *)0)->fd[0])==4 && sizeof(((FsTable *)0)->guest[0])==2 && sizeof(((FdTable *)0)->index[0])==2 && sizeof(((ProcBlock *)0)->locks_held[0])==2,"table fields hvf_el1_guest.c writes");
+    _Static_assert(sizeof(((FsSlot *)0)->fd)==4 && sizeof(((FsTable *)0)->top)==4 && sizeof(((FsSlot *)0)->guest)==2 && sizeof(((FsSlot *)0)->dir)==8 && sizeof(((FsSlot *)0)->pack)==8 && sizeof(((FdTable *)0)->index[0])==2 && sizeof(((ProcBlock *)0)->locks_held[0])==2,"table fields hvf_el1_guest.c writes");
     __atomic_store_n(&c->block,HVF_EL1_VA+HVF_EL1_BLOCK,__ATOMIC_RELEASE);
     /* Image files in the pack: opens and closes (its index). */
     if(!pack_base)return;
@@ -1449,10 +1450,10 @@ static void hvf_share_image(void) {
 static ThreadTable *hvf_threads_ensure(void) {
     ScheduledTask *t=hvf_task();
     if(!t->threads) {
-        ThreadTable *p=calloc(1,sizeof(*p));if(!p)return NULL;
+        ThreadTable *p=resource_metadata(sizeof(*p));if(!p)return NULL;   /* room for THREAD_LIMIT threads: pages as they are used */
         Thread *th=&p->thread[0];
         th->state=1;th->tid=(unsigned)process_pid;th->clear_tid=hvf_main_clear_tid[process_pid];
-        th->signal_mask=t->signal_mask;th->network=net_wait;th->worker=t->worker;th->wakeups=t->wakeups;
+        th->signal_mask=t->signal_mask;net_wait_copy(&th->network,&net_wait);th->worker=t->worker;th->wakeups=t->wakeups;
         p->top=1;t->worker=0;t->running=1;t->threads=p;thread_now=0;net_wait_now=&th->network;
         hvf_share_image();
     }
@@ -1587,7 +1588,7 @@ static uint64_t hvf_thread_clone(void) {
     unsigned i=0;while(i<THREAD_LIMIT && (p->thread[i].state || p->thread[i].worker))i++; /* a killed thread may still be leaving a worker */
     if(i==THREAD_LIMIT || hvf_next_tid>1048575)return linux_error(11);
     if(i>=p->top)p->top=i+1;
-    Thread *t=&p->thread[i];uint64_t mask=*signal_mask_now();memset(t,0,sizeof(*t));
+    Thread *t=&p->thread[i];uint64_t mask=*signal_mask_now();memset(t,0,offsetof(Thread,network)+offsetof(NetWait,fds));
     t->regs=*cpu;t->regs.gpr[0]=0;t->regs.sp=cpu->gpr[1];if(flags&0x80000)t->regs.tls=cpu->gpr[3];
     t->regs.altstack_sp=t->regs.altstack_size=0; /* a new thread has no alternate signal stack */
     t->signal_mask=mask;t->epoch=io_epoch;    /* and inherits the creator's mask */
@@ -1969,7 +1970,7 @@ static int hvf_direct_wait(ScheduledTask *task) {
     unsigned budget=net_unlocked_wait.timeout<HVF_DIRECT_WAIT_MS?net_unlocked_wait.timeout:HVF_DIRECT_WAIT_MS;
     /* As an in-place waiter: a signal, the process's end or a thread that needs this
        worker end the wait at once; so does an event of the thread (it retries). */
-    static _Thread_local struct pollfd fds[NET_FD_LIMIT+1];
+    static _Thread_local struct pollfd fds[NET_DIRECT_FDS+1];                       /* net_suspend gives at most NET_DIRECT_FDS */
     memcpy(fds,net_unlocked_wait.fds,count*sizeof(*fds));
     int woken=schedule_inplace_block(task,task_thread(task),fds,count,(uint64_t)budget*1000000,0)==2;
     mm_lock(task);

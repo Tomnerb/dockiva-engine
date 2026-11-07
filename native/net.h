@@ -13,6 +13,18 @@
 #include <poll.h>
 #include <time.h>
 #include <sys/select.h>
+/* A worker thread's scratch array, grown on demand and kept (contents too) for its
+   later calls: dyld commits a thread's whole static TLS block when the thread starts,
+   so an array sized for the largest call (4096 descriptors) would cost every worker
+   that much memory. */
+typedef struct { void *data;size_t bytes; } Scratch;
+static void *scratch_room(Scratch *s,size_t bytes) {
+    if(bytes<=s->bytes)return s->data;
+    size_t size=s->bytes?s->bytes*2:4096;while(size<bytes)size*=2;
+    void *grown=malloc(size);if(!grown)return NULL;
+    if(s->bytes)memcpy(grown,s->data,s->bytes);
+    free(s->data);s->data=grown;s->bytes=size;return grown;
+}
 /* poll(fds, n, 0). Darwin's poll costs about 10 us when nothing is ready (select:
    0.2 us), and readiness checks mostly find nothing: select first, and poll only
    when something is ready, for its exact revents. A descriptor with no events (poll
@@ -73,16 +85,32 @@ static unsigned char *fd_mirror_base;static uint32_t *fd_mirror_append;
 static void fd_mirror(uint64_t fd);
 static void fd_bind(uint64_t fd,unsigned kind,unsigned index) { fd_kind[fd]=(unsigned char)kind;fd_index[fd]=(unsigned short)index;fd_mirror(fd); }
 static void fd_unbind(uint64_t fd) { if(fd<GUEST_FD_LIMIT) { fd_kind[fd]=0;fd_index[fd]=0;fd_mirror(fd); } }
-#define NET_FD_LIMIT 1024u /* sockets one wait can cover */
-#define NET_SLOTS 1024u
+/* The layers' tables (sockets here, files in fs.h, pipe-like slots in io.h) have room
+   for every descriptor a process may hold, and a top: no slot at or above it was ever
+   used, and every one there is zero. Copies (fork) and scans (exec, exit) stop at top,
+   so a process costs time and host memory for the slots it used, not the room. A claim
+   takes the lowest free slot and raises top past it. */
+#define TABLE_COPY(to,from,field,top,old) do { memcpy((to)->field,(from)->field,(top)*sizeof((to)->field[0])); \
+    memset((to)->field+(top),0,((old)-(top))*sizeof((to)->field[0])); } while(0)  /* old: the larger top */
+#define NET_FD_LIMIT GUEST_FD_LIMIT /* sockets one wait can cover */
+#define NET_SLOTS GUEST_FD_LIMIT
 /* fd: zero means unused, else host descriptor + 1; flags: descriptor-local CLOEXEC
    only; guest: slot -> guest descriptor. */
-typedef struct { int fd[NET_SLOTS];unsigned flags[NET_SLOTS];unsigned short guest[NET_SLOTS]; } NetTable;
+typedef struct { unsigned top;int fd[NET_SLOTS];unsigned flags[NET_SLOTS];unsigned short guest[NET_SLOTS]; } NetTable;
 static NetTable net_table_first;
 static _Thread_local NetTable *net_table=&net_table_first;
 #define net_fd (net_table->fd)
 #define net_flags (net_table->flags)
 #define net_guest (net_table->guest)
+#define net_top (net_table->top)
+static int net_claim(void) {
+    for(unsigned i=0;i<NET_SLOTS;i++)if(!net_fd[i]) { if(i>=net_top)net_top=i+1;return (int)i; }
+    return -1;
+}
+static void net_table_copy(NetTable *to,const NetTable *from) {
+    unsigned top=from->top,old=to->top>top?to->top:top;
+    TABLE_COPY(to,from,fd,top,old);TABLE_COPY(to,from,flags,top,old);TABLE_COPY(to,from,guest,top,old);to->top=top;
+}
 static int net_slot(uint64_t guest) { return fd_slot(guest,FD_NET); }
 #define NET_BACKLOG_LIMIT 128u
 /* Published ports (--publish GUEST:HOST). A guest bind or connect on GUEST uses
@@ -168,7 +196,10 @@ static int io_managed(uint64_t fd);static int fs_host(uint64_t n); /* io.h and f
    any of the process's pipes. */
 #define NET_WAIT_PIPES 8
 struct GuestPipe;
-typedef struct { struct pollfd fds[NET_FD_LIMIT];unsigned count,active,targeted;uint64_t deadline,at_pc;const struct GuestPipe *pipes[NET_WAIT_PIPES];unsigned pipe_count; } NetWait;
+/* fds last: only the count it names are ever read, copied or cleared. */
+typedef struct { unsigned count,active,targeted;uint64_t deadline,at_pc;const struct GuestPipe *pipes[NET_WAIT_PIPES];unsigned pipe_count;struct pollfd fds[NET_FD_LIMIT]; } NetWait;
+static void net_wait_copy(NetWait *to,const NetWait *from) { memcpy(to,from,offsetof(NetWait,fds)+from->count*sizeof(from->fds[0])); }
+static void net_wait_clear(NetWait *w) { memset(w,0,offsetof(NetWait,fds)); }
 static NetWait net_wait_first;
 static _Thread_local NetWait *net_wait_now=&net_wait_first;
 #define net_wait (*net_wait_now)
@@ -180,11 +211,14 @@ static uint64_t net_now(void) {
    or passes a poll timeout, as on Linux. */
 #define NET_FOREVER UINT32_MAX
 /* The sockets an unlocked call would have waited on (it aborted instead): the CPU
-   backend may wait for them itself, without any lock, before taking the slow path. */
-static _Thread_local struct { unsigned count,timeout;struct pollfd fds[NET_FD_LIMIT]; } net_unlocked_wait;
+   backend may wait for them itself, without any lock, before taking the slow path.
+   Waits on more than NET_DIRECT_FDS sockets take the slow path at once (they park,
+   and the scheduler's pump polls them). */
+#define NET_DIRECT_FDS 1024u
+static _Thread_local struct { unsigned count,timeout;struct pollfd fds[NET_DIRECT_FDS]; } net_unlocked_wait;
 static uint64_t net_suspend(const struct pollfd *fds,unsigned count,unsigned timeout) {
     if(syscall_unlocked) {                                       /* blocking needs the scheduler */
-        if(count>NET_FD_LIMIT)count=NET_FD_LIMIT;
+        if(count>NET_DIRECT_FDS)count=0;
         memcpy(net_unlocked_wait.fds,fds,count*sizeof(*fds));net_unlocked_wait.count=count;net_unlocked_wait.timeout=timeout;
         syscall_abort=1;return IO_BLOCK;
     }
@@ -230,8 +264,9 @@ static uint64_t net_error(void) {
 /* Shared open descriptions survive fork and close only on the last guest FD.
    Keep status flags/timeouts shared; descriptor CLOEXEC stays process-local. */
 /* Indexed by host descriptor (one description per host socket); the worker caps
-   host descriptors below NET_DESCRIPTIONS. */
-#define NET_DESCRIPTIONS 4096u
+   host descriptors below NET_DESCRIPTIONS (worker_launcher.c). Scans of them all stop
+   at net_descriptions_top, one past the highest host descriptor ever described. */
+#define NET_DESCRIPTIONS 65536u
 /* reads/writes count guest read-side (read, readv, accept) and write-side calls;
    edge-triggered epoll treats a change as new activity. */
 /* unix: AF_UNIX; named: 2 bound, 4 connected, to the guest path in path. v6: AF_INET6;
@@ -241,6 +276,7 @@ static struct NetDescription { int host;unsigned refs,flags,connecting,read_time
     unsigned abstract;ino_t abstract_ino;  /* abstract: an abstract name's length (in path), and its host socket */
     unsigned ping;uint16_t ping_id;        /* ping: 1 an ICMP ping socket and its identifier (network order), 2 a raw ICMP socket */
     unsigned wildcard; } net_descriptions[NET_DESCRIPTIONS]; /* bound to 0.0.0.0 or [::] (the host socket has loopback) */
+static unsigned net_descriptions_top;
 static struct NetDescription *net_host_description(int host) {
     return host>=0 && (unsigned)host<NET_DESCRIPTIONS && net_descriptions[host].refs?&net_descriptions[host]:NULL;
 }
@@ -264,11 +300,11 @@ static int net_release(unsigned slot) {
     fd_unbind(net_guest[slot]);net_fd[slot]=0;net_flags[slot]=0;return result;
 }
 static void net_retain_all(void) {
-    for(unsigned i=0;i<NET_SLOTS;i++)if(net_fd[i])net_description(i)->refs++;
+    for(unsigned i=0;i<net_top;i++)if(net_fd[i])net_description(i)->refs++;
 }
 static void net_cleanup(void) {
-    for(unsigned i=0;i<NET_SLOTS;i++)if(net_fd[i])net_release(i);
-    memset(&net_wait,0,sizeof(net_wait));
+    for(unsigned i=0;i<net_top;i++)if(net_fd[i])net_release(i);
+    net_wait_clear(&net_wait);
 }
 static int net_host(uint64_t guest) { int slot=net_slot(guest);return slot>=0 && net_fd[slot]?net_fd[slot]-1:-1; }
 static uint64_t net_adopt(int host,unsigned guest_flags) {
@@ -280,10 +316,11 @@ static uint64_t net_adopt(int host,unsigned guest_flags) {
         uint64_t error=net_error();close(host);return error;
     }
     if((unsigned)host>=NET_DESCRIPTIONS || net_descriptions[host].refs) { close(host);return linux_error(24); }
-    int guest=fd_lowest(0);
-    if(guest>=0)for(unsigned i=0;i<NET_SLOTS;i++) if(!net_fd[i]) {
+    int guest=fd_lowest(0),i=guest>=0?net_claim():-1;
+    if(i>=0) {
+        if((unsigned)host>=net_descriptions_top)net_descriptions_top=(unsigned)host+1;
         net_descriptions[host]=(struct NetDescription){host,1,guest_flags&2048,0,NET_FOREVER,NET_FOREVER,0,0,(guest_flags&NET_UDP)!=0,(guest_flags&NET_UNIX)!=0,0,{0},0,(guest_flags&NET_V6)!=0,0,0,0,{0},0,0,(guest_flags&NET_PING)?(guest_flags&NET_RAW_ICMP)?2u:1u:0u,0,0};
-        net_fd[i]=host+1;net_flags[i]=guest_flags&524288;net_guest[i]=(unsigned short)guest;fd_bind((uint64_t)guest,FD_NET,i);return (uint64_t)guest; }
+        net_fd[i]=host+1;net_flags[i]=guest_flags&524288;net_guest[i]=(unsigned short)guest;fd_bind((uint64_t)guest,FD_NET,(unsigned)i);return (uint64_t)guest; }
     close(host);return linux_error(24);
 }
 static int net_raw_allowed(void); /* compat.h: CAP_NET_RAW */
@@ -672,7 +709,7 @@ static int net_connect_v6only(unsigned slot,int fd,uint64_t *result) {
     const unsigned char *q=lookup(cpu->gpr[1],24,4);unsigned char v4[4];
     if(!q || le(q,2)!=10 || !net_v6_to_v4(q+8,v4) || q[19]==255)return 0;          /* [::1] or [::], not v4-mapped */
     struct sockaddr_in6 to;socklen_t size=sizeof(to);int found=0;
-    for(unsigned i=0;i<NET_DESCRIPTIONS && !found;i++) {
+    for(unsigned i=0;i<net_descriptions_top && !found;i++) {
         const struct NetDescription *o=&net_descriptions[i];
         found=o->refs && o->v6_bound && !o->udp && !memcmp(&o->v6_port,q+2,2) && !getsockname(o->host,(struct sockaddr *)&to,&size);
     }
@@ -987,7 +1024,7 @@ static uint64_t net_call(uint64_t number) {
     return linux_error(38);
 }
 
-/* ppoll over sockets, pipes, stdio and files; no signal mask, at most 1024 entries.
+/* ppoll over sockets, pipes, stdio and files; no signal mask, at most NET_FD_LIMIT entries.
    Sockets wait on the host; pipe changes wake the task through io_epoch. */
 static uint64_t net_poll_wait(void) {
     if(cpu->gpr[1]>NET_FD_LIMIT)return linux_error(22);
@@ -1001,7 +1038,9 @@ static uint64_t net_poll_wait(void) {
         uint64_t ms=sec>UINT32_MAX/1000?NET_FOREVER:sec*1000+(ns+999999)/1000000;
         timeout=ms>=NET_FOREVER?NET_FOREVER:(unsigned)ms;
     }
-    static _Thread_local struct pollfd fds[NET_FD_LIMIT];static _Thread_local int other[NET_FD_LIMIT];unsigned ready_other=0,hosts=0; /* per worker: also served unlocked */
+    static _Thread_local Scratch fds_room,other_room;unsigned ready_other=0,hosts=0;   /* per worker: also served unlocked */
+    struct pollfd *fds=scratch_room(&fds_room,count*sizeof(struct pollfd));int *other=scratch_room(&other_room,count*sizeof(int));
+    if(count && (!fds || !other))return linux_error(12);
     for(unsigned i=0;i<count;i++) {
         int32_t guest=(int32_t)le(in+i*8,4);unsigned events=(unsigned)le(in+i*8+4,2);
         fds[i].fd=guest<0?-1:net_host((uint64_t)guest);

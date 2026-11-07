@@ -62,7 +62,7 @@ typedef struct {
        (descriptor slots hold its pointers to pool entries), and its layout. */
     uint64_t block,host_block,pack_entries,pack_strings,pack_count,file_limit;
     uint32_t b_mm,b_locks,b_hint,b_fs,b_fds,b_pack,fs_size,fds_size;
-    uint32_t t_fd,t_cloexec,t_ro,t_dev,t_sole,t_dirs,t_guest,t_pack,d_kind,d_index;
+    uint32_t t_fd,t_cloexec,t_ro,t_dev,t_sole,t_dirs,t_guest,t_pack,t_top,slot_size,d_kind,d_index;   /* a slot's field: t_*+slot_size*slot */
     uint32_t marker,fd_file,mirror_file,mirror_cloexec,fs_slots,fd_limit;
     uint32_t b_mmc;                                   /* the block's HvfMmCache array, by mm lock index */
     uint32_t b_futex;                                 /* the block's futex counts: HVF_EL1_FUTEX_SLOTS, then the shared one */

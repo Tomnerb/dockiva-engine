@@ -15,7 +15,7 @@ int main(int argc,char **argv) {
     regs[1]=UINT64_MAX-3;assert(process_exec()==linux_error(14));
     regs[0]=17;regs[1]=1;regs[2]=regs[3]=regs[4]=0;assert(process_clone()==linux_error(95));
     /* An injected directory fd lacks fs_open shared-cursor ownership metadata. */
-    regs[1]=0;fs_fd[0]=dup(fs_root)+1;assert(fs_fd[0]>0);assert(process_clone()==linux_error(95));close(fs_fd[0]-1);fs_fd[0]=0;
+    regs[1]=0;FS(0).fd=dup(fs_root)+1;assert(FS(0).fd>0);assert(process_clone()==linux_error(95));close(FS(0).fd-1);FS(0).fd=0;
     process_count=PROCESS_LIMIT;assert(process_clone()==linux_error(11));process_count=0;
     regs[0]=(uint64_t)-1;assert(process_wait()==linux_error(10));
     regs[0]=0;assert(process_wait()==linux_error(95));

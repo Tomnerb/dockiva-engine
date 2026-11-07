@@ -9,8 +9,8 @@
    edge-triggered socket left holding unread data is rechecked every 10 ms, so
    epoll_wait can return 0 early in that case. */
 #include <sys/ioctl.h>
-#define EPOLL_SLOTS 256 /* epoll instances in the container (each PostgreSQL process has one) */
-#define EPOLL_WATCHES 1024
+#define EPOLL_SLOTS 4096 /* epoll instances in the container (each PostgreSQL process has one) */
+#define EPOLL_WATCHES GUEST_FD_LIMIT /* descriptors one instance watches: all a process may hold */
 #define EPOLL_RDHUP 0x2000u
 #define EPOLL_EXCLUSIVE (1u<<28)
 #define EPOLL_WAKEUP (1u<<29)
@@ -24,8 +24,9 @@ typedef struct {
 /* high: no watch at or above this index is active (waits scan only below it).
    watch grows by doubling from 16 entries up to EPOLL_WATCHES. */
 static struct GuestEpoll { unsigned refs,cursor,high,capacity;EpollWatch *watch; } epolls[EPOLL_SLOTS];
+static unsigned epoll_top; /* one past the highest instance ever used: scans stop there */
 static int epoll_live(void) {
-    for(unsigned i=0;i<EPOLL_SLOTS;i++)if(epolls[i].refs)return 1;
+    for(unsigned i=0;i<epoll_top;i++)if(epolls[i].refs)return 1;
     return 0;
 }
 static void epoll_ref(int slot,int change) {
@@ -33,13 +34,13 @@ static void epoll_ref(int slot,int change) {
     if(change>0)e->refs++;else if(!--e->refs) { free(e->watch);memset(e,0,sizeof(*e)); }
 }
 static void epoll_forget_socket(int host) {
-    for(unsigned i=0;i<EPOLL_SLOTS;i++)for(unsigned j=0;j<epolls[i].high;j++) {
+    for(unsigned i=0;i<epoll_top;i++)for(unsigned j=0;j<epolls[i].high;j++) {
         EpollWatch *w=&epolls[i].watch[j];
         if(w->active && !w->kind && w->host==host)w->active=0;
     }
 }
 static void epoll_forget_pipe(void *pipe,unsigned kind) {
-    for(unsigned i=0;i<EPOLL_SLOTS;i++)for(unsigned j=0;j<epolls[i].high;j++) {
+    for(unsigned i=0;i<epoll_top;i++)for(unsigned j=0;j<epolls[i].high;j++) {
         EpollWatch *w=&epolls[i].watch[j];
         if(w->active && w->kind==kind && w->pipe==pipe)w->active=0;
     }
@@ -50,7 +51,8 @@ static int epoll_fd_valid(uint64_t fd) {
 /* An unlocked epoll_wait that found nothing leaves its socket wait here; the locked
    retry of that same call reuses it instead of polling every socket again. */
 static _Thread_local struct { int valid;uint64_t pc,fd;unsigned count,limit; } epoll_prepared;
-static _Thread_local struct pollfd epoll_wait_fds[EPOLL_WATCHES];
+static _Thread_local Scratch epoll_wait_room;                  /* the wait's sockets, epoll_wait_fds (net.h's Scratch) */
+#define epoll_wait_fds ((struct pollfd *)epoll_wait_room.data)
 /* Block on the sockets in epoll_wait_fds; pipes record the task as a waiter. */
 static uint64_t epoll_suspend(struct GuestEpoll *e,unsigned high,unsigned count,unsigned limit) {
     /* A pipe's writer wakes the waiters io_wait_on recorded, which needs the lock: the
@@ -74,6 +76,7 @@ static uint64_t guest_epoll(uint64_t call) {
         unsigned flags=(unsigned)cpu->gpr[0];if(flags&~524288u)return linux_error(22);
         unsigned i=0;while(i<EPOLL_SLOTS && epolls[i].refs)i++;
         if(i==EPOLL_SLOTS)return linux_error(24);
+        if(i>=epoll_top)epoll_top=i+1;
         int fd=io_free_slot(0);if(fd<0)return linux_error(24);
         EpollWatch *watch=calloc(16,sizeof(EpollWatch));if(!watch) { fd_unbind((uint64_t)fd);return linux_error(12); }
         epolls[i]=(struct GuestEpoll){1,0,0,16,watch};IO(fd)=(GuestIO){IO_EPOLL,!!flags,(int)i,NULL,NULL,NULL,NULL,NULL,NULL};fd_mirror((uint64_t)fd);return (uint64_t)fd;
@@ -128,10 +131,14 @@ static uint64_t guest_epoll(uint64_t call) {
     if(cpu->gpr[4])return linux_error(95); /* Atomic signal-mask changes need guest signal support. */
     unsigned capacity=(unsigned)maxevents;if(capacity>EPOLL_WATCHES)capacity=EPOLL_WATCHES;
     int scheduled=schedule_active;
-    static _Thread_local struct pollfd polls[EPOLL_WATCHES];
-    static _Thread_local unsigned level[EPOLL_WATCHES],deliver[EPOLL_WATCHES],reads[EPOLL_WATCHES],writes[EPOLL_WATCHES];static _Thread_local size_t avail[EPOLL_WATCHES];
     while(e->high && !e->watch[e->high-1].active)e->high--;
     unsigned high=e->high;
+    static _Thread_local Scratch room[6];                     /* per worker: polls, level, deliver, reads, writes, avail */
+    struct pollfd *polls=scratch_room(&room[0],high*sizeof(struct pollfd));
+    unsigned *level=scratch_room(&room[1],high*sizeof(unsigned)),*deliver=scratch_room(&room[2],high*sizeof(unsigned));
+    unsigned *reads=scratch_room(&room[3],high*sizeof(unsigned)),*writes=scratch_room(&room[4],high*sizeof(unsigned));
+    size_t *avail=scratch_room(&room[5],high*sizeof(size_t));
+    if(high && (!polls || !level || !deliver || !reads || !writes || !avail || !scratch_room(&epoll_wait_room,high*sizeof(struct pollfd))))return linux_error(12);
     if(epoll_prepared.valid && !syscall_unlocked && epoll_prepared.pc==cpu->pc && epoll_prepared.fd==fd) {
         /* Sockets were just polled without the lock; recheck what the lock guards
            (pipes, pending signals) and, if nothing is ready, block on that wait. */
