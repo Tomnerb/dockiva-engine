@@ -105,7 +105,9 @@ static int backing_inherits(const MemoryBacking *b,size_t page) {
     return b->base && page<b->inherit_pages && (b->inherit[page>>6]>>(page&63)&1);
 }
 /* Copy the host pages of [first, last] an overlay still reads from its base, owning (and
-   charging) them: how many, or -1 when out of memory (nothing changed). */
+   charging) them: how many, or -1 when out of memory (nothing changed). The running
+   process's tables still name the base there: backing_moved_hook maps them again, for
+   every caller (a write, and a fork of the overlay's process copying all of it first). */
 static long backing_materialize(MemoryBacking *b,size_t first,size_t last) {
     if(!b->base || first>=b->inherit_pages)return 0;
     if(last>=b->inherit_pages)last=b->inherit_pages-1;
@@ -120,6 +122,7 @@ static long backing_materialize(MemoryBacking *b,size_t first,size_t last) {
         backing_set(b,i,&group->pages[next++]);if(i+1>b->used)b->used=i+1;
     }
     PROFILE_ADD(profile_overlay_copies,count);
+    if(backing_moved_hook)backing_moved_hook(b,first*ps,(last-first+1)*ps);
     return (long)count;
 }
 /* Its references are gone: 1 if overlays still read it (the last of them frees it). */
@@ -394,7 +397,7 @@ static int backing_prepare(MemoryBacking *backing,size_t offset,size_t size,int 
     size_t first=offset/backing->page_size,last=(offset+size-1)/backing->page_size,count=0;
     if(backing->base) {                                 /* an overlay's own copy; the running process's tables follow */
         long copied=backing_materialize(backing,first,last);if(copied<0)return 0;
-        if(copied) { *changed=1;if(backing_moved_hook)backing_moved_hook(backing,first*backing->page_size,(last-first+1)*backing->page_size); }
+        if(copied)*changed=1;
     }
     for(size_t i=first;i<=last;i++)count+=!backing->pages[i] || backing->pages[i]->refs>1; /* unowned or shared */
     if(!count)return 1;
