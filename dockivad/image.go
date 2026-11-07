@@ -616,7 +616,7 @@ func (b *engine) commitTag(name, digest, layout string) string {
 		retainLowers(b.Home, b.State, target)
 		gone := filepath.Join(b.Cache, ".replaced-"+token()[:16])
 		check(os.Rename(target, gone))
-		go os.RemoveAll(gone)
+		go removeTree(gone)
 	}
 	return commitImage(b.Cache, name, layout)
 }

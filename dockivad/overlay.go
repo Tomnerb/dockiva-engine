@@ -401,7 +401,7 @@ func releaseLower(home, state, lower string) {
 	}
 	gone := filepath.Join(home, "lowers", ".removing-"+token()[:16])
 	if os.Rename(lower, gone) == nil {
-		go os.RemoveAll(gone)
+		go removeTree(gone)
 	}
 }
 
