@@ -105,6 +105,9 @@ func containerCommand(p string, c obj, dir string, env, argv []string) (command 
 // lookPath finds a command in the container's PATH, as docker exec does.
 // A path with a slash is used as is, relative to the working directory dir.
 func lookPath(root layers, env []string, dir, name string) string {
+	if path.IsAbs(name) {
+		return path.Clean(name)
+	}
 	if strings.Contains(name, "/") {
 		return path.Join(dir, name)
 	}

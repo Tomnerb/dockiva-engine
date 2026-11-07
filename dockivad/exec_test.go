@@ -21,6 +21,9 @@ func TestExecHelpers(t *testing.T) {
 	if p := lookPath(layers{upper: root}, nil, "/", "/custom/tool"); p != "/custom/tool" {
 		t.Fatalf("absolute: %s", p)
 	}
+	if p := lookPath(layers{upper: root}, nil, "/home/runner", "/usr/bin/ls"); p != "/usr/bin/ls" { // not joined to the working directory
+		t.Fatalf("absolute with a working directory: %q", p)
+	}
 	mustReject(t, func() { lookPath(layers{upper: root}, nil, "/", "data") }) // not executable
 	mustReject(t, func() { lookPath(layers{upper: root}, nil, "/", "missing") })
 	if p := lookPath(layers{upper: root}, nil, "/home/runner", "./bin/tool"); p != "/home/runner/bin/tool" { // relative to the working directory
