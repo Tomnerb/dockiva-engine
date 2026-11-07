@@ -588,7 +588,7 @@ func (b *engine) remove(name string) {
 	gone := filepath.Join(b.State, ".removing-"+token()[:16])
 	check(os.Rename(p, gone))
 	notifyChanged()
-	go func() { _ = os.RemoveAll(gone) }()
+	go func() { _ = removeTree(gone) }()
 	releaseLower(b.Home, b.State, text(c["lower"])) // an image removed meanwhile: its files go now
 	b.refreshHosts(network)
 }

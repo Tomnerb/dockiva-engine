@@ -6,8 +6,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -63,7 +65,7 @@ func stringsOf(v any) []string {
 		return []string{}
 	}
 	a := array(v)
-	reject(len(a) <= 64, "Too many strings")
+	reject(len(a) <= execEntries, "Too many strings")
 	out := []string{}
 	for _, v := range a {
 		s := str(v)
@@ -152,6 +154,22 @@ func timestamp(v any) string {
 		reject(false, "Invalid timestamp")
 	}
 	return time.Unix(0, int64(n*1e9)).UTC().Format(time.RFC3339Nano)
+}
+
+// removeTree removes a tree of guest files. A guest may leave directories without
+// write permission (Go's module cache is 0555), which os.RemoveAll cannot empty:
+// those are made writable first. Symlinks are not followed.
+func removeTree(p string) error {
+	if e := os.RemoveAll(p); e == nil || !errors.Is(e, fs.ErrPermission) {
+		return e
+	}
+	_ = filepath.WalkDir(p, func(path string, d fs.DirEntry, e error) error {
+		if e == nil && d.IsDir() {
+			_ = os.Chmod(path, 0o700) // before WalkDir reads it
+		}
+		return nil
+	})
+	return os.RemoveAll(p)
 }
 
 // mkdirGuest makes a directory a container sees: 0755 as Docker makes it, despite the

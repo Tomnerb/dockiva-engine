@@ -1048,6 +1048,7 @@ static int mem_path_call(uint64_t call) {
         }
         a[0]=(MemArg){x[0],x[1],!(x[3]&256),(x[3]&4096)!=0};break;
     case 53: a[0]=(MemArg){x[0],x[1],1,0};break;
+    case 452: if(x[3]&~UINT64_C(0x1100))return MEM_PASS;a[0]=(MemArg){x[0],x[1],!(x[3]&256),(x[3]&4096)!=0};break;
     case 54: a[0]=(MemArg){x[0],x[1],!(x[4]&256),(x[4]&4096)!=0};break;
     case 45: case 49: case 43: case 5: case 8: case 11: case 14: a[0]=(MemArg){(uint64_t)-100,x[0],1,0};break;
     case 6: case 9: case 12: case 15: a[0]=(MemArg){(uint64_t)-100,x[0],0,0};break;
@@ -1175,6 +1176,7 @@ static int64_t mem_path_op(uint64_t call,MemPath *w,const int *res,uint64_t *fif
         break;
     }
     case 53: r=!n?-2:mem_chmod(n,x[2]&07777);break;
+    case 452: r=!n?-2:mem_is(n,MEM_LNK)?-95:mem_chmod(n,x[2]&07777);break;
     case 54: r=x[4]&~UINT64_C(0x1100)?-22:!n?-2:mem_chown(n,(uint32_t)x[2],(uint32_t)x[3]);break;
     case 45:
         if(!n)r=-2;else if(mem_is(n,MEM_DIR))r=-21;else if(!mem_is(n,MEM_REG) || (int64_t)x[1]<0)r=-22;
@@ -1202,7 +1204,7 @@ static int64_t mem_path_op(uint64_t call,MemPath *w,const int *res,uint64_t *fif
     }
     default: r=-38;
     }
-    if(!r && n && (call==53 || call==54 || call==88 || (call>=5 && call<=7) || (call>=14 && call<=16)))mem_notify_child(w[0].dir,w[0].name,n,IN_ATTRIB);
+    if(!r && n && (call==53 || call==452 || call==54 || call==88 || (call>=5 && call<=7) || (call>=14 && call<=16)))mem_notify_child(w[0].dir,w[0].name,n,IN_ATTRIB);
     if(!r && n && call==45)mem_notify_child(w[0].dir,w[0].name,n,IN_MODIFY);
     if(!r && layer && (call==35 || ((call==38 || call==276) && !(call==276 && (x[4]&2)))))upm_gone(was);  /* upm.h: no longer at that path */
 done:

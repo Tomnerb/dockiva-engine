@@ -20,7 +20,7 @@ func cleanupUnpublished(state string) {
 	check(err)
 	for _, entry := range entries {
 		if entry.IsDir() && (strings.HasPrefix(entry.Name(), ".creating-") || strings.HasPrefix(entry.Name(), ".removing-")) {
-			check(os.RemoveAll(filepath.Join(state, entry.Name())))
+			check(removeTree(filepath.Join(state, entry.Name())))
 		}
 	}
 }

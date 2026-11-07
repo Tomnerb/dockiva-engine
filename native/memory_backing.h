@@ -43,7 +43,7 @@ typedef struct {
 } MemoryBacking;
 #endif
 static void (*backing_release_hook)(MemoryBacking *); /* the hypervisor backend forgets the memory first */
-static void (*backing_moved_hook)(MemoryBacking *,size_t,size_t); /* an overlay's [offset, offset+size) now holds its own copy (backing_prepare): tables still name its base there */
+static void (*backing_moved_hook)(MemoryBacking *,size_t,size_t); /* an overlay's [offset, offset+size) now holds its own copy (backing_materialize): tables still name its base there */
 static void (*backing_hold_hook)(MemoryBacking *,int); /* a fork's hold on its parent's backing: 1 at the fork, 0 at the thaw; NULL without the hypervisor */
 static unsigned char *backing_data(MemoryBacking *backing) {
     return backing?backing->bytes:NULL;
