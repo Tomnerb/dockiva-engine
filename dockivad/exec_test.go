@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -21,10 +22,25 @@ func TestExecHelpers(t *testing.T) {
 	if p := lookPath(layers{upper: root}, nil, "/", "/custom/tool"); p != "/custom/tool" {
 		t.Fatalf("absolute: %s", p)
 	}
+	if p := lookPath(layers{upper: root}, nil, "/home/runner", "/usr/bin/ls"); p != "/usr/bin/ls" { // not joined to the working directory
+		t.Fatalf("absolute with a working directory: %q", p)
+	}
 	mustReject(t, func() { lookPath(layers{upper: root}, nil, "/", "data") }) // not executable
 	mustReject(t, func() { lookPath(layers{upper: root}, nil, "/", "missing") })
 	if p := lookPath(layers{upper: root}, nil, "/home/runner", "./bin/tool"); p != "/home/runner/bin/tool" { // relative to the working directory
 		t.Fatalf("relative path: %q", p)
+	}
+	many := make([]string, 100) // act passes more than 64 variables to an action
+	for i := range many {
+		many[i] = "V" + strconv.Itoa(i) + "=x"
+	}
+	validateEnv(many)
+	values := make([]any, len(many))
+	for i, v := range many {
+		values[i] = v
+	}
+	if got := len(stringsOf(values)); got != 100 {
+		t.Fatalf("stringsOf: %d", got)
 	}
 	if got := strings.Join(mergeEnv([]string{"A=1", "B=2"}, []string{"B=3", "C=4"}), " "); got != "A=1 B=3 C=4" {
 		t.Fatalf("mergeEnv: %s", got)

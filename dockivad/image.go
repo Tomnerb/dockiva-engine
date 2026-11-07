@@ -44,6 +44,10 @@ const maxBlob = int64(64 << 30) // one layer, and a whole pull
 const maxMembers = 4 << 20      // files in an image
 const maxJSON = int64(1 << 20)
 
+// execEntries is the runtime's cap on argv and environment entries
+// (EXEC_ENTRIES in native/address_space.h); their bytes are capped at 1 MiB.
+const execEntries = 16384
+
 var digestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 // image is an image's configuration and, in Root, its unpacked filesystem: the
@@ -485,7 +489,7 @@ func (im *image) ensureDir(guest string) string {
 // files are the image's files as a container sees them.
 func (im *image) files() layers { return layers{upper: im.Root, lower: im.Lower} }
 func validateEnv(env []string) {
-	reject(len(env) <= 64, "Too many environment values")
+	reject(len(env) <= execEntries, "Too many environment values")
 	seen := map[string]bool{}
 	for _, v := range env {
 		k, _, ok := strings.Cut(v, "=")
@@ -500,7 +504,7 @@ func (im *image) command(override []string) []string {
 	}
 	cmd := append(append([]string{}, im.Entry...), args...)
 	reject(len(cmd) > 0, "No command specified")
-	reject(len(cmd) <= 64, "Expected executable and at most 63 arguments")
+	reject(len(cmd) <= execEntries, "Too many arguments")
 	find := func(guest string) (struct{ Data []byte }, bool) {
 		head, ok := im.guestFile(guest)
 		return struct{ Data []byte }{head}, ok
@@ -546,7 +550,7 @@ func (im *image) command(override []string) []string {
 			script = []string{interpreter, argument, cmd[0]}
 		}
 		cmd = append(script, cmd[1:]...)
-		reject(len(cmd) <= 64, "Expected executable and at most 63 arguments")
+		reject(len(cmd) <= execEntries, "Too many arguments")
 		v, ok = find(interpreter[1:])
 		reject(ok, "Script interpreter missing or not executable: "+interpreter)
 	}
@@ -612,7 +616,7 @@ func (b *engine) commitTag(name, digest, layout string) string {
 		retainLowers(b.Home, b.State, target)
 		gone := filepath.Join(b.Cache, ".replaced-"+token()[:16])
 		check(os.Rename(target, gone))
-		go os.RemoveAll(gone)
+		go removeTree(gone)
 	}
 	return commitImage(b.Cache, name, layout)
 }
