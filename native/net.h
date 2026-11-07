@@ -224,8 +224,13 @@ static uint64_t net_suspend(const struct pollfd *fds,unsigned count,unsigned tim
     }
     uint64_t now=net_now();
     if(net_wait.active && net_wait.at_pc==cpu->pc && now>=net_wait.deadline) { net_wait.active=0;return linux_error(11); }
-    /* +1: now is truncated to the millisecond, and a wait must last at least timeout. */
-    if(!net_wait.active || net_wait.at_pc!=cpu->pc)net_wait.deadline=timeout==NET_FOREVER?UINT64_MAX:now+timeout+1;
+    /* +1: now is truncated to the millisecond, and a wait must last at least timeout.
+       A retried call keeps its first deadline, unless this pass asks for an earlier one:
+       epoll_wait's 10 ms recheck of a socket whose edge another thread took (it waits
+       without that socket's POLLIN) would otherwise sleep out the call's whole timeout,
+       Go's netpoller for minutes while a connection's data piled up unread. */
+    uint64_t deadline=timeout==NET_FOREVER?UINT64_MAX:now+timeout+1;
+    if(!net_wait.active || net_wait.at_pc!=cpu->pc || deadline<net_wait.deadline)net_wait.deadline=deadline;
     net_wait_blocks++;net_wait.active=1;net_wait.targeted=1;net_wait.at_pc=cpu->pc;net_wait.count=count;net_wait.pipe_count=0;
     if(count)memcpy(net_wait.fds,fds,count*sizeof(*fds));
     return IO_BLOCK;
