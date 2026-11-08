@@ -67,6 +67,7 @@ func (b *engine) systemAPI(w http.ResponseWriter, method, path string, q url.Val
 		unbounded(w) // stop grace periods
 		b.Mu.Lock()  // held until the engine exits: nothing starts meanwhile
 		b.stopAll()
+		closeStore(b.Home) // store.go: detached and compacted while the API still answers the app's pings
 		send(w, 204, nil)
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
@@ -212,7 +213,7 @@ func (b *engine) pruneImages(danglingOnly bool, keep func(time.Time, obj) bool) 
 			if !keep(c.created, labels) {
 				continue
 			}
-			retainLowers(b.Home, b.State, c.dir)
+			retainLowers(b.storeDir(), b.State, c.dir)
 			check(os.RemoveAll(c.dir))
 			removed++
 			if !strings.HasPrefix(c.name, "<none>:") {

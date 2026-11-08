@@ -53,7 +53,16 @@ func TestExecHelpers(t *testing.T) {
 // resolve inside the container (never to the Mac's files beside the mount's
 // source), and a new volume holds the image's files before the lookup.
 func TestExecLookupInMounts(t *testing.T) {
-	b := testEngine(t)
+	t.Run("home", func(t *testing.T) { execLookupInMounts(t, testEngine(t)) })
+	t.Run("store", func(t *testing.T) { // containers in <home>/store, volumes in <home> (store.go)
+		home := t.TempDir()
+		check(os.Chmod(home, 0o700))
+		check(os.Mkdir(filepath.Join(home, storeBundle), 0o700)) // the layout without attaching it
+		execLookupInMounts(t, engineAt(home, filepath.Join(home, "store")))
+	})
+}
+
+func execLookupInMounts(t *testing.T, b *engine) {
 	src, outside := t.TempDir(), t.TempDir()
 	elf := append([]byte("\x7fELF\x02\x01\x01"), make([]byte, 57)...)
 	check(os.WriteFile(filepath.Join(src, "prog"), elf, 0o755))
@@ -96,7 +105,14 @@ func TestExecLookupInMounts(t *testing.T) {
 	b.create("vol", decode([]byte(`{"Image":"dockiva/shell:demo","HostConfig":{"Mounts":[{"Type":"volume","Source":"tools","Target":"/bin"}]}}`), maxJSON))
 	p = b.container("vol")
 	c = readObject(filepath.Join(p, "config.json"))
-	if run := runtimeCommand(p, b.Native, c, []string{"/bin/sh"}, "sh", nil, false); run[2] != filepath.Join(volumeData(b.Home, "tools"), "sh") {
+	run := runtimeCommand(p, b.Native, c, []string{"/bin/sh"}, "sh", nil, false)
+	if run[2] != filepath.Join(volumeData(b.Home, "tools"), "sh") {
 		t.Fatalf("runtime program in a volume: %v", run[:3])
+	}
+	if !strings.Contains(strings.Join(run, "\x00"), "\x00--statfs-from\x00"+b.Home+"\x00") { // df: the Mac's volume, not the store's disk image
+		t.Fatalf("statfs: %q", run)
+	}
+	if got := lookPath(containerView(p, c), []string{"PATH=/bin"}, "/", "sh"); got != "/bin/sh" { // docker exec
+		t.Fatalf("exec lookup in a volume: %q", got)
 	}
 }

@@ -19,6 +19,16 @@ does (its stop signal and grace period), answers 204 and exits; `always` and
 `unless-stopped` containers start again with the next engine.
 Use the authenticated Docker API subset or Dockiva for container lifecycle.
 
+Images, containers, retained lowers and the build cache live on a case-sensitive
+APFS volume (`store.go`): `<home>/store.sparsebundle`, attached at `<home>/store` with
+`diskutil image attach` (never `hdiutil attach`, whose attachment makes every
+barrier a full flush), because two Linux names that differ only by case are one
+file on the Mac's case-insensitive APFS. Volumes, networks and sockets stay in
+`<home>`. A home from before the store moves into it at the first start with no
+container running; meanwhile the API answers only `/_ping`. `POST /dockiva/shutdown`
+detaches the store and compacts the bundle, which keeps its largest size while
+attached; any other exit detaches it when no container runs.
+
 Import a bounded OCI layout while the daemon is stopped:
 
 ```sh

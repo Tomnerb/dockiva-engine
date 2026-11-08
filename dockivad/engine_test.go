@@ -138,7 +138,13 @@ func testEngine(t *testing.T) *engine {
 	t.Helper()
 	home := t.TempDir()
 	check(os.Chmod(home, 0700))
-	b := &engine{Home: home, State: private(filepath.Join(home, "containers")), Cache: private(filepath.Join(home, "images")), Assets: "..", Native: "../build/dockiva-runtime", MaxContainers: 64}
+	return engineAt(home, home)
+}
+
+// engineAt is a test engine whose images and containers are in root: home, or its
+// store (store_test.go).
+func engineAt(home, root string) *engine {
+	b := &engine{Home: home, State: private(filepath.Join(root, "containers")), Cache: private(filepath.Join(root, "images")), Assets: "..", Native: "../build/dockiva-runtime", MaxContainers: 64}
 	commitImage(b.Cache, "dockiva/shell:demo", "../examples/m19/shell-image")
 	// Hermetic default: the host's hypervisor availability must not change test results.
 	nativeProbe.Lock()

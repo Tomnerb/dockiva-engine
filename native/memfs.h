@@ -458,7 +458,7 @@ static void mem_stat_pack(unsigned char *out,const MemNode *n) {
 static uint64_t proc_mem_total(void);
 static void mem_statfs_pack(unsigned char *out,const MemFs *fs) {
     struct statfs host;
-    if(fs==upm_fs && fs_root>=0 && !fstatfs(fs_root,&host)) {                     /* upm.h: the layer's, as the host's files say (syscall.h) */
+    if(fs==upm_fs && fs_root>=0 && !fstatfs(fs_space>=0?fs_space:fs_root,&host)) { /* upm.h: the layer's, as the host's files say (syscall.h) */
         memset(out,0,120);
         fs_pack(out,0,0x794c7630,8);fs_pack(out,8,host.f_bsize,8);fs_pack(out,16,host.f_blocks,8);
         fs_pack(out,24,host.f_bfree,8);fs_pack(out,32,host.f_bavail,8);fs_pack(out,40,host.f_files,8);

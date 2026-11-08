@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -41,6 +42,13 @@ type engine struct {
 	watched                                          watcher        // what engine.watch last saw
 	spares                                           spareSlot      // a supervisor started ahead of the next start
 	creating                                         map[string]obj // under Mu: the configs of creates syncing without it, by name (createWith)
+
+	// While main attaches the store or moves an older home into it (store.go; minutes
+	// at times): why the API answers only /_ping.
+	opening atomic.Pointer[string]
+	// While the Mac's disk is almost full (store.go: guardSpace): why starts, pulls
+	// and builds are refused.
+	lowSpace atomic.Pointer[string]
 }
 
 // memoryMiB is a container's guest memory limit: docker run -m, else its profile's.
@@ -595,7 +603,7 @@ func (b *engine) remove(name string) {
 	check(os.Rename(p, gone))
 	notifyChanged()
 	go func() { _ = removeTree(gone) }()
-	releaseLower(b.Home, b.State, text(c["lower"])) // an image removed meanwhile: its files go now
+	releaseLower(b.storeDir(), b.State, text(c["lower"])) // an image removed meanwhile: its files go now
 	b.refreshHosts(network)
 }
 func sandboxArgs(native string, args []string, r layers, writable bool) []string {
@@ -714,12 +722,15 @@ func runtimeCommand(p, native string, c obj, command []string, argv0 string, env
 	reject(c["network"] == nil || c["network"] == "none" || c["network"] == "outbound", "Invalid network mode")
 	// A container created by this engine has them already (prepareRun).
 	mountPoints(r)
-	home := filepath.Dir(filepath.Dir(p)) // <home>/containers/<name>
+	home := engineHome(p) // networks and volumes (store.go)
+	// df shows the Mac's volume, as Docker's overlay2 shows its host's: the store is a
+	// 4 TB sparse disk image whose free space is the Mac's, so df would say 100% used.
+	args = append(args, "--statfs-from", home)
 	if c["network"] != "none" {
 		name := filepath.Base(p)
 		members := []obj{}
 		if n, ok := c["net_name"].(string); ok && n != "bridge" {
-			members = membersOn(home, n)
+			members = membersOn(filepath.Dir(p), n)
 		}
 		networkFiles(r, hostsFile(home, name, c, members))
 		args = append(args, "--outbound")
@@ -728,8 +739,7 @@ func runtimeCommand(p, native string, c obj, command []string, argv0 string, env
 	if ip, ok := c["ip"].(string); ok && c["network"] != "none" {
 		args = append(args, "--network", networkPorts(home, str(c["net_name"])), "--ip", ip)
 	}
-	// <home>/containers/<name>: volumes are in <home>/volumes.
-	args = append(args, prepareMounts(filepath.Dir(filepath.Dir(p)), r, c, publish)...)
+	args = append(args, prepareMounts(home, r, c, publish)...)
 	// The program as the container sees it: a mount hides the files beneath it, and a
 	// new volume holds the image's files by now. Guest symlinks resolve inside the
 	// container; find refuses a symlink on the way.
@@ -820,7 +830,7 @@ func processName(p, runtime string) string {
 	if generatedName.MatchString(filepath.Base(p)) {
 		return runtime
 	}
-	link := filepath.Join(filepath.Dir(filepath.Dir(p)), "process", filepath.Base(p))
+	link := filepath.Join(engineHome(p), "process", filepath.Base(p))
 	if have, e := os.Stat(link); e == nil {
 		if target, e := os.Stat(runtime); e == nil && os.SameFile(have, target) {
 			return link
@@ -927,7 +937,7 @@ func supervise(p, native, worker, generation string) (result error) {
 	learnProbes(os.Getenv("DOCKIVA_PROBES"))
 	command := stringsOf(c["command"])
 	env := stringsOf(c["env"])
-	clearPorts(filepath.Dir(filepath.Dir(p)), c) // left by a run that did not end cleanly
+	clearPorts(engineHome(p), c) // left by a run that did not end cleanly
 	extra := []string{}
 	if c["tty"] == true || c["open_stdin"] == true {
 		extra = append(extra, "--stdin")
@@ -1070,7 +1080,7 @@ func supervise(p, native, worker, generation string) (result error) {
 		if code < 0 {
 			code = 128 + int(cmd.ProcessState.Sys().(syscall.WaitStatus).Signal())
 		}
-		clearPorts(filepath.Dir(filepath.Dir(p)), c)
+		clearPorts(engineHome(p), c)
 		if input != nil {
 			input.Close()
 			input, terminal = nil, nil

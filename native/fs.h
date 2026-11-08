@@ -98,6 +98,7 @@ static int fs_slot(uint64_t guest) { return fd_slot(guest,FD_FILE); }
 #define FS_FILE_LIMIT (16u*1024u*1024u)
 static int fs_root=-1, fs_writable;
 static int fs_lower=-1;                                        /* --lower: the image's files (overlay.h) */
+static int fs_space=-1;                                        /* --statfs-from: the file system statfs reports, else the root's */
 #include "pack.h"
 /* Process-wide state every thread of a process shares (workers running its
    threads all point proc_now at the same record): the working directory, the

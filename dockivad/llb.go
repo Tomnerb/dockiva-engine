@@ -191,7 +191,7 @@ func (s *bkSolve) llbRef(id string) string {
 func (b *engine) llbSolve(ctx context.Context, st *bkSolve, def pbFields) pbuf {
 	st.mu.Lock()
 	if st.llb.work == "" {
-		w, e := os.MkdirTemp(private(filepath.Join(b.Home, "build")), "llb-")
+		w, e := os.MkdirTemp(private(filepath.Join(b.storeDir(), "build")), "llb-")
 		if e != nil {
 			st.mu.Unlock()
 			check(e)

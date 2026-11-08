@@ -177,7 +177,7 @@ def main():
             # Development-only legacy control client also cleans up if the API has failed.
             for i in range(5):
                 for action in ('stop','rm'):
-                    subprocess.run([sys.executable,str(Path(__file__).resolve().parents[1]/'containers.py'),'--state-dir',str(home/'containers'),action,f'server-{i}'],capture_output=True,timeout=30)
+                    subprocess.run([sys.executable,str(Path(__file__).resolve().parents[1]/'containers.py'),'--state-dir',str(home/'store'/'containers'),action,f'server-{i}'],capture_output=True,timeout=30)
             if engine is not None and engine.poll() is None:
                 stop_engine()
         check('no remaining store-owned processes',not process_snapshot(home))

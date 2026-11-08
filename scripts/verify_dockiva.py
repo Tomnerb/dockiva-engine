@@ -37,7 +37,7 @@ def main():
             finally:
                 # Clean only this verifier's dedicated store, including failed tests.
                 for action in ('stop', 'rm'):
-                    subprocess.run([sys.executable, str(ROOT/'containers.py'), '--state-dir', str(home/'containers'), action, 'dockiva-preview-test'], capture_output=True, timeout=30)
+                    subprocess.run([sys.executable, str(ROOT/'containers.py'), '--state-dir', str(home/'store'/'containers'), action, 'dockiva-preview-test'], capture_output=True, timeout=30)
                 engine.terminate()
                 try:
                     engine.wait(timeout=5)

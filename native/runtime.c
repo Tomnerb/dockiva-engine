@@ -1229,6 +1229,13 @@ int main(int argc,char **argv) {
             if(fs_lower>=0) fail("Lower layer specified twice");
             lower_path=argv[++i];fs_lower=open(lower_path,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
             if(fs_lower<0) fail("Cannot open guest lower layer");
+        } else if(!strcmp(argv[i],"--statfs-from") && i+1<argc) {
+            /* --statfs-from DIR: statfs and fstatfs report DIR's file system. dockivad names the
+               engine home, on the Mac's volume: the layers' disk image is a 4 TB sparse bundle,
+               which df would show nearly full of the Mac's free space (dockivad/store.go). */
+            if(fs_space>=0) fail("--statfs-from specified twice");
+            fs_space=open(argv[++i],O_RDONLY|O_DIRECTORY|O_CLOEXEC);
+            if(fs_space<0) fail("--statfs-from needs an existing directory");
         } else if(!strcmp(argv[i],"--lower-pack") && i+1<argc) {
             /* --lower-pack FILE: the lower layer's small files, mapped (pack.h); built there when missing. */
             if(fs_lower<0) fail("--lower-pack needs --lower first");
