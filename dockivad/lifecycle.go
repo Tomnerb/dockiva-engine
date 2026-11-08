@@ -294,12 +294,13 @@ func (b *engine) stop(name string, seconds ...int) {
 	defer func() {
 		if failure := recover(); failure != nil {
 			// Natural exit can remove the control endpoint after our running
-			// snapshot. Stop is successful once that same run is terminal.
+			// snapshot. Stop is successful once that same run is terminal, or once
+			// the container is gone: autoRemove removes a --rm container as it ends.
 			deadline := time.Now().Add(time.Second)
 			for time.Now().Before(deadline) {
 				terminal := false
 				err := safeRun(func() { terminal = !live(b.status(p)) })
-				if err == nil && terminal {
+				if (err == nil && terminal) || !exists(filepath.Join(p, "status.json")) {
 					return
 				}
 				time.Sleep(20 * time.Millisecond)

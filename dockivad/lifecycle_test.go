@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -140,6 +141,46 @@ func TestRemovalKeepsExitStatus(t *testing.T) {
 	}
 	if exit, _ := b.exits.Load("k"); fmt.Sprint(exit) != "137" {
 		t.Fatalf("docker rm kept exit status %v", exit)
+	}
+}
+
+// docker rm -f of a running --rm container: as the kill ends the run, autoRemove
+// removes the container, before the removal has the engine lock back and here even
+// before the stop sees the run's end. docker rm -f succeeds all the same, at once.
+// A fake supervisor answers the kill, as in TestShutdownStopsContainers, once
+// autoRemove is done.
+func TestForceRemoveAfterAutoRemove(t *testing.T) {
+	b := testEngine(t)
+	h := b.socketHandler()
+	if r := request(t, h, "POST", "/containers/create?name=rm", `{"Image":"dockiva/shell:demo","HostConfig":{"AutoRemove":true}}`, ""); r.Code != 201 {
+		t.Fatalf("create: %d %s", r.Code, r.Body.String())
+	}
+	p := b.container("rm")
+	lock, e := lockFile(filepath.Join(p, "lock"), true)
+	check(e)
+	listener, e := net.Listen("tcp", "127.0.0.1:0")
+	check(e)
+	defer listener.Close()
+	save(filepath.Join(p, "control.json"), obj{"port": listener.Addr().(*net.TCPAddr).Port, "token": "secret"})
+	save(filepath.Join(p, "status.json"), obj{"state": "running", "generation": "g", "pid": os.Getpid()})
+	go func() {
+		conn, e := listener.Accept()
+		if e != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = conn.Read(make([]byte, 64)) // the stop command
+		save(filepath.Join(p, "status.json"), obj{"state": "exited", "exit_code": 137, "generation": "g"})
+		lock.Close()
+		b.autoRemove("rm") // as start's goroutine does once the supervisor is over
+		_, _ = conn.Write([]byte("OK"))
+	}()
+	began := time.Now()
+	if r := request(t, h, "DELETE", "/containers/rm?force=1", "", ""); r.Code != 204 {
+		t.Fatalf("docker rm -f: %d %s", r.Code, r.Body.String())
+	}
+	if exists(p) || time.Since(began) > 500*time.Millisecond { // a stop that missed the removal gave up after 1 s
+		t.Fatalf("container left: %v, after %v", exists(p), time.Since(began))
 	}
 }
 
