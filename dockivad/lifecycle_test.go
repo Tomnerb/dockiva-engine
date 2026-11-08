@@ -110,6 +110,28 @@ func TestWaitConditions(t *testing.T) {
 	}
 }
 
+// docker run --rm waits for its container's removal, then reports the exit status
+// autoRemove kept. A waiter sees the container gone as soon as its directory moves
+// away, before the rest of the removal is done, so the status must be kept first.
+// Here another container's unreadable config stops the removal just after the move
+// (in the hosts refresh): the moment such a waiter looks.
+func TestAutoRemoveKeepsExitFirst(t *testing.T) {
+	b := testEngine(t)
+	p := b.container("r")
+	check(os.Mkdir(p, 0o700))
+	save(filepath.Join(p, "config.json"), obj{"auto_remove": true, "net_name": "n"})
+	save(filepath.Join(p, "status.json"), obj{"state": "exited", "generation": "g", "exit_code": 3})
+	check(os.Mkdir(filepath.Join(b.State, "bad"), 0o700))
+	check(os.WriteFile(filepath.Join(b.State, "bad", "config.json"), []byte("{"), 0o600))
+	if safeRun(func() { b.refreshHosts("n") }) == nil {
+		t.Fatal("the hosts refresh no longer fails here: stop the removal after the move another way")
+	}
+	b.autoRemove("r")
+	if exit, _ := b.exits.Load("r"); exists(p) || fmt.Sprint(exit) != "3" {
+		t.Fatalf("container left: %v, exit status kept: %v", exists(p), exit)
+	}
+}
+
 // docker stats: PIDs from the run's process table (threads), block I/O from the
 // host processes' disk counters.
 func TestStatsSample(t *testing.T) {
