@@ -27,7 +27,11 @@ file on the Mac's case-insensitive APFS. Volumes, networks and sockets stay in
 `<home>`. A home from before the store moves into it at the first start with no
 container running; meanwhile the API answers only `/_ping`. `POST /dockiva/shutdown`
 detaches the store and compacts the bundle, which keeps its largest size while
-attached; any other exit detaches it when no container runs.
+attached; any other exit detaches it when no container runs. On a Mac that cannot
+make or attach the store (`diskutil image attach` came in macOS 13), a new home
+keeps its images and containers in `<home>` and the engine logs why; a store that
+exists but does not attach stops the engine instead, since its images and
+containers would seem gone.
 
 Import a bounded OCI layout while the daemon is stopped:
 

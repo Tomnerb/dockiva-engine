@@ -217,7 +217,7 @@ def case_sensitive():
         build(ROOT/'tests/native/case_guest.c', t/'case')
         subprocess.run(['hdiutil', 'create', '-quiet', '-type', 'SPARSEBUNDLE', '-fs', 'Case-sensitive APFS', '-layout', 'NONE', '-size', '1g', str(t/'cs.sparsebundle')], check=True)
         (t/'cs').mkdir()
-        subprocess.run(['diskutil', 'image', 'attach', '--nobrowse', '--mountPoint', str(t/'cs'), str(t/'cs.sparsebundle')], check=True, capture_output=True)
+        subprocess.run(['diskutil', 'image', 'attach', '-nobrowse', '-mountPoint', str(t/'cs'), str(t/'cs.sparsebundle')], check=True, capture_output=True)
         try:
             lower = t/'cs/lower'
             for name, text in CASE_LOWER.items():

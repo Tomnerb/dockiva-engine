@@ -21,6 +21,11 @@ package main
 // files are written and keeps its size when they go: closeStore gives the space back
 // when the engine stops (POST /dockiva/shutdown). guardSpace keeps it from filling
 // the Mac's disk, which would eject it.
+//
+// diskutil image attach came in macOS 13 (diskutil(8), HISTORY). Where macOS cannot
+// make or attach the store, a new home keeps its images and containers in <home>, as
+// before the store, and the next start tries again. A store made already holds them,
+// so the engine never starts without it: it stops and says why (openStore).
 
 import (
 	"errors"
@@ -36,6 +41,9 @@ import (
 
 const storeBundle = "store.sparsebundle"
 
+// diskutil attaches the store; tests put a stand-in in its place.
+var diskutil = "/usr/sbin/diskutil"
+
 // storeDir is where the engine keeps images, containers, retained lowers and the
 // build cache: <home>/store, or <home> itself for an engine started before its
 // containers moved (openStore).
@@ -44,26 +52,59 @@ func (b *engine) storeDir() string { return filepath.Dir(b.State) }
 // openStore attaches the store, made first on a new home, and returns its root,
 // <home>/store, checked case-sensitive. While containers an engine before the store
 // left running use <home>'s files, it returns <home>: they move at a start with none
-// running (moveToStore).
+// running (moveToStore). It returns <home> too where a new store cannot be made or
+// attached: one that never attached holds nothing, so it goes. A store that exists
+// holds the images and containers, which would seem gone without it: if it does not
+// attach, the engine stops.
 func openStore(home string) string {
 	bundle, root := filepath.Join(home, storeBundle), filepath.Join(home, "store")
-	if !exists(bundle) {
-		if names := runningIn(filepath.Join(home, "containers")); len(names) > 0 {
-			fmt.Fprintln(os.Stderr, "dockivad: containers move to the case-sensitive store at a start with none running; running:", strings.Join(names, ", "))
-			return home
+	if exists(bundle) {
+		if e := safeRun(func() { attachStore(bundle, root) }); e != nil {
+			panic(fmt.Errorf("%s holds the engine's images and containers, and did not open: %v", bundle, e))
 		}
-		stage := filepath.Join(home, ".creating-"+storeBundle) // hdiutil adds .sparsebundle to a name without it
-		check(os.RemoveAll(stage))
-		command("/usr/bin/hdiutil", "create", "-quiet", "-type", "SPARSEBUNDLE", "-fs", "Case-sensitive APFS", "-layout", "NONE", "-volname", "Dockiva Engine", "-size", "4t", stage)
-		check(os.Rename(stage, bundle))
-		// Time Machine would copy the changed bands: images and containers, which can be
-		// pulled and made again (volumes stay in <home>, backed up). The attribute tmutil
-		// addexclusion sets (a plist of "com.apple.backupd"); tmutil itself took 11 s.
-		command("/usr/bin/xattr", "-wx", "com.apple.metadata:com_apple_backup_excludeItem", "62706C69737430305F1011636F6D2E6170706C652E6261636B75706408000000000000010100000000000000010000000000000000000000000000001C", bundle)
+		return private(root)
 	}
+	if names := runningIn(filepath.Join(home, "containers")); len(names) > 0 {
+		fmt.Fprintln(os.Stderr, "dockivad: containers move to the case-sensitive store at a start with none running; running:", strings.Join(names, ", "))
+		return home
+	}
+	// ponytail: a start killed between making the bundle and removing it after a failed
+	// attach leaves a store that never attached, and the next start stops on it; making
+	// it under its stage name until a first attach (and detach) would close that window.
+	if e := safeRun(func() { makeStore(bundle); attachStore(bundle, root) }); e != nil {
+		detachStore(home, 5)
+		_ = os.RemoveAll(bundle)
+		_ = os.Remove(root)
+		fmt.Fprintf(os.Stderr, "dockivad: the case-sensitive store does not work on this Mac, so images and containers stay in %s, on its case-insensitive disk; the next start tries again: %v\n", home, e)
+		return home
+	}
+	return private(root)
+}
+
+// makeStore makes the store's bundle once macOS can attach it: a sparse bundle of
+// case-sensitive APFS, 4 TB, with no partition map, excluded from Time Machine.
+func makeStore(bundle string) {
+	if out, e := exec.Command(diskutil, "image", "attach", "-help").CombinedOutput(); !strings.Contains(string(out), "mountPoint") {
+		panic(fmt.Errorf("no diskutil image attach (macOS 13 and later have it): %v: %s", e, strings.TrimSpace(string(out))))
+	}
+	stage := filepath.Join(filepath.Dir(bundle), ".creating-"+storeBundle) // hdiutil adds .sparsebundle to a name without it
+	check(os.RemoveAll(stage))
+	command("/usr/bin/hdiutil", "create", "-quiet", "-type", "SPARSEBUNDLE", "-fs", "Case-sensitive APFS", "-layout", "NONE", "-volname", "Dockiva Engine", "-size", "4t", stage)
+	check(os.Rename(stage, bundle))
+	// Time Machine would copy the changed bands: images and containers, which can be
+	// pulled and made again (volumes stay in <home>, backed up). The attribute tmutil
+	// addexclusion sets (a plist of "com.apple.backupd"); tmutil itself took 11 s.
+	command("/usr/bin/xattr", "-wx", "com.apple.metadata:com_apple_backup_excludeItem", "62706C69737430305F1011636F6D2E6170706C652E6261636B75706408000000000000010100000000000000010000000000000000000000000000001C", bundle)
+}
+
+// attachStore attaches the store's bundle at root, unless it is there already, and
+// checks it is case-sensitive. The flags have one dash: macOS 13's diskutil image
+// attach refuses --nobrowse and --mountPoint (blacktop/ipsw#1321); macOS 26 and 27
+// take both forms.
+func attachStore(bundle, root string) {
 	check(os.MkdirAll(root, 0o700))
 	if !mounted(root) {
-		command("/usr/sbin/diskutil", "image", "attach", "--nobrowse", "--mountPoint", root, bundle)
+		command(diskutil, "image", "attach", "-nobrowse", "-mountPoint", root, bundle)
 		if !mounted(root) { // diskutil answers with the mount point of an image attached already
 			panic(fmt.Errorf("%s is attached elsewhere; detach it (hdiutil detach) and start the engine again", bundle))
 		}
@@ -76,7 +117,6 @@ func openStore(home string) string {
 	if !errors.Is(e, fs.ErrNotExist) {
 		panic(fmt.Errorf("%s is not case-sensitive", root))
 	}
-	return private(root)
 }
 
 // closeStore detaches the store once the containers stopped (POST /dockiva/shutdown;

@@ -45,6 +45,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--helper', type=Path, required=True)
     parser.add_argument('--report', type=Path, required=True)
+    parser.add_argument('--new-home', action='store_true',
+                        help='start the engine once on the new home first, as a new install does: it makes its case-sensitive store '
+                             '(dockivad/store.go), or keeps the in-home layout where macOS cannot, and the checks run on that layout. '
+                             'Without it, the legacy container running at the first start keeps the in-home layout')
     args = parser.parse_args()
     helper = args.helper.resolve(strict=True)
     report = {'checks': [], 'helper_sha256': hashlib.sha256(helper.read_bytes()).hexdigest()}
@@ -121,6 +125,11 @@ def main():
                 rows.append((int(pid), int(parent), command))
             return rows
         try:
+            if args.new_home:  # SIGKILL leaves the store attached for the legacy container
+                engine = launch()
+                engine.kill(); engine.wait()
+            report['layout'] = 'store' if (home/'store.sparsebundle').exists() else 'home'
+            print('LAYOUT', report['layout'], flush=True)
             # Prepare a running Python supervisor before Go starts, using the old disk/control format.
             legacy('create', 'legacy', str(ROOT/'examples/m11_17/http-image'), '--arg=0', '--read-only')
             legacy('start', 'legacy')
@@ -257,6 +266,8 @@ def main():
                 engine.terminate()
                 try: engine.wait(5)
                 except subprocess.TimeoutExpired: engine.kill(); engine.wait()
+            if os.path.ismount(home/'store'):  # left attached by a killed engine: the home goes next
+                subprocess.run(['/usr/bin/hdiutil', 'detach', '-force', str(home/'store')], capture_output=True)
     report['source_hashes'] = {str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest()
                                for p in sorted((ROOT/'dockivad').glob('*.go'))}
     report['source_hashes']['native/worker_launcher.c'] = hashlib.sha256((ROOT/'native/worker_launcher.c').read_bytes()).hexdigest()

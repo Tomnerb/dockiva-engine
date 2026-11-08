@@ -97,6 +97,51 @@ func TestStoreGPTLayout(t *testing.T) {
 	}
 }
 
+// Where macOS cannot make or attach the store, a new home keeps its images and
+// containers in <home>, and the next start tries again. A store made already holds
+// them: the engine stops instead, and keeps it.
+func TestStoreUnavailable(t *testing.T) {
+	home := t.TempDir()
+	check(os.Chmod(home, 0o700))
+	bundle := filepath.Join(home, storeBundle)
+	t.Cleanup(func() { _ = exec.Command("/usr/bin/hdiutil", "detach", "-force", filepath.Join(home, "store")).Run() })
+	left := func() bool {
+		return exists(bundle) || exists(filepath.Join(home, ".creating-"+storeBundle)) || exists(filepath.Join(home, "store"))
+	}
+	calls := filepath.Join(t.TempDir(), "calls")
+	stand := func(script string) { // in diskutil's place
+		diskutil = filepath.Join(t.TempDir(), "diskutil")
+		check(os.WriteFile(diskutil, []byte("#!/bin/sh\necho \"$*\" >> "+calls+"\n"+script+"\n"), 0o755))
+	}
+	defer func(was string) { diskutil = was }(diskutil)
+
+	// macOS 12: no image verb. Nothing is made.
+	stand(`echo "diskutil: did not recognize verb \"$1\"; type \"diskutil\" for a list"; exit 1`)
+	if openStore(home) != home || left() {
+		t.Fatal("a store without diskutil image attach")
+	}
+	if data, _ := os.ReadFile(calls); string(data) != "image attach -help\n" {
+		t.Fatalf("a bundle made without diskutil image attach: diskutil got %q", data)
+	}
+	// The bundle is made, and its attach fails: it goes.
+	stand(`[ "$3" = -help ] && echo "USAGE: diskutil image attach [-nobrowse] [-mountPoint <mountPoint>]" && exit 0; echo "Error: refused"; exit 1`)
+	if openStore(home) != home || left() {
+		t.Fatal("a store that did not attach was kept")
+	}
+	// A store that exists does not attach: the engine stops, keeping it.
+	check(os.Mkdir(bundle, 0o700))
+	if e := safeRun(func() { openStore(home) }); e == nil || !strings.Contains(e.Error(), "holds the engine's images and containers") || !exists(bundle) {
+		t.Fatalf("an existing store that did not attach: %v", e)
+	}
+	check(os.Remove(bundle))
+	// macOS 13's diskutil takes flags with one dash only (blacktop/ipsw#1321): the next
+	// start makes the store.
+	stand(`for a; do case $a in --*) echo "Error: Unknown option '$a'"; exit 64;; esac; done; exec /usr/sbin/diskutil "$@"`)
+	if store := openStore(home); store != filepath.Join(home, "store") || !mounted(store) {
+		t.Fatalf("store %s mounted %v", store, mounted(store))
+	}
+}
+
 // bundleBytes is the disk space the store's bundle takes.
 func bundleBytes(t *testing.T, home string) (n int64) {
 	t.Helper()
