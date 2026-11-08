@@ -136,11 +136,12 @@ def main():
         build(ROOT/'tests/native/overlay_guest.c', t/'overlay')
         before = snapshot(lower)
         for binary, runtime, extra in runtimes():
-            for run in (1, 2):                              # the second run sees the lower layer as the first did
+            for run in (1, 2):                              # the second run sees the lower layer as the first did, with the lookup cache
                 upper = t/f'up-{binary}-{run}'
                 upper.mkdir()
+                cache = ['--layers-gen', str(t/f'gen-{binary}')] if run == 2 else []
                 r = subprocess.run([str(runtime), 'run', str(t/'overlay'), '--root', str(upper), '--lower', str(lower), '--writable',
-                                    '--storage-limit-mib', '0', '--max-steps', '2000000000', '--process-tree', '--scheduled-network', '--dynamic', *extra], capture_output=True, timeout=300)
+                                    '--storage-limit-mib', '0', '--max-steps', '2000000000', '--process-tree', '--scheduled-network', '--dynamic', *extra, *cache], capture_output=True, timeout=300)
                 ok = r.returncode == 0 and r.stdout == b'overlay PASS\n' and b'ERROR: AddressSanitizer' not in r.stderr
                 markers = all((upper/p).exists() for p in ('d/.wh.a', 'gone/.wh..wh..opq', '.wh.mv', '.wh.open', 'edir2/.wh..wh..opq'))
                 ok = ok and markers and not leftovers(upper) and not (upper/'.wh.gone').exists()

@@ -1439,6 +1439,7 @@ static uint64_t fs_open(void) {
     /* Validate the existing leaf before a possible truncate; only regular files/dirs.
        An unfollowed symlink reaches openat, which fails with ELOOP or EEXIST as on Linux. */
     struct stat before;int exists=fs_leaf_stat(parent,leaf,&before)==0;
+    if(!exists && errno==ENOENT && !(flags&64)) { close(parent);return linux_error(2); }   /* missing, not made: no host open (gcc tries every include directory) */
     if(exists) {
         if(S_ISFIFO(before.st_mode)) { /* a named pipe: the container's shared pipe */
             close(parent);
@@ -1717,7 +1718,13 @@ static uint64_t fs_call(uint64_t call) {
             if(n>cpu->gpr[3])n=(size_t)cpu->gpr[3];memcpy(out,pid,n);return n;
         }
         if(fs_proc_kind(path))return linux_error(22);  /* our /proc files and directories are not links (glibc's realpath asks) */
-        char leaf[1025];int parent=fs_parent_nofollow(cpu->gpr[0],cpu->gpr[1],leaf);if(parent<0)return fs_error();
+        /* Most paths asked are not links (gcc's realpath asks of every component of every
+           header): the direct walk's lstat answers them with no directory opened. */
+        char leaf[1025];int parent=fs_lookup(cpu->gpr[0],cpu->gpr[1],leaf,FS_DIRECT,NULL);if(parent<0)return fs_error();
+        struct stat st;int known=fs_leaf_stat(parent,leaf,&st),leaf_errno=errno;close(parent);
+        if(known<0) { errno=leaf_errno;return fs_error(); }
+        if(!S_ISLNK(st.st_mode))return linux_error(22);
+        parent=fs_parent_nofollow(cpu->gpr[0],cpu->gpr[1],leaf);if(parent<0)return fs_error();
         /* Read the final link's text; ancestors are resolved inside the root. */
         ssize_t result=readlinkat(parent,leaf,(char *)out,(size_t)cpu->gpr[3]);
         int saved=errno;close(parent);errno=saved;return result<0?fs_error():(uint64_t)result;
