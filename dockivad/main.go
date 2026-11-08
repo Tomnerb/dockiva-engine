@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -80,16 +81,17 @@ func run() {
 	lock, e := lockFile(filepath.Join(b.Home, "daemon.lock"), true)
 	check(e)
 	defer lock.Close()
-	store := openStore(b.Home) // store.go: the case-sensitive volume, attached
 	defer detachStore(b.Home, 1)
-	b.State = private(filepath.Join(store, "containers"))
-	b.Cache = private(filepath.Join(store, "images"))
-	moving := store != b.Home && (exists(filepath.Join(b.Home, "images")) || exists(filepath.Join(b.Home, "containers")))
-	// The start's file work. Moving an older home into the store copies its images and
-	// containers (about 15 s a GB): the API answers /_ping meanwhile (the app waits 15 s
-	// for it) and asks for patience otherwise.
+	// The start's file work: the store attached (store.go: the case-sensitive volume)
+	// and, once, an older home moved into it, which copies its images and containers
+	// (about 15 s a GB).
 	files := func() {
-		if store != b.Home {
+		store := openStore(b.Home)
+		b.State = private(filepath.Join(store, "containers"))
+		b.Cache = private(filepath.Join(store, "images"))
+		if store != b.Home && (exists(filepath.Join(b.Home, "images")) || exists(filepath.Join(b.Home, "containers"))) {
+			why := "Dockiva Engine is moving its images and containers to a case-sensitive disk image, once (about 15 s a GB); try again in a minute"
+			b.opening.Store(&why)
 			moveToStore(b.Home, store)
 		}
 		cleanupUnpublished(b.State)
@@ -169,17 +171,22 @@ func run() {
 		docker = &http.Server{Handler: b.socketHandler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 40 * time.Second, IdleTimeout: 10 * time.Second, MaxHeaderBytes: 16384}
 		defer docker.Close()
 	}
+	var serving sync.Once
 	serve := func() {
-		go func() { served <- server.Serve(listener) }()
-		if docker != nil {
-			go func() { _ = docker.Serve(userListener) }()
-		}
+		serving.Do(func() {
+			go func() { served <- server.Serve(listener) }()
+			if docker != nil {
+				go func() { _ = docker.Serve(userListener) }()
+			}
+		})
 	}
-	if moving { // the app waits 15 s for /_ping: it answers during the move, the rest asks for patience
-		why := "Dockiva Engine is moving its images and containers to a case-sensitive disk image, once (about 15 s a GB); try again in a minute"
-		b.opening.Store(&why)
-		serve()
-	}
+	// The app waits 15 s for /_ping, then kills the engine. The store attaches in half a
+	// second, but has taken macOS minutes (store.go), and a move into it takes about 15 s
+	// a GB: after 3 s the API answers /_ping, and asks for patience otherwise, until the
+	// files are ready. A start that fails sooner exits before answering.
+	why := "Dockiva Engine is starting (macOS can take minutes to attach its disk image); try again in a minute"
+	b.opening.Store(&why)
+	early := time.AfterFunc(3*time.Second, serve)
 	go func() {
 		// SIGTERM leaves containers running; POST /dockiva/shutdown has stopped them.
 		select {
@@ -202,13 +209,11 @@ func run() {
 	// OCI validation has a large, short-lived working set. Return it to the host
 	// before idle service, rather than waiting for another allocation-triggered GC.
 	debug.FreeOSMemory()
-	if moving {
-		b.opening.Store(nil)
-	} else {
-		serve()
-	}
+	early.Stop()
+	b.opening.Store(nil)
+	serve()
 	go b.watch(done)
-	if store != b.Home {
+	if b.storeDir() != b.Home {
 		go b.guardSpace(done) // store.go: a full Mac would eject the store
 	}
 	b.spares.on = true // after the Setenvs above: a spare inherits them as an exec'd supervisor would

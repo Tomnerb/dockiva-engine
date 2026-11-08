@@ -12,7 +12,12 @@ package main
 // do on every Mac engine, along with Time Machine and the boot volume's flushes.
 //
 // The bundle is attached with diskutil image attach, never hdiutil attach, which
-// turns every F_BARRIERFSYNC into a full flush (10.8 ms instead of 0.9). It grows as
+// turns every F_BARRIERFSYNC into a full flush (10.8 ms instead of 0.9). It holds
+// the APFS container alone, with no partition map: hdiutil's default GPT layout adds
+// an EFI partition, which DiskArbitration probes through FSKit (msdos) at every
+// attach, and attaches waiting on those probes took from 11 s to over 10 minutes.
+// Stores made with that layout attach as they are. The engine answers /_ping during
+// a slow attach (main.go). It grows as
 // files are written and keeps its size when they go: closeStore gives the space back
 // when the engine stops (POST /dockiva/shutdown). guardSpace keeps it from filling
 // the Mac's disk, which would eject it.
@@ -49,7 +54,7 @@ func openStore(home string) string {
 		}
 		stage := filepath.Join(home, ".creating-"+storeBundle) // hdiutil adds .sparsebundle to a name without it
 		check(os.RemoveAll(stage))
-		command("/usr/bin/hdiutil", "create", "-quiet", "-type", "SPARSEBUNDLE", "-fs", "Case-sensitive APFS", "-volname", "Dockiva Engine", "-size", "4t", stage)
+		command("/usr/bin/hdiutil", "create", "-quiet", "-type", "SPARSEBUNDLE", "-fs", "Case-sensitive APFS", "-layout", "NONE", "-volname", "Dockiva Engine", "-size", "4t", stage)
 		check(os.Rename(stage, bundle))
 		// Time Machine would copy the changed bands: images and containers, which can be
 		// pulled and made again (volumes stay in <home>, backed up). The attribute tmutil

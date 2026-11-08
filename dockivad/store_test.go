@@ -73,8 +73,27 @@ func TestStoreKeepsCase(t *testing.T) {
 	if after := bundleBytes(t, home); after > before-48<<20 {
 		t.Fatalf("compact gave back %d of 64 MiB", (before-after)>>20)
 	}
+	if out, _ := exec.Command("/usr/bin/hdiutil", "imageinfo", filepath.Join(home, storeBundle)).Output(); !strings.Contains(string(out), "partition-scheme: none") {
+		t.Fatalf("the store has a partition map, whose EFI partition DiskArbitration probes at every attach:\n%s", out)
+	}
 	if openStore(home) != store || !exists(filepath.Join(root, "netfilter", "xt_connmark.h")) {
 		t.Fatal("reattached without its files")
+	}
+}
+
+// A store made with hdiutil's default GPT layout (before -layout NONE) attaches,
+// detaches and compacts as it is.
+func TestStoreGPTLayout(t *testing.T) {
+	home := t.TempDir()
+	check(os.Chmod(home, 0o700))
+	command("/usr/bin/hdiutil", "create", "-quiet", "-type", "SPARSEBUNDLE", "-fs", "Case-sensitive APFS", "-volname", "Dockiva Engine", "-size", "4t", filepath.Join(home, storeBundle))
+	t.Cleanup(func() { _ = exec.Command("/usr/bin/hdiutil", "detach", "-force", filepath.Join(home, "store")).Run() })
+	if store := openStore(home); store != filepath.Join(home, "store") || !mounted(store) {
+		t.Fatalf("store %s mounted %v", store, mounted(store))
+	}
+	closeStore(home)
+	if mounted(filepath.Join(home, "store")) {
+		t.Fatal("still attached")
 	}
 }
 

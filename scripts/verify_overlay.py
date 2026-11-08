@@ -214,7 +214,7 @@ def case_sensitive():
     with tempfile.TemporaryDirectory(prefix='ovlcase') as temp:
         t = Path(temp)
         build(ROOT/'tests/native/case_guest.c', t/'case')
-        subprocess.run(['hdiutil', 'create', '-quiet', '-type', 'SPARSEBUNDLE', '-fs', 'Case-sensitive APFS', '-size', '1g', str(t/'cs.sparsebundle')], check=True)
+        subprocess.run(['hdiutil', 'create', '-quiet', '-type', 'SPARSEBUNDLE', '-fs', 'Case-sensitive APFS', '-layout', 'NONE', '-size', '1g', str(t/'cs.sparsebundle')], check=True)
         (t/'cs').mkdir()
         subprocess.run(['diskutil', 'image', 'attach', '--nobrowse', '--mountPoint', str(t/'cs'), str(t/'cs.sparsebundle')], check=True, capture_output=True)
         try:

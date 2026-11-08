@@ -43,8 +43,8 @@ type engine struct {
 	spares                                           spareSlot      // a supervisor started ahead of the next start
 	creating                                         map[string]obj // under Mu: the configs of creates syncing without it, by name (createWith)
 
-	// While main moves an older home into the store (store.go; minutes for a large
-	// one): why the API answers only /_ping.
+	// While main attaches the store or moves an older home into it (store.go; minutes
+	// at times): why the API answers only /_ping.
 	opening atomic.Pointer[string]
 	// While the Mac's disk is almost full (store.go: guardSpace): why starts, pulls
 	// and builds are refused.
