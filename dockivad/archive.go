@@ -36,50 +36,17 @@ func (b *engine) guestFile(name, guest string) guestFile { return b.guestFiles(n
 func (b *engine) guestFiles(name string) func(guest string, create bool) guestFile {
 	p := b.container(name)
 	c := readObject(filepath.Join(p, "config.json"))
-	files := containerLayers(p, c)
+	view := containerView(p, c)
+	files := view.files
 	root := files.upper
-	type mount struct {
-		guest, source string
-		readonly      bool
-	}
-	mounts := []mount{}
-	for _, m := range savedMounts(c) {
-		if m["type"] == "tmpfs" { // in the runtime's memory: docker cp sees the mount point beneath it
-			continue
-		}
-		source := str(m["source"])
-		if m["type"] == "volume" {
-			source = volumeData(b.Home, source)
-		}
-		mounts = append(mounts, mount{resolveGuest(pathName(str(m["target"])[1:]), files.link), source, m["readonly"] == true})
-	}
-	// at maps a resolved guest path to its base directory and the rest of the path.
-	at := func(g string) (string, string, bool) {
-		best := -1
-		for i, m := range mounts {
-			if (g == m.guest || strings.HasPrefix(g, m.guest+"/")) && (best < 0 || len(m.guest) > len(mounts[best].guest)) {
-				best = i
-			}
-		}
-		if best < 0 {
-			return root, g, c["writable"] != true
-		}
-		return mounts[best].source, strings.TrimPrefix(strings.TrimPrefix(g, mounts[best].guest), "/"), mounts[best].readonly
-	}
-	link := func(g string) (string, bool) {
-		base, rest, _ := at(g)
-		if base == root {
-			return files.link(rest)
-		}
-		return readLink(filepath.Join(base, rest))
-	}
 	return func(guest string, create bool) guestFile {
 		reject(len(guest) <= 4096 && strings.HasPrefix(guest, "/"), "Path must be absolute: "+guest)
 		clean := strings.TrimPrefix(path.Clean(guest), "/")
 		dir, leaf := path.Split(clean)
-		resolved := path.Join(resolveGuest(pathName(dir), link), leaf)
-		base, rest, readonly := at(resolved)
-		if base == root { // the container's own files, over its image's
+		resolved := path.Join(resolveGuest(pathName(dir), view.link), leaf)
+		m, rest, mounted := view.at(resolved)
+		if !mounted { // the container's own files, over its image's
+			readonly := c["writable"] != true
 			f := guestFile{filepath.Join(root, filepath.FromSlash(rest)), "/" + resolved, readonly, &files, rest}
 			if host, ok := files.find(rest); ok {
 				f.host = host
@@ -90,6 +57,7 @@ func (b *engine) guestFiles(name string) func(guest string, create bool) guestFi
 			}
 			return f
 		}
+		base, readonly := m.source, m.readonly
 		// Every directory above the file is now a real directory; noLinks re-checks that.
 		// ponytail: a process in the container can swap a directory for a symlink between
 		// this check and the copy; open with openat2-style beneath-checks if that matters.
