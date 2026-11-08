@@ -236,7 +236,7 @@ func (im *image) unpack(root string) int64 {
 	members := 0
 	for i, ld := range im.layers {
 		d := str(ld["digest"])
-		fd, e := syscall.Open(noLinks(im.layout, "blobs/sha256/"+d[7:]), syscall.O_RDONLY|syscall.O_NOFOLLOW, 0)
+		fd, e := syscall.Open(noLinks(im.layout, "blobs/sha256/"+d[7:]), syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
 		check(e)
 		f := os.NewFile(uintptr(fd), d)
 		packed, counted := sha256.New(), &counter{}
@@ -460,7 +460,7 @@ func (im *image) guestFile(guest string) ([]byte, bool) {
 	}) != nil || !ok {
 		return nil, false
 	}
-	fd, e := syscall.Open(host, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	fd, e := syscall.Open(host, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC|syscall.O_NONBLOCK, 0)
 	if e != nil {
 		return nil, false
 	}

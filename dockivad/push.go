@@ -247,7 +247,7 @@ func (r *registry) blob(path, d, from string, progress func(current, total int64
 		return "Mounted from " + from
 	}
 	upload := r.location(response)
-	fd, e := syscall.Open(path, syscall.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	fd, e := syscall.Open(path, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
 	check(e)
 	f := os.NewFile(uintptr(fd), d)
 	defer f.Close()

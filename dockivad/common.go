@@ -211,7 +211,7 @@ func noLinks(root, relative string) string {
 }
 func readBounded(root, relative string, limit int64) []byte {
 	p := noLinks(root, relative)
-	fd, e := syscall.Open(p, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	fd, e := syscall.Open(p, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC|syscall.O_NONBLOCK, 0)
 	check(e)
 	f := os.NewFile(uintptr(fd), p)
 	defer f.Close()
