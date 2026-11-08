@@ -1,11 +1,61 @@
 # Dockiva Engine
 
-Dockiva Engine (formerly the VM-free runtime) runs Linux ARM64 containers on Apple
-Silicon macOS with no Linux VM: guest code runs on the host CPU under
-Hypervisor.framework and this runtime implements the Linux system calls. The app
-bundle ships it as `Dockiva.app/Contents/Resources/dockiva-engine/`; its state lives
-in `~/.dockiva-engine`. The notes below keep the project's history and its original
-development name for the Python tooling (`vmfree.py`).
+Dockiva Engine runs Linux containers on Apple Silicon Macs with no Linux VM.
+Container code runs directly on the Mac's CPU under Hypervisor.framework, and the
+engine answers the Linux system calls itself. It is the default engine of
+[Dockiva](https://github.com/Tomnerb/Dockiva), which bundles it as
+`Dockiva.app/Contents/Resources/dockiva-engine/`. Its state lives in
+`~/.dockiva-engine`.
+
+## How it works
+
+- **dockivad** (Go, `dockivad/`) serves the Docker Engine API. The Docker CLI,
+  Compose and BuildKit reach it through the `dockiva` Docker context. It pulls and
+  stores images and supervises containers.
+- **dockiva-hvf** (C, `native/`) runs a container's processes. Guest ARM64 code runs
+  on the CPU in a Hypervisor.framework VM with no guest kernel. Most system calls
+  exit to the runtime on the Mac, which answers them. A few frequent ones are
+  answered inside the guest at EL1, without leaving it.
+- **Images** are unpacked once. Each container writes to its own upper layer, and
+  the image's files stay unchanged.
+- **linux/amd64** images run through FEX, described below.
+- Where a VM cannot be created, such as inside a VM or on CI runners, the same
+  runtime interprets the guest code instead (`dockiva-runtime`).
+
+## Status
+
+Dockiva uses this engine by default on new Apple Silicon installations and starts
+it automatically. An engine a user chose before is kept
+([how Dockiva starts it](docs/PROJECT-DEFINITION.md#default-engine-and-automatic-startup)).
+Each Dockiva release bundles the engine commit pinned in its `DOCKIVA_ENGINE_REF`.
+
+The engine is young. It implements the Linux system calls itself, so some
+programs still need calls or behaviour it lacks. The independent security review
+of the boundary between containers and the Mac is still open; see
+[SECURITY.md](SECURITY.md). Report problems in
+[Dockiva's issues](https://github.com/Tomnerb/Dockiva/issues).
+
+Measurements against OrbStack on the same Mac are in
+[Dockiva's README](https://github.com/Tomnerb/Dockiva#benchmarks).
+
+## Build and test
+
+On an Apple Silicon Mac with the Xcode Command Line Tools, Go 1.24 and Python 3
+(3.14+, or the `zstd` command, for the FEX bundle):
+
+```sh
+python3 scripts/bundle_dockiva_engine.py --output build/dockiva-go   # the bundle Dockiva ships
+go -C dockivad test -race -ldflags=-linkmode=external ./...
+python3 scripts/verify_hvf.py
+python3 scripts/verify_overlay.py
+```
+
+The bundle script builds the runtimes (`scripts/build_native.py`), dockivad and the
+FEX bundle. The FEX bundle's first build downloads four pinned Ubuntu packages.
+The other `scripts/verify_*.py` checks cover memory, processes, networking and the
+Docker API, and [docs/DOCKIVA-INTEGRATION.md](docs/DOCKIVA-INTEGRATION.md) shows
+how to run them against a bundle. CI builds the interpreter on Linux and replays
+the compatibility corpus.
 
 ## linux/amd64 images
 
@@ -52,6 +102,11 @@ Python (`pip install`) images, and a Go cross-compile with an amd64 final stage,
 build and run with the classic builder and BuildKit.
 
 ## History
+
+The rest of this file is the project's development log, kept as written. Each part
+describes the project at that point. Since then, the native backend has become the
+default, the Unicorn adapter has been removed, and the Python tooling, which keeps
+the original development name (`vmfree.py`), is used only to build and test.
 
 Run supported Linux ARM64 guests on Apple Silicon macOS without a Linux kernel VM.
 The prototype supports bounded guest processes, noninteractive commands, buffered
@@ -279,14 +334,10 @@ report; this release's Mac acceptance is pending.
 - [Roadmap](docs/ROADMAP.md#roadmap), [validation evidence](VALIDATION.md)
 - [Earlier M7–M10](docs/MILESTONES.md#m7-10)
 
-No performance advantage over Docker or a Linux VM has been established. The
-Mac packaging scripts must run on your Mac. The historical CLI package requires
-Python for development commands. The new Dockiva helper uses Go/C only; Python
+No performance advantage over Docker or a Linux VM had been established then;
+[Status](#status) links current measurements. The Mac packaging scripts must run on
+your Mac. The historical CLI package requires Python for development commands. The new Dockiva helper uses Go/C only; Python
 remains build and verification tooling.
-
-## Dockiva integration for internal testing
-
-Dockiva defaults to the bundled Dockiva Engine on new Apple Silicon installations and starts it automatically, with no terminal setup. Existing engine choices are preserved. Supported images and basic lifecycle workflows remain the scope. See [project definition and setup](docs/PROJECT-DEFINITION.md). This integration does not close M33 preview or M80 production acceptance gates.
 
 ## License
 
