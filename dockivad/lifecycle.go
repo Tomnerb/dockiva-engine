@@ -35,7 +35,7 @@ type engine struct {
 	BindIP                                           string // -default-bind-ip: where -p HOST:GUEST publishes ("": 127.0.0.1)
 	Mu                                               sync.Mutex
 	events                                           events
-	exits                                            sync.Map       // exit status of auto-removed containers, by name, for a minute
+	exits                                            sync.Map       // exit status of removed containers, by name, for a minute
 	execs                                            sync.Map       // *execJob by ID
 	pausing                                          sync.Mutex     // pause and unpause, and an exec starting meanwhile
 	quit                                             chan struct{}  // POST /dockiva/shutdown asks main to exit
@@ -302,12 +302,13 @@ func (b *engine) stop(name string, seconds ...int) {
 	defer func() {
 		if failure := recover(); failure != nil {
 			// Natural exit can remove the control endpoint after our running
-			// snapshot. Stop is successful once that same run is terminal.
+			// snapshot. Stop is successful once that same run is terminal, or once
+			// the container is gone: autoRemove removes a --rm container as it ends.
 			deadline := time.Now().Add(time.Second)
 			for time.Now().Before(deadline) {
 				terminal := false
 				err := safeRun(func() { terminal = !live(b.status(p)) })
-				if err == nil && terminal {
+				if (err == nil && terminal) || !exists(filepath.Join(p, "status.json")) {
 					return
 				}
 				time.Sleep(20 * time.Millisecond)
@@ -591,6 +592,11 @@ func (b *engine) remove(name string) {
 	reject(!workerAlive(s), "Previous worker is still alive")
 	c := readObject(filepath.Join(p, "config.json"))
 	network := text(c["net_name"])
+	// Kept first: wait reads status without the engine lock, so it sees the container
+	// gone as soon as its directory moves below, and then answers this (docker run
+	// --rm, also after docker rm -f; docker wait --condition removed), as Docker does.
+	b.exits.Store(name, cmp.Or(s["exit_code"], any(0)))
+	time.AfterFunc(time.Minute, func() { b.exits.Delete(name) })
 	// The name is free at once; the files (a whole root file system) go in the
 	// background. A removal cut short is finished at the next engine start.
 	gone := filepath.Join(b.State, ".removing-"+token()[:16])

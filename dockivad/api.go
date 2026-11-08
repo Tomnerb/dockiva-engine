@@ -1199,10 +1199,17 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 					// period for a container that ignores SIGTERM), without the engine lock.
 					b.Mu.Unlock()
 					locked = false
-					b.stop(name, 0)
+					stopped := safeRun(func() { b.stop(name, 0) })
 					b.Mu.Lock()
 					locked = true
 					b.watchPass()
+					// A --rm container: autoRemove removes it as its run ends, usually before
+					// the engine lock is back here. It is gone, as asked.
+					if !exists(filepath.Join(b.container(name), "status.json")) {
+						send(w, 204, nil)
+						return
+					}
+					check(stopped)
 				}
 				mounts := savedMounts(readObject(filepath.Join(b.container(name), "config.json")))
 				b.remove(name)

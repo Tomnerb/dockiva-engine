@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -111,11 +112,12 @@ func TestWaitConditions(t *testing.T) {
 }
 
 // docker run --rm waits for its container's removal, then reports the exit status
-// autoRemove kept. A waiter sees the container gone as soon as its directory moves
+// the removal kept. A waiter sees the container gone as soon as its directory moves
 // away, before the rest of the removal is done, so the status must be kept first.
-// Here another container's unreadable config stops the removal just after the move
-// (in the hosts refresh): the moment such a waiter looks.
-func TestAutoRemoveKeepsExitFirst(t *testing.T) {
+// Here another container's unreadable config stops autoRemove's removal just after
+// the move (in the hosts refresh): the moment such a waiter looks. docker rm keeps
+// it too: docker run --rm reports 137 after docker rm -f, as with Docker.
+func TestRemovalKeepsExitStatus(t *testing.T) {
 	b := testEngine(t)
 	p := b.container("r")
 	check(os.Mkdir(p, 0o700))
@@ -129,6 +131,56 @@ func TestAutoRemoveKeepsExitFirst(t *testing.T) {
 	b.autoRemove("r")
 	if exit, _ := b.exits.Load("r"); exists(p) || fmt.Sprint(exit) != "3" {
 		t.Fatalf("container left: %v, exit status kept: %v", exists(p), exit)
+	}
+	k := b.container("k") // as docker rm -f's kill leaves it
+	check(os.Mkdir(k, 0o700))
+	save(filepath.Join(k, "config.json"), obj{"auto_remove": true})
+	save(filepath.Join(k, "status.json"), obj{"state": "exited", "generation": "g", "exit_code": 137})
+	if r := request(t, b.socketHandler(), "DELETE", "/containers/k", "", ""); r.Code != 204 {
+		t.Fatalf("docker rm: %d %s", r.Code, r.Body.String())
+	}
+	if exit, _ := b.exits.Load("k"); fmt.Sprint(exit) != "137" {
+		t.Fatalf("docker rm kept exit status %v", exit)
+	}
+}
+
+// docker rm -f of a running --rm container: as the kill ends the run, autoRemove
+// removes the container, before the removal has the engine lock back and here even
+// before the stop sees the run's end. docker rm -f succeeds all the same, at once.
+// A fake supervisor answers the kill, as in TestShutdownStopsContainers, once
+// autoRemove is done.
+func TestForceRemoveAfterAutoRemove(t *testing.T) {
+	b := testEngine(t)
+	h := b.socketHandler()
+	if r := request(t, h, "POST", "/containers/create?name=rm", `{"Image":"dockiva/shell:demo","HostConfig":{"AutoRemove":true}}`, ""); r.Code != 201 {
+		t.Fatalf("create: %d %s", r.Code, r.Body.String())
+	}
+	p := b.container("rm")
+	lock, e := lockFile(filepath.Join(p, "lock"), true)
+	check(e)
+	listener, e := net.Listen("tcp", "127.0.0.1:0")
+	check(e)
+	defer listener.Close()
+	save(filepath.Join(p, "control.json"), obj{"port": listener.Addr().(*net.TCPAddr).Port, "token": "secret"})
+	save(filepath.Join(p, "status.json"), obj{"state": "running", "generation": "g", "pid": os.Getpid()})
+	go func() {
+		conn, e := listener.Accept()
+		if e != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = conn.Read(make([]byte, 64)) // the stop command
+		save(filepath.Join(p, "status.json"), obj{"state": "exited", "exit_code": 137, "generation": "g"})
+		lock.Close()
+		b.autoRemove("rm") // as start's goroutine does once the supervisor is over
+		_, _ = conn.Write([]byte("OK"))
+	}()
+	began := time.Now()
+	if r := request(t, h, "DELETE", "/containers/rm?force=1", "", ""); r.Code != 204 {
+		t.Fatalf("docker rm -f: %d %s", r.Code, r.Body.String())
+	}
+	if exists(p) || time.Since(began) > 500*time.Millisecond { // a stop that missed the removal gave up after 1 s
+		t.Fatalf("container left: %v, after %v", exists(p), time.Since(began))
 	}
 }
 
