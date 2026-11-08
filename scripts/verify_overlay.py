@@ -2,7 +2,10 @@
 """Image layers (--root UPPER --lower LOWER, native/overlay.h): overlay semantics
 (tests/native/overlay_guest.c on every built runtime, each on a fresh upper layer
 over one shared lower tree, the second run proving the first left the shared files
-alone); then, with alpine as the lower layer, busybox copying, archiving, renaming
+alone); new files kept in memory (--upper-memory, native/upm.h) renamed while open
+over lower and upper files (tests/native/upm_guest.c), and what that run wrote
+back: each file whole, and no whiteout beside it; then, with alpine as the lower
+layer, busybox copying, archiving, renaming
 and removing image files, and a container trying to change the image's files every
 way it can (writes, chmod, rename, links, truncate, MAP_SHARED writes, sockets,
 FIFOs; MAP_SHARED writes are overlay_guest's) while another container uses them. The lower tree must stay byte-for-byte,
@@ -69,6 +72,46 @@ def runtimes():
             print(f'{binary}: skipped (not built)')
 
 
+# upm_guest.c's lower tree, and what its run leaves in the upper layer: files written
+# back, and the whiteouts of the lower files it removed (and only those).
+UPM_LOWER = {'u/lower': 'old lower', 'u/lower2': 'old lower2', 'u/up': 'old up', 'u/app.log.1': 'old log', 'u/k': 'k', 'u/nr': 'nr',
+             'u/closed': 'old closed', 'u/sub/s': 's', 'w/x': 'old w', 'v/keep': 'v'}
+UPM_WRITTEN = {'u/lower': 'newmore', 'u/up': 'y', 'u/first': 'z', 'u/app.log.1': 'ab', 'u/app.log': 'c', 'w/x': 'w', 'v/made': 'v',
+               'u/m2': 'm', 'u/closed': 'c', 'u/r.new': ''}
+UPM_WHITEOUTS = {'u/.wh.k', 'u/.wh.lower2'}
+
+
+def upm_runs(t):
+    """upm_guest.c on every built runtime, as dockivad runs a container (--upper-memory, --layers-gen)."""
+    failed = 0
+    lower = t/'upm-lower'
+    for name, text in UPM_LOWER.items():
+        (lower/name).parent.mkdir(parents=True, exist_ok=True)
+        (lower/name).write_text(text)
+    build(ROOT/'tests/native/upm_guest.c', t/'upm')
+    before = snapshot(lower)
+    for binary, runtime, extra in runtimes():
+        upper, state = t/f'upm-up-{binary}', t/f'upm-state-{binary}'
+        upper.mkdir()
+        state.mkdir()
+        r = subprocess.run([str(runtime), 'run', str(t/'upm'), '--root', str(upper), '--lower', str(lower), '--writable',
+                            '--upper-memory', str(state/'upper-sync'), '--layers-gen', str(state/'gen'), '--storage-limit-mib', '0',
+                            '--max-steps', '2000000000', '--process-tree', '--scheduled-network', '--dynamic', *extra], capture_output=True, timeout=300)
+        wrong = {k: (upper/k).read_text() if (upper/k).is_file() else None for k, v in UPM_WRITTEN.items()
+                 if not (upper/k).is_file() or (upper/k).read_text() != v}
+        hidden = {str(p.relative_to(upper)) for p in upper.rglob('.wh.*')}
+        left = [k for k in ('u/k', 'u/lower2', 'u/nr', 'u/x.new', 'top.new', 'top2.new') if (upper/k).exists()]
+        ok = r.returncode == 0 and r.stdout == b'upm PASS\n' and b'ERROR: AddressSanitizer' not in r.stderr
+        ok = ok and not wrong and hidden == UPM_WHITEOUTS and not left
+        failed += not ok
+        print(f'{binary} upm_guest (--upper-memory):', 'PASS' if ok else f'FAIL exit={r.returncode} {r.stdout!r} written={wrong} '
+              f'whiteouts={sorted(hidden)} left={left} {r.stderr.decode()[-2000:]}')
+    same = snapshot(lower) == before
+    failed += not same
+    print('upm lower layer unchanged:', 'PASS' if same else 'FAIL')
+    return failed
+
+
 ATTACK = r'''
 for f in /bin/busybox /lib/ld-musl-aarch64.so.1; do      # what this shell runs on: changed, not broken
   echo pwn >> $f; chmod 777 $f; touch -d 2001-01-01 $f; ln $f $f.hard; mv $f.hard $f.moved; rm $f.moved
@@ -108,6 +151,7 @@ def main():
         same = after == before
         failed += not same
         print('lower layer unchanged:', 'PASS' if same else f'FAIL {[k for k in set(before)|set(after) if before.get(k) != after.get(k)]}')
+        failed += upm_runs(t)
 
         # busybox on alpine's files as the lower layer
         lower = t/'alpine'
