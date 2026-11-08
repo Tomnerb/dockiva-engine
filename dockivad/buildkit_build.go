@@ -34,7 +34,7 @@ func (b *engine) bkBuild(ctx context.Context, st *bkSolve, opts map[string]strin
 	for _, t := range st.names {
 		tags = append(tags, normalizeTag(t))
 	}
-	work, e := os.MkdirTemp(private(filepath.Join(b.Home, "build")), "b-")
+	work, e := os.MkdirTemp(private(filepath.Join(b.storeDir(), "build")), "b-")
 	check(e)
 	defer func() { go os.RemoveAll(work) }()
 	bd := &builder{b: b, ctx: ctx, work: work, context: filepath.Join(work, "context"), network: opts["force-network-mode"],

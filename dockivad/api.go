@@ -149,7 +149,7 @@ func (b *engine) removeImage(ref string, force bool) []obj {
 	}
 	out := []obj{}
 	for p, name := range dirs {
-		retainLowers(b.Home, b.State, p) // containers keep running over its files
+		retainLowers(b.storeDir(), b.State, p) // containers keep running over its files
 		check(os.RemoveAll(p))
 		out = append(out, obj{"Untagged": name})
 		b.events.publish(imageEvent("untag", digest, digest)) // Docker names both by the image ID
@@ -710,6 +710,9 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 			check(e)
 			reject(major == 1 && minor >= 24 && minor <= 45, "Supported API range is 1.24–1.45")
 			path = m[3]
+		}
+		if why := b.opening.Load(); why != nil && path != "/_ping" {
+			panic(apiError{503, *why})
 		}
 		q := r.URL.Query()
 		method := r.Method

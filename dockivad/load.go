@@ -64,7 +64,7 @@ func (b *engine) loadImages(w http.ResponseWriter, body io.Reader, quiet bool) {
 			say(obj{"errorDetail": obj{"message": message}, "error": message})
 		}
 	}()
-	work, e := os.MkdirTemp(private(filepath.Join(b.Home, "load")), "l-")
+	work, e := os.MkdirTemp(private(filepath.Join(b.storeDir(), "load")), "l-")
 	check(e)
 	defer func() { go os.RemoveAll(work) }()
 	in := bufio.NewReaderSize(body, 1<<16)

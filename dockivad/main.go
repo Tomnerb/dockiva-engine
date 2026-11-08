@@ -75,19 +75,32 @@ func run() {
 	reject(*maxContainers >= 1 && *maxContainers <= 1024, "--max-containers must be 1..1024")
 	reject(net.ParseIP(*bindIP) != nil, "--default-bind-ip must be an IP address")
 	b := &engine{Home: private(*home), Self: self, Assets: *assetRoot, MaxContainers: *maxContainers, Insecure: *insecure, BindIP: *bindIP, quit: make(chan struct{}, 1)}
-	b.State = private(filepath.Join(b.Home, "containers"))
-	b.Cache = private(filepath.Join(b.Home, "images"))
 	lock, e := lockFile(filepath.Join(b.Home, "daemon.lock"), true)
 	check(e)
 	defer lock.Close()
-	cleanupUnpublished(b.State)
-	migrateNames(b.Cache)
+	store := openStore(b.Home) // store.go: the case-sensitive volume, attached
+	defer detachStore(b.Home, 1)
+	b.State = private(filepath.Join(store, "containers"))
+	b.Cache = private(filepath.Join(store, "images"))
+	moving := store != b.Home && (exists(filepath.Join(b.Home, "images")) || exists(filepath.Join(b.Home, "containers")))
+	// The start's file work. Moving an older home into the store copies its images and
+	// containers (about 15 s a GB): the API answers /_ping meanwhile (the app waits 15 s
+	// for it) and asks for patience otherwise.
+	files := func() {
+		if store != b.Home {
+			moveToStore(b.Home, store)
+		}
+		cleanupUnpublished(b.State)
+		migrateNames(b.Cache)
+	}
 	if *importName != "" {
 		reject(*layout != "", "Import requires --import-layout")
+		files()
 		fmt.Println(commitImage(b.Cache, *importName, *layout))
 		return
 	}
 	if *pull != "" {
+		files()
 		fmt.Println(pullWith(*pull, b.Cache, *insecure, credentials{RegistryToken: os.Getenv(*tokenEnv)}, b.commitPulled))
 		return
 	}
@@ -95,15 +108,6 @@ func run() {
 	b.Worker = regularExecutable(*worker)
 	pruneProcessNames(b.Home, b.Native, filepath.Join(filepath.Dir(b.Native), "dockiva-hvf"))
 	profileCatalogParsed() // checked at start: a bad catalog stops the engine
-	for _, seed := range [][2]string{{"dockiva/shell:demo", "examples/m19/shell-image"}, {"dockiva/server:demo", "examples/m11_17/http-image"}, {"dockiva/redis:preview", "examples/redis-preview/image"}} {
-		source := filepath.Join(b.Assets, seed[1])
-		if exists(source) && !exists(filepath.Join(b.Cache, key(seed[0]))) {
-			commitImage(b.Cache, seed[0], source)
-		}
-	}
-	// OCI validation has a large, short-lived working set. Return it to the host
-	// before idle service, rather than waiting for another allocation-triggered GC.
-	debug.FreeOSMemory()
 	secret := token()
 	endpoint := filepath.Join(b.Home, "engine.sock")
 	// docker.sock serves the same API without the token, for the docker CLI and
@@ -157,14 +161,22 @@ func run() {
 	defer signal.Stop(signals)
 	done := make(chan struct{})
 	defer close(done)
-	go b.watch(done)
-	b.spares.on = true // after the Setenvs above: a spare inherits them as an exec'd supervisor would
-	b.refillSpare()
-	go b.restartOnBoot()
+	served := make(chan error, 1)
+	var docker *http.Server
 	if userListener != nil {
-		docker := &http.Server{Handler: b.socketHandler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 40 * time.Second, IdleTimeout: 10 * time.Second, MaxHeaderBytes: 16384}
-		go func() { _ = docker.Serve(userListener) }()
+		docker = &http.Server{Handler: b.socketHandler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 40 * time.Second, IdleTimeout: 10 * time.Second, MaxHeaderBytes: 16384}
 		defer docker.Close()
+	}
+	serve := func() {
+		go func() { served <- server.Serve(listener) }()
+		if docker != nil {
+			go func() { _ = docker.Serve(userListener) }()
+		}
+	}
+	if moving { // the app waits 15 s for /_ping: it answers during the move, the rest asks for patience
+		why := "Dockiva Engine is moving its images and containers to a case-sensitive disk image, once (about 15 s a GB); try again in a minute"
+		b.opening.Store(&why)
+		serve()
 	}
 	go func() {
 		// SIGTERM leaves containers running; POST /dockiva/shutdown has stopped them.
@@ -178,8 +190,26 @@ func run() {
 		defer cancel()
 		_ = server.Shutdown(ctx)
 	}()
-	e = server.Serve(listener)
-	if e != http.ErrServerClosed {
+	files()
+	for _, seed := range [][2]string{{"dockiva/shell:demo", "examples/m19/shell-image"}, {"dockiva/server:demo", "examples/m11_17/http-image"}, {"dockiva/redis:preview", "examples/redis-preview/image"}} {
+		source := filepath.Join(b.Assets, seed[1])
+		if exists(source) && !exists(filepath.Join(b.Cache, key(seed[0]))) {
+			commitImage(b.Cache, seed[0], source)
+		}
+	}
+	// OCI validation has a large, short-lived working set. Return it to the host
+	// before idle service, rather than waiting for another allocation-triggered GC.
+	debug.FreeOSMemory()
+	if moving {
+		b.opening.Store(nil)
+	} else {
+		serve()
+	}
+	go b.watch(done)
+	b.spares.on = true // after the Setenvs above: a spare inherits them as an exec'd supervisor would
+	b.refillSpare()
+	go b.restartOnBoot()
+	if e = <-served; e != http.ErrServerClosed {
 		check(e)
 	}
 }

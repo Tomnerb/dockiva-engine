@@ -83,8 +83,12 @@ def main():
                 return p
             except BaseException:
                 p.kill(); p.wait(); raise
+        def state():
+            """The containers' directory: in the engine's case-sensitive store (dockivad/store.go), which waits
+            while containers from before it run (the legacy one here)."""
+            return home/'store'/'containers' if (home/'store.sparsebundle').exists() else home/'containers'
         def status(name):
-            return json.loads((home/'containers'/name/'status.json').read_text())
+            return json.loads((state()/name/'status.json').read_text())
         def port(name):
             raw = expect('GET', f'/containers/{name}/logs?stdout=1&tail=1', 200)
             match = re.search(rb'PORT (\d+)', raw)
@@ -107,7 +111,7 @@ def main():
             except OSError:
                 return True
         def legacy(*arguments):
-            return subprocess.run([sys.executable, str(ROOT/'containers.py'), '--state-dir', str(home/'containers'),
+            return subprocess.run([sys.executable, str(ROOT/'containers.py'), '--state-dir', str(state()),
                                    '--native', str(helper.parent/'_internal/build/dockiva-runtime'), *arguments],
                                   capture_output=True, text=True, check=True, timeout=20)
         def processes():
@@ -149,7 +153,7 @@ def main():
             check('20 immediate restarts and removal tolerate natural exit and supervisor cleanup')
             # Image layers: each container's changes stay in its own directory, over the image's
             # files, which all its containers share and none changes; diff, export and commit read them.
-            image_root = next(p.parent for p in (home/'images').glob('*/image.json') if json.loads(p.read_text())['name'] == 'dockiva/shell:demo')/'rootfs'
+            image_root = next(p.parent for p in (state().parent/'images').glob('*/image.json') if json.loads(p.read_text())['name'] == 'dockiva/shell:demo')/'rootfs'
             def image_files():
                 return sorted((str(p.relative_to(image_root)), p.lstat().st_mode, p.lstat().st_mtime_ns, p.lstat().st_size, p.lstat().st_ino) for p in image_root.rglob('*'))
             before = image_files()
@@ -194,7 +198,7 @@ def main():
                 runs.append(run_rm())
             seconds = sorted(t for t, _ in runs)
             report['run_rm_seconds'] = [round(t, 3) for t, _ in runs]
-            check('20 docker run --rm: exit statuses kept, all removed', all(code == 3 for _, code in runs) and not list((home/'containers').glob('[0-9a-f]'*24)))
+            check('20 docker run --rm: exit statuses kept, all removed', all(code == 3 for _, code in runs) and not list(state().glob('[0-9a-f]'*24)))
             check(f'20 docker run --rm: median {seconds[10]:.3f} s under 0.2 s, at most 3 over 0.25 s', seconds[10] < .2 and seconds[-4] < .25)
             for i in range(9):
                 expect('POST', f'/containers/create?name=server-{i}', 201,
@@ -240,12 +244,12 @@ def main():
             check('guard crash also removes native worker')
             for n in active:
                 expect('POST', f'/containers/{n}/stop', 204)
-            check('no hidden partial container publication', not list((home/'containers').glob('.creating-*')))
+            check('no hidden partial container publication', not list(state().glob('.creating-*')))
             files = list(helper.parent.rglob('*'))
             check('bundle has no CPython, .py or .pyc files', all('python' not in p.name.lower() and p.suffix not in ('.py','.pyc') for p in files))
         finally:
             # Only this test's private containers; compatible control protocol works across both engines.
-            for folder in (home/'containers').glob('*'):
+            for folder in state().glob('*'):
                 if folder.is_dir() and (folder/'status.json').exists():
                     try: legacy('stop', folder.name)
                     except (subprocess.SubprocessError, OSError): pass

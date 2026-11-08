@@ -55,20 +55,20 @@ def main():
                 check('packaged native handshake '+backend,caps['schema_version']==1 and backend in caps['backends'])
             expect('POST','/containers/create?name=readonly',400,
                    {'Image':'alias/prepared:renamed','Cmd':['--version'],'HostConfig':{'ReadonlyRootfs':True}})
-            check('alias requires writable root before state publication',not (home/'containers/readonly').exists())
+            check('alias requires writable root before state publication',not (home/'store/containers/readonly').exists())
             expect('POST','/containers/create?name=alias',201,{'Image':'alias/prepared:renamed','Cmd':['--version']})
             info=json.loads(expect('GET','/containers/alias/json',200))['DockivaCompatibility']
             check('alias inspection exposes digest profile and experimental scope',
                   info['Backend']=='hvf' and info['Status']=='EXPERIMENTAL' and
                   info['ProfileID']=='prepared-redis-7.4.2-native' and info['RuntimeABI']=='dockiva-native-v1')
-            before=(home/'containers/alias/config.json').read_bytes()
+            before=(home/'store/containers/alias/config.json').read_bytes()
             # Simulate an incorrectly packaged/replaced backend without modifying the real bundle.
             replacement=native/'replacement';shutil.copy2(native/'dockiva-runtime',replacement)
             replacement.replace(native/'dockiva-hvf')
             failure=expect('POST','/containers/alias/start',409)
             check('missing required backend fails without interpreter fallback',b'required backend: hvf' in failure)
-            state=json.loads((home/'containers/alias/status.json').read_text())
-            check('failed negotiation launches no guest worker',state['state']=='created' and not (home/'containers/alias/control.json').exists())
+            state=json.loads((home/'store/containers/alias/status.json').read_text())
+            check('failed negotiation launches no guest worker',state['state']=='created' and not (home/'store/containers/alias/control.json').exists())
             shutil.copy2(helper.parent/'_internal/build/dockiva-hvf',replacement)
             replacement.replace(native/'dockiva-hvf')
             expect('POST','/containers/alias/start',204)
@@ -77,16 +77,16 @@ def main():
             check('restored backend runs renamed prepared Redis',result['StatusCode']==0 and b'Redis server v=7.4.2' in logs)
             engine.terminate();engine.wait(5);engine=launch()
             after=json.loads(expect('GET','/containers/alias/json',200))['DockivaCompatibility']
-            check('daemon reconnect preserves exact selected profile',after==info and (home/'containers/alias/config.json').read_bytes()==before)
+            check('daemon reconnect preserves exact selected profile',after==info and (home/'store/containers/alias/config.json').read_bytes()==before)
             config=json.loads(before);config['max_steps']=42
-            (home/'containers/alias/config.json').write_text(json.dumps(config))
+            (home/'store/containers/alias/config.json').write_text(json.dumps(config))
             failure=expect('POST','/containers/alias/start',400)
             check('saved launch-policy drift rejected before restart',b'disagrees with profile: max_steps' in failure)
-            (home/'containers/alias/config.json').write_bytes(before)
+            (home/'store/containers/alias/config.json').write_bytes(before)
             expect('DELETE','/containers/alias?force=1',204)
             check('restored policy remains removable')
         finally:
-            for path in (home/'containers').glob('*'):
+            for path in (home/'store'/'containers').glob('*'):
                 if path.is_dir() and (path/'status.json').exists():
                     try:api('DELETE',f'/containers/{path.name}?force=1')
                     except (OSError,ValueError):pass

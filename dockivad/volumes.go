@@ -30,7 +30,9 @@ func volumeData(home, name string) string {
 	return filepath.Join(volumesDir(home), name, "_data")
 }
 
-// createVolume makes a volume, or returns the existing one of that name.
+// createVolume makes a volume, or returns the existing one of that name. Volumes stay
+// on the Mac's case-insensitive disk (store.go), where data's directory is Data's: a
+// name that differs from an existing one only by case is refused.
 func (b *engine) createVolume(name string, labels obj, anonymous bool) obj {
 	reject(volumeName.MatchString(name), "Invalid volume name: "+name)
 	reject(len(labels) <= 64, "Too many labels")
@@ -44,6 +46,11 @@ func (b *engine) createVolume(name string, labels obj, anonymous bool) obj {
 			_ = os.RemoveAll(stage)
 		}
 	}
+	if meta := filepath.Join(dir, "meta.json"); exists(meta) {
+		if other := text(readObject(meta)["name"]); other != name && strings.EqualFold(other, name) {
+			panic(apiError{409, "Volume " + other + " exists, and volume names that differ only by case are one volume on the Mac's case-insensitive disk"})
+		}
+	}
 	return b.volumeInfo(name)
 }
 func (b *engine) volumeMeta(name string) obj {
@@ -52,7 +59,11 @@ func (b *engine) volumeMeta(name string) obj {
 	if !exists(p) {
 		panic(apiError{404, "No such volume: " + name})
 	}
-	return readObject(p)
+	meta := readObject(p)
+	if other := text(meta["name"]); other != "" && other != name { // Data's directory, found for data
+		panic(apiError{404, "No such volume: " + name})
+	}
+	return meta
 }
 func (b *engine) volumeInfo(name string) obj {
 	meta := b.volumeMeta(name)

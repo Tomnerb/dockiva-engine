@@ -361,14 +361,14 @@ func (r layers) mountPoint(guest string, directory bool) {
 
 // retainLowers keeps the unpacked files of image directory dir, which is going (docker
 // rmi, a tag moved to another image), while containers use them as their lower layer:
-// they move to <home>/lowers and the containers' configs follow.
-func retainLowers(home, state, dir string) {
+// they move to the store's lowers (store.go) and the containers' configs follow.
+func retainLowers(store, state, dir string) {
 	root := filepath.Join(dir, "rootfs")
 	users := containersUsing(state, root)
 	if len(users) == 0 {
 		return
 	}
-	kept := filepath.Join(private(filepath.Join(home, "lowers")), token()[:16])
+	kept := filepath.Join(private(filepath.Join(store, "lowers")), token()[:16])
 	check(os.Rename(root, kept))
 	for _, config := range users {
 		c := readObject(config)
@@ -394,12 +394,12 @@ func containersUsing(state, root string) []string {
 	return out
 }
 
-// releaseLower removes a retained lower layer (in <home>/lowers) no container uses.
-func releaseLower(home, state, lower string) {
-	if filepath.Dir(lower) != filepath.Join(home, "lowers") || len(containersUsing(state, lower)) > 0 {
+// releaseLower removes a retained lower layer (in the store's lowers) no container uses.
+func releaseLower(store, state, lower string) {
+	if filepath.Dir(lower) != filepath.Join(store, "lowers") || len(containersUsing(state, lower)) > 0 {
 		return
 	}
-	gone := filepath.Join(home, "lowers", ".removing-"+token()[:16])
+	gone := filepath.Join(store, "lowers", ".removing-"+token()[:16])
 	if os.Rename(lower, gone) == nil {
 		go removeTree(gone)
 	}
@@ -426,7 +426,7 @@ func (b *engine) commitContainer(name string, q url.Values) obj {
 	if labels := object(c["labels"]); len(labels) > 0 {
 		settings["Labels"] = labels
 	}
-	work, e := os.MkdirTemp(b.Home, ".commit-")
+	work, e := os.MkdirTemp(b.storeDir(), ".commit-")
 	check(e)
 	defer os.RemoveAll(work)
 	merged := filepath.Join(work, "rootfs")

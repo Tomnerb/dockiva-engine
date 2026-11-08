@@ -2,7 +2,7 @@ package main
 
 // The build cache, as Docker's classic builder keeps one: each RUN, COPY and ADD
 // result is the stage's files after the step, kept as an APFS clone under
-// <home>/build-cache/<key>/ (rootfs, the stage config, and entry.json: the
+// <store>/build-cache/<key>/ (rootfs, the stage config, and entry.json: the
 // /system/df BuildCache row). The key is the stage's state before the step (the
 // base image digest, chained through every step), the instruction, the ARGs and
 // settings it sees, for COPY and ADD a hash of the sources, and for RUN a hash of
@@ -31,7 +31,7 @@ var buildCacheMu sync.Mutex
 // buildCacheMax caps the build cache, together with a tenth of the free disk.
 var buildCacheMax int64 = 10 << 30
 
-func (b *engine) buildCacheDir() string { return private(filepath.Join(b.Home, "build-cache")) }
+func (b *engine) buildCacheDir() string { return private(filepath.Join(b.storeDir(), "build-cache")) }
 
 // stepKey is a step's cache key: the stage's state, the instruction (with its
 // here-documents), and what it sees.
@@ -312,7 +312,7 @@ func (b *engine) discard(dir string) {
 	if !exists(dir) {
 		return
 	}
-	trash, e := os.MkdirTemp(private(filepath.Join(b.Home, "build")), "trash-")
+	trash, e := os.MkdirTemp(private(filepath.Join(b.storeDir(), "build")), "trash-")
 	check(e)
 	check(os.Rename(dir, filepath.Join(trash, "entry")))
 	go os.RemoveAll(trash)

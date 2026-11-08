@@ -114,7 +114,7 @@ func (b *engine) build(w http.ResponseWriter, r *http.Request, q url.Values) {
 			send(obj{"errorDetail": obj{"message": message}, "error": message})
 		}
 	}()
-	work, e := os.MkdirTemp(private(filepath.Join(b.Home, "build")), "b-")
+	work, e := os.MkdirTemp(private(filepath.Join(b.storeDir(), "build")), "b-")
 	check(e)
 	defer func() { go os.RemoveAll(work) }()
 	quiet := q.Get("q") == "1" || q.Get("q") == "true"

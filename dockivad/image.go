@@ -613,7 +613,7 @@ func (b *engine) commitTag(name, digest, layout string) string {
 	name = shortName(name)
 	target := filepath.Join(b.Cache, key(name))
 	if exists(target) && text(readObject(filepath.Join(target, "image.json"))["digest"]) != digest {
-		retainLowers(b.Home, b.State, target)
+		retainLowers(b.storeDir(), b.State, target)
 		gone := filepath.Join(b.Cache, ".replaced-"+token()[:16])
 		check(os.Rename(target, gone))
 		go removeTree(gone)

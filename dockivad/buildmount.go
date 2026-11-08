@@ -3,7 +3,7 @@ package main
 // RUN's BuildKit options (Dockerfile 1.2+ syntax) on the classic builder:
 //
 //	--mount=type=cache   a directory kept across builds, keyed by id (the target by
-//	                     default): a build cache entry (<home>/build-cache/<key>/data,
+//	                     default): a build cache entry (<store>/build-cache/<key>/data,
 //	                     Type exec.cachemount), so docker builder prune, buildx du
 //	                     and system df count it. It is not part of the step's key.
 //	--mount=type=bind    a path of the context, a stage or an image (from=):

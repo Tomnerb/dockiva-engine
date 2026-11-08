@@ -120,14 +120,14 @@ func (b *engine) createNetwork(body obj) obj {
 }
 
 // members lists the containers on a network: name, address and aliases.
-func (b *engine) members(network string) []obj { return membersOn(b.Home, network) }
+func (b *engine) members(network string) []obj { return membersOn(b.State, network) }
 
-func membersOn(home, network string) []obj {
+func membersOn(state, network string) []obj {
 	out := []obj{}
-	entries, e := os.ReadDir(filepath.Join(home, "containers"))
+	entries, e := os.ReadDir(state)
 	check(e)
 	for _, entry := range entries {
-		config := filepath.Join(home, "containers", entry.Name(), "config.json")
+		config := filepath.Join(state, entry.Name(), "config.json")
 		if !entry.IsDir() || !namePattern.MatchString(entry.Name()) || !exists(config) {
 			continue
 		}
