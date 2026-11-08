@@ -354,9 +354,13 @@ static void *upm_writer(void *unused) {
     (void)unused;
     char dir[1025];snprintf(dir,sizeof dir,"%s",upm_sync);
     char *slash=strrchr(dir,'/');if(slash)*slash=0;
+#ifdef __APPLE__
     int kq=kqueue(),fd=slash?open(dir,O_EVTONLY|O_CLOEXEC):-1;
     struct kevent change;EV_SET(&change,fd,EVFILT_VNODE,EV_ADD|EV_CLEAR,NOTE_WRITE,0,NULL);
     if(kq>=0 && (fd<0 || kevent(kq,&change,1,NULL,0,NULL)<0)) { close(kq);kq=-1; }   /* then a 20 ms poll */
+#else
+    int kq=-1,fd=-1;                                                           /* no kqueue: the 20 ms poll */
+#endif
     pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED,0);
     struct timespec now;clock_gettime(CLOCK_MONOTONIC,&now);
     uint64_t aged=upm_ns(&now)+250000000;
@@ -374,8 +378,12 @@ static void *upm_writer(void *unused) {
         }
         uint64_t left=aged-upm_ns(&now);
         struct timespec wait={(time_t)(left/1000000000),(long)(left%1000000000)};
+#ifdef __APPLE__
         struct kevent event;
         if(kq<0 || kevent(kq,NULL,0,&event,1,&wait)<0)usleep(20000);
+#else
+        (void)wait;usleep(20000);
+#endif
     }
     if(kq>=0)close(kq);
     if(fd>=0)close(fd);

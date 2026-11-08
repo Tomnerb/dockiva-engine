@@ -25,10 +25,18 @@ def main():
     name = {(False, False): 'dockiva-runtime', (True, False): 'dockiva-runtime-sanitize',
             (False, True): 'dockiva-hvf', (True, True): 'dockiva-hvf-sanitize'}[(args.sanitize, args.with_hvf)]
     flags = ['-std=c11', '-O2', '-Wall', '-Wextra', '-Werror', '-pedantic']
+    if platform.system() != 'Darwin':
+        # The Linux CI build (GCC) checks what the Mac build (clang) checks. The runtime is one
+        # translation unit of headers, and clang does not report unused statics in headers
+        # (helpers only Darwin code calls are unused here). GCC's misleading-indentation check
+        # (this code's one-line `if(a)x;if(b)y;`) and its flow-based truncation, bounds and
+        # overlap guesses have no clang counterpart.
+        flags += ['-Wno-unused-function', '-Wno-unused-variable', '-Wno-misleading-indentation',
+                  '-Wno-format-truncation', '-Wno-array-bounds', '-Wno-restrict']
     if args.sanitize:
         flags += ['-g', '-fsanitize=address,undefined', '-fno-omit-frame-pointer']
     source = ROOT / 'native/runtime.c'
-    libraries = []
+    libraries = ['-lm']                                                     # exp() (fs.h); part of libSystem on macOS
     if args.with_hvf:
         build_el1.build(args.cc)                                              # native/hvf_el1_code.h, from hvf_el1_guest.c
         flags += ['-DVMFREE_HVF']

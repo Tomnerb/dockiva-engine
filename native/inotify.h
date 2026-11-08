@@ -68,6 +68,7 @@ static int inotify_load(void) {
        !fse.cf_release || !fse.array_callbacks || !fse.queue_create || !fse.sync || !(fse.queue=fse.queue_create("dockiva.inotify",NULL)))return 0;
     fse.loaded=1;return 1;
 }
+#endif
 /* Called with in->lock held. */
 static void inotify_emit(struct GuestInotify *in,int wd,uint32_t mask,const char *name) {
     size_t name_size=name?(strlen(name)+1+15)/16*16:0,size=16+name_size;
@@ -88,6 +89,7 @@ static void inotify_drop(struct GuestInotify *in,unsigned index) {
     inotify_emit(in,in->watch[index].wd,IN_IGNORED,NULL);
     in->watch[index]=in->watch[--in->nwatch];
 }
+#ifdef __APPLE__
 /* FSEvents repeats a path's earlier flags (created, renamed, modified) with later
    events: remember which paths were reported as existing, and their modification
    and change times, so a file is created once and a change is MODIFY (its contents)

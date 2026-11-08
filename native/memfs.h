@@ -1031,7 +1031,7 @@ static int mem_path_call(uint64_t call) {
         const unsigned char *how=lookup(x[2],24,4);if(!how)return MEM_PASS;
         uint64_t flags=le(how,8);a[0]=(MemArg){x[0],x[1],!(flags&32768) && (flags&192)!=192,0};break;
     }
-    case 79: if(x[3]&~UINT64_C(256|2048|4096))return MEM_PASS;a[0]=(MemArg){x[0],x[1],!(x[3]&256),(x[3]&4096)!=0};break;
+    case 79: if(x[3]&~(UINT64_C(256)|2048|4096))return MEM_PASS;a[0]=(MemArg){x[0],x[1],!(x[3]&256),(x[3]&4096)!=0};break;
     case 48: a[0]=(MemArg){x[0],x[1],1,0};break;
     case 439: a[0]=(MemArg){x[0],x[1],!(x[3]&256),(x[3]&4096)!=0};break;
     case 78: case 34: case 35: case 33: a[0]=(MemArg){x[0],x[1],0,0};break;
