@@ -39,6 +39,7 @@ typedef struct {
 /* Portable reference implementation retains backing-granular COW. */
 typedef struct {
     size_t refs,size;
+    unsigned frozen;                  /* never set: snapshots are the Mach backing's */
     _Alignas(max_align_t) unsigned char bytes[];
 } MemoryBacking;
 #endif

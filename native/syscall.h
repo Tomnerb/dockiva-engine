@@ -358,7 +358,7 @@ static int guest_syscall_dispatch(void) {
                 int writable;
                 if(call==55) { fd=fs_host(cpu->gpr[0]);if(fd<0) { cpu->gpr[0]=linux_error(9);return -3; }writable=FS(fs_slot(cpu->gpr[0])).ro!=1; } /* 2: a lower file (overlay.h), no change to make */
                 else {
-                    if(cpu->gpr[4]&~UINT64_C(256|4096)) { cpu->gpr[0]=linux_error(22);return -3; }
+                    if(cpu->gpr[4]&~(UINT64_C(256)|4096)) { cpu->gpr[0]=linux_error(22);return -3; }
                     char leaf[1025];int parent=fs_lookup(cpu->gpr[0],cpu->gpr[1],leaf,!(cpu->gpr[4]&256)|FS_DIRECT,NULL);
                     if(parent<0) { cpu->gpr[0]=fs_error();return -3; }
                     writable=fs_path_writable();
@@ -610,7 +610,7 @@ static int guest_syscall_dispatch(void) {
                 uint64_t dirfd=cpu->gpr[0],path=cpu->gpr[1],flags=cpu->gpr[2],buffer=cpu->gpr[4];
                 unsigned char *out=lookup(buffer,256,2),*first=lookup(path,1,4);
                 if(!out || !first) { cpu->gpr[0]=linux_error(14);return -3; }
-                if(flags&~UINT64_C(0x100|0x800|0x1000|0x6000)) { cpu->gpr[0]=linux_error(22);return -3; }
+                if(flags&~(UINT64_C(0x100)|0x800|0x1000|0x6000)) { cpu->gpr[0]=linux_error(22);return -3; }
                 uint64_t saved[9];memcpy(saved,cpu->gpr,sizeof(saved));
                 if(!*first && (flags&0x1000)) { cpu->gpr[0]=dirfd;cpu->gpr[1]=buffer;cpu->gpr[8]=80; }
                 else { cpu->gpr[0]=dirfd;cpu->gpr[1]=path;cpu->gpr[2]=buffer;cpu->gpr[3]=flags&(0x100|0x800|0x1000);cpu->gpr[8]=79; }
@@ -853,7 +853,7 @@ static int guest_syscall_unlocked(void) {
     if(call==291) {
         /* statx of a path (npm stats thousands): newfstatat without the lock, rewritten. */
         uint64_t flags=cpu->gpr[2],buffer=cpu->gpr[4];
-        if(!named || !path[0] || (flags&~UINT64_C(0x100|0x800|0x6000)))return 0;
+        if(!named || !path[0] || (flags&~(UINT64_C(0x100)|0x800|0x6000)))return 0;
         unsigned char *out=lookup(buffer,256,2);if(!out)return 0;
         uint64_t saved[9];memcpy(saved,cpu->gpr,sizeof(saved));
         cpu->gpr[2]=buffer;cpu->gpr[3]=flags&(0x100|0x800);cpu->gpr[8]=79;

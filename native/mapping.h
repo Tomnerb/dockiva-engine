@@ -967,7 +967,7 @@ static uint64_t proc_resident(const MemoryBacking *backing,size_t offset,size_t 
     for(size_t i=first;i<=last && i<backing->used;i++)owned+=backing->pages[i]!=NULL;
     return owned*page<size?owned*page:size;
 #else
-    return size;
+    (void)offset;return size;
 #endif
 }
 /* An address space's virtual size (its mappings, as maps lists them) and resident

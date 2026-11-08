@@ -111,15 +111,9 @@
       ],
       "expected": {
         "exit_code": 0,
-        "stdout": "denied\n/bin\n",
-        "stderr": ""
-      },
-      "reference_expected": {
-        "exit_code": 0,
         "stdout": "allowed\n/\n",
         "stderr": ""
-      },
-      "policy_gap": "FS-001: parent traversal remains rejected; M27 open"
+      }
     },
     {
       "id": "symlink-policy",
@@ -128,16 +122,10 @@
         "/link"
       ],
       "expected": {
-        "exit_code": 1,
-        "stdout": "",
-        "stderr": "cat: can't open '/link': Permission denied\n"
-      },
-      "reference_expected": {
         "exit_code": 0,
         "stdout": "fixture\n",
         "stderr": ""
-      },
-      "policy_gap": "FS-002: links remain rejected; M27 open"
+      }
     }
   ]
 }

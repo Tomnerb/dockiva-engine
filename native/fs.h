@@ -144,7 +144,9 @@ static uint64_t fs_file_limit=FS_FILE_LIMIT,fs_storage_limit=FS_STORAGE_LIMIT,fs
    system without the fcntl gets fsync. */
 static int fs_fsync_mode;                                                    /* 0 barrier, 1 full, 2 fast */
 static int fs_sync(int fd) {
+#ifdef __APPLE__
     if(fs_fsync_mode!=2 && !fcntl(fd,fs_fsync_mode?F_FULLFSYNC:F_BARRIERFSYNC))return 0;
+#endif
     return fsync(fd);
 }
 static int fs_count_full(void) { return fs_storage_limit && (fs_created>=4096 || fs_entries>=8192); }
@@ -924,7 +926,11 @@ static void proc_cpu_of(uint64_t pid,uint64_t out[2]) {
 /* Memory: the budget (docker run -m), or the host's memory if that is smaller; in use,
    what the container's runs have charged. */
 static uint64_t proc_mem_total(void) {
+#ifdef __APPLE__
     static uint64_t host;if(!host) { size_t size=sizeof(host);if(sysctlbyname("hw.memsize",&host,&size,NULL,0))host=UINT64_MAX; }
+#else
+    static uint64_t host;if(!host) { long pages=sysconf(_SC_PHYS_PAGES),page=sysconf(_SC_PAGESIZE);host=pages>0 && page>0?(uint64_t)pages*(uint64_t)page:UINT64_MAX; }
+#endif
     return resource_limit<host?resource_limit:host;
 }
 static uint64_t proc_mem_used(void) {
@@ -1804,7 +1810,7 @@ static uint64_t fs_call(uint64_t call) {
         return fs_sync(fd)<0?fs_error():0;                                 /* fdatasync as fsync */
     }
     if(call==79) {
-        if(cpu->gpr[3]&~UINT64_C(256|2048|4096)) return linux_error(95);
+        if(cpu->gpr[3]&~(UINT64_C(256)|2048|4096)) return linux_error(95);
         unsigned char *out=fs_memory(cpu->gpr[2],128,2);if(!out)return linux_error(14);
         unsigned char *first=fs_memory(cpu->gpr[1],1,4);if(!first)return linux_error(14);
         if(!*first) {
