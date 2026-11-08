@@ -168,10 +168,12 @@ static void el1_unlock(uint64_t *frame,const HvfEl1Context *c,uint64_t mm) {
 static long el1_open(uint64_t *frame,const HvfEl1Context *c) {
     uint64_t flags=frame[2],task=frame[HF_TASK],mm=frame[HF_MM],mirror=frame[HF_FDS];
     /* O_NOCTTY, O_NONBLOCK, O_NOFOLLOW, O_LARGEFILE, O_NOATIME, O_CLOEXEC: read-only, nothing made */
-    if(!c->pack_count || task>UINT32_MAX || !mirror || (flags&~(UINT64_C(256)|2048|32768|131072|262144|524288)))return 0;
+    if(flags&~(UINT64_C(256)|2048|32768|131072|262144|524288))return 0;
     char full[1025];unsigned f=el1_path(c,frame[1]&USER_MASK,full);if(!f)return 0;
     unsigned layer,lower;uint64_t st[18];
-    if(!el1_lookup(c,full,f,!(flags&32768),&layer,&lower,st) || layer!=1)return 0;
+    if(!el1_lookup(c,full,f,!(flags&32768),&layer,&lower,st))return 0;
+    if(layer!=1) { frame[0]=(uint64_t)(int64_t)(layer==3 && lower?-20:-2);return 1; }   /* missing (a compiler tries every include directory) */
+    if(!c->pack_count || task>UINT32_MAX || !mirror)return 0;
     uint64_t mode=st_field(st,c->s_mode,2),size=st_field(st,c->s_size,8),ino=st_field(st,c->s_ino,8);
     if((mode&0170000)!=0100000 || size>c->file_limit)return 0;
     /* pack_find: the entry for this inode, if it still has the file's size, time and path */
@@ -384,9 +386,21 @@ static long el1_sigaction(uint64_t *frame,const HvfEl1Context *c) {
     el1_unlock(frame,c,mm);
     frame[0]=0;return 1;
 }
+/* readlinkat (78) of an absolute path the lookup cache knows is no link: EINVAL, as on
+   Linux (realpath asks of every component); missing: ENOENT. A link's text: the runtime. */
+static long el1_readlink(uint64_t *frame,const HvfEl1Context *c) {
+    if((int32_t)frame[3]<=0)return 0;
+    char full[1025];unsigned f=el1_path(c,frame[1]&USER_MASK,full);if(!f)return 0;
+    unsigned layer,lower;uint64_t st[18];
+    if(!el1_lookup(c,full,f,0,&layer,&lower,st))return 0;
+    if(layer!=1) { frame[0]=(uint64_t)(int64_t)(layer==3 && lower?-20:-2);return 1; }
+    if((st_field(st,c->s_mode,2)&0170000)==0120000)return 0;
+    frame[0]=(uint64_t)(int64_t)-22;return 1;
+}
 long el1_entry(uint64_t *frame,const HvfEl1Context *c) {
     uint64_t call=frame[8];
     if(call==79 || call==291)return el1_stat(frame,c);
+    if(call==78)return el1_readlink(frame,c);
     if(call==56)return el1_open(frame,c);
     if(call==57)return el1_close(frame,c);
     if(call==222)return el1_mmap(frame,c);

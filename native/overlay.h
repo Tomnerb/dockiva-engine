@@ -234,6 +234,7 @@ static int ov_upper(const char *canon) {
             if(made) {
                 struct timespec times[2]={st.st_atimespec,st.st_mtimespec};
                 (void)ov_chmod(u,part,st.st_mode&07777);(void)utimensat(u,part,times,AT_SYMLINK_NOFOLLOW);
+                ov_dirty=1;                                            /* a lower directory now shows from above (fchmod of its descriptor): ov_changed */
             }
             nu=ov_subdir(u,part);
         }

@@ -645,9 +645,6 @@ func runtimeCommand(p, native string, c obj, command []string, argv0 string, env
 	reject(c["cpu_backend"] == nil || c["cpu_backend"] == "interpreter" || c["cpu_backend"] == "hvf", "Unknown execution backend")
 	r := containerLayers(p, c)
 	root := r.upper
-	// Resolve guest symlinks inside the container; find refuses a symlink on the way.
-	guest, found := r.find(resolveGuest(pathName(command[0][1:]), r.link))
-	reject(found, "Executable missing: "+command[0])
 	validateEnv(env)
 	steps := "10000000"
 	if c["max_steps"] != nil {
@@ -661,7 +658,7 @@ func runtimeCommand(p, native string, c obj, command []string, argv0 string, env
 	reject(memory >= 1 && memory <= 65536, "Invalid memory limit")
 	// The run creates the oom file when it kills a process over the memory limit
 	// (exec and healthchecks share the container's budget, as in a cgroup).
-	args := []string{"run", guest, "--root", root}
+	args := []string{"run", "", "--root", root} // the program: found below, once the mounts are ready
 	if r.lower != "" {
 		// The image's small files from one mapping, built beside its root by the first run.
 		args = append(args, "--lower", r.lower, "--layers-gen", r.gen, "--lower-pack", r.lower+".pack")
@@ -734,6 +731,13 @@ func runtimeCommand(p, native string, c obj, command []string, argv0 string, env
 		args = append(args, "--network", networkPorts(home, str(c["net_name"])), "--ip", ip)
 	}
 	args = append(args, prepareMounts(home, r, c, publish)...)
+	// The program as the container sees it: a mount hides the files beneath it, and a
+	// new volume holds the image's files by now. Guest symlinks resolve inside the
+	// container; find refuses a symlink on the way.
+	view := containerView(p, c)
+	program, found := view.find(resolveGuest(pathName(command[0][1:]), view.link))
+	reject(found, "Executable missing: "+command[0])
+	args[1] = program
 	if c["arch"] == "amd64" { // FEX runs its x86 programs (x86.go)
 		args = append(args, x86Args(r, native, home)...)
 	}

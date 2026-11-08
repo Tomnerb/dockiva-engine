@@ -485,6 +485,9 @@ func (b *engine) createWith(name string, body obj, prepared *image) obj {
 	for k, v := range labels {
 		reject(len(k)+len(str(v)) <= 4096, "Label too long")
 	}
+	// The program may be in a mount: look for it as the first start will show them.
+	mounts, makeSources := b.parseMounts(host, body, im.Volumes)
+	im.mounts = viewMounts(b.Home, im.files(), savedMounts(obj{"mounts": mounts}), true)
 	command := im.command(override)
 	for _, k := range im.Exposed {
 		exposed[k] = true
@@ -571,7 +574,7 @@ func (b *engine) createWith(name string, body obj, prepared *image) obj {
 	if im.User != "" {
 		config["user"] = im.User
 	}
-	if mounts := b.parseMounts(host, body, im.Volumes); len(mounts) > 0 {
+	if len(mounts) > 0 {
 		config["mounts"] = mounts
 		if host["Binds"] != nil {
 			config["binds"] = stringsOf(host["Binds"])
@@ -581,6 +584,7 @@ func (b *engine) createWith(name string, body obj, prepared *image) obj {
 	profile.apply(config)
 	validateLaunchProfile(config, b.Native)
 	reject(config["mounts"] == nil || config["host_sandbox"] != true, "Mounts are not supported for host-sandboxed containers")
+	makeSources() // its volumes and -v directories, now that it is valid
 	if layered {
 		config["lower"], im.Lower = im.Root, im.Root
 	} else {

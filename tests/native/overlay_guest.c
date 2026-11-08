@@ -79,6 +79,15 @@ void _start(void) {
     { unsigned char times[32]={0};times[16]=200;CHECK(C4(88,AT,"/ut",times,0)==0 && stat_of("/ut")==0 && ST_MTIME==200 && has("/ut","utimes")); }
     CHECK(C2(45,"/t1",4)==0 && has("/t1","trun"));                            /* truncate */
     CHECK(C4(88,AT,"/ln",0,0x100)==0 && lstat_of("/ln")==0 && (ST_MODE&0170000)==0120000 && C4(78,AT,"/ln",buffer,64)==1 && buffer[0]=='f');
+    /* readlink of what is no link, of missing paths, and opens of missing files: the same
+       answers again (from the lookup cache, when the run has one), until the file is made */
+    for(int i=0;i<3;i++) {
+        CHECK(C4(78,AT,"/d",buffer,64)==-22 && C4(78,AT,"/d/a",buffer,64)==-22 && C4(78,AT,"/f",buffer,64)==-22 && C4(78,AT,"/d/a",buffer,0)==-22);
+        CHECK(C4(78,AT,"/d/none",buffer,64)==-2 && C4(78,AT,"/nodir/x",buffer,64)==-2 && C4(78,AT,"/d/a/x",buffer,64)==-20);
+        CHECK(C4(78,AT,"/abs",buffer,64)==2 && same(buffer,"/d",2) && open3("/e/later",0,0)==-2 && open3("/nodir/x",0,0)==-2 && open3("/d/a/x",0,0)==-20);
+    }
+    CHECK(put("/e/later","l")==1 && has("/e/later","l") && C4(78,AT,"/e/later",buffer,64)==-22);
+    CHECK(C3(34,AT,"/nodir",0755)==0 && put("/nodir/x","x")==1 && has("/nodir/x","x") && C4(78,AT,"/nodir/x",buffer,64)==-22);
     /* whiteouts: a lower file, then its directory; made again, the directory is empty */
     CHECK(C3(35,AT,"/gone/x",0)==0 && stat_of("/gone/x")==-2 && names("/gone",0)==0);
     CHECK(C3(35,AT,"/gone",0x200)==0 && stat_of("/gone")==-2 && names("/","gone")==0);
@@ -112,6 +121,12 @@ void _start(void) {
     CHECK(C1(57,fd)==0 && has("/d/b","b"));
     /* a lower directory's descriptor: fchmod copies it up */
     fd=open3("/ddir",040000,0);CHECK(fd>=0 && C2(52,fd,0700)==0 && C1(57,fd)==0 && stat_of("/ddir")==0 && (ST_MODE&07777)==0700);
+    /* AT_EMPTY_PATH names the descriptor itself: systemd's copy_rights on the new file that
+       sysusers renames over /etc/group, and a lower directory (copied up); without it, "" is ENOENT */
+    fd=open3("/d/sub/.#c",0302,0600);CHECK(fd>=0 && C3(64,fd,"new",3)==3 && call(452,(U)fd,(U)"",0644,0x1000,0,0)==0 && C5(54,fd,"",0,0,0x1000)==0);
+    CHECK(call(452,(U)fd,(U)"",0600,0,0,0)==-2 && C5(54,fd,"",0,0,0)==-2 && C2(80,fd,st)==0 && (ST_MODE&07777)==0644 && C1(57,fd)==0);
+    CHECK(C4(38,AT,"/d/sub/.#c",AT,"/d/sub/c")==0 && has("/d/sub/c","new") && stat_of("/d/sub/c")==0 && (ST_MODE&07777)==0644);
+    fd=open3("/e",040000,0);CHECK(fd>=0 && call(452,(U)fd,(U)"",0711,0x1000,0,0)==0 && C1(57,fd)==0 && stat_of("/e")==0 && (ST_MODE&07777)==0711);
     /* a lower directory as working directory and as dirfd, after files appear in it */
     CHECK(C1(49,"/cwd")==0 && put("rel","r")==1 && has("/cwd/rel","r") && C2(17,buffer,sizeof buffer)==5 && same(buffer,"/cwd",5) && C1(49,"/")==0);
     fd=open3("/deep/1/2",040000,0);CHECK(fd>=0 && put("/deep/1/2/new","n")==1);

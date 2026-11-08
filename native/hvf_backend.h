@@ -1329,7 +1329,7 @@ static void hvf_init_vm(void) {
         0xa94637ec,0xa9473fee,0xa94847f0,0xa9494ff2,0xa94a57f4,0xa94b5ff6,0xa94c67f8,0xa94d6ffa,0xa94e77fc,0xf9407bfe,0xd69f03e0,
         0xa95287e0,0xd50883a0,0x91000400,0xf1000421,0x54ffffa1,0xd5033b9f,0x17ffffe3};
     memcpy(hvf_system+0x400,lower_sync,sizeof(lower_sync));
-    /* Calls 172..178 aside, newfstatat (79), statx (291), openat (56), close (57), mmap (222), munmap (215) and futex (98) go to the EL1 handlers while
+    /* Calls 172..178 aside, newfstatat (79), statx (291), readlinkat (78), openat (56), close (57), mmap (222), munmap (215) and futex (98) go to the EL1 handlers while
        HF_STAT says so: the stub saves what C code may clobber (x2..x18, x30) and the
        call's ELR, SPSR and ESR, runs el1_entry(frame, context) on the vCPU's stack, and
        returns to the guest (handled) or takes the exit at save. A fault in the handlers
@@ -1339,8 +1339,8 @@ static void hvf_init_vm(void) {
         w[0x42c/4]=a64_b19(0x42c,HVF_EL1_STUB,0x54000008);              /* b.hi: no longer straight to save */
         unsigned at=HVF_EL1_STUB,give_up,taken;
 #define EMIT(x) (w[at/4]=(x),at+=4)
-        static const unsigned answered[]={79,291,56,57,222,215,98,134};   /* newfstatat, statx, openat, close, mmap, munmap, futex, rt_sigaction */
-        unsigned taken_at[8],calls=sizeof(answered)/sizeof(*answered);
+        static const unsigned answered[]={79,291,78,56,57,222,215,98,134};   /* newfstatat, statx, readlinkat, openat, close, mmap, munmap, futex, rt_sigaction */
+        unsigned taken_at[sizeof(answered)/sizeof(*answered)],calls=sizeof(answered)/sizeof(*answered);
         for(unsigned k=0;k+1<calls;k++) { EMIT(0xf100001fu|(answered[k]<<10)|(8u<<5));taken_at[k]=at;at+=4; }   /* cmp x8, #call; b.eq (below) */
         EMIT(0xf100001fu|(answered[calls-1]<<10)|(8u<<5));EMIT(a64_b19(at,HVF_SAVE_OFFSET,0x54000001));      /* the last: b.ne save */
         for(unsigned k=0;k+1<calls;k++)w[taken_at[k]/4]=a64_b19(taken_at[k],at,0x54000000);

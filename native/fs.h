@@ -1439,6 +1439,7 @@ static uint64_t fs_open(void) {
     /* Validate the existing leaf before a possible truncate; only regular files/dirs.
        An unfollowed symlink reaches openat, which fails with ELOOP or EEXIST as on Linux. */
     struct stat before;int exists=fs_leaf_stat(parent,leaf,&before)==0;
+    if(!exists && errno==ENOENT && !(flags&64)) { close(parent);return linux_error(2); }   /* missing, not made: no host open (gcc tries every include directory) */
     if(exists) {
         if(S_ISFIFO(before.st_mode)) { /* a named pipe: the container's shared pipe */
             close(parent);
@@ -1678,14 +1679,17 @@ static uint64_t fs_call(uint64_t call) {
     if(call==166) { unsigned previous=fs_umask;fs_umask=(unsigned)cpu->gpr[0]&0777;return previous; }
     if(call==52 || call==53 || call==452) {
         uint64_t mode=cpu->gpr[call==52?1:2]&UINT64_C(07777); /* Linux ignores other bits (libuv passes st_mode); setuid/setgid/sticky allowed */
+        uint64_t flags=call==452?cpu->gpr[3]:0;if(flags&~UINT64_C(0x1100))return linux_error(22);
+        /* fchmodat2(fd, "", mode, AT_EMPTY_PATH) changes the descriptor's file, as fchmod:
+           systemd's fchmod_opath (sysusers on its new /etc/.#group* file). ponytail: with
+           AT_FDCWD it is EBADF (Linux changes the working directory); none seen asks. */
+        if(flags&0x1000) { const unsigned char *first=fs_memory(cpu->gpr[1],1,4);if(first && !*first)call=52; }
         int fd=fs_host(cpu->gpr[0]),own=-1;
         if(call==52 && fs_slot(cpu->gpr[0])>=0 && FS(fs_slot(cpu->gpr[0])).ro && (fd=own=ov_fd_upper(fs_slot(cpu->gpr[0])))<0)return linux_error(30);
         if(call!=52) {
             /* By path, never opening the file (an open costs ~12 us and needs read permission).
                fchmodat2 (452): AT_SYMLINK_NOFOLLOW on a symlink is EOPNOTSUPP, as Linux; glibc
-               and Go call it first. ponytail: AT_EMPTY_PATH with "" fails the lookup (Linux
-               changes the descriptor itself); add if a program needs it. */
-            uint64_t flags=call==452?cpu->gpr[3]:0;if(flags&~UINT64_C(0x1100))return linux_error(22);
+               and Go call it first. */
             char leaf[1025];int parent=fs_lookup(cpu->gpr[0],cpu->gpr[1],leaf,(flags&0x100?0:1)|FS_DIRECT,NULL);if(parent<0)return fs_error();
             if(!fs_path_writable()) { close(parent);return linux_error(30); }
             if(flags&0x100) { struct stat link;if(!fstatat(parent,leaf,&link,FS_NOFOLLOW_AT) && S_ISLNK(link.st_mode)) { close(parent);return linux_error(95); } } /* before a copy-up */
@@ -1714,7 +1718,13 @@ static uint64_t fs_call(uint64_t call) {
             if(n>cpu->gpr[3])n=(size_t)cpu->gpr[3];memcpy(out,pid,n);return n;
         }
         if(fs_proc_kind(path))return linux_error(22);  /* our /proc files and directories are not links (glibc's realpath asks) */
-        char leaf[1025];int parent=fs_parent_nofollow(cpu->gpr[0],cpu->gpr[1],leaf);if(parent<0)return fs_error();
+        /* Most paths asked are not links (gcc's realpath asks of every component of every
+           header): the direct walk's lstat answers them with no directory opened. */
+        char leaf[1025];int parent=fs_lookup(cpu->gpr[0],cpu->gpr[1],leaf,FS_DIRECT,NULL);if(parent<0)return fs_error();
+        struct stat st;int known=fs_leaf_stat(parent,leaf,&st),leaf_errno=errno;close(parent);
+        if(known<0) { errno=leaf_errno;return fs_error(); }
+        if(!S_ISLNK(st.st_mode))return linux_error(22);
+        parent=fs_parent_nofollow(cpu->gpr[0],cpu->gpr[1],leaf);if(parent<0)return fs_error();
         /* Read the final link's text; ancestors are resolved inside the root. */
         ssize_t result=readlinkat(parent,leaf,(char *)out,(size_t)cpu->gpr[3]);
         int saved=errno;close(parent);errno=saved;return result<0?fs_error():(uint64_t)result;

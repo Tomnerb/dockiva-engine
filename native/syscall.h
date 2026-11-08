@@ -353,10 +353,12 @@ static int guest_syscall_dispatch(void) {
             if(call==158) { cpu->gpr[0]=0;return -3; }                                                          /* getgroups: none */
             if(call==54 || call==55) {
                 /* fchownat/fchown: ownership is not tracked (every file shows the current
-                   identity), so a valid request by root succeeds without effect. */
+                   identity), so a valid request by root succeeds without effect. fchownat
+                   with AT_EMPTY_PATH (and at most AT_SYMLINK_NOFOLLOW) and "" is fchown
+                   (systemd's fchmod_and_chown). */
                 int fd=-1;struct stat st;
-                int writable;
-                if(call==55) { fd=fs_host(cpu->gpr[0]);if(fd<0) { cpu->gpr[0]=linux_error(9);return -3; }writable=FS(fs_slot(cpu->gpr[0])).ro!=1; } /* 2: a lower file (overlay.h), no change to make */
+                int writable;const unsigned char *first=call==54 && (cpu->gpr[4]|256)==(256|4096)?lookup(cpu->gpr[1],1,4):NULL;
+                if(call==55 || (first && !*first)) { fd=fs_host(cpu->gpr[0]);if(fd<0) { cpu->gpr[0]=linux_error(9);return -3; }writable=FS(fs_slot(cpu->gpr[0])).ro!=1; } /* 2: a lower file (overlay.h), no change to make */
                 else {
                     if(cpu->gpr[4]&~(UINT64_C(256)|4096)) { cpu->gpr[0]=linux_error(22);return -3; }
                     char leaf[1025];int parent=fs_lookup(cpu->gpr[0],cpu->gpr[1],leaf,!(cpu->gpr[4]&256)|FS_DIRECT,NULL);
@@ -849,6 +851,13 @@ static int guest_syscall_unlocked(void) {
                 cpu->gpr[0]=error;return 1;
             }
         }
+    }
+    if(named && call==78 && ((int32_t)cpu->gpr[0]==-100 || path[0]=='/') && (int32_t)cpu->gpr[3]>0) {
+        /* readlinkat of a path the lookup cache knows: anything but a link is EINVAL,
+           as on Linux, with no host call (gcc's realpath asks of every component of
+           every header path; the walk opens the parent directory each time). */
+        uint64_t error;struct stat st;
+        if(fs_stat_cached(path,0,&st,&error) && (error || !S_ISLNK(st.st_mode))) { cpu->gpr[0]=error?error:linux_error(22);return 1; }
     }
     if(call==291) {
         /* statx of a path (npm stats thousands): newfstatat without the lock, rewritten. */

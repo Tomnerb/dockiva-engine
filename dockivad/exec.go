@@ -58,7 +58,7 @@ func (b *engine) createExec(container string, body obj) obj {
 	p := b.container(container)
 	c := readObject(filepath.Join(p, "config.json"))
 	env := mergeEnv(stringsOf(c["env"]), j.Env)
-	j.Path = lookPath(containerLayers(p, c), env, cmp.Or(j.WorkingDir, workdir(c)), j.Cmd[0])
+	j.Path = lookPath(containerView(p, c), env, cmp.Or(j.WorkingDir, workdir(c)), j.Cmd[0])
 	count := 0
 	b.execs.Range(func(any, any) bool { count++; return true })
 	if count >= execLimit {
@@ -91,11 +91,11 @@ func (b *engine) inspectExec(id string) obj {
 }
 
 // containerCommand resolves argv as docker run does for its entrypoint: the
-// command is found in the container's PATH, and a script runs under its #!
-// interpreter. argv0 is what the program sees as its name.
+// command is found in the container's PATH, its mounts included, and a script runs
+// under its #! interpreter. argv0 is what the program sees as its name.
 func containerCommand(p string, c obj, dir string, env, argv []string) (command []string, argv0 string) {
-	root := containerLayers(p, c)
-	command = (&image{Root: root.upper, Lower: root.lower, Env: env}).command(append([]string{lookPath(root, env, dir, argv[0])}, argv[1:]...))
+	view := containerView(p, c)
+	command = (&image{Root: view.files.upper, Lower: view.files.lower, Env: env, mounts: view.mounts}).command(append([]string{lookPath(view, env, dir, argv[0])}, argv[1:]...))
 	if argv0 = argv[0]; len(command) != len(argv) {
 		argv0 = command[0] // a script: its interpreter
 	}
@@ -104,7 +104,7 @@ func containerCommand(p string, c obj, dir string, env, argv []string) (command 
 
 // lookPath finds a command in the container's PATH, as docker exec does.
 // A path with a slash is used as is, relative to the working directory dir.
-func lookPath(root layers, env []string, dir, name string) string {
+func lookPath(root guestView, env []string, dir, name string) string {
 	if path.IsAbs(name) {
 		return path.Clean(name)
 	}

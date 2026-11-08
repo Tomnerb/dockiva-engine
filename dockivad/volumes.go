@@ -133,6 +133,108 @@ func savedMounts(config obj) []obj {
 	return out
 }
 
+// guestView is a container's files as its processes see them: its bind mounts and
+// volumes over its layers, a mount hiding what lies beneath it. tmpfs mounts are left
+// out: they live in the runtime's memory, and the engine sees the mount point beneath
+// them. Paths are root-relative; resolveGuest them with link.
+type guestView struct {
+	files  layers
+	mounts []guestMount
+}
+
+// guestMount is a bind mount or volume: guest, where it shows (resolved through the
+// container's files, as prepareMounts mounts it), and source, the files it shows.
+type guestMount struct {
+	guest, source string
+	readonly      bool
+}
+
+// containerView is container p's view (config c).
+func containerView(p string, c obj) guestView {
+	files := containerLayers(p, c)
+	return guestView{files, viewMounts(engineHome(p), files, savedMounts(c), false)} // volumes are in the engine home (store.go)
+}
+
+// viewMounts are a container's mounts (saved) over its files, its tmpfs mounts left
+// out. fresh: the container has not started yet, so a volume its start will fill from
+// the image (fillsFromImage) is left out too: the image's files show there.
+func viewMounts(home string, files layers, mounts []obj, fresh bool) []guestMount {
+	var out []guestMount
+	for _, m := range mounts {
+		if m["type"] == "tmpfs" || fresh && fillsFromImage(home, m) {
+			continue
+		}
+		source := str(m["source"])
+		if m["type"] == "volume" {
+			source = volumeData(home, source)
+		}
+		out = append(out, guestMount{resolveGuest(pathName(mountTarget(str(m["target"]))[1:]), files.link), source, m["readonly"] == true})
+	}
+	return out
+}
+
+// fillsFromImage: whether a start fills volume mount m with the image's files at its
+// target (populateVolume): it is new, or never used and empty, and not nocopy.
+func fillsFromImage(home string, m obj) bool {
+	if m["type"] != "volume" || m["nocopy"] == true {
+		return false
+	}
+	name := str(m["source"])
+	meta := filepath.Join(volumesDir(home), name, "meta.json")
+	if !exists(meta) {
+		return true
+	}
+	if readObject(meta)["populated"] == true {
+		return false
+	}
+	entries, e := os.ReadDir(volumeData(home, name))
+	return e == nil && len(entries) == 0
+}
+
+// at is the mount holding g, the deepest, and g's path inside its source; ok false:
+// g is among the container's layers.
+func (v guestView) at(g string) (m guestMount, rest string, ok bool) {
+	for _, n := range v.mounts {
+		if (g == n.guest || strings.HasPrefix(g, n.guest+"/")) && (!ok || len(n.guest) > len(m.guest)) {
+			m, ok = n, true
+		}
+	}
+	if !ok {
+		return m, g, false
+	}
+	return m, strings.TrimPrefix(strings.TrimPrefix(g, m.guest), "/"), true
+}
+
+// link is g's symlink target, for resolveGuest: a link in a mount, like one in the
+// layers, leads to another guest path, never out of the container.
+func (v guestView) link(g string) (string, bool) {
+	if m, rest, ok := v.at(g); ok {
+		return readLink(filepath.Join(m.source, rest))
+	}
+	return v.files.link(g)
+}
+
+// find is the host path showing g, and whether it exists. As in the layers, a symlink
+// on the way finds nothing, so a lookup in a mount stays inside its source.
+func (v guestView) find(g string) (string, bool) {
+	m, rest, ok := v.at(g)
+	if !ok {
+		return v.files.find(g)
+	}
+	host := m.source
+	if rest == "" {
+		_, e := os.Stat(host)
+		return host, e == nil
+	}
+	for _, part := range relParts(rest) {
+		host = filepath.Join(host, part)
+		if st, e := os.Lstat(host); e != nil || st.Mode()&os.ModeSymlink != 0 {
+			return "", false
+		}
+	}
+	return host, true
+}
+
 // mountTarget validates a guest mount path: absolute, clean, printable UTF-8
 // without ':' or '\', and not the root itself.
 func mountTarget(t string) string {
@@ -142,17 +244,21 @@ func mountTarget(t string) string {
 }
 
 // parseMounts turns HostConfig.Binds, HostConfig.Mounts and Config.Volumes into
-// saved mounts. -v creates a missing host directory (as Docker does); --mount
-// requires the source to exist. Volumes are created on first use.
-func (b *engine) parseMounts(host, body obj, declared []string) []any {
-	mounts := []any{}
+// saved mounts, and changes nothing on disk: makeSources does, once the create goes
+// ahead. It creates volumes on first use and a missing -v host directory (as Docker
+// does); --mount requires the source to exist.
+func (b *engine) parseMounts(host, body obj, declared []string) (mounts []any, makeSources func()) {
+	mounts = []any{}
 	targets := map[string]bool{}
+	var todo []func()
 	add := func(m obj) {
 		t := mountTarget(str(m["target"]))
 		reject(!targets[t], "Duplicate mount point: "+t)
 		targets[t] = true
 		if m["type"] == "volume" {
-			b.createVolume(str(m["source"]), obj{}, m["anonymous"] == true)
+			name, anonymous := str(m["source"]), m["anonymous"] == true
+			reject(volumeName.MatchString(name), "Invalid volume name: "+name)
+			todo = append(todo, func() { b.createVolume(name, obj{}, anonymous) })
 		}
 		mounts = append(mounts, m)
 	}
@@ -161,8 +267,8 @@ func (b *engine) parseMounts(host, body obj, declared []string) []any {
 		source = filepath.Clean(source)
 		st, e := os.Stat(source)
 		if os.IsNotExist(e) && create {
-			check(os.MkdirAll(source, 0o755))
-			st, e = os.Stat(source)
+			todo = append(todo, func() { check(os.MkdirAll(source, 0o755)) })
+			return source
 		}
 		if e != nil {
 			panic(apiError{400, "Bind source path does not exist: " + source})
@@ -273,7 +379,11 @@ func (b *engine) parseMounts(host, body obj, declared []string) []any {
 			add(obj{"type": "volume", "source": token(), "target": target, "readonly": false, "anonymous": true})
 		}
 	}
-	return mounts
+	return mounts, func() {
+		for _, f := range todo {
+			f()
+		}
+	}
 }
 
 // tmpfsOptions validates tmpfs mount options (Docker's: size, mode, uid, gid,
