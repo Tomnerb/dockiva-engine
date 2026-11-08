@@ -69,6 +69,7 @@ type image struct {
 	blobs            []string // manifest, config and layer digests
 	layers           []obj
 	diffs            []string
+	mounts           []guestMount // a container's bind mounts and volumes, over Root and Lower (command)
 }
 
 func pathName(name string) string {
@@ -446,14 +447,15 @@ func cloneTree(src, dst string) {
 	reject(e == nil, "Copying the image failed: "+strings.TrimSpace(string(out)))
 }
 
-// guestFile is an executable file at an absolute guest path of the unpacked root,
-// following guest symlinks inside it, with its first bytes (for #! and ELF checks).
+// guestFile is an executable file at an absolute guest path of the unpacked root or
+// a container's mounts, following guest symlinks inside them, with its first bytes
+// (for #! and ELF checks).
 func (im *image) guestFile(guest string) ([]byte, bool) {
 	host, ok := "", false
 	if safeRun(func() {
-		r := im.files()
-		rel := resolveGuest(pathName(strings.TrimPrefix(guest, "/")), r.link)
-		host, ok = r.find(rel)
+		v := guestView{im.files(), im.mounts}
+		rel := resolveGuest(pathName(strings.TrimPrefix(guest, "/")), v.link)
+		host, ok = v.find(rel)
 		ok = ok && rel != ""
 	}) != nil || !ok {
 		return nil, false

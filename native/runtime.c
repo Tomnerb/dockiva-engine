@@ -1374,6 +1374,16 @@ int main(int argc,char **argv) {
             const char *base=layer?lower_path:root_path;
             if(base && realpath(base,root_real) && realpath(argv[2],elf_real) && !strncmp(elf_real,root_real,n=strlen(root_real)) && elf_real[n]=='/' && strlen(elf_real+n)<sizeof(guest_exe)) { strcpy(guest_exe,elf_real+n);break; }
         }
+#ifdef __APPLE__ /* F_GETPATH; the Linux build (CI's) leaves a program in a mount without a guest path */
+        /* ponytail: a file seen through two mounts gets the first deepest one's path; have dockivad pass the guest path it found if that matters */
+        if(!guest_exe[0] && realpath(argv[2],elf_real))           /* or in a mount (docker exec of a program in a bind mount or volume): the deepest source */
+            for(unsigned i=0;i<fs_mount_count;i++) {
+                if(fcntl(fs_mounts[i].fd,F_GETPATH,root_real)<0)continue;  /* the source directory (a file's: its directory) */
+                size_t m=strcmp(root_real,"/")?strlen(root_real):0;const char *rest=elf_real+m,*tail=fs_mounts[i].directory?rest:"";
+                if(strncmp(elf_real,root_real,m) || rest[0]!='/' || (guest_exe[0] && m<=n) || (!fs_mounts[i].directory && strcmp(rest+1,fs_mounts[i].name)))continue;
+                if(strlen(fs_mounts[i].path)+strlen(tail)<sizeof(guest_exe)) { snprintf(guest_exe,sizeof(guest_exe),"%s%s",fs_mounts[i].path,tail);n=m; }
+            }
+#endif
     }
     FILE *input=NULL;
     if(x86_translator[0] && strcmp(argv[1],"inspect") && guest_exe[0]) { /* an x86 program: FEX runs it (x86_exec_args) */
