@@ -607,10 +607,12 @@ func (b *engine) autoRemove(name string) {
 	}
 	var mounts []obj
 	_ = safeRun(func() { mounts = savedMounts(readObject(filepath.Join(b.container(name), "config.json"))) })
+	// Kept first: wait reads status without the engine lock, so it sees the container
+	// gone as soon as remove moves its directory away, and then looks here.
+	b.exits.Store(name, code)
+	time.AfterFunc(time.Minute, func() { b.exits.Delete(name) })
 	if safeRun(func() { b.remove(name) }) == nil {
 		b.removeAnonymousVolumes(mounts) // --rm also removes anonymous volumes, as Docker does
-		b.exits.Store(name, code)
-		time.AfterFunc(time.Minute, func() { b.exits.Delete(name) })
 	}
 }
 
