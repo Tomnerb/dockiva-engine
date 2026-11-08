@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -88,6 +89,58 @@ func TestBindsMountsAndVolumes(t *testing.T) {
 	r = request(t, h, "POST", "/volumes/prune", "", "secret")
 	if r.Code != 200 || strings.Contains(r.Body.String(), `"made"`) || !strings.Contains(r.Body.String(), `"VolumesDeleted":["`) {
 		t.Fatalf("prune: %d %s", r.Code, r.Body.String())
+	}
+}
+
+// docker run -v "$D":/m image /m/prog: create finds the program in the mounts as the
+// first start shows them: a bind mount's, by path, in PATH or as a script, and a
+// volume's own files; a new volume shows the image's, which start copies into it, and
+// a mount hides what lies beneath it. A program missing from them all is still refused,
+// and a refused create leaves no volume or -v directory behind.
+func TestCreateFindsProgramInMounts(t *testing.T) {
+	b := testEngine(t)
+	src := t.TempDir()
+	elf := append([]byte("\x7fELF\x02\x01\x01"), make([]byte, 57)...)
+	check(os.WriteFile(filepath.Join(src, "prog"), elf, 0o755))
+	check(os.WriteFile(filepath.Join(src, "tool.sh"), []byte("#!/bin/sh\n"), 0o755))
+	b.createVolume("tools", obj{}, false) // never used, but not empty: its files show
+	check(os.WriteFile(filepath.Join(volumeData(b.Home, "tools"), "prog"), elf, 0o755))
+	b.createVolume("used", obj{}, false) // used before, and empty
+	populateVolume(b.Home, "used", layers{upper: t.TempDir()}, "bin")
+	body := func(entry, rest string) string {
+		return `{"Image":"dockiva/shell:demo","Entrypoint":["` + entry + `"],"Cmd":[]` + rest + `}`
+	}
+	bind := `,"HostConfig":{"Binds":["` + src + `:/m"]}`
+	for i, c := range []struct{ body, want string }{
+		{body("/m/prog", bind), "/m/prog"},
+		{body("prog", `,"Env":["PATH=/m:/bin"]`+bind), "/m/prog"},
+		{body("./tool.sh", `,"WorkingDir":"/m"`+bind), "/bin/sh /m/tool.sh"},
+		{body("/t/prog", `,"HostConfig":{"Binds":["tools:/t"]}`), "/t/prog"},
+		{body("/bin/sh", `,"HostConfig":{"Mounts":[{"Type":"volume","Source":"fresh","Target":"/bin"}]}`), "/bin/sh"},
+	} {
+		name := "ok" + strconv.Itoa(i)
+		b.create(name, decode([]byte(c.body), maxJSON))
+		if got := strings.Join(stringsOf(readObject(filepath.Join(b.container(name), "config.json"))["command"]), " "); got != c.want {
+			t.Fatalf("%s: command %q, want %q", c.body, got, c.want)
+		}
+	}
+	missing := filepath.Join(t.TempDir(), "for-v")
+	for i, bad := range []string{
+		body("/nope/prog", `,"HostConfig":{"Binds":["`+missing+`:/new","unused:/data"]}`),
+		body("/m/absent", bind),
+		// Each mount hides the image's /bin/sh: a bind mount, a volume used before, and
+		// one that nocopy leaves empty.
+		body("/bin/sh", `,"HostConfig":{"Binds":["`+src+`:/bin"]}`),
+		body("/bin/sh", `,"HostConfig":{"Binds":["used:/bin"]}`),
+		body("/bin/sh", `,"HostConfig":{"Mounts":[{"Type":"volume","Source":"fresh","Target":"/bin","VolumeOptions":{"NoCopy":true}}]}`),
+	} {
+		e := safeRun(func() { b.create("bad"+strconv.Itoa(i), decode([]byte(bad), maxJSON)) })
+		if e == nil || !strings.Contains(e.Error(), "Executable missing") {
+			t.Fatalf("%s: %v", bad, e)
+		}
+	}
+	if exists(missing) || exists(filepath.Join(volumesDir(b.Home), "unused")) {
+		t.Fatal("a refused create made its mounts' sources")
 	}
 }
 
