@@ -79,6 +79,15 @@ void _start(void) {
     { unsigned char times[32]={0};times[16]=200;CHECK(C4(88,AT,"/ut",times,0)==0 && stat_of("/ut")==0 && ST_MTIME==200 && has("/ut","utimes")); }
     CHECK(C2(45,"/t1",4)==0 && has("/t1","trun"));                            /* truncate */
     CHECK(C4(88,AT,"/ln",0,0x100)==0 && lstat_of("/ln")==0 && (ST_MODE&0170000)==0120000 && C4(78,AT,"/ln",buffer,64)==1 && buffer[0]=='f');
+    /* readlink of what is no link, of missing paths, and opens of missing files: the same
+       answers again (from the lookup cache, when the run has one), until the file is made */
+    for(int i=0;i<3;i++) {
+        CHECK(C4(78,AT,"/d",buffer,64)==-22 && C4(78,AT,"/d/a",buffer,64)==-22 && C4(78,AT,"/f",buffer,64)==-22 && C4(78,AT,"/d/a",buffer,0)==-22);
+        CHECK(C4(78,AT,"/d/none",buffer,64)==-2 && C4(78,AT,"/nodir/x",buffer,64)==-2 && C4(78,AT,"/d/a/x",buffer,64)==-20);
+        CHECK(C4(78,AT,"/abs",buffer,64)==2 && same(buffer,"/d",2) && open3("/e/later",0,0)==-2 && open3("/nodir/x",0,0)==-2 && open3("/d/a/x",0,0)==-20);
+    }
+    CHECK(put("/e/later","l")==1 && has("/e/later","l") && C4(78,AT,"/e/later",buffer,64)==-22);
+    CHECK(C3(34,AT,"/nodir",0755)==0 && put("/nodir/x","x")==1 && has("/nodir/x","x") && C4(78,AT,"/nodir/x",buffer,64)==-22);
     /* whiteouts: a lower file, then its directory; made again, the directory is empty */
     CHECK(C3(35,AT,"/gone/x",0)==0 && stat_of("/gone/x")==-2 && names("/gone",0)==0);
     CHECK(C3(35,AT,"/gone",0x200)==0 && stat_of("/gone")==-2 && names("/","gone")==0);

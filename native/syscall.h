@@ -850,6 +850,13 @@ static int guest_syscall_unlocked(void) {
             }
         }
     }
+    if(named && call==78 && ((int32_t)cpu->gpr[0]==-100 || path[0]=='/') && (int32_t)cpu->gpr[3]>0) {
+        /* readlinkat of a path the lookup cache knows: anything but a link is EINVAL,
+           as on Linux, with no host call (gcc's realpath asks of every component of
+           every header path; the walk opens the parent directory each time). */
+        uint64_t error;struct stat st;
+        if(fs_stat_cached(path,0,&st,&error) && (error || !S_ISLNK(st.st_mode))) { cpu->gpr[0]=error?error:linux_error(22);return 1; }
+    }
     if(call==291) {
         /* statx of a path (npm stats thousands): newfstatat without the lock, rewritten. */
         uint64_t flags=cpu->gpr[2],buffer=cpu->gpr[4];
