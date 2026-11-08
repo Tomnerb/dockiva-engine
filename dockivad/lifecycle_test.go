@@ -111,11 +111,12 @@ func TestWaitConditions(t *testing.T) {
 }
 
 // docker run --rm waits for its container's removal, then reports the exit status
-// autoRemove kept. A waiter sees the container gone as soon as its directory moves
+// the removal kept. A waiter sees the container gone as soon as its directory moves
 // away, before the rest of the removal is done, so the status must be kept first.
-// Here another container's unreadable config stops the removal just after the move
-// (in the hosts refresh): the moment such a waiter looks.
-func TestAutoRemoveKeepsExitFirst(t *testing.T) {
+// Here another container's unreadable config stops autoRemove's removal just after
+// the move (in the hosts refresh): the moment such a waiter looks. docker rm keeps
+// it too: docker run --rm reports 137 after docker rm -f, as with Docker.
+func TestRemovalKeepsExitStatus(t *testing.T) {
 	b := testEngine(t)
 	p := b.container("r")
 	check(os.Mkdir(p, 0o700))
@@ -129,6 +130,16 @@ func TestAutoRemoveKeepsExitFirst(t *testing.T) {
 	b.autoRemove("r")
 	if exit, _ := b.exits.Load("r"); exists(p) || fmt.Sprint(exit) != "3" {
 		t.Fatalf("container left: %v, exit status kept: %v", exists(p), exit)
+	}
+	k := b.container("k") // as docker rm -f's kill leaves it
+	check(os.Mkdir(k, 0o700))
+	save(filepath.Join(k, "config.json"), obj{"auto_remove": true})
+	save(filepath.Join(k, "status.json"), obj{"state": "exited", "generation": "g", "exit_code": 137})
+	if r := request(t, b.socketHandler(), "DELETE", "/containers/k", "", ""); r.Code != 204 {
+		t.Fatalf("docker rm: %d %s", r.Code, r.Body.String())
+	}
+	if exit, _ := b.exits.Load("k"); fmt.Sprint(exit) != "137" {
+		t.Fatalf("docker rm kept exit status %v", exit)
 	}
 }
 

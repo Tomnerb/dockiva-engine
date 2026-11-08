@@ -592,25 +592,16 @@ func (b *engine) watchPass() (remove []string) {
 	return remove
 }
 
-// autoRemove deletes an exited --rm container, keeping its exit status for a
-// docker run that waits for removal.
+// autoRemove deletes an exited --rm container; remove keeps its exit status for
+// the docker run that waits for the removal.
 func (b *engine) autoRemove(name string) {
 	b.Mu.Lock()
 	defer b.Mu.Unlock()
-	s := b.statusOf(b.container(name))
-	if s == nil || live(s) { // removed, or started again, meanwhile
+	if s := b.statusOf(b.container(name)); s == nil || live(s) { // removed, or started again, meanwhile
 		return
-	}
-	code := s["exit_code"]
-	if code == nil {
-		code = 0
 	}
 	var mounts []obj
 	_ = safeRun(func() { mounts = savedMounts(readObject(filepath.Join(b.container(name), "config.json"))) })
-	// Kept first: wait reads status without the engine lock, so it sees the container
-	// gone as soon as remove moves its directory away, and then looks here.
-	b.exits.Store(name, code)
-	time.AfterFunc(time.Minute, func() { b.exits.Delete(name) })
 	if safeRun(func() { b.remove(name) }) == nil {
 		b.removeAnonymousVolumes(mounts) // --rm also removes anonymous volumes, as Docker does
 	}
