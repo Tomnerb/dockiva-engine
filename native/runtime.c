@@ -14,17 +14,44 @@
 /* Bounded Linux user-mode runtime: interpreter and optional native (Hypervisor.framework) backend. */
 #include <stdint.h>
 #include <stdio.h>
+#ifdef __APPLE__
 #include <sys/sysctl.h>
+#endif
 #include <stdlib.h>
 #include <string.h>
 #include <inttypes.h>
 #include <errno.h>
 #include <unistd.h>
 #include <sys/random.h>
+#include <sys/resource.h>
 #include <limits.h>
 #include <setjmp.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#ifdef __linux__
+/* Linux spellings of the Darwin calls and fields used (the interpreter builds on Linux for CI). */
+#include <time.h>
+#include <sys/syscall.h>
+#include <sys/vfs.h>                                                         /* statfs */
+#define st_atimespec st_atim
+#define st_mtimespec st_mtim
+#define st_ctimespec st_ctim
+#define CLOCK_UPTIME_RAW CLOCK_MONOTONIC                                     /* neither counts sleep */
+#define TCP_NOPUSH TCP_CORK
+#define TCP_KEEPALIVE TCP_KEEPIDLE
+#define RENAME_EXCL 1                                                        /* RENAME_NOREPLACE */
+#define renameatx_np(from_dir,from,to_dir,to,flags) ((int)syscall(SYS_renameat2,from_dir,from,to_dir,to,flags))
+#define pthread_set_qos_class_self_np(qos,priority) ((void)0)
+static uint64_t clock_gettime_nsec_np(clockid_t clock) { struct timespec t;clock_gettime(clock,&t);return (uint64_t)t.tv_sec*1000000000u+(uint64_t)t.tv_nsec; }
+#include <linux/futex.h>
+static int __ulock_wait(uint32_t operation,void *address,uint64_t value,uint32_t timeout_us) {   /* UL_COMPARE_AND_WAIT */
+    struct timespec t={(time_t)(timeout_us/1000000),(long)(timeout_us%1000000)*1000};(void)operation;
+    return (int)syscall(SYS_futex,address,FUTEX_WAIT_PRIVATE,(uint32_t)value,timeout_us?&t:NULL,NULL,0);
+}
+static int __ulock_wake(uint32_t operation,void *address,uint64_t value) {                      /* 0x100: ULF_WAKE_ALL */
+    (void)value;return (int)syscall(SYS_futex,address,FUTEX_WAKE_PRIVATE,(operation&0x100)?INT_MAX:1,NULL,NULL,0);
+}
+#endif
 #include "resources.h"
 static _Thread_local jmp_buf exec_recovery;   /* fail() while this worker loads an exec */
 static _Thread_local int exec_loading;
@@ -177,7 +204,7 @@ static uint64_t load_stream_inner(FILE *f,int interpreter) {
     if(text_fd>=0)close(text_fd);
     text_fd=dup(fileno(f));
     fclose(f);
-    if(mapped==MAP_FAILED)fail("ELF input could not be read");
+    if(mapped==MAP_FAILED)fail(size?"ELF input could not be read":"Expected little-endian ELF64 version 1"); /* empty: not mapped */
     address_space->file_data=mapped;address_space->file_size=size;
     const unsigned char *d=address_space->file_data;
     if(size<64 || memcmp(d,"\177ELF\002\001\001",7)) fail("Expected little-endian ELF64 version 1");
