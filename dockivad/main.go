@@ -64,7 +64,9 @@ func run() {
 	tmp := flags.String("tmp", "disk", "containers' /tmp and /dev/shm: disk (the container's files, as Docker) or memory (a tmpfs the runtime keeps in memory, counted against the memory limit: no host file system calls, several times faster for many small files; not shared with docker exec)")
 	rootfs := flags.String("rootfs", "layered", "containers' files: layered (each container's own changes over its image's files, which all its containers share, as Docker's overlay2: they stay warm in the file cache) or copy (each container gets an APFS clone of its image's files)")
 	fsync := flags.String("fsync", "barrier", "containers' fsync: barrier (ordered writes, OrbStack-like), full (drains the drive cache; strictly durable, slower) or fast (plain macOS fsync)")
+	minFreeMB := flags.Uint64("min-free-mb", minFree>>20, "the Mac's free space (MB) under which containers on the store are paused and starts, pulls and builds refused: a full disk would eject the store")
 	check(flags.Parse(os.Args[1:]))
+	minFree = *minFreeMB << 20
 	reject(flags.NArg() == 0, "Unexpected arguments")
 	reject(*fsync == "barrier" || *fsync == "full" || *fsync == "fast", "--fsync must be barrier, full or fast")
 	check(os.Setenv("DOCKIVA_FSYNC", *fsync)) // read by runtimeCommand here and in supervisors, which inherit it
@@ -206,6 +208,9 @@ func run() {
 		serve()
 	}
 	go b.watch(done)
+	if store != b.Home {
+		go b.guardSpace(done) // store.go: a full Mac would eject the store
+	}
 	b.spares.on = true // after the Setenvs above: a spare inherits them as an exec'd supervisor would
 	b.refillSpare()
 	go b.restartOnBoot()

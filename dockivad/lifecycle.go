@@ -46,6 +46,9 @@ type engine struct {
 	// While main moves an older home into the store (store.go; minutes for a large
 	// one): why the API answers only /_ping.
 	opening atomic.Pointer[string]
+	// While the Mac's disk is almost full (store.go: guardSpace): why starts, pulls
+	// and builds are refused.
+	lowSpace atomic.Pointer[string]
 }
 
 // memoryMiB is a container's guest memory limit: docker run -m, else its profile's.

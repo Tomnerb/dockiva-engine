@@ -714,6 +714,9 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 		if why := b.opening.Load(); why != nil && path != "/_ping" {
 			panic(apiError{503, *why})
 		}
+		if why := b.lowSpace.Load(); why != nil && writesMuch(r.Method, path) {
+			panic(apiError{507, *why})
+		}
 		q := r.URL.Query()
 		method := r.Method
 		yes := func(k string) bool { return q.Get(k) == "1" || q.Get(k) == "true" }

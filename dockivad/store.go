@@ -14,7 +14,8 @@ package main
 // The bundle is attached with diskutil image attach, never hdiutil attach, which
 // turns every F_BARRIERFSYNC into a full flush (10.8 ms instead of 0.9). It grows as
 // files are written and keeps its size when they go: closeStore gives the space back
-// when the engine stops (POST /dockiva/shutdown).
+// when the engine stops (POST /dockiva/shutdown). guardSpace keeps it from filling
+// the Mac's disk, which would eject it.
 
 import (
 	"errors"
@@ -123,6 +124,82 @@ func detachStore(home string, tries int) bool {
 	}
 	fmt.Fprintln(os.Stderr, "dockivad: the store stays attached:", strings.TrimSpace(string(out)))
 	return false
+}
+
+// minFree is the Mac's free space under which guardSpace pauses the containers.
+var minFree uint64 = 4 << 30
+
+// guardSpace keeps the Mac's disk from filling under the store. The bundle grows by
+// every block the containers write (APFS in it reuses no freed block while attached:
+// 7 x 300 MB written and deleted grew it by 2.1 GB), and when the Mac's volume runs
+// out, macOS ejects it mid-write (DiskImages2: "unrecoverable I/O error"): the writer
+// gets EIO, the volume is force-unmounted, the writes since its last checkpoint are
+// lost, every running container loses its files and its supervisor its lock, and the
+// engine goes on without a store. APFS answers ENOSPC only once the Mac is full
+// already: writers of 50 and 380 MB/s got there first. So under minFree the running
+// containers are paused and starts, pulls, loads, builds, commits and copies in are
+// refused (writesMuch, 507) until the Mac has a GiB more; then the containers the
+// guard paused go on. The store's statfs reports the Mac's free space (its size is
+// the bundle's 4 TB). ponytail: pulls and builds under way go on; an ENOSPC from the
+// runtime (writes checked against the Mac's free space) would stop those too, and
+// give writers Docker's error instead of a pause.
+func (b *engine) guardSpace(stop <-chan struct{}) {
+	tick := time.NewTicker(time.Second)
+	defer tick.Stop()
+	paused := map[string]bool{}
+	for {
+		b.checkSpace(paused)
+		select {
+		case <-stop:
+			return
+		case <-tick.C:
+		}
+	}
+}
+
+// checkSpace is one pass of guardSpace; paused holds the containers it paused.
+func (b *engine) checkSpace(paused map[string]bool) {
+	var s syscall.Statfs_t
+	if syscall.Statfs(b.storeDir(), &s) != nil {
+		return
+	}
+	free, low := s.Bavail*uint64(s.Bsize), b.lowSpace.Load() != nil
+	switch {
+	case low && free >= minFree+1<<30:
+		b.lowSpace.Store(nil)
+		fmt.Fprintln(os.Stderr, "dockivad: the Mac has free space again; the containers paused for it go on")
+		for name := range paused {
+			_ = safeRun(func() { b.pause(name, false) })
+		}
+		clear(paused)
+		return
+	case !low && free >= minFree:
+		return
+	}
+	why := fmt.Sprintf("The Mac's disk is almost full (%d MB free; Dockiva Engine keeps %d MB): its containers are paused, and starts, pulls and builds refused, until there is more. Images and containers removed in the engine give their space back when it stops", free>>20, minFree>>20)
+	if !low {
+		fmt.Fprintln(os.Stderr, "dockivad:", why)
+	}
+	b.lowSpace.Store(&why)
+	var names []string
+	_ = safeRun(func() { names = b.names() })
+	for _, name := range names { // every pass: containers started before the refusals too
+		if !paused[name] && safeRun(func() { b.pause(name, true) }) == nil {
+			paused[name] = true
+		}
+	}
+}
+
+// writesMuch: the requests refused while the Mac is almost full (guardSpace).
+func writesMuch(method, path string) bool {
+	if method == "POST" {
+		switch path {
+		case "/containers/create", "/images/create", "/images/load", "/build", "/grpc", "/session", "/commit":
+			return true
+		}
+	}
+	m := containerPath.FindStringSubmatch(path)
+	return m != nil && (method == "POST" && (m[2] == "start" || m[2] == "restart" || m[2] == "unpause") || method == "PUT" && m[2] == "archive")
 }
 
 // mounted reports whether a volume is mounted at dir.

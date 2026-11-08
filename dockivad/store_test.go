@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"syscall"
 	"testing"
 )
@@ -236,4 +237,47 @@ func TestMoveToStore(t *testing.T) {
 		t.Fatal("build cache not moved")
 	}
 	check(os.Chmod(filepath.Join(upper, "ro"), 0o755)) // for the temporary directory's removal
+}
+
+// Under minFree the guard pauses the running containers and refuses what writes
+// much, saying why; with room again it unpauses the containers it paused.
+func TestLowSpaceGuard(t *testing.T) {
+	b := testEngine(t)
+	h := b.handler("")
+	b.create("web", decode([]byte(`{"Image":"dockiva/shell:demo"}`), maxJSON))
+	p := b.container("web")
+	run := exec.Command("/bin/sleep", "30") // stands in for the worker, its own group leader
+	run.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	check(run.Start())
+	defer func() { _ = run.Process.Kill(); _ = run.Wait() }()
+	lock, e := lockFile(filepath.Join(p, "lock"), true) // a live supervisor holds it
+	check(e)
+	defer lock.Close()
+	save(filepath.Join(p, "status.json"), obj{"state": "running", "generation": "g", "pid": run.Process.Pid})
+	paused := func() bool { return object(b.inspect("web")["State"])["Paused"] == true }
+	defer func(was uint64) { minFree = was }(minFree)
+	guard := map[string]bool{}
+
+	minFree = 1 << 62 // more than the disk has
+	b.checkSpace(guard)
+	if !paused() {
+		t.Fatal("running container not paused")
+	}
+	for _, path := range []string{"/containers/create?name=next", "/containers/web/unpause", "/images/create?fromImage=alpine", "/images/load", "/build", "/commit?container=web"} {
+		if r := request(t, h, "POST", path, "{}", ""); r.Code != 507 || !strings.Contains(r.Body.String(), "almost full") {
+			t.Fatalf("%s with the Mac almost full: %d %s", path, r.Code, r.Body.String())
+		}
+	}
+	if r := request(t, h, "GET", "/containers/json?all=1", "", ""); r.Code != 200 {
+		t.Fatalf("list with the Mac almost full: %d", r.Code)
+	}
+
+	minFree = 0
+	b.checkSpace(guard)
+	if paused() || b.lowSpace.Load() != nil {
+		t.Fatal("still paused with room again")
+	}
+	if r := request(t, h, "POST", "/containers/create?name=next", `{"Image":"dockiva/shell:demo"}`, ""); r.Code != 201 {
+		t.Fatalf("create with room again: %d %s", r.Code, r.Body.String())
+	}
 }
