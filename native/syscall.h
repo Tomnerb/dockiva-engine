@@ -573,7 +573,7 @@ static int guest_syscall_dispatch(void) {
                 if(!out) { cpu->gpr[0]=linux_error(14);return -3; }
                 if(call==44 && fs_host(cpu->gpr[0])<0 && net_host(cpu->gpr[0])<0 && !io_managed(cpu->gpr[0])) { cpu->gpr[0]=linux_error(9);return -3; }
                 struct statfs host;
-                if(fstatfs(fs_root>=0?fs_root:0,&host)<0) { cpu->gpr[0]=fs_error();return -3; }
+                if(fstatfs(fs_space>=0?fs_space:fs_root>=0?fs_root:0,&host)<0) { cpu->gpr[0]=fs_error();return -3; }
                 memset(out,0,120);
                 fs_pack(out,0,0x794c7630,8);fs_pack(out,8,host.f_bsize,8);fs_pack(out,16,host.f_blocks,8);
                 fs_pack(out,24,host.f_bfree,8);fs_pack(out,32,host.f_bavail,8);fs_pack(out,40,host.f_files,8);

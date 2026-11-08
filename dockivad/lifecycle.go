@@ -723,6 +723,9 @@ func runtimeCommand(p, native string, c obj, command []string, argv0 string, env
 	// A container created by this engine has them already (prepareRun).
 	mountPoints(r)
 	home := engineHome(p) // networks and volumes (store.go)
+	// df shows the Mac's volume, as Docker's overlay2 shows its host's: the store is a
+	// 4 TB sparse disk image whose free space is the Mac's, so df would say 100% used.
+	args = append(args, "--statfs-from", home)
 	if c["network"] != "none" {
 		name := filepath.Base(p)
 		members := []obj{}

@@ -11,7 +11,8 @@ way it can (writes, chmod, rename, links, truncate, MAP_SHARED writes, sockets,
 FIFOs; MAP_SHARED writes are overlay_guest's) while another container uses them. The lower tree must stay byte-for-byte,
 mode, time and inode unchanged, and no copy-up leftovers may remain. Last, names that
 differ only by case (tests/native/case_guest.c) with both layers on a case-sensitive
-volume, as dockivad keeps them, with and without the memory layer."""
+volume, as dockivad keeps them, with and without the memory layer, and statfs there
+(tests/native/statfs_guest.c): the size of the volume --statfs-from names."""
 import os
 from pathlib import Path
 import subprocess
@@ -236,6 +237,24 @@ def case_sensitive():
                     failed += not ok
                     print(f'{binary} case_guest{" with the memory layer" if memory else ""}:', 'PASS' if ok else
                           f'FAIL exit={r.returncode} {r.stdout!r} upper={sorted(os.listdir(upper))} {r.stderr.decode()[-1500:]}')
+            # statfs_guest.c: the size of the file system --statfs-from names (dockivad: the
+            # engine home, on the Mac's volume), else the image's 1 GB under the root.
+            build(ROOT/'tests/native/statfs_guest.c', t/'statfs')
+            for binary, runtime, extra in runtimes():
+                for memory in ([], ['--upper-memory', str(t/'sync')]):
+                    for space in (t, None):
+                        upper = t/'cs'/f'statfs-{binary}-{len(memory)}-{space is None}'
+                        upper.mkdir()
+                        r = subprocess.run([str(runtime), 'run', str(t/'statfs'), '--root', str(upper), '--lower', str(lower), '--writable', '--storage-limit-mib', '0', '--max-steps', '2000000000',
+                                            '--process-tree', '--scheduled-network', '--dynamic', *memory, *(['--statfs-from', str(space)] if space else []), *extra],
+                                           capture_output=True, timeout=300)
+                        want = os.statvfs(space or t/'cs')
+                        want = want.f_blocks * want.f_frsize
+                        got = [int.from_bytes(r.stdout[i+16:i+24], 'little') * int.from_bytes(r.stdout[i+8:i+16], 'little') for i in (0, 120, 240)]
+                        ok = r.returncode == 0 and len(r.stdout) == 360 and b'ERROR: AddressSanitizer' not in r.stderr and all(abs(g - want) <= want // 100 for g in got)
+                        failed += not ok
+                        print(f'{binary} statfs{" with the memory layer" if memory else ""}, {"--statfs-from" if space else "no --statfs-from"}:',
+                              'PASS' if ok else f'FAIL exit={r.returncode} sizes={got} want={want} {r.stderr.decode()[-800:]}')
             same = snapshot(lower) == before
             failed += not same
             print('case lower layer unchanged:', 'PASS' if same else 'FAIL')

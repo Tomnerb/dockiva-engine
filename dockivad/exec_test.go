@@ -105,8 +105,12 @@ func execLookupInMounts(t *testing.T, b *engine) {
 	b.create("vol", decode([]byte(`{"Image":"dockiva/shell:demo","HostConfig":{"Mounts":[{"Type":"volume","Source":"tools","Target":"/bin"}]}}`), maxJSON))
 	p = b.container("vol")
 	c = readObject(filepath.Join(p, "config.json"))
-	if run := runtimeCommand(p, b.Native, c, []string{"/bin/sh"}, "sh", nil, false); run[2] != filepath.Join(volumeData(b.Home, "tools"), "sh") {
+	run := runtimeCommand(p, b.Native, c, []string{"/bin/sh"}, "sh", nil, false)
+	if run[2] != filepath.Join(volumeData(b.Home, "tools"), "sh") {
 		t.Fatalf("runtime program in a volume: %v", run[:3])
+	}
+	if !strings.Contains(strings.Join(run, "\x00"), "\x00--statfs-from\x00"+b.Home+"\x00") { // df: the Mac's volume, not the store's disk image
+		t.Fatalf("statfs: %q", run)
 	}
 	if got := lookPath(containerView(p, c), []string{"PATH=/bin"}, "/", "sh"); got != "/bin/sh" { // docker exec
 		t.Fatalf("exec lookup in a volume: %q", got)
