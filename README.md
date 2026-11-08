@@ -287,3 +287,10 @@ remains build and verification tooling.
 ## Dockiva integration for internal testing
 
 Dockiva defaults to the bundled Dockiva Engine on new Apple Silicon installations and starts it automatically, with no terminal setup. Existing engine choices are preserved. Supported images and basic lifecycle workflows remain the scope. See [project definition and setup](docs/PROJECT-DEFINITION.md). This integration does not close M33 preview or M80 production acceptance gates.
+
+## License
+
+Dockiva Engine is licensed under the [Apache License 2.0](LICENSE). Third-party
+components and test fixtures, some under other licenses, are listed in
+[third_party/NOTICE.md](third_party/NOTICE.md). Report vulnerabilities as
+[SECURITY.md](SECURITY.md) describes.
