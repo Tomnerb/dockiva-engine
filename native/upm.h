@@ -10,6 +10,9 @@
    host files: st_dev 0, owned by the caller, the host's statfs, no xattrs, inode
    numbers from 2^62 up (an inode changes once it is written back, as on overlayfs'
    copy-up). Listings merge it (ov_list), rmdir sees it, a directory rename moves it.
+   Renamed, it moves in memory to a name missing on disk, and while open over a name
+   on disk too, which then goes from disk (upm_move); a closed one is written back
+   first and renamed on the host.
 
    Write-back: each file goes to its path in the upper directory (under a hidden name
    first, then renamed into place, so a host walk sees it whole or not at all) once it
@@ -225,6 +228,7 @@ static int upm_write_back(MemNode *n,const char *canon,int force) {
         int placed=!renameatx_np(parent,temp,parent,name,RENAME_EXCL);
         if(placed || errno==EEXIST) {                                          /* EEXIST: made on disk meanwhile; that one stays */
             if(!placed)(void)unlinkat(parent,temp,0);
+            else if(now->dir->whiteouts)ov_unmark(parent,name);                /* one for the file it replaced (upm_move): after, so the name never shows the lower one */
             mem_unlink_entry(now);upm_count(canon,-1);if(upm_files)upm_files--;
             __atomic_add_fetch(&upm_drains,1,__ATOMIC_ACQ_REL);if(ov_gen)ov_bump(canon);
             done=1;
@@ -234,6 +238,45 @@ static int upm_write_back(MemNode *n,const char *canon,int force) {
     mem_node_put(n);                                                           /* the pin (frees it once forgotten) */
     return done;
 }
+/* upm_cross: pending file n (entry e at from; mem_lock held) renamed to to, a path of
+   the root's layers as the walk found it (at; parent and leaf its result). A name the
+   fast walk found missing (bare) takes n in memory. So does any other while n is open,
+   as Linux renames an open file (systemd-sysusers' /etc/group, debconf, log rotation):
+   the disk's entry goes as ov_unlink removes it (a whiteout over a lower one, upper
+   directories made where missing) and n takes the name, so its descriptors read and
+   write the renamed file and a walk finding the name missing finds n. The new name is
+   linked first and the old one dropped last, all under mem_lock, and walks of to look
+   in memory (upm_count) before the disk changes: they wait, and none sees the name
+   missing; a failure leaves both as they were. The whiteout goes once n is written
+   back. ponytail: until then an exec run or a commit sees no file there, as for any
+   open pending file. 0: moved; 1: neither (closed: written back, then the host's
+   rename); else the error. */
+static int64_t upm_move(MemNode *n,MemEntry *e,const char *from,const char *to,const OvLeaf *at,int parent,const char *leaf,uint64_t flags) {
+    char dir[1025];const char *name;upm_split(to,dir,&name);
+    int disk=at->layer!=2 || !at->bare;struct stat st;
+    if(!*name || strlen(name)>255 || !strncmp(name,OV_WH,4) || (disk && n->refs<2))return 1;   /* refs: the caller's pin, then the file's users */
+    if(at->layer!=2) {                                                         /* there on disk */
+        if(flags&1)return -17;                                                 /* RENAME_NOREPLACE */
+        if(fstatat(parent,leaf,&st,FS_NOFOLLOW_AT))return errno==ENOENT?MEM_PASS-3:(int64_t)fs_error();   /* gone meanwhile: again */
+        if(S_ISDIR(st.st_mode))return -21;
+    }
+    MemNode *into=upm_dir(dir,1);MemEntry *clash=into?mem_find(into,name):NULL;
+    if(!into || (clash && clash->node))return 1;
+    upm_count(to,1);                                                           /* before it exists: walks look it up */
+    MemEntry *now=mem_link(into,name,n);int64_t r=now?0:-12;
+    if(!r && disk) {
+        OvLeaf w=*at;int u=-1;
+        if(w.layer!=2)r=!ov_unlink(&w,parent,leaf,0)?0:errno==ENOENT?MEM_PASS-3:(int64_t)fs_error();
+        else if((u=ov_upper(dir))<0)r=(int64_t)fs_error();                     /* missing (a whiteout's, or the upper directory is) */
+        if(u>=0)close(u);
+        into->whiteouts|=!r;
+    }
+    if(r) { if(now)mem_unlink_entry(now);upm_count(to,-1);return r; }
+    mem_unlink_entry(e);upm_count(from,-1);                                    /* n keeps the new name: not freed */
+    n->ctime=into->mtime=into->ctime=mem_now();
+    if(ov_gen) { ov_bump(from);ov_bump(to); }
+    return 0;
+}
 /* memfs's rename or link between a pending file and the host (mem_lock held; released
    here). MEM_PASS-3 to redo the call (the host's now), else its result. */
 static int64_t upm_cross(uint64_t call,MemPath *w,const int *res) {
@@ -242,29 +285,17 @@ static int64_t upm_cross(uint64_t call,MemPath *w,const int *res) {
     if(res[0]==1) {                                                            /* from a pending file */
         MemNode *n=w[0].node;char from[1025];snprintf(from,sizeof from,"%s",w[0].canon);
         if(!n || !from[0]) { pthread_mutex_unlock(&mem_lock);return -2; }
-        if(call!=37 && !(flags&2)) {                                           /* rename to a path missing on disk: moved in memory */
+        if(call!=37 && !(flags&2)) {                                           /* a rename: in memory where it can be (upm_move) */
             n->refs++;pthread_mutex_unlock(&mem_lock);
-            char leaf[1025],to[1025];int bare=0,parent=fs_lookup(x[2],x[3],leaf,FS_DIRECT,to);
-            if(parent>=0) { bare=ov_leaf.layer==2 && ov_leaf.bare && !fs_where && to[0];close(parent); }
-            int redirected=mem_redirect_take();
+            char leaf[1025],to[1025];int parent=fs_lookup(x[2],x[3],leaf,FS_DIRECT,to);
+            int64_t walked=parent<0?(int64_t)fs_error():1;                     /* 1: in a bind mount, outside the layers */
+            OvLeaf at=ov_leaf;int layers=parent>=0 && !fs_where && to[0],redirected=mem_redirect_take();
             pthread_mutex_lock(&mem_lock);
             MemEntry *e=upm_entry(from);
-            if(bare && !redirected && e && e->node==n) {
-                char dir[1025];const char *name;upm_split(to,dir,&name);
-                MemNode *into=*name && strlen(name)<256 && strncmp(name,OV_WH,4)?upm_dir(dir,1):NULL;
-                MemEntry *clash=into?mem_find(into,name):NULL;
-                if(into && !(clash && clash->node)) {
-                    upm_count(to,1);
-                    if(!(r=mem_move(e,into,name))) {
-                        n->ctime=into->mtime=into->ctime=mem_now();upm_count(from,-1);
-                        if(ov_gen) { ov_bump(from);ov_bump(to); }
-                        mem_node_put(n);pthread_mutex_unlock(&mem_lock);return 0;
-                    }
-                    upm_count(to,-1);
-                }
-            }
+            r=!e || e->node!=n?MEM_PASS-3:redirected?1:layers?upm_move(n,e,from,to,&at,parent,leaf,flags):walked;   /* changed meanwhile: again */
+            if(parent>=0)close(parent);
             mem_node_put(n);
-            if(!(e=upm_entry(from)) || e->node!=n) { pthread_mutex_unlock(&mem_lock);return MEM_PASS-3; }   /* changed meanwhile: again */
+            if(r!=1) { pthread_mutex_unlock(&mem_lock);return r; }
         }
         r=n->refs?-18:upm_write_back(n,from,0)?MEM_PASS-3:-18;                /* open: EXDEV, as across file systems */
         pthread_mutex_unlock(&mem_lock);return r;

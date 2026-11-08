@@ -31,6 +31,7 @@ struct MemNode {
     uint32_t mode,uid,gid,nlink;      /* nlink: names (a directory: 2 + subdirectories) */
     uint32_t refs;                    /* open descriptions, working directories, shared mappings */
     unsigned char upper_only;         /* upm.h: a mirror of an upper directory the lower layer lacks (1), holds (2), not looked at (0) */
+    unsigned char whiteouts;          /* upm.h: a mirror whose upper directory may hold whiteouts naming pending files (upm_move) */
     uint64_t ino,size;
     struct timespec atime,mtime,ctime;
     MemFs *fs;MemNode *parent;MemEntry *entry; /* a directory's parent and own name (NULL: the root, or removed) */

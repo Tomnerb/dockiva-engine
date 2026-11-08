@@ -1678,14 +1678,17 @@ static uint64_t fs_call(uint64_t call) {
     if(call==166) { unsigned previous=fs_umask;fs_umask=(unsigned)cpu->gpr[0]&0777;return previous; }
     if(call==52 || call==53 || call==452) {
         uint64_t mode=cpu->gpr[call==52?1:2]&UINT64_C(07777); /* Linux ignores other bits (libuv passes st_mode); setuid/setgid/sticky allowed */
+        uint64_t flags=call==452?cpu->gpr[3]:0;if(flags&~UINT64_C(0x1100))return linux_error(22);
+        /* fchmodat2(fd, "", mode, AT_EMPTY_PATH) changes the descriptor's file, as fchmod:
+           systemd's fchmod_opath (sysusers on its new /etc/.#group* file). ponytail: with
+           AT_FDCWD it is EBADF (Linux changes the working directory); none seen asks. */
+        if(flags&0x1000) { const unsigned char *first=fs_memory(cpu->gpr[1],1,4);if(first && !*first)call=52; }
         int fd=fs_host(cpu->gpr[0]),own=-1;
         if(call==52 && fs_slot(cpu->gpr[0])>=0 && FS(fs_slot(cpu->gpr[0])).ro && (fd=own=ov_fd_upper(fs_slot(cpu->gpr[0])))<0)return linux_error(30);
         if(call!=52) {
             /* By path, never opening the file (an open costs ~12 us and needs read permission).
                fchmodat2 (452): AT_SYMLINK_NOFOLLOW on a symlink is EOPNOTSUPP, as Linux; glibc
-               and Go call it first. ponytail: AT_EMPTY_PATH with "" fails the lookup (Linux
-               changes the descriptor itself); add if a program needs it. */
-            uint64_t flags=call==452?cpu->gpr[3]:0;if(flags&~UINT64_C(0x1100))return linux_error(22);
+               and Go call it first. */
             char leaf[1025];int parent=fs_lookup(cpu->gpr[0],cpu->gpr[1],leaf,(flags&0x100?0:1)|FS_DIRECT,NULL);if(parent<0)return fs_error();
             if(!fs_path_writable()) { close(parent);return linux_error(30); }
             if(flags&0x100) { struct stat link;if(!fstatat(parent,leaf,&link,FS_NOFOLLOW_AT) && S_ISLNK(link.st_mode)) { close(parent);return linux_error(95); } } /* before a copy-up */
