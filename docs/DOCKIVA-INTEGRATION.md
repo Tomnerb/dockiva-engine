@@ -173,9 +173,10 @@ python3 scripts/verify_dockiva_capacity.py \
 
 Python is development tooling only. Go uses the standard library with no external
 modules. The local Go 1.22/macOS toolchain needs external linking and explicit
-ad-hoc signing. Each executable is verified before bundle publication. `dockivad`
-and `dockiva-engine` (the name Dockiva starts) contain the same Go program and
-are separately signed copies. The bundle ships the C runtime as
+ad-hoc signing. Each executable is verified before bundle publication: its
+signature, and that its minimum macOS is Dockiva's, 14.0 (`MACOS_MIN` in
+`scripts/build_native.py`). `dockivad` and `dockiva-engine` (the name Dockiva
+starts) contain the same Go program and are separately signed copies. The bundle ships the C runtime as
 `_internal/build/dockiva-runtime`, `dockiva-hvf` and `dockiva-worker`, the names
 `scripts/build_native.py` builds them under.
 

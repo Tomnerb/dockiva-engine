@@ -2,12 +2,16 @@
 """Build Dockiva's Go/C helper. Python is build tooling, never bundled/executed."""
 import argparse
 import json
+import os
 from pathlib import Path
 import platform
 import shutil
 import subprocess
 import sys
 import tempfile
+
+from build_native import MACOS_MIN
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -34,8 +38,12 @@ def main():
     layouts = ('examples/m19/shell-image', 'examples/m11_17/http-image', 'examples/redis-preview/image')
     fixture_digests = {json.loads((ROOT/path/'index.json').read_text())['manifests'][0]['digest'] for path in layouts}
     validate_profile_pins(json.loads((ROOT/'dockivad/profiles.json').read_text()), fixture_digests)
-    subprocess.run(['go', 'build', '-trimpath', '-ldflags=-linkmode=external', '-o', str(ROOT/'build/dockivad'), '.'], cwd=ROOT/'dockivad', check=True)
-    subprocess.run(['cc', '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror', '-pedantic',
+    # Go's external link (clang) takes the minimum from MACOSX_DEPLOYMENT_TARGET. Go's build
+    # cache key leaves that variable out, so CGO_CFLAGS carries the minimum too: otherwise
+    # cached cgo objects (CI restores the cache) keep the SDK's version.
+    env = dict(os.environ, MACOSX_DEPLOYMENT_TARGET=MACOS_MIN, CGO_CFLAGS='-O2 -g -mmacosx-version-min='+MACOS_MIN)
+    subprocess.run(['go', 'build', '-trimpath', '-ldflags=-linkmode=external', '-o', str(ROOT/'build/dockivad'), '.'], cwd=ROOT/'dockivad', env=env, check=True)
+    subprocess.run(['cc', '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror', '-pedantic', '-mmacosx-version-min='+MACOS_MIN,
                     str(ROOT/'native/worker_launcher.c'), '-o', str(ROOT/'build/dockiva-worker')], check=True)
     # FEX and its arm64 glibc, for linux/amd64 images: build/x86 (Linux ELF files,
     # not signed). The engine finds it beside the runtime.
@@ -64,6 +72,9 @@ def main():
                         str(stage/'_internal/build/dockiva-hvf')], check=True)
         for executable in (stage/'dockivad', stage/'dockiva-engine', *(p for p in (stage/'_internal/build').iterdir() if p.is_file())):
             subprocess.run(['codesign', '--verify', '--strict', str(executable)], check=True)
+            # Nothing else catches a program that declares a newer macOS than the app.
+            if f' minos {MACOS_MIN}\n' not in subprocess.run(['otool', '-l', str(executable)], capture_output=True, text=True, check=True).stdout:
+                raise RuntimeError(f'{executable.name} is not built for macOS {MACOS_MIN}')
         forbidden = [p for p in stage.rglob('*') if p.suffix in ('.py', '.pyc') or 'python' in p.name.lower()]
         if forbidden:
             raise RuntimeError('Python must not be shipped in the engine bundle: '+str(forbidden))
