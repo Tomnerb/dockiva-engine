@@ -254,7 +254,7 @@ func newLayout(work string) (layout, blobs string) {
 
 // layerFile is a layer file's digest, size and media type (by its compression).
 func layerFile(p string) (string, int64, string) {
-	fd, e := syscall.Open(p, syscall.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	fd, e := syscall.Open(p, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
 	check(e)
 	f := os.NewFile(uintptr(fd), p)
 	defer f.Close()
@@ -335,7 +335,7 @@ func (b *engine) saveImages(w http.ResponseWriter, names []string) {
 				continue
 			}
 			written[d] = true
-			fd, e := syscall.Open(noLinks(s.im.layout, "blobs/sha256/"+d[7:]), syscall.O_RDONLY|syscall.O_NOFOLLOW, 0)
+			fd, e := syscall.Open(noLinks(s.im.layout, "blobs/sha256/"+d[7:]), syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
 			check(e)
 			f := os.NewFile(uintptr(fd), d)
 			st, e := f.Stat()

@@ -4,6 +4,9 @@ import (
 	"archive/tar"
 	"encoding/json"
 	"errors"
+	"go/ast"
+	"go/parser"
+	gotoken "go/token"
 	"io/fs"
 	"net"
 	"os"
@@ -343,5 +346,50 @@ func TestLowSpaceGuard(t *testing.T) {
 	}
 	if r := request(t, h, "POST", "/containers/create?name=next", `{"Image":"dockiva/shell:demo"}`, ""); r.Code != 201 {
 		t.Fatalf("create with room again: %d %s", r.Code, r.Body.String())
+	}
+}
+
+// Every syscall.Open in the engine sets O_CLOEXEC, as os.Open does itself. Without it a
+// child the engine starts while the file is open (a spare runtime, a supervisor) keeps
+// the descriptor for as long as it runs: a spare holding a container's config.json kept
+// the store busy at POST /dockiva/shutdown, so the store stayed attached and was not
+// compacted. readBounded closes its file before it returns, so the race is checked here
+// in the source.
+func TestOpensCloseOnExec(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := gotoken.NewFileSet() // token is the engine's (common.go)
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok || len(call.Args) < 2 {
+				return true
+			}
+			if fn, ok := call.Fun.(*ast.SelectorExpr); !ok || fn.Sel.Name != "Open" {
+				return true
+			} else if pkg, ok := fn.X.(*ast.Ident); !ok || pkg.Name != "syscall" {
+				return true
+			}
+			cloexec := false
+			ast.Inspect(call.Args[1], func(m ast.Node) bool {
+				if flag, ok := m.(*ast.SelectorExpr); ok && flag.Sel.Name == "O_CLOEXEC" {
+					cloexec = true
+				}
+				return true
+			})
+			if !cloexec {
+				t.Errorf("%s: syscall.Open without O_CLOEXEC", fset.Position(call.Pos()))
+			}
+			return true
+		})
 	}
 }
