@@ -24,6 +24,10 @@ void _start(void) {
     check(run("/sgid")==30);
     check(run("/plain")==20);
     check(call(174,0,0,0,0,0,0)==1000 && call(175,0,0,0,0,0,0)==1000);  /* the caller is unchanged */
+    long pid=call(220,17,0,0,0,0,0);                                    /* a child's no_new_privs (apt's sandbox sets it) is the child's */
+    if(!pid)call(93,call(167,38,1,0,0,0,0)==0 && call(167,39,0,0,0,0,0)==1 && run("/suid")==20?0:1,0,0,0,0,0);
+    int status=-1;check(pid>0 && call(260,(U)pid,(U)&status,0,0,0,0)==pid && status==0);
+    check(call(167,39,0,0,0,0,0)==0 && run("/suid")==10);
     check(call(167,38,1,0,0,0,0)==0);                                   /* PR_SET_NO_NEW_PRIVS */
     check(run("/suid")==20);
     call(64,1,(U)"setuid PASS\n",12,0,0,0);call(93,0,0,0,0,0,0);for(;;){}

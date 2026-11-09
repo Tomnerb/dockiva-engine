@@ -174,15 +174,13 @@ static uint64_t guest_readv(void) {
 /* prctl: the options common programs use for privilege dropping and naming.
    Capabilities are not modelled beyond "root holds all"; PDEATHSIG is recorded
    but no signal is sent when a parent exits. Unknown options return EINVAL. */
-static unsigned prctl_keepcaps,prctl_no_new_privs,prctl_dumpable=1,prctl_pdeathsig;
-/* Permitted capabilities (0..40). Root starts with all; a switch away from root
+/* The flags, the name and the permitted capabilities (0..40) are the process's
+   (fs.h: GuestPriv). Root starts with all capabilities; a switch away from root
    keeps them only with PR_SET_KEEPCAPS, and a non-root exec clears them. */
-static uint32_t cap_held[2]={UINT32_MAX,0x1ffu};
 static void cap_after_setuid(const GuestIds *old,const GuestIds *now) {
     if((!old->ruid || !old->uid || !old->suid) && now->ruid && now->uid && now->suid && !prctl_keepcaps)cap_held[0]=cap_held[1]=0;
 }
 static int net_raw_allowed(void) { return !guest_uid && (cap_held[0]&(1u<<13)); } /* root with CAP_NET_RAW */
-static char prctl_name[16];
 /* PR_SET_MEM_MODEL / PR_GET_MEM_MODEL (the Apple/Asahi kernel ABI; FEX asks for TSO
    with it): model 1 runs the calling thread under the CPU's TSO memory model, kept
    across clone and fork, reset by exec. Offered only where the vCPUs take
