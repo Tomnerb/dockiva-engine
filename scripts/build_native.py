@@ -11,6 +11,10 @@ import subprocess
 import build_el1
 
 ROOT = Path(__file__).resolve().parents[1]
+# The oldest macOS the engine runs on: Dockiva's (its LSMinimumSystemVersion). Without a
+# deployment target, clang stamps the SDK's version as the programs' minimum and compiles
+# __builtin_available checks for any older version as always true.
+MACOS_MIN = '14.0'
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -25,7 +29,9 @@ def main():
     name = {(False, False): 'dockiva-runtime', (True, False): 'dockiva-runtime-sanitize',
             (False, True): 'dockiva-hvf', (True, True): 'dockiva-hvf-sanitize'}[(args.sanitize, args.with_hvf)]
     flags = ['-std=c11', '-O2', '-Wall', '-Wextra', '-Werror', '-pedantic']
-    if platform.system() != 'Darwin':
+    if platform.system() == 'Darwin':
+        flags += ['-mmacosx-version-min='+MACOS_MIN]
+    else:
         # The Linux CI build (GCC) checks what the Mac build (clang) checks. The runtime is one
         # translation unit of headers, and clang does not report unused statics in headers
         # (helpers only Darwin code calls are unused here). GCC's misleading-indentation check
