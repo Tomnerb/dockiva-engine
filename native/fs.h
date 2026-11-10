@@ -108,8 +108,14 @@ static int fs_space=-1;                                        /* --statfs-from:
    host credential ever changes. uid and gid are the effective IDs (they own files);
    real and saved ones differ after a set-user-ID exec or seteuid. */
 typedef struct { uint32_t uid,gid,ruid,rgid,suid,sgid; } GuestIds;
-typedef struct { struct GuestCwd *cwd;GuestIds ids;unsigned umask;struct SharedImage *shared; } ProcShared;
-static ProcShared proc_first={.umask=0022};
+/* prctl's flags and name and the permitted capabilities (compat.h), each process's
+   own: fork copies them with the rest of the record. Kept for the whole runtime
+   they leaked between processes: once apt's sandbox child set no_new_privs, no
+   later sudo in the container gained root. ponytail: Linux keeps all but dumpable
+   per thread; here a process's threads share them. */
+typedef struct { unsigned keepcaps,no_new_privs,dumpable,pdeathsig;uint32_t caps[2];char name[16]; } GuestPriv;
+typedef struct { struct GuestCwd *cwd;GuestIds ids;unsigned umask;struct SharedImage *shared;GuestPriv priv; } ProcShared;
+static ProcShared proc_first={.umask=0022,.priv={.dumpable=1,.caps={UINT32_MAX,0x1ffu}}}; /* root starts with capabilities 0..40 */
 static _Thread_local ProcShared *proc_now=&proc_first;
 #define fs_cwd (proc_now->cwd)
 #define guest_ids (proc_now->ids)
@@ -117,6 +123,12 @@ static _Thread_local ProcShared *proc_now=&proc_first;
 #define guest_gid (proc_now->ids.gid)
 #define fs_umask (proc_now->umask)
 #define shared_image (proc_now->shared)
+#define prctl_keepcaps (proc_now->priv.keepcaps)
+#define prctl_no_new_privs (proc_now->priv.no_new_privs)
+#define prctl_dumpable (proc_now->priv.dumpable)
+#define prctl_pdeathsig (proc_now->priv.pdeathsig)
+#define prctl_name (proc_now->priv.name)
+#define cap_held (proc_now->priv.caps)
 /* merged: the listing of a directory both image layers hold (overlay.h). */
 struct OvList;static void ov_list_free(struct OvList *list);
 typedef struct GuestDirectory { DIR *stream;unsigned refs,count;char path[1025];struct OvList *merged;int lower; } GuestDirectory; /* lower: opened there only */
@@ -783,7 +795,6 @@ static uint64_t io_text_open(const void *data,size_t size,int cloexec,int direct
 static int proc_text(const char *path,char *text,size_t capacity,size_t *out);
 static const char *io_text_path(uint64_t fd);                              /* io.h */
 static uint64_t io_fifo_open(dev_t dev,ino_t ino,uint64_t flags);          /* io.h */
-static char prctl_name[16];       /* compat.h: PR_SET_NAME */
 static uint64_t guest_ppid_of(uint64_t pid);static unsigned guest_threads_of(uint64_t pid); /* syscall.h */
 static int guest_process_exists(uint64_t pid);
 static unsigned process_count; /* process.h: child slots in use (the highest, plus one); scans stop there */

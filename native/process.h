@@ -254,6 +254,7 @@ static uint64_t process_exec_at(uint64_t dir,unsigned r) {
             for(unsigned i=0;i+1<address_space->auxv_count;i+=2)if(address_space->auxv[i]==2)address_space->auxv[i+1]=guest; /* /proc/self/auxv */
         }
     }
+    prctl_keepcaps=0;prctl_name[0]=0;       /* exec clears keepcaps and names the process after its program again */
     if(guest_uid)cap_held[0]=cap_held[1]=0; /* no file capabilities: a non-root exec loses them */
     else if(caller.uid) { cap_held[0]=UINT32_MAX;cap_held[1]=0x1ffu; } /* a set-user-ID-root exec gains them all */
     /* Sockets survive exec unless SOCK_CLOEXEC/FD_CLOEXEC is set, as on Linux. */
@@ -358,12 +359,12 @@ static uint64_t process_clone(void) {
         return pid;
     }
     process_depth=1;process_pid=pid;
-    GuestIds parent_ids=guest_ids;
+    GuestIds parent_ids=guest_ids;GuestPriv parent_priv=proc_now->priv;
     static unsigned char parent_kind[GUEST_FD_LIMIT];static unsigned short parent_index[GUEST_FD_LIMIT],parent_net[NET_SLOTS],parent_io_guest[IO_END];
     memcpy(parent_kind,fd_kind,sizeof(fd_kind));memcpy(parent_index,fd_index,sizeof(fd_index));
     memcpy(parent_net,net_guest,sizeof(net_guest));memcpy(parent_io_guest,io_guest,sizeof(io_guest));
     unsigned status=(unsigned)run(0);
-    guest_ids=parent_ids; /* the child's identity changes stay in the child */
+    guest_ids=parent_ids;proc_now->priv=parent_priv; /* the child's identity, prctl and capability changes stay in the child */
     fs_cwd_release();fs_cwd=parent_cwd;image_free();image_restore(&parent);
     io_restore(parent_io,io_used);
     net_cleanup();memset(net_fd,0,net_top*sizeof(net_fd[0]));

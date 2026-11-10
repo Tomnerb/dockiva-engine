@@ -28,6 +28,8 @@ void _start(void) {
     }
     int status=-1;check(call(260,(U)pid,(U)&status,0,0,0,0)==pid && status==0);
     check(call(174,0,0,0,0,0,0)==0);                                   /* parent is still root */
+    unsigned header[2]={0x20080522,0},caps[6]={0};                     /* and still holds its capabilities */
+    check(call(90,(U)header,(U)caps,0,0,0,0)==0 && caps[1]==0xffffffffu);
     check(call(147,(U)-1,500,(U)-1,0,0,0)==0 && call(175,0,0,0,0,0,0)==500 && call(174,0,0,0,0,0,0)==0); /* setresuid: effective only */
     call(64,1,(U)"identity PASS\n",14,0,0,0);call(93,0,0,0,0,0,0);for(;;){}
 }
