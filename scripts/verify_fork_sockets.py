@@ -37,6 +37,7 @@ def main():
     lazy_charge, lazy_leaf, oom_kill = (build(n, folder, linker) for n in ('lazy_charge_guest', 'lazy_charge_leaf', 'oom_kill_guest'))
     fs_stress = build('fs_stress_guest', folder, linker)  # file calls racing close, dup2, munmap, fork, exec
     vfork_threads = build('vfork_threads_guest', folder, linker)  # vfork from a threaded process shares its memory
+    va_top = build('va_top_guest', folder, linker)  # the top 64 KiB below 1 << 48 are taken, as FEX's allocator must see them
     mmap_probe = build('mmap_probe_guest', folder, linker)  # Go's 64 MiB arena probes: cheap, first fit and zeroing exact
     nested = build('fork_nested_guest', folder, linker)  # a fork's child forks again, then writes the parent's memory (its own copy)
     recheck = build('epoll_recheck_guest', folder, linker)  # an epoll_wait whose edge another thread took rechecks within 10 ms
@@ -93,6 +94,7 @@ def main():
                                      (fs_stress, ['--root', str(shared), '--writable', '--dynamic', '--storage-limit-mib', '0'], b'fs-stress PASS\n'),
                                      (stress, ['--root', str(stress_root), '--signals'], b'fork-exec-stress PASS\n'),
                                      (vfork_threads, ['--root', str(shared), '--writable'], b'vfork-threads PASS\n'),
+                                     (va_top, ['--dynamic'], b'va-top PASS\n'),
                                      (mmap_probe, ['--mmap-limit-mib', '2048', '--dynamic'], b'mmap-probe PASS\n'),
                                      (nested, [], b'fork-nested PASS\n'),
                                      (recheck, [], b'epoll-recheck PASS\n'),

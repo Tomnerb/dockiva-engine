@@ -24,8 +24,13 @@
    (ld-musl, ld-linux) and a static PIE just below mmap_base (top minus 128 MiB). */
 #define PIE_BASE UINT64_C(0xaaaaaaaaa000)
 #define INTERPRETER_TOP UINT64_C(0xfffff8000000)
-/* The end of guest user addresses: the hypervisor backend's EL1 page is at the top. */
+/* The end of guest user addresses: the hypervisor backend's EL1 page is at the top. A
+   48-bit Linux ends user space at 1 << 48 (USER_VA_END): the 64 KiB between are shown
+   as mapped (/proc/self/maps) and refuse mappings (MAP_FIXED_NOREPLACE: EEXIST), so a
+   program that reserves the gaps /proc/self/maps lists, as FEX's allocator does, never
+   counts on memory it could not get there. */
 #define GUEST_VA_END UINT64_C(0xffffffff0000)
+#define USER_VA_END (UINT64_C(1)<<48)
 /* Segment flag: MAP_SHARED memory (shared anonymous mappings, System V shm). Its
    backing is never copied on write, so fork keeps every process on the same bytes. */
 #define SEG_SHARED 8u
