@@ -972,9 +972,10 @@ static int guest_memory_unlocked(void) {
     if(!dynamic_enabled || trace)return 0;
     if(call!=222 && call!=215 && call!=226 && call!=233 && call!=214)return 0;
     /* A file's MAP_SHARED mapping and the unmapping of shared memory change the table
-       of shared files (mapping.h), one for every process: under the runtime lock. */
+       of shared files (mapping.h), one for every process: under the runtime lock. So
+       does a MAP_FIXED mapping over shared memory, which unmaps it. */
     if(call==222 && !(cpu->gpr[3]&32) && (cpu->gpr[3]&3) && (cpu->gpr[3]&3)!=2)return 0;
-    if(call==215 && shared_in(cpu->gpr[0],cpu->gpr[1]))return 0;
+    if((call==215 || (call==222 && (cpu->gpr[3]&16))) && shared_in(cpu->gpr[0],cpu->gpr[1]))return 0;
     cpu->exclusive_valid=0;
     cpu->gpr[0]=call==222?guest_dynamic_mmap():call==215?guest_munmap(cpu->gpr[0],cpu->gpr[1]):call==226?guest_mprotect():call==233?guest_madvise():guest_brk(cpu->gpr[0]);
     return 1;

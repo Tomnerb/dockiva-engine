@@ -238,7 +238,11 @@ static void file_share_unmapped(MemoryBacking *backing) {
    holds them. Go's tools exit without munmap: each process of a build kept an
    entry (and its memory) until the 1024th mapping failed with ENFILE (go build's
    link: "mapping output file failed: too many open files in system"), and what a
-   process wrote through such a mapping never reached the file. */
+   process wrote through such a mapping never reached the file. The image's own
+   references to them go here, under the runtime lock: the rest of a dead image's
+   memory goes later (image_destroy_later, after the lock), and another process's
+   exit or munmap meanwhile counted these references still, skipped its write-back,
+   and left the entry to the table alone, never written. */
 static int file_share_pointer_order(const void *a,const void *b) {
     uintptr_t x=(uintptr_t)*(MemoryBacking *const *)a,y=(uintptr_t)*(MemoryBacking *const *)b;return x<y?-1:x>y;
 }
@@ -251,8 +255,12 @@ static void file_share_image_gone(GuestAddressSpace *space) {
     for(unsigned j=0;j<file_share_top;j++) {
         MemoryBacking *b=file_shares[j].backing;
         if(!b || !bsearch(&b,mine,n,sizeof(*mine),file_share_pointer_order))continue;
-        if(b->refs==1+address_space_backing_refs(space,b)) { file_share_flush(&file_shares[j]);file_share_forget(&file_shares[j]); }
+        for(unsigned i=0;i<space->nseg;)                             /* the table keeps it alive */
+            if(space->seg[i].backing==b && (space->seg[i].flags&SEG_SHARED)) { backing_release(b);space->seg[i]=space->seg[--space->nseg]; }
+            else i++;
+        if(b->refs==1) { file_share_flush(&file_shares[j]);file_share_forget(&file_shares[j]); }
     }
+    memset(space->lookup_cache,0,sizeof(space->lookup_cache));
 }
 static int file_share_find(uint64_t guestfd) {
     uint64_t dev,ino,size;int writable;

@@ -39,8 +39,9 @@ def main():
     vfork_threads = build('vfork_threads_guest', folder, linker)  # vfork from a threaded process shares its memory
     mmap_probe = build('mmap_probe_guest', folder, linker)  # Go's 64 MiB arena probes: cheap, first fit and zeroing exact
     nested = build('fork_nested_guest', folder, linker)  # a fork's child forks again, then writes the parent's memory (its own copy)
-    shared_exit = build('shared_exit_guest', folder, linker)  # exits with MAP_SHARED file mappings: written back, table entries freed
+    shared_exit = build('shared_exit_guest', folder, linker)  # exits with MAP_SHARED file mappings in place: each written back
     shared_many = build('shared_many_guest', folder, linker)  # 1300 files mapped MAP_SHARED by two processes: coherent, no ENFILE
+    shared_kill = build('shared_kill_guest', folder, linker)  # a parent and child sharing a file mapping killed together: both writes reach it
     recheck = build('epoll_recheck_guest', folder, linker)  # an epoll_wait whose edge another thread took rechecks within 10 ms
     stress, stress_leaf = (build(n, folder, linker) for n in ('fork_exec_stress_guest', 'fork_exec_stress_leaf'))
     stress_root = folder/'stress-root'  # fork_exec_stress_guest execs /leaf in /d0../d2 and reads /data
@@ -100,6 +101,7 @@ def main():
                                      (recheck, [], b'epoll-recheck PASS\n'),
                                      (shared_exit, ['--root', str(shared), '--writable', '--dynamic'], b'shared-exit PASS\n'),
                                      (shared_many, ['--root', str(shared), '--writable', '--dynamic', '--storage-limit-mib', '0', '--mmap-limit-mib', '2048'], b'shared-many PASS\n'),
+                                     (shared_kill, ['--root', str(shared), '--writable', '--dynamic', '--signals'], b'shared-kill PASS\n'),
                                      (fd_fast, ['--root', str(shared), '--writable'], b'fd-fast PASS\n')):
             if backend == 'interpreter' and elf in (vfork_threads, threads, fork_threads, thread_group, futex, thread_limit, fp_preserve, sleep, vdso, sigmask, cow_stress, smp_atomic, fork_churn, thread_smp, out_edge, around, oom_kill, fastcall, fd_fast, recheck):
                 continue  # the interpreter has no CLONE_THREAD support (nor these SIMD instructions); its OOM kill ends the run
@@ -143,6 +145,17 @@ def main():
                     ok, out = False, 'timed out (a lost wake-up)'
                 failed += not ok
                 print(f'hvf {elf.stem} --cpus {cpus}: {"PASS" if ok else "FAIL"} {out}')
+            # A parent and child sharing a file mapping killed together: a dead image's references
+            # outlive the runtime lock only with several workers, so four whatever --cpus says.
+            kills = []
+            for _ in range(6):
+                shutil.rmtree(shared, ignore_errors=True)
+                shared.mkdir()
+                r = subprocess.run([str(runtime), 'run', str(shared_kill), '--root', str(shared), '--writable', '--dynamic', '--signals',
+                                    *common, *extra, '--cpus', '4'], capture_output=True, timeout=60)   # the last --cpus counts
+                kills.append(r.returncode == 0 and r.stdout == b'shared-kill PASS\n')
+            failed += not all(kills)
+            print(f'hvf shared_kill_guest --cpus 4: {"PASS" if all(kills) else "FAIL"} {sum(kills)} of 6')
     return 1 if failed else 0
 
 

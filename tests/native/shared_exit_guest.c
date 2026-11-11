@@ -1,8 +1,8 @@
 /* A process that exits with a writable MAP_SHARED file mapping in place (Go's
    tools never munmap): 1100 children each map /shared-N, write a byte through the
-   mapping and exit. Each byte reaches its file, as on Linux, and no mapping fails:
-   the runtime's table of shared file mappings holds 1024, and exits kept their
-   entries until mmap answered ENFILE. Needs a writable root. */
+   mapping and exit (every other one first maps anonymous memory over it with
+   MAP_FIXED). Each byte reaches its file, as on Linux, and every mapping works.
+   Needs a writable root. */
 typedef unsigned long U;
 static long call(U n,U a,U b,U c,U d,U e,U f) {
     register U x8 __asm__("x8")=n,x0 __asm__("x0")=a,x1 __asm__("x1")=b;
@@ -27,6 +27,8 @@ void _start(void) {
             long map=call(222,0,4096,3,1,(U)fd,0);                          /* PROT_READ|WRITE, MAP_SHARED */
             if(map<0 && map>-4096)call(94,12,0,0,0,0,0);
             *(volatile char *)map='x';
+            if(n&1 && call(222,(U)map,4096,3,0x32,(U)-1,0)!=map)            /* MAP_FIXED anonymous memory over it */
+                call(94,13,0,0,0,0,0);
             call(94,0,0,0,0,0,0);for(;;){}                                  /* exit_group, mapped */
         }
         int status=-1;check(call(260,(U)pid,(U)&status,0,0,0,0)==pid && status==0);
