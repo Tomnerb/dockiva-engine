@@ -196,6 +196,23 @@ static void file_share_unmapped(MemoryBacking *backing) {
         file_share_flush(&file_shares[i]);file_share_forget(&file_shares[i]);return;
     }
 }
+/* An image goes (exit, exec): its shared file mappings go as munmap takes them,
+   written back to their files and their table entries freed once only the table
+   holds them. Go's tools exit without munmap: each process of a build kept an
+   entry (and its memory) until the 1024th mapping failed with ENFILE (go build's
+   link: "mapping output file failed: too many open files in system"), and what a
+   process wrote through such a mapping never reached the file. */
+static void file_share_image_gone(GuestAddressSpace *space) {
+    if(!__atomic_load_n(&file_shares_live,__ATOMIC_RELAXED))return;
+    for(unsigned i=0;i<space->nseg;i++) {
+        MemoryBacking *b=space->seg[i].backing;
+        if(!(space->seg[i].flags&SEG_SHARED))continue;
+        for(unsigned j=0;j<FILE_SHARES;j++)if(file_shares[j].backing==b) {
+            if(b->refs==1+address_space_backing_refs(space,b)) { file_share_flush(&file_shares[j]);file_share_forget(&file_shares[j]); }
+            break;
+        }
+    }
+}
 static int file_share_find(uint64_t guestfd) {
     uint64_t dev,ino,size;int writable;
     if(mem_map_file(guestfd,&dev,&ino,&size,&writable,NULL)<=0) {
