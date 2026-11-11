@@ -560,6 +560,10 @@ static uint64_t guest_dynamic_mmap_map(void) {
            shared and writable: then it must see those writes. JITs map a memfd twice,
            asmjit (Erlang's BEAM) the executable view first. */
         file_share_find(cpu->gpr[4]) || (fs_host(cpu->gpr[4])>=0 && !FS(fs_slot(cpu->gpr[4])).ro) || map_mem_writable(cpu->gpr[4]));
+    /* Such a read-only shared mapping takes a segment; Go's linker maps every package
+       archive so. The last SEGMENT_SPARE stay for other memory: ENOMEM, as when Linux's
+       vm.max_map_count is reached, and the linker reads those archives instead. */
+    if(share_file && !(prot&2) && address_space->nseg>=SEGMENT_LIMIT-SEGMENT_SPARE)return linux_error(12);
     if(shared && ((flags&32) || share_file) && fixed) {
         uint64_t e=outside?map_outside_clear(addr,bytes):map_in_arena(addr,bytes)?guest_munmap(addr,bytes):0;
         if(e)return e;
