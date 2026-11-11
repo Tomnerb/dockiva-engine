@@ -444,11 +444,11 @@ static int guest_syscall_dispatch(void) {
             if(io_managed(cpu->gpr[0]) && (call==57 || call==63 || call==64 || call==25 || call==29 || call==80 || call==62 || call==67 || call==61)) { uint64_t result=io_call(call);if(result==IO_BLOCK) { cpu->pc-=4;return -2; }cpu->gpr[0]=result;return -3; }
             if(call==220) { cpu->gpr[0]=process_clone();return -3; }
             if(call==221) { uint64_t result=process_exec_at((uint64_t)-100,0);if(result)cpu->gpr[0]=result;return -3; }
-            /* execveat (FEX re-runs itself through it). ponytail: AT_EMPTY_PATH (fexecve) is
-               ENOSYS, AT_SYMLINK_NOFOLLOW is not enforced. */
+            /* execveat (FEX re-runs itself through it; fexecve with AT_EMPTY_PATH).
+               ponytail: AT_SYMLINK_NOFOLLOW is not enforced. */
             if(call==281) {
                 uint64_t flags=cpu->gpr[4];
-                uint64_t result=(flags&~UINT64_C(0x1100))?linux_error(22):(flags&0x1000)?linux_error(38):process_exec_at(cpu->gpr[0],1);
+                uint64_t result=(flags&~UINT64_C(0x1100))?linux_error(22):process_exec_at(cpu->gpr[0],1);
                 if(result)cpu->gpr[0]=result;return -3;
             }
             if(call==260 || call==95) {

@@ -786,7 +786,7 @@ static uint64_t fs_memfd(void) {
     int slot=fs_claim();
     if(slot<0 || fd_lowest(0)<0)return linux_error(24);
     char path[]="/tmp/dockiva-memfd-XXXXXX";int fd=mkstemp(path);if(fd<0)return fs_error();
-    unlink(path);(void)fcntl(fd,F_SETFD,FD_CLOEXEC);
+    unlink(path);(void)fcntl(fd,F_SETFD,FD_CLOEXEC);(void)fchmod(fd,0777);   /* a memfd's mode, as on Linux: fexecve runs it */
     FS(slot).fd=fd+1;FS(slot).cloexec=(flags&1)!=0;FS(slot).ro=0;FS(slot).dev=0;FS(slot).sole=0;FS(slot).pack=NULL;
     int guest=fd_lowest(0);FS(slot).guest=(unsigned short)guest;fd_bind((uint64_t)guest,FD_FILE,(unsigned)slot);return (uint64_t)guest;
 }
