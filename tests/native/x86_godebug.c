@@ -1,7 +1,8 @@
 /* x86-64 Linux, freestanding: writes the GODEBUG it was given ("unset" without one)
    and a newline. With "exec" as its argument it first execs itself with only A=1
    in its environment, so the exec path (an x86 program a guest program runs) is
-   checked too. scripts/verify_x86_godebug.py runs it through FEX. */
+   checked too; with "script" it execs /s, a #! script whose interpreter is itself,
+   so FEX running itself again is. scripts/verify_x86_godebug.py runs it through FEX. */
 typedef unsigned long U;
 static long sys(U n,U a,U b,U c) {
     long r;
@@ -11,9 +12,10 @@ static long sys(U n,U a,U b,U c) {
 static U length(const char *s) { U n=0;while(s[n])n++;return n; }
 void start_c(U *sp) {
     U argc=sp[0];char **argv=(char **)(sp+1),**envp=argv+argc+1;
-    if(argc>1 && argv[1][0]=='e') {
-        static char *args[]={(char *)"/godebug",0},*env[]={(char *)"A=1",0};
-        sys(59,(U)"/godebug",(U)args,(U)env);                 /* execve */
+    if(argc>1 && (argv[1][0]=='e' || argv[1][0]=='s')) {
+        static char *args[]={(char *)"/godebug",0},*script[]={(char *)"/s",0},*env[]={(char *)"A=1",0};
+        if(argv[1][0]=='s')sys(59,(U)"/s",(U)script,(U)env);  /* execve; its interpreter gets "/s" */
+        else sys(59,(U)"/godebug",(U)args,(U)env);
         sys(60,3,0,0);
     }
     const char *value="unset";

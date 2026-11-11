@@ -17,6 +17,11 @@ CASES = [  # GODEBUG given (None: unset) -> what the program sees
     ('netdns=go', 'netdns=go,asyncpreemptoff=1'),
     ('asyncpreemptoff=0', 'asyncpreemptoff=0'),                 # the program's own choice stays
     ('gctrace=1,asyncpreemptoff=0', 'gctrace=1,asyncpreemptoff=0'),
+    ('asyncpreemptoff=true', 'asyncpreemptoff=true,asyncpreemptoff=1'),   # Go skips a value it cannot parse
+    ('asyncpreemptoff=', 'asyncpreemptoff=,asyncpreemptoff=1'),
+    ('asyncpreemptoff=+1', 'asyncpreemptoff=+1,asyncpreemptoff=1'),     # Go before 1.26 takes no '+'
+    ('asyncpreemptoff=2147483648', 'asyncpreemptoff=2147483648,asyncpreemptoff=1'),   # past int32
+    ('asyncpreemptoff=-2147483648', 'asyncpreemptoff=-2147483648'),   # the smallest int32: applied
 ]
 
 
@@ -56,6 +61,12 @@ def main():
         ok = code == 0 and out == 'asyncpreemptoff=1'
         failed += not ok
         print('exec without GODEBUG:', 'PASS' if ok else f'FAIL exit={code} got {out!r} {err}')
+        (root/'s').write_text('#!/godebug\n')                  # an x86 interpreter: FEX runs itself again for it
+        (root/'s').chmod(0o755)
+        code, out, err = run('netdns=go', '--', 'script')    # the script exec'd with only A=1
+        ok = code == 0 and out == 'asyncpreemptoff=1'
+        failed += not ok
+        print('#! script without GODEBUG:', 'PASS' if ok else f'FAIL exit={code} got {out!r} {err}')
         return 1 if failed else 0
 
 
