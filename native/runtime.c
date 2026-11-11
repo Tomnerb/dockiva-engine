@@ -1402,6 +1402,7 @@ int main(int argc,char **argv) {
         if(n>0) {
             for(int k=0;k<n;k++)guestargv[k]=line[k];
             guestargc=n;snprintf(guest_exe,sizeof(guest_exe),"%s/bin/FEX",x86_translator);
+            x86_vdso_env(guestenv,&envc,EXEC_ENTRIES,strings,&used,sizeof(strings));
             int program=open(argv[2],O_RDONLY|O_CLOEXEC);                         /* binfmt's O flag: FEX reads the program through it */
             if(program<0 || (int64_t)(startup_execfd=(int64_t)fs_install(program,0,1,0,NULL))<0)fail("Cannot open the x86 program");
             int fd=fs_open_root_file(guestargv[0]);

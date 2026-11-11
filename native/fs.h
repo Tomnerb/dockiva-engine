@@ -1118,6 +1118,23 @@ static const char *fs_proc_sys_value(const char *path) {
     if(x86_translator[0] && (!strcmp(path,"/proc/sys/fs/binfmt_misc/FEX-x86_64") || !strcmp(path,"/proc/sys/fs/binfmt_misc/FEX-x86")))return "enabled\nflags: POCF\n";
     return NULL;
 }
+/* FEX gives an x86 program a vDSO (AT_SYSINFO_EHDR) only when it finds its guest
+   library, libVDSO-guest.so, in the ThunkGuestLibs folder (GuestThunks_32 for i386),
+   which defaults to /usr/share/fex-emu/GuestThunks: a path in the image. So FEX's own
+   copy in the bundle (scripts/build_x86.py) is named by FEX_THUNKGUESTLIBS, added to
+   an x86 program's environment unless it sets one, also when FEX runs itself again
+   (a #! script whose interpreter is x86). Without a vDSO every clock_gettime,
+   gettimeofday and time is a system call: Go's time.Now cost 2.3 µs instead of
+   56 ns. The program and its children see the variable, even after their caller
+   cleared the environment (env -i). Strings go to buffer at *used (limit bytes);
+   env grows to capacity at most. */
+static void x86_vdso_env(const char **env,unsigned *envc,unsigned capacity,char *buffer,size_t *used,size_t limit) {
+    static const char key[]="FEX_THUNKGUESTLIBS=";
+    for(unsigned i=0;i<*envc;i++)if(!strncmp(env[i],key,sizeof(key)-1))return;  /* the program's own choice */
+    int n=snprintf(buffer+*used,limit-*used,"%s%s/share/fex-emu/GuestThunks",key,x86_translator);
+    if(*envc>=capacity || n<0 || (size_t)n>=limit-*used)return;
+    env[(*envc)++]=buffer+*used;*used+=(size_t)n+1;
+}
 /* The command line binfmt_misc gives a program at the guest path exe (argv: n of them,
    argv[0] first), when it is x86 (x86 set) or one of FEX's own (under
    x86_translator): the translator's ld.so, its lib directory, then FEX with exe, its
