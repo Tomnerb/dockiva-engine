@@ -634,6 +634,7 @@ static void hvf_map_arena_pass(GuestAddressSpace *space,uint64_t *mapped) {
    and keep their entries. This spares a fork-heavy server from re-mapping all of
    its memory (Postgres: its shared buffers) several times per new process.
    Returns 0 when only a full rebuild can do it. */
+static void hvf_remap_backing(const GuestAddressSpace *space,HvfView *v,MemoryBacking *backing,size_t offset,size_t size); /* below */
 static int hvf_sync_partial(GuestAddressSpace *space,HvfView *v) {
     if(!v->root || v->stale==HVF_STALE_NEW || v->map_capacity!=space->map_capacity || v->tables>HVF_TABLES/4)return 0;
     if(v->map_backing && !space->map_backing)return 0;
@@ -664,10 +665,14 @@ static int hvf_sync_partial(GuestAddressSpace *space,HvfView *v) {
     } else if(all)hvf_map_range(space,space->brk_base,space->brk_pages,6,space->brk_backing,0);
     if(arena_dirty)hvf_remap_arena(space);                       /* pages mapped, unmapped or reprotected since */
     if(all || v->map_backing!=space->map_backing)hvf_map_arena_all(space);
+    /* Queued remaps (an overlay's copied pages, discarded pages: hvf_backing_moved), which
+       the kept segments above did not map again; all mapped every private page. */
+    for(unsigned i=0;!all && i<v->nmoved;i++)hvf_remap_backing(space,v,v->moved[i].backing,v->moved[i].offset,v->moved[i].size);
     return !hvf_exhausted;
 }
 /* Map backing's [offset, offset+size) again wherever space maps it, into v. */
 static void hvf_remap_backing(const GuestAddressSpace *space,HvfView *v,MemoryBacking *backing,size_t offset,size_t size) {
+    int cow=-1;   /* hvf_effective_flags' sharing test, made once: it counts the backing's references (every segment) per page */
     for(unsigned r=0;r<space->nseg+2;r++) {
         uint64_t base,length;size_t from;unsigned flags;int arena=0;
         if(r==0) { if(space->map_backing!=backing || !space->map_flags)continue;base=MAP_BASE;length=space->map_capacity;from=0;flags=0;arena=1; }
@@ -681,7 +686,12 @@ static void hvf_remap_backing(const GuestAddressSpace *space,HvfView *v,MemoryBa
             if(arena)f&=7;
             if(!(f&7))continue;
             uint64_t ipa=hvf_page_ipa(backing,at);if(!ipa)continue;
-            hvf_map_page_in(v,va,ipa,hvf_effective_flags(space,backing,f,at),0);
+            if(cow<0)cow=backing->frozen || (backing->refs>1 && backing->refs>address_space_backing_refs(space,backing));
+            unsigned e=f;                                                       /* as hvf_effective_flags */
+            if(f&SEG_SHARED)e=f&7;
+            else if((f&2) && cow)e=f&~2u;
+            else if(f&2) { const BackingPage *page=backing->pages[at/backing->page_size];if(!page || page->refs>1)e=f&~2u; }
+            hvf_map_page_in(v,va,ipa,e,0);
         }
     }
 }
@@ -992,6 +1002,12 @@ static void hvf_put_regs(void) {
         }
         hvf_fp_dirty=0;
     }
+}
+/* A write fault mapped its page: the view is current again unless remaps another thread
+   queued (hvf_backing_moved: an overlay's copies, discarded pages) or arena changes are
+   still pending, which the next sync must apply rather than skip. */
+static void hvf_fault_synced(HvfView *v,const GuestAddressSpace *space) {
+    if(!v->nmoved && v->arena_rev==space->arena_rev)v->generation=space->generation;
 }
 /* From the frame; else (a preemption, or another vector) from the vCPU: after an
    EL0 exception the guest's return address and flags are ELR/SPSR_EL1 (passed in),
@@ -1920,7 +1936,7 @@ static int hvf_unlocked_exit(void) {
             address_space_touched(address_space);
             if(address_space->layout==layout && hvf_view==hvf_own_view && hvf_view_matches(address_space)) {
                 unsigned around=hvf_fault_around(address_space,far);PROFILE_ADD(profile_fault_around,around);
-                hvf_remap_host_page(address_space,far,1+around);hvf_view->generation=address_space->generation;
+                hvf_remap_host_page(address_space,far,1+around);hvf_fault_synced(hvf_view,address_space);
             } else hvf_own_view->stale=HVF_STALE_COW;
             hvf_faulting=0;
         }
@@ -2155,7 +2171,7 @@ static int hvf_slice_run(void) {
                 address_space_touched(address_space);
                 if(address_space->layout==layout && hvf_view==hvf_own_view && hvf_view_matches(address_space)) {
                     unsigned around=hvf_fault_around(address_space,far);PROFILE_ADD(profile_fault_around,around);
-                    hvf_remap_host_page(address_space,far,1+around);hvf_view->generation=address_space->generation;
+                    hvf_remap_host_page(address_space,far,1+around);hvf_fault_synced(hvf_view,address_space);
                 } else hvf_own_view->stale=HVF_STALE_COW;
                 hvf_faulting=0;in_vector=hvf_fault_resume(elr,spsr);fast=1;continue;
             }

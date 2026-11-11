@@ -38,6 +38,7 @@ def main():
     fs_stress = build('fs_stress_guest', folder, linker)  # file calls racing close, dup2, munmap, fork, exec
     vfork_threads = build('vfork_threads_guest', folder, linker)  # vfork from a threaded process shares its memory
     mmap_probe = build('mmap_probe_guest', folder, linker)  # Go's 64 MiB arena probes: cheap, first fit and zeroing exact
+    discard_rewrite = build('discard_rewrite_guest', folder, linker)  # MADV_DONTNEED again on rewritten pages of a reservation zeroes them
     nested = build('fork_nested_guest', folder, linker)  # a fork's child forks again, then writes the parent's memory (its own copy)
     recheck = build('epoll_recheck_guest', folder, linker)  # an epoll_wait whose edge another thread took rechecks within 10 ms
     stress, stress_leaf = (build(n, folder, linker) for n in ('fork_exec_stress_guest', 'fork_exec_stress_leaf'))
@@ -94,6 +95,7 @@ def main():
                                      (stress, ['--root', str(stress_root), '--signals'], b'fork-exec-stress PASS\n'),
                                      (vfork_threads, ['--root', str(shared), '--writable'], b'vfork-threads PASS\n'),
                                      (mmap_probe, ['--mmap-limit-mib', '2048', '--dynamic'], b'mmap-probe PASS\n'),
+                                     (discard_rewrite, ['--dynamic'], b'discard-rewrite PASS\n'),
                                      (nested, [], b'fork-nested PASS\n'),
                                      (recheck, [], b'epoll-recheck PASS\n'),
                                      (fd_fast, ['--root', str(shared), '--writable'], b'fd-fast PASS\n')):
