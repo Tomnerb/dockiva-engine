@@ -1112,10 +1112,15 @@ static int hvf_held_yield(uint64_t far,uint64_t pc) {
 }
 /* A write fault on memory a fork held that has thawed: give this view's write permission
    back in one pass and resume the write through an ASID flush (1; the vCPU is then in
-   an EL1 routine). 0 when nothing was restored here. Under the mm lock, framed. */
+   an EL1 routine). 0 when nothing was restored here. Under the mm lock, framed. A later
+   fork that ran out of copy and overlay slots keeps a held backing as it is
+   (address_space_fork_backing): shared then, so the write takes the copy-on-write path
+   (0) instead of making the memory another process maps writable in place. */
 static int hvf_held_restore(MemoryBacking *b,uint64_t elr,uint64_t spsr) {
     if(__atomic_load_n(&b->frozen,__ATOMIC_ACQUIRE) || !__atomic_exchange_n(&b->held,0,__ATOMIC_ACQ_REL))return 0;
     __atomic_sub_fetch(&hvf_held_live,1,__ATOMIC_ACQ_REL);
+    size_t refs=__atomic_load_n(&b->refs,__ATOMIC_ACQUIRE);
+    if(refs>1 && refs>address_space_backing_refs(address_space,b))return 0;
     if(hvf_view!=hvf_own_view || !hvf_hold(hvf_view,address_space,b,0))return 0;
     hvf_resume_el0(elr,spsr);
     hvf_frame[HF_FLUSH]=(uint64_t)hvf_view->asid<<48;
