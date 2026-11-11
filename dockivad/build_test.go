@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
@@ -250,6 +251,39 @@ func TestBuildCache(t *testing.T) {
 	left := b.buildCacheEntries()
 	if failure != "" || len(left) != 1 || !strings.Contains(stream, "COPY big /2\n ---> "+left[0].(obj)["ID"].(string)[:12]+"\n") {
 		t.Fatalf("eviction: %q %v\n%s", failure, left, stream)
+	}
+}
+
+// RUN steps get Docker's unlimited memory (the runtime's largest budget, seen as the
+// host's memory), or docker build -m's: a container's default (2 GiB) killed go build.
+func TestBuildMemory(t *testing.T) {
+	if !exists("../build/dockivad") {
+		t.Skip("RUN needs ../build/dockivad (scripts/bundle_dockiva_engine.py)")
+	}
+	b := testEngine(t)
+	b.Self, b.Worker = "../build/dockivad", "../build/dockiva-worker"
+	dockerfile := "FROM dockiva/shell:demo\nSHELL [\"busybox\", \"sh\", \"-c\"]\nRUN busybox cat /proc/meminfo > /meminfo\n"
+	memTotal := func(query string) int64 {
+		_, stream, failure := buildResult(t, buildMessages(t, b, query, tarOf(t, map[string]string{"Dockerfile": dockerfile})))
+		if failure != "" {
+			t.Fatalf("%s: %q\n%s", query, failure, stream)
+		}
+		data, e := os.ReadFile(filepath.Join(b.image("mem").Root, "meminfo"))
+		check(e)
+		var kb int64
+		_, e = fmt.Sscanf(string(data), "MemTotal: %d kB", &kb)
+		check(e)
+		return kb
+	}
+	if kb := memTotal("t=mem&nocache=1"); kb <= 2<<20 {
+		t.Fatalf("default build memory: %d kB, want more than the 2 GiB container default", kb)
+	}
+	if kb := memTotal("t=mem&nocache=1&memory=268435456"); kb != 256<<10 {
+		t.Fatalf("docker build -m 256m: %d kB", kb)
+	}
+	w := request(t, b.socketHandler(), "POST", "/v1.45/build?memory=1024", "", "")
+	if !strings.Contains(w.Body.String(), "Memory limit must be") {
+		t.Fatalf("memory=1024: %s", w.Body.String())
 	}
 }
 
