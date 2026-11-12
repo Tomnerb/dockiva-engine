@@ -465,6 +465,7 @@ static uint64_t reserve_commit_piece(uint64_t address,uint64_t size,unsigned fla
         if(!address_space_discard(address_space,backing,offset,(size_t)size))return linux_error(12);
         backing=reserve_window(window);                                              /* a copy, if it was shared after fork */
         if(!backing || !backing_retain(backing,1))return linux_error(12);
+        if(backing_moved_hook)backing_moved_hook(backing,offset,(size_t)size);      /* its pages unowned: read-only again (reserve_discard) */
     } else if(!(backing=backing_reserve((size_t)RESERVE_WINDOW)))return linux_error(12);
     uint64_t e=segments_remove(address,address+size);
     if(e || !flags) { backing_release(backing);return e; }
@@ -728,10 +729,23 @@ static uint64_t guest_mprotect(void) {
 
 /* Zero the private commits in [address, address+bytes) of a reservation, giving their memory back. */
 static int reserve_discard(uint64_t address,uint64_t bytes) {
+    int discarded=0;
     for(unsigned i=0;i<address_space->nseg;i++) {
         Segment *s=&address_space->seg[i];uint64_t low=s->base>address?s->base:address,high=s->base+s->size<address+bytes?s->base+s->size:address+bytes;
-        if(low<high && !(s->flags&SEG_SHARED) && !address_space_discard(address_space,s->backing,s->offset+(size_t)(low-s->base),(size_t)(high-low)))return 0;
+        if(low>=high || (s->flags&SEG_SHARED))continue;
+        size_t offset=s->offset+(size_t)(low-s->base);
+        if(!address_space_discard(address_space,s->backing,offset,(size_t)(high-low))) { if(discarded)address_space_touched(address_space);return 0; }
+        /* Its pages have no owner now: the hypervisor's tables map them read-only
+           again (as the mmap arena's, address_space_arena_changed), so the next write
+           faults and owns its page. Left writable, writes went unseen, and the next
+           MADV_DONTNEED skipped those pages as never written: FEX empties its
+           return-address stack and lookup caches this way when it frees a code
+           buffer, and stale entries then sent threads into the freed code (amd64
+           go build: "unexpected fault address" in FEX's memory). */
+        if(backing_moved_hook)backing_moved_hook(s->backing,offset,(size_t)(high-low));
+        discarded=1;
     }
+    if(discarded)address_space_touched(address_space);            /* the tables sync before guest code runs */
     return 1;
 }
 /* Linux madvise advice values are not host ABI values. Pure hints are accepted on
