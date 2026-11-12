@@ -67,6 +67,7 @@ type builder struct {
 	ssh      func(id string) (func(net.Conn), error) // the client's SSH agents (buildx --ssh): a forwarder per connection; nil in the classic API
 	named    map[string]namedContext                 // --build-context (buildx)
 	platform string                                  // --platform's architecture; "" when none is given
+	memory   int64                                   // RUN steps' memory limit in bytes (docker build -m); 0: buildMemory
 	held     []string                                // build cache entries the build reads until it ends (basePull)
 }
 
@@ -118,8 +119,14 @@ func (b *engine) build(w http.ResponseWriter, r *http.Request, q url.Values) {
 	check(e)
 	defer func() { go os.RemoveAll(work) }()
 	quiet := q.Get("q") == "1" || q.Get("q") == "true"
+	var memory int64
+	if raw := q.Get("memory"); raw != "" && raw != "0" { // docker build -m
+		n, e := strconv.ParseInt(raw, 10, 64)
+		reject(e == nil && n >= 6<<20 && n <= buildMemory, "Memory limit must be 6 MiB to 64 GiB")
+		memory = n
+	}
 	bd := &builder{b: b, ctx: r.Context(), work: work, context: filepath.Join(work, "context"), network: q.Get("networkmode"),
-		args: map[string]string{}, used: map[string]bool{}, global: platformArgs(platform), platform: platform, nocache: q.Get("nocache") == "1" || q.Get("nocache") == "true"}
+		args: map[string]string{}, used: map[string]bool{}, global: platformArgs(platform), platform: platform, memory: memory, nocache: q.Get("nocache") == "1" || q.Get("nocache") == "true"}
 	bd.say = func(s string) {
 		if !quiet {
 			send(obj{"stream": s})
@@ -603,6 +610,12 @@ func (bd *builder) pull(ref, arch string) *image {
 	return bd.b.image(ref)
 }
 
+// buildMemory is a RUN step's memory limit unless docker build -m sets one: Docker
+// sets none, so the largest the runtime takes (it is a budget, not a reservation; the
+// step sees the Mac's memory when that is smaller). A container's default (its
+// profile's, 2 GiB) killed compilers: go build of a large module needs more.
+const buildMemory = 64 << 30
+
 // runStep is RUN: the command in a container on a clone of the stage's files,
 // whose files become the stage's when it succeeds.
 func (bd *builder) runStep(st *buildStage, o runOptions) {
@@ -628,7 +641,7 @@ func (bd *builder) runStep(st *buildStage, o runOptions) {
 	}
 	stubs := mountStubs(st.root, targets)
 	im := &image{Root: st.root, Env: stringsOfAny(st.config["Env"]), WorkingDir: stageWorkdir(st), User: validUser(text(st.config["User"])), StopSignal: "SIGTERM", Digest: st.digest, Arch: st.arch}
-	host := obj{}
+	host := obj{"Memory": json.Number(strconv.FormatInt(cmp.Or(bd.memory, buildMemory), 10))}
 	if o.network == "host" || o.network == "none" {
 		host["NetworkMode"] = o.network
 	}

@@ -148,6 +148,9 @@ accepted; other frontends are refused, and `# check=` is ignored):
 - `ADD` unpacks local tar archives, plain or gzip, bzip2, xz (through the Mac's
   bsdtar) or zstd; a compressed file that is not a tar is copied.
 - `RUN --network=default|none|host`; `RUN --security=insecure` is refused.
+- `RUN` steps have no memory limit, as in Docker (the runtime's largest budget, 64
+  GiB; `/proc/meminfo` shows the Mac's memory when that is smaller), unless
+  `docker build -m` (`DOCKER_BUILDKIT=0`) sets one.
 - Here-documents: `RUN <<EOF` (the script, run by its `#!` line or the shell),
   `RUN python3 <<EOF` and several documents in one instruction (the shell does
   the redirecting), `<<-EOF` (leading tabs dropped), quoted delimiters
