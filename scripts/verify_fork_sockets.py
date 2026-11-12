@@ -36,6 +36,7 @@ def main():
     setuid, setuid_leaf, ping, many_procs, inet6, bigfile = (build(n, folder, linker) for n in ('setuid_guest', 'setuid_leaf', 'ping_guest', 'many_procs_guest', 'inet6_guest', 'bigfile_guest'))
     lazy_charge, lazy_leaf, oom_kill = (build(n, folder, linker) for n in ('lazy_charge_guest', 'lazy_charge_leaf', 'oom_kill_guest'))
     fs_stress = build('fs_stress_guest', folder, linker)  # file calls racing close, dup2, munmap, fork, exec
+    segment_spare = build('segment_spare_guest', folder, linker)  # read-only shared file maps leave the last segments for other memory
     vfork_threads = build('vfork_threads_guest', folder, linker)  # vfork from a threaded process shares its memory
     va_top = build('va_top_guest', folder, linker)  # the top 64 KiB below 1 << 48 are taken, as FEX's allocator must see them
     mmap_probe = build('mmap_probe_guest', folder, linker)  # Go's 64 MiB arena probes: cheap, first fit and zeroing exact
@@ -98,6 +99,7 @@ def main():
                                      (around, ['--mmap-limit-mib', '256', '--signals'], b'fault-around PASS\n'), (fastcall, [], b'fastcall PASS\n'),
                                      (fs_stress, ['--root', str(shared), '--writable', '--dynamic', '--storage-limit-mib', '0'], b'fs-stress PASS\n'),
                                      (stress, ['--root', str(stress_root), '--signals'], b'fork-exec-stress PASS\n'),
+                                     (segment_spare, ['--root', str(shared), '--writable', '--dynamic'], b'segment-spare PASS\n'),
                                      (vfork_threads, ['--root', str(shared), '--writable'], b'vfork-threads PASS\n'),
                                      (va_top, ['--dynamic'], b'va-top PASS\n'),
                                      (mmap_probe, ['--mmap-limit-mib', '2048', '--dynamic'], b'mmap-probe PASS\n'),

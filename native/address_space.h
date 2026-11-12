@@ -47,8 +47,16 @@ typedef struct { uint64_t base,size;unsigned flags;MemoryBacking *backing;size_t
 typedef struct { uint64_t base,size; } Reservation;
 #define RESERVE_LIMIT 65536u /* Linux's default vm.max_map_count */
 /* Mappings outside the arena's page flags: the program, shared memory, mapped files
-   (Go's linker maps every package archive it reads), reservations' commits. */
-#define SEGMENT_LIMIT 1024u
+   (Go's linker maps every package archive it reads), reservations' commits.
+   Read-only shared file mappings take at most SEGMENT_LIMIT-SEGMENT_SPARE (1024) of
+   them (mapping.h): programs keep that many, rustc an rlib per crate it links,
+   Lucene a mapping per index file. Copies take only the segments in use. */
+#define SEGMENT_LIMIT 1280u
+/* Segments read-only shared file mappings never take (mapping.h): left for writable
+   and anonymous memory, above all a JIT's commits into its reservations. FEX's
+   allocator ignores a failed mprotect, then faults on the memory: amd64 Go's linker
+   under FEX, its archives mapped from a writable volume, died in a thread's clone. */
+#define SEGMENT_SPARE 256u
 static unsigned char *segment_data(const Segment *segment) {
     return segment->backing?backing_data(segment->backing)+segment->offset:NULL;
 }
