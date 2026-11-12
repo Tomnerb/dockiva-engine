@@ -7,6 +7,8 @@ import struct
 import subprocess
 import sys
 
+import build_native
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -41,6 +43,9 @@ def main():
     va_top = build('va_top_guest', folder, linker)  # the top 64 KiB below 1 << 48 are taken, as FEX's allocator must see them
     mmap_probe = build('mmap_probe_guest', folder, linker)  # Go's 64 MiB arena probes: cheap, first fit and zeroing exact
     discard_rewrite = build('discard_rewrite_guest', folder, linker)  # MADV_DONTNEED again on rewritten pages of a reservation zeroes them
+    table_pool = build('table_pool_guest', folder, linker)  # 272 GiB committed, untouched: no page tables until first used
+    lazy_map = build('lazy_map_guest', folder, linker)  # untouched memory mapped at first use: reads, fetches, fork, racing threads
+    table_churn, table_exhaust = (build(n, folder, linker) for n in ('table_churn_guest', 'table_exhaust_guest'))  # hvf, a 4 MiB table pool
     nested = build('fork_nested_guest', folder, linker)  # a fork's child forks again, then writes the parent's memory (its own copy)
     shared_exit = build('shared_exit_guest', folder, linker)  # exits with MAP_SHARED file mappings in place: each written back
     shared_many = build('shared_many_guest', folder, linker)  # 1300 files mapped MAP_SHARED by two processes: coherent, no ENFILE
@@ -110,8 +115,9 @@ def main():
                                      (shared_exit, ['--root', str(shared), '--writable', '--dynamic'], b'shared-exit PASS\n'),
                                      (shared_many, ['--root', str(shared), '--writable', '--dynamic', '--storage-limit-mib', '0', '--mmap-limit-mib', '2048'], b'shared-many PASS\n'),
                                      (shared_kill, ['--root', str(shared), '--writable', '--dynamic', '--signals'], b'shared-kill PASS\n'),
-                                     (fd_fast, ['--root', str(shared), '--writable'], b'fd-fast PASS\n')):
-            if backend == 'interpreter' and elf in (vfork_threads, threads, fork_threads, thread_group, futex, thread_limit, fp_preserve, sleep, vdso, sigmask, cow_stress, smp_atomic, fork_churn, thread_smp, out_edge, around, oom_kill, fastcall, fd_fast, recheck):
+                                     (fd_fast, ['--root', str(shared), '--writable'], b'fd-fast PASS\n'),
+                                     (lazy_map, ['--mmap-limit-mib', '1024'], b'lazy-map PASS\n')):
+            if backend == 'interpreter' and elf in (vfork_threads, threads, fork_threads, thread_group, futex, thread_limit, fp_preserve, sleep, vdso, sigmask, cow_stress, smp_atomic, fork_churn, thread_smp, out_edge, around, oom_kill, fastcall, fd_fast, recheck, lazy_map):
                 continue  # the interpreter has no CLONE_THREAD support (nor these SIMD instructions); its OOM kill ends the run
             shutil.rmtree(shared, ignore_errors=True)
             shared.mkdir()
@@ -129,6 +135,23 @@ def main():
         r = subprocess.run([str(runtime), 'run', str(setuid_root/'suid'), '--root', str(setuid_root), '--uid', '1000', '--gid', '1000', *common, *extra], capture_output=True, timeout=60)
         failed += r.returncode != 10
         print(f'{backend} setuid first program: {"PASS" if r.returncode == 10 else "FAIL"} exit={r.returncode} {r.stderr.decode().strip()}')
+        if backend == 'hvf':  # 272 GiB committed, never touched: tables only for the pages written (its own memory limit)
+            r = subprocess.run([str(runtime), 'run', str(table_pool), '--cpu-backend', 'hvf', '--dynamic', '--cpus', str(cpus),
+                                '--memory-limit-mib', '512', '--max-steps', '2000000000'], capture_output=True, timeout=120)
+            ok = r.returncode == 0 and r.stdout == b'table-pool PASS\n'
+            failed += not ok
+            print(f'hvf table_pool_guest --cpus {cpus}: {"PASS" if ok else "FAIL"} exit={r.returncode} {r.stdout.decode().strip()} {r.stderr.decode().strip()[-200:]}')
+        if backend == 'hvf':  # a 4 MiB table pool (1020 tables): freed tables are reused only after a TLB invalidation, and running out ends the run cleanly
+            small = folder/'dockiva-hvf-small-pool'
+            subprocess.run(['cc', '-std=c11', '-O2', '-mmacosx-version-min='+build_native.MACOS_MIN, '-DVMFREE_HVF', '-DHVF_TABLE_BYTES=(4u<<20)',
+                            str(ROOT/'native/runtime.c'), '-lm', '-framework', 'Hypervisor', '-o', str(small)], check=True)
+            subprocess.run(['codesign', '--force', '--sign', '-', '--entitlements', str(ROOT/'native/hvf.entitlements.plist'), str(small)], check=True, capture_output=True)
+            for elf, code, expected in ((table_churn, 0, b'table-churn PASS\n'), (table_exhaust, 125, b'')):
+                r = subprocess.run([str(small), 'run', str(elf), '--cpu-backend', 'hvf', '--dynamic', '--cpus', str(cpus),
+                                    '--memory-limit-mib', '256', '--max-steps', '2000000000'], capture_output=True, timeout=120)
+                ok = r.returncode == code and r.stdout == expected and (not code or b"Guest memory exceeds the hypervisor's page tables" in r.stderr)
+                failed += not ok
+                print(f'hvf {elf.stem} --cpus {cpus} (4 MiB table pool): {"PASS" if ok else "FAIL"} exit={r.returncode} {r.stdout.decode().strip()} {r.stderr.decode().strip()[-200:]}')
         if backend == 'hvf':  # fewer workers than runnable threads, whatever --cpus says: 1 and 2
             sleeper_root = folder/'sleeper-root'
             shutil.rmtree(sleeper_root, ignore_errors=True)
