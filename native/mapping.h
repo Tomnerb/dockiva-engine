@@ -87,7 +87,7 @@ static uint64_t shared_map(uint64_t fixed,uint64_t length,uint64_t prot,MemoryBa
     if(fixed && length<=GUEST_VA_END && !map_in_arena(fixed,page_up(length))) {
         /* Outside the arena: a segment of its own in a reservation of its range. */
         uint64_t bytes=page_up(length);
-        if(fixed%4096 || fixed<UINT64_C(0x10000) || bytes>GUEST_VA_END-fixed || (fixed<MAP_BASE+address_space->map_capacity && MAP_BASE<fixed+bytes) ||
+        if(fixed%4096 || fixed<UINT64_C(0x10000) || fixed>GUEST_VA_END || bytes>GUEST_VA_END-fixed || (fixed<MAP_BASE+address_space->map_capacity && MAP_BASE<fixed+bytes) ||
            map_outside_used(fixed,bytes))return linux_error(22);
         if(backing) { if(!backing_retain(backing,1))return linux_error(12); }
         else if(!(backing=backing_alloc((size_t)bytes,1)))return linux_error(12);
@@ -603,7 +603,8 @@ static uint64_t guest_dynamic_mmap_map(void) {
     if(outside) {
         flags=(flags&~UINT64_C(0x100000))|16;
         if(addr<UINT64_C(0x10000))return linux_error(1);                         /* below mmap_min_addr: EPERM */
-        if(bytes>GUEST_VA_END-addr)return linux_error(12);
+        if(addr>GUEST_VA_END || bytes>GUEST_VA_END-addr)                         /* the top 64 KiB are taken (GUEST_VA_END) */
+            return linux_error(noreplace && addr<USER_VA_END && bytes<=USER_VA_END-addr?17:12);
         /* ponytail: a range across the arena's edge is refused; split it if that is ever needed */
         if(addr<MAP_BASE+address_space->map_capacity && MAP_BASE<addr+bytes)return linux_error(22);
         if(noreplace && map_outside_used(addr,bytes))return linux_error(17);
@@ -824,7 +825,7 @@ static uint64_t map_call(uint64_t address,uint64_t length,uint64_t prot,uint64_t
 /* Whether [address, address+bytes) is free to map: unmapped arena pages, or unused
    address space outside it (not across its edge, nor the heap's room). */
 static int map_range_free(uint64_t address,uint64_t bytes) {
-    if(bytes>GUEST_VA_END || address<UINT64_C(0x10000) || bytes>GUEST_VA_END-address)return 0;
+    if(bytes>GUEST_VA_END || address<UINT64_C(0x10000) || address>GUEST_VA_END || bytes>GUEST_VA_END-address)return 0;
     if(map_in_arena(address,bytes)) {
         for(uint64_t p=(address-MAP_BASE)/4096;p<(address-MAP_BASE+bytes)/4096;p++)if(address_space->map_flags[p])return 0;
         return 1;
@@ -851,8 +852,8 @@ static uint64_t guest_mremap(void) {
     if(old%4096 || (flags&~UINT64_C(7)) || ((flags&6) && !(flags&1)) || !new_size || old_size>GUEST_VA_END || new_size>GUEST_VA_END)return linux_error(22);
     old_size=page_up(old_size);new_size=page_up(new_size);
     if((flags&4) && old_size!=new_size)return linux_error(22);                     /* MREMAP_DONTUNMAP moves, never resizes */
-    if((flags&2) && (target%4096 || target<UINT64_C(0x10000) || new_size>GUEST_VA_END-target || (target<old+old_size && old<target+new_size)))return linux_error(22);
-    if(old_size>GUEST_VA_END-old)return linux_error(14);
+    if((flags&2) && (target%4096 || target<UINT64_C(0x10000) || target>GUEST_VA_END || new_size>GUEST_VA_END-target || (target<old+old_size && old<target+new_size)))return linux_error(22);
+    if(old>GUEST_VA_END || old_size>GUEST_VA_END-old)return linux_error(14);
     mm_cache_range(old,old_size);if(flags&2)mm_cache_range(target,new_size);
     if(!address_space_map_flags(address_space))return linux_error(12);
     /* What the old range is. */
@@ -1065,8 +1066,9 @@ static void proc_space_memory(const GuestAddressSpace *space,uint64_t *vsz,uint6
     *vsz=size;*rss=resident;
 }
 static size_t proc_maps(char *out,size_t capacity) {
-    GuestAddressSpace *space=address_space;size_t limit=2*space->nseg+space->nreserve+2+(space->map_flags?space->map_top:0),n=0,used=0;
+    GuestAddressSpace *space=address_space;size_t limit=2*space->nseg+space->nreserve+3+(space->map_flags?space->map_top:0),n=0,used=0;
     ProcMap *m=malloc(limit*sizeof(*m));if(!m)return 0;
+    m[n++]=(ProcMap){GUEST_VA_END,USER_VA_END,0,""};          /* taken: the hypervisor's page (address_space.h) */
     for(unsigned i=0;i<space->nseg;i++) {
         Segment *s=&space->seg[i];
         m[n++]=(ProcMap){s->base,s->base+s->size,(s->flags&7)|((s->flags&SEG_SHARED)?8:0),
