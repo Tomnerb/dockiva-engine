@@ -91,7 +91,11 @@ and children inherit it. `scripts/verify_x86_godebug.py` checks it.
 The bundle holds `bin/FEX`, `bin/FEXServer`, `lib/` with their arm64 glibc
 (`ld-linux-aarch64.so.1`, `libc.so.6`, `libm.so.6`, `libgcc_s.so.1`,
 `libstdc++.so.6`), and `share/` with the packages' copyright files and `SOURCES`
-(each package, its SHA-256 and where its source is). `scripts/build_x86.py`
+(each package, its SHA-256 and where its source is) and FEX's x86 vDSO
+(`share/fex-emu/GuestThunks/libVDSO-guest.so`, `GuestThunks_32` for i386): the
+runtime names it to FEX with `FEX_THUNKGUESTLIBS` in an x86 program's environment
+(also after `env -i`), so `clock_gettime` and `gettimeofday` are not system
+calls. `scripts/build_x86.py`
 assembles it into `build/x86` from pinned packages, each checked against its size
 and SHA-256: FEX 2610 from the fex-emu PPA (`fex-emu-armv8.4`, built for Ubuntu
 24.04) and the libraries from Ubuntu 24.04's libc6 2.39-0ubuntu8.9 and gcc-14
