@@ -108,9 +108,27 @@ static void exec_discard(void) {
 /* execve (path, argv, envp in x0..x2), or execveat (dirfd in x0, the rest from x1: r=1),
    whose path may be relative to dirfd: the new image into exec_stage. 0 or an error. */
 static _Thread_local int exec_unlocked;               /* exec_build runs without the runtime lock */
+static int64_t guest_fd_path(const char *path);      /* syscall.h */
+/* The open file an exec names instead of a path: execveat(fd, "", AT_EMPTY_PATH)
+   (fexecve), or /dev/fd/N and /proc/self/fd/N (musl's fexecve without execveat).
+   apk 3 runs its package scripts from a memfd so. -1 for a path. */
+static int64_t exec_named_fd(uint64_t dir,unsigned r,char path[1025]) {
+    const unsigned char *first=lookup(cpu->gpr[r],1,4);path[0]=0;     /* fs_string refuses "" (ENOENT) */
+    if(first && !*first)return r && (cpu->gpr[4]&0x1000)?(int64_t)(dir&0xffffffffu):-1;
+    return fs_string(cpu->gpr[r],path)<0?-1:guest_fd_path(path);
+}
+/* That file, a descriptor of its own, or -errno (memfs.h's convention). */
+static int exec_fd_open(int64_t n,char exe[1025]) {
+    int host=n<GUEST_FD_LIMIT?fs_host((uint64_t)n):-1;
+    if(host<0)return n<GUEST_FD_LIMIT && fd_kind[n]?-13:-9;           /* a pipe or socket: EACCES */
+    int fd=fcntl(host,F_DUPFD_CLOEXEC,0);if(fd<0)return -errno;
+    snprintf(exe,1025,"/dev/fd/%lld",(long long)n);return fd;
+}
 static uint64_t exec_build_held(uint64_t dir,unsigned r) {
     if(exec_stage.execfd) { close(exec_stage.execfd-1);exec_stage.execfd=0; }   /* an earlier build's that failed */
-    char leaf[1025],exe[1025];int saved,fd=mem_exec_open(dir,cpu->gpr[r],exe,0);   /* memfs: a host copy */
+    char leaf[1025],exe[1025];int saved;
+    char named_path[1025];int64_t named=exec_named_fd(dir,r,named_path);
+    int fd=named>=0?exec_fd_open(named,exe):mem_exec_open(dir,cpu->gpr[r],exe,0);   /* memfs: a host copy */
     if(fd==MEM_HOST_PATH) {
         syscall_unlocked=exec_unlocked;syscall_abort=0;int parent=fs_lookup(dir,cpu->gpr[r],leaf,1|FS_DIRECT,exe);syscall_unlocked=0;
         if(parent<0 && mem_redirect_take()) { mem_exec_done();fd=mem_exec_open(dir,cpu->gpr[r],exe,1); } /* reached memfs through a link */
@@ -137,11 +155,16 @@ static uint64_t exec_build_held(uint64_t dir,unsigned r) {
     /* "#!INTERPRETER [ONE-ARGUMENT]" runs INTERPRETER [ARG] SCRIPT ARGV[1..], as execve does.
        An interpreter may itself be a script (Oracle Linux's /usr/bin/env is), four
        levels deep at most, as on Linux. */
-    char script[1025];if(fs_string(cpu->gpr[r],script)<0) { close(fd);return linux_error(14); }
+    char script[1025];                             /* fexecve of a script: the interpreter opens /dev/fd/N, as on Linux */
+    if(named>=0)strcpy(script,named_path[0]?named_path:exe);
+    else if(fs_string(cpu->gpr[r],script)<0) { close(fd);return linux_error(14); }
     for(unsigned depth=0;;depth++) {
         char head[256];ssize_t got=pread(fd,head,sizeof(head)-1,0);
         if(got<2 || head[0]!='#' || head[1]!='!')break;
         if(depth==4) { close(fd);return linux_error(40); }                           /* ELOOP */
+        /* Its interpreter reads it through /dev/fd/N, which this runtime opens as a dup
+           (one offset, not Linux's fresh open): from the start, wherever writing it left it. */
+        if(!depth && named>=0)(void)lseek(fd,0,SEEK_SET);
         head[got]=0;char *end=strchr(head,'\n');
         if(!end && got==(ssize_t)sizeof(head)-1) { close(fd);return linux_error(8); }
         if(end)*end=0;
