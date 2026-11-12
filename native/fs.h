@@ -1141,6 +1141,48 @@ static int x86_exec_args(const char *exe,int x86,const char *const *argv,unsigne
     for(unsigned i=1;i<n;i++)out[k-1+i]=argv[i];
     return (int)(k-1+(n?n:1));
 }
+/* Go's asynchronous preemption (a SIGURG whose handler moves the interrupted thread
+   into runtime.asyncPreempt) breaks under FEX: now and then a return from the edited
+   signal frame resumes with a wrong stack or instruction pointer, and Go dies with
+   "unknown caller pc", "fatal error: fault" or corrupt memory (on a Linux kernel
+   too: FEX 2610 and 2611). An x86 program FEX runs therefore gets
+   GODEBUG=asyncpreemptoff=1, added to a GODEBUG it has unless that already sets
+   asyncpreemptoff to a value every Go applies (x86_godebug_int); Go then preempts at
+   function calls only, and programs in other languages ignore it. The program and
+   its children see it in their environment, even one its caller cleared (env -i), as
+   do programs FEX runs by running itself again (a #! script whose interpreter is x86).
+   Strings go to buffer at *used (limit bytes); env grows to capacity at most. */
+/* Whether a GODEBUG value (up to ',' or the end) is one every Go applies: Go 1.26
+   and later parse it with strconv.ParseInt (base 10, 32 bits), earlier ones with the
+   runtime's Atoi32, which takes no '+'; a setting Go cannot parse is skipped
+   ("asyncpreemptoff=true" leaves preemption on). So an optional '-', digits, and a
+   value in int32's range. */
+static int x86_godebug_int(const char *p) {
+    int negative=*p=='-';p+=negative;
+    const char *digits=p;uint64_t v=0;
+    while(*p>='0' && *p<='9') { v=v*10+(uint64_t)(*p-'0');if(v>UINT64_C(2147483647)+(uint64_t)negative)return 0;p++; }
+    return p>digits && (!*p || *p==',');
+}
+static void x86_godebug(const char **env,unsigned *envc,unsigned capacity,char *buffer,size_t *used,size_t limit) {
+    static const char key[]="asyncpreemptoff=",fresh[]="GODEBUG=asyncpreemptoff=1";
+    for(unsigned i=0;i<*envc;i++) {
+        if(strncmp(env[i],"GODEBUG=",8))continue;
+        const char *value=env[i]+8;
+        for(const char *p=value;p;p=strchr(p,',')) {
+            if(*p==',')p++;
+            if(!strncmp(p,key,sizeof(key)-1) && x86_godebug_int(p+sizeof(key)-1))return; /* the program's own choice */
+        }
+        size_t length=strlen(env[i]),need=length+(value[0]?1:0)+sizeof("asyncpreemptoff=1");
+        if(need>limit-*used)return;
+        char *out=buffer+*used;
+        memcpy(out,env[i],length);if(value[0])out[length++]=',';
+        memcpy(out+length,"asyncpreemptoff=1",sizeof("asyncpreemptoff=1"));
+        env[i]=out;*used+=need;return;
+    }
+    if(*envc>=capacity || sizeof(fresh)>limit-*used)return;
+    char *out=buffer+*used;memcpy(out,fresh,sizeof(fresh));*used+=sizeof(fresh);
+    env[(*envc)++]=out;
+}
 /* A path argument as /proc sees it: relative to a /proc working directory (busybox
    top chdirs there) or to one of our /proc directory descriptors (htop reads files
    relative to /proc/PID), made absolute, without trailing slashes. Other paths are

@@ -196,6 +196,7 @@ static uint64_t exec_build_held(uint64_t dir,unsigned r) {
         if(n<0) { close(fd);return linux_error(7); }
         if(n>0) {
             for(int i=0;i<n;i++)args[i]=(char *)line[i];
+            x86_godebug((const char **)env,&envc,EXEC_ENTRIES,buffer,&used,EXEC_STRINGS);  /* also FEX run again by FEX */
             if(x86) { int program=dup(fd);if(program<0) { close(fd);return linux_error(24); }exec_stage.execfd=program+1; }
             argc=(unsigned)n;close(fd);
             if(x86)snprintf(exe,sizeof(exe),"%s/bin/FEX",x86_translator);              /* /proc/self/exe: FEX finds FEXServer beside it */
