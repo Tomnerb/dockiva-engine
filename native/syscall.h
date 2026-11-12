@@ -444,11 +444,11 @@ static int guest_syscall_dispatch(void) {
             if(io_managed(cpu->gpr[0]) && (call==57 || call==63 || call==64 || call==25 || call==29 || call==80 || call==62 || call==67 || call==61)) { uint64_t result=io_call(call);if(result==IO_BLOCK) { cpu->pc-=4;return -2; }cpu->gpr[0]=result;return -3; }
             if(call==220) { cpu->gpr[0]=process_clone();return -3; }
             if(call==221) { uint64_t result=process_exec_at((uint64_t)-100,0);if(result)cpu->gpr[0]=result;return -3; }
-            /* execveat (FEX re-runs itself through it). ponytail: AT_EMPTY_PATH (fexecve) is
-               ENOSYS, AT_SYMLINK_NOFOLLOW is not enforced. */
+            /* execveat (FEX re-runs itself through it; fexecve with AT_EMPTY_PATH).
+               ponytail: AT_SYMLINK_NOFOLLOW is not enforced. */
             if(call==281) {
                 uint64_t flags=cpu->gpr[4];
-                uint64_t result=(flags&~UINT64_C(0x1100))?linux_error(22):(flags&0x1000)?linux_error(38):process_exec_at(cpu->gpr[0],1);
+                uint64_t result=(flags&~UINT64_C(0x1100))?linux_error(22):process_exec_at(cpu->gpr[0],1);
                 if(result)cpu->gpr[0]=result;return -3;
             }
             if(call==260 || call==95) {
@@ -959,10 +959,23 @@ static int guest_syscall_unlocked(void) {
 /* mmap, munmap, mprotect, madvise and brk change only the worker's own address
    space, its backings (atomic reference counts) and the atomic memory charge, so
    they too run without the runtime lock; the backend then syncs its tables. */
+/* Whether [address,address+bytes) holds shared memory. */
+static int shared_in(uint64_t address,uint64_t bytes) {
+    for(unsigned i=0;i<address_space->nseg;i++) {
+        const Segment *s=&address_space->seg[i];
+        if((s->flags&SEG_SHARED) && s->base<address+bytes && address<s->base+s->size)return 1;
+    }
+    return 0;
+}
 static int guest_memory_unlocked(void) {
     uint64_t call=cpu->gpr[8];
     if(!dynamic_enabled || trace)return 0;
     if(call!=222 && call!=215 && call!=226 && call!=233 && call!=214)return 0;
+    /* A file's MAP_SHARED mapping and the unmapping of shared memory change the table
+       of shared files (mapping.h), one for every process: under the runtime lock. So
+       does a MAP_FIXED mapping over shared memory, which unmaps it. */
+    if(call==222 && !(cpu->gpr[3]&32) && (cpu->gpr[3]&3) && (cpu->gpr[3]&3)!=2)return 0;
+    if((call==215 || (call==222 && (cpu->gpr[3]&16))) && shared_in(cpu->gpr[0],cpu->gpr[1]))return 0;
     cpu->exclusive_valid=0;
     cpu->gpr[0]=call==222?guest_dynamic_mmap():call==215?guest_munmap(cpu->gpr[0],cpu->gpr[1]):call==226?guest_mprotect():call==233?guest_madvise():guest_brk(cpu->gpr[0]);
     return 1;

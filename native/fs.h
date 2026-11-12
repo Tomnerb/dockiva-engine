@@ -786,7 +786,7 @@ static uint64_t fs_memfd(void) {
     int slot=fs_claim();
     if(slot<0 || fd_lowest(0)<0)return linux_error(24);
     char path[]="/tmp/dockiva-memfd-XXXXXX";int fd=mkstemp(path);if(fd<0)return fs_error();
-    unlink(path);(void)fcntl(fd,F_SETFD,FD_CLOEXEC);
+    unlink(path);(void)fcntl(fd,F_SETFD,FD_CLOEXEC);(void)fchmod(fd,0777);   /* a memfd's mode, as on Linux: fexecve runs it */
     FS(slot).fd=fd+1;FS(slot).cloexec=(flags&1)!=0;FS(slot).ro=0;FS(slot).dev=0;FS(slot).sole=0;FS(slot).pack=NULL;
     int guest=fd_lowest(0);FS(slot).guest=(unsigned short)guest;fd_bind((uint64_t)guest,FD_FILE,(unsigned)slot);return (uint64_t)guest;
 }
@@ -1118,6 +1118,23 @@ static const char *fs_proc_sys_value(const char *path) {
     if(x86_translator[0] && (!strcmp(path,"/proc/sys/fs/binfmt_misc/FEX-x86_64") || !strcmp(path,"/proc/sys/fs/binfmt_misc/FEX-x86")))return "enabled\nflags: POCF\n";
     return NULL;
 }
+/* FEX gives an x86 program a vDSO (AT_SYSINFO_EHDR) only when it finds its guest
+   library, libVDSO-guest.so, in the ThunkGuestLibs folder (GuestThunks_32 for i386),
+   which defaults to /usr/share/fex-emu/GuestThunks: a path in the image. So FEX's own
+   copy in the bundle (scripts/build_x86.py) is named by FEX_THUNKGUESTLIBS, added to
+   an x86 program's environment unless it sets one, also when FEX runs itself again
+   (a #! script whose interpreter is x86). Without a vDSO every clock_gettime,
+   gettimeofday and time is a system call: Go's time.Now cost 2.3 µs instead of
+   56 ns. The program and its children see the variable, even after their caller
+   cleared the environment (env -i). Strings go to buffer at *used (limit bytes);
+   env grows to capacity at most. */
+static void x86_vdso_env(const char **env,unsigned *envc,unsigned capacity,char *buffer,size_t *used,size_t limit) {
+    static const char key[]="FEX_THUNKGUESTLIBS=";
+    for(unsigned i=0;i<*envc;i++)if(!strncmp(env[i],key,sizeof(key)-1))return;  /* the program's own choice */
+    int n=snprintf(buffer+*used,limit-*used,"%s%s/share/fex-emu/GuestThunks",key,x86_translator);
+    if(*envc>=capacity || n<0 || (size_t)n>=limit-*used)return;
+    env[(*envc)++]=buffer+*used;*used+=(size_t)n+1;
+}
 /* The command line binfmt_misc gives a program at the guest path exe (argv: n of them,
    argv[0] first), when it is x86 (x86 set) or one of FEX's own (under
    x86_translator): the translator's ld.so, its lib directory, then FEX with exe, its
@@ -1140,6 +1157,48 @@ static int x86_exec_args(const char *exe,int x86,const char *const *argv,unsigne
     }
     for(unsigned i=1;i<n;i++)out[k-1+i]=argv[i];
     return (int)(k-1+(n?n:1));
+}
+/* Go's asynchronous preemption (a SIGURG whose handler moves the interrupted thread
+   into runtime.asyncPreempt) breaks under FEX: now and then a return from the edited
+   signal frame resumes with a wrong stack or instruction pointer, and Go dies with
+   "unknown caller pc", "fatal error: fault" or corrupt memory (on a Linux kernel
+   too: FEX 2610 and 2611). An x86 program FEX runs therefore gets
+   GODEBUG=asyncpreemptoff=1, added to a GODEBUG it has unless that already sets
+   asyncpreemptoff to a value every Go applies (x86_godebug_int); Go then preempts at
+   function calls only, and programs in other languages ignore it. The program and
+   its children see it in their environment, even one its caller cleared (env -i), as
+   do programs FEX runs by running itself again (a #! script whose interpreter is x86).
+   Strings go to buffer at *used (limit bytes); env grows to capacity at most. */
+/* Whether a GODEBUG value (up to ',' or the end) is one every Go applies: Go 1.26
+   and later parse it with strconv.ParseInt (base 10, 32 bits), earlier ones with the
+   runtime's Atoi32, which takes no '+'; a setting Go cannot parse is skipped
+   ("asyncpreemptoff=true" leaves preemption on). So an optional '-', digits, and a
+   value in int32's range. */
+static int x86_godebug_int(const char *p) {
+    int negative=*p=='-';p+=negative;
+    const char *digits=p;uint64_t v=0;
+    while(*p>='0' && *p<='9') { v=v*10+(uint64_t)(*p-'0');if(v>UINT64_C(2147483647)+(uint64_t)negative)return 0;p++; }
+    return p>digits && (!*p || *p==',');
+}
+static void x86_godebug(const char **env,unsigned *envc,unsigned capacity,char *buffer,size_t *used,size_t limit) {
+    static const char key[]="asyncpreemptoff=",fresh[]="GODEBUG=asyncpreemptoff=1";
+    for(unsigned i=0;i<*envc;i++) {
+        if(strncmp(env[i],"GODEBUG=",8))continue;
+        const char *value=env[i]+8;
+        for(const char *p=value;p;p=strchr(p,',')) {
+            if(*p==',')p++;
+            if(!strncmp(p,key,sizeof(key)-1) && x86_godebug_int(p+sizeof(key)-1))return; /* the program's own choice */
+        }
+        size_t length=strlen(env[i]),need=length+(value[0]?1:0)+sizeof("asyncpreemptoff=1");
+        if(need>limit-*used)return;
+        char *out=buffer+*used;
+        memcpy(out,env[i],length);if(value[0])out[length++]=',';
+        memcpy(out+length,"asyncpreemptoff=1",sizeof("asyncpreemptoff=1"));
+        env[i]=out;*used+=need;return;
+    }
+    if(*envc>=capacity || sizeof(fresh)>limit-*used)return;
+    char *out=buffer+*used;memcpy(out,fresh,sizeof(fresh));*used+=sizeof(fresh);
+    env[(*envc)++]=out;
 }
 /* A path argument as /proc sees it: relative to a /proc working directory (busybox
    top chdirs there) or to one of our /proc directory descriptors (htop reads files

@@ -78,10 +78,24 @@ FEXServer's lock and socket, telemetry) stay out of built and committed images. 
 platform per build: the image store keeps one image per tag. `docker buildx ls`
 lists linux/amd64 once the bundle is installed.
 
+x86 programs get `GODEBUG=asyncpreemptoff=1` in their environment, appended to a
+`GODEBUG` they have unless that already sets `asyncpreemptoff` to a value every Go
+applies (digits with an optional `-`, within int32), and also after their caller
+cleared the environment (`env -i`): Go's asynchronous
+preemption, a signal whose handler redirects the interrupted thread, does not
+survive FEX's signal return reliably (also on a Linux kernel, FEX 2610 and 2611),
+and Go programs died with "unknown caller pc" or "fatal error: fault". Go then
+preempts goroutines at function calls only; other programs ignore the variable,
+and children inherit it. `scripts/verify_x86_godebug.py` checks it.
+
 The bundle holds `bin/FEX`, `bin/FEXServer`, `lib/` with their arm64 glibc
 (`ld-linux-aarch64.so.1`, `libc.so.6`, `libm.so.6`, `libgcc_s.so.1`,
 `libstdc++.so.6`), and `share/` with the packages' copyright files and `SOURCES`
-(each package, its SHA-256 and where its source is). `scripts/build_x86.py`
+(each package, its SHA-256 and where its source is) and FEX's x86 vDSO
+(`share/fex-emu/GuestThunks/libVDSO-guest.so`, `GuestThunks_32` for i386): the
+runtime names it to FEX with `FEX_THUNKGUESTLIBS` in an x86 program's environment
+(also after `env -i`), so `clock_gettime` and `gettimeofday` are not system
+calls. `scripts/build_x86.py`
 assembles it into `build/x86` from pinned packages, each checked against its size
 and SHA-256: FEX 2610 from the fex-emu PPA (`fex-emu-armv8.4`, built for Ubuntu
 24.04) and the libraries from Ubuntu 24.04's libc6 2.39-0ubuntu8.9 and gcc-14

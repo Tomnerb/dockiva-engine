@@ -38,13 +38,20 @@ def main():
     setuid, setuid_leaf, ping, many_procs, inet6, bigfile = (build(n, folder, linker) for n in ('setuid_guest', 'setuid_leaf', 'ping_guest', 'many_procs_guest', 'inet6_guest', 'bigfile_guest'))
     lazy_charge, lazy_leaf, oom_kill = (build(n, folder, linker) for n in ('lazy_charge_guest', 'lazy_charge_leaf', 'oom_kill_guest'))
     fs_stress = build('fs_stress_guest', folder, linker)  # file calls racing close, dup2, munmap, fork, exec
+    segment_spare = build('segment_spare_guest', folder, linker)  # read-only shared file maps leave the last segments for other memory
     vfork_threads = build('vfork_threads_guest', folder, linker)  # vfork from a threaded process shares its memory
+    va_top = build('va_top_guest', folder, linker)  # the top 64 KiB below 1 << 48 are taken, as FEX's allocator must see them
     mmap_probe = build('mmap_probe_guest', folder, linker)  # Go's 64 MiB arena probes: cheap, first fit and zeroing exact
+    discard_rewrite = build('discard_rewrite_guest', folder, linker)  # MADV_DONTNEED again on rewritten pages of a reservation zeroes them
     table_pool = build('table_pool_guest', folder, linker)  # 272 GiB committed, untouched: no page tables until first used
     lazy_map = build('lazy_map_guest', folder, linker)  # untouched memory mapped at first use: reads, fetches, fork, racing threads
     table_churn, table_exhaust = (build(n, folder, linker) for n in ('table_churn_guest', 'table_exhaust_guest'))  # hvf, a 4 MiB table pool
     nested = build('fork_nested_guest', folder, linker)  # a fork's child forks again, then writes the parent's memory (its own copy)
+    shared_exit = build('shared_exit_guest', folder, linker)  # exits with MAP_SHARED file mappings in place: each written back
+    shared_many = build('shared_many_guest', folder, linker)  # 1300 files mapped MAP_SHARED by two processes: coherent, no ENFILE
+    shared_kill = build('shared_kill_guest', folder, linker)  # a parent and child sharing a file mapping killed together: both writes reach it
     recheck = build('epoll_recheck_guest', folder, linker)  # an epoll_wait whose edge another thread took rechecks within 10 ms
+    held_shared = build('fork_held_shared_guest', folder, linker)  # memory held for one fork, shared by the next: a write copies it
     stress, stress_leaf = (build(n, folder, linker) for n in ('fork_exec_stress_guest', 'fork_exec_stress_leaf'))
     stress_root = folder/'stress-root'  # fork_exec_stress_guest execs /leaf in /d0../d2 and reads /data
     shutil.rmtree(stress_root, ignore_errors=True)
@@ -97,10 +104,17 @@ def main():
                                      (around, ['--mmap-limit-mib', '256', '--signals'], b'fault-around PASS\n'), (fastcall, [], b'fastcall PASS\n'),
                                      (fs_stress, ['--root', str(shared), '--writable', '--dynamic', '--storage-limit-mib', '0'], b'fs-stress PASS\n'),
                                      (stress, ['--root', str(stress_root), '--signals'], b'fork-exec-stress PASS\n'),
+                                     (segment_spare, ['--root', str(shared), '--writable', '--dynamic'], b'segment-spare PASS\n'),
                                      (vfork_threads, ['--root', str(shared), '--writable'], b'vfork-threads PASS\n'),
+                                     (va_top, ['--dynamic'], b'va-top PASS\n'),
                                      (mmap_probe, ['--mmap-limit-mib', '2048', '--dynamic'], b'mmap-probe PASS\n'),
+                                     (discard_rewrite, ['--dynamic'], b'discard-rewrite PASS\n'),
                                      (nested, [], b'fork-nested PASS\n'),
+                                     (held_shared, ['--dynamic'], b'fork-held-shared PASS\n'),
                                      (recheck, [], b'epoll-recheck PASS\n'),
+                                     (shared_exit, ['--root', str(shared), '--writable', '--dynamic'], b'shared-exit PASS\n'),
+                                     (shared_many, ['--root', str(shared), '--writable', '--dynamic', '--storage-limit-mib', '0', '--mmap-limit-mib', '2048'], b'shared-many PASS\n'),
+                                     (shared_kill, ['--root', str(shared), '--writable', '--dynamic', '--signals'], b'shared-kill PASS\n'),
                                      (fd_fast, ['--root', str(shared), '--writable'], b'fd-fast PASS\n'),
                                      (lazy_map, ['--mmap-limit-mib', '1024'], b'lazy-map PASS\n')):
             if backend == 'interpreter' and elf in (vfork_threads, threads, fork_threads, thread_group, futex, thread_limit, fp_preserve, sleep, vdso, sigmask, cow_stress, smp_atomic, fork_churn, thread_smp, out_edge, around, oom_kill, fastcall, fd_fast, recheck, lazy_map):
@@ -162,6 +176,17 @@ def main():
                     ok, out = False, 'timed out (a lost wake-up)'
                 failed += not ok
                 print(f'hvf {elf.stem} --cpus {cpus}: {"PASS" if ok else "FAIL"} {out}')
+            # A parent and child sharing a file mapping killed together: a dead image's references
+            # outlive the runtime lock only with several workers, so four whatever --cpus says.
+            kills = []
+            for _ in range(6):
+                shutil.rmtree(shared, ignore_errors=True)
+                shared.mkdir()
+                r = subprocess.run([str(runtime), 'run', str(shared_kill), '--root', str(shared), '--writable', '--dynamic', '--signals',
+                                    *common, *extra, '--cpus', '4'], capture_output=True, timeout=60)   # the last --cpus counts
+                kills.append(r.returncode == 0 and r.stdout == b'shared-kill PASS\n')
+            failed += not all(kills)
+            print(f'hvf shared_kill_guest --cpus 4: {"PASS" if all(kills) else "FAIL"} {sum(kills)} of 6')
     return 1 if failed else 0
 
 

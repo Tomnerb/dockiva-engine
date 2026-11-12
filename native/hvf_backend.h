@@ -137,6 +137,7 @@ typedef struct {
     uint64_t layout,arena_rev,generation;
     unsigned asid,asid_generation;            /* valid while asid_generation is hvf_asid_generation */
     struct { MemoryBacking *backing;size_t offset,size; } moved[8];unsigned nmoved; /* overlay ranges a host write copied, to map again (hvf_backing_moved) */
+    uint64_t unheld_generation,unheld_epoch;int unheld; /* hvf_holding found none of its memory held at that generation and hold epoch */
     uint64_t want;                            /* an address whose first use ran out of tables: the rebuild maps its span (hvf_first_use) */
 } HvfView;
 static HvfView hvf_views[HVF_VIEWS];
@@ -241,6 +242,7 @@ static void hvf_block_unmap(unsigned i) {
    Hypervisor-level (stage-2) protection did the same with no table pass, but
    hv_vm_protect took 30-150 us per 256 MiB block each way. */
 static unsigned hvf_held_live;                          /* backings held now (atomic) */
+static uint64_t hvf_hold_epoch;                         /* bumped after a backing becomes held (atomic): hvf_holding's cached answers expire */
 static uint64_t hvf_held_thaws;                         /* thaws so far, under hvf_held_lock */
 static pthread_mutex_t hvf_held_lock=PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t hvf_held_cond=PTHREAD_COND_INITIALIZER;
@@ -281,6 +283,7 @@ static void hvf_backing_hold(MemoryBacking *backing,int protect) {
        parent's writes after a thaw remap a page at a time when the locked path serves
        them) are writable again. */
     if(!__atomic_exchange_n(&backing->held,1,__ATOMIC_ACQ_REL))__atomic_add_fetch(&hvf_held_live,1,__ATOMIC_ACQ_REL);
+    __atomic_add_fetch(&hvf_hold_epoch,1,__ATOMIC_ACQ_REL);         /* after held: a reader that sees the new epoch sees it held */
     if(hvf_hold(hvf_own_view,address_space,backing,1))hvf_flush();
     PROFILE_ADD(profile_holds,1);
 }
@@ -693,6 +696,7 @@ static void hvf_map_arena_pass(const GuestAddressSpace *space,unsigned first,uns
    and keep their entries. This spares a fork-heavy server from re-mapping all of
    its memory (Postgres: its shared buffers) several times per new process.
    Returns 0 when only a full rebuild can do it. */
+static void hvf_remap_backing(const GuestAddressSpace *space,HvfView *v,MemoryBacking *backing,size_t offset,size_t size); /* below */
 static int hvf_sync_partial(GuestAddressSpace *space,HvfView *v) {
     if(!v->root || v->stale==HVF_STALE_NEW || v->map_capacity!=space->map_capacity || v->tables>HVF_TABLES/4)return 0;
     if(v->map_backing && !space->map_backing)return 0;
@@ -725,11 +729,15 @@ static int hvf_sync_partial(GuestAddressSpace *space,HvfView *v) {
     } else if(all)hvf_map_range(space,space->brk_base,space->brk_pages,6,space->brk_backing,0);
     if(arena_dirty)hvf_remap_arena(space);                       /* pages mapped, unmapped or reprotected since */
     if(all || v->map_backing!=space->map_backing)hvf_map_arena_all(space);
+    /* Queued remaps (an overlay's copied pages, discarded pages: hvf_backing_moved), which
+       the kept segments above did not map again; all mapped every private page. */
+    for(unsigned i=0;!all && i<v->nmoved;i++)hvf_remap_backing(space,v,v->moved[i].backing,v->moved[i].offset,v->moved[i].size);
     return !hvf_exhausted;
 }
 /* Map backing's [offset, offset+size) again wherever space maps it, into v (an untouched
    page only where its span has a table: else its first use maps it). */
 static void hvf_remap_backing(const GuestAddressSpace *space,HvfView *v,MemoryBacking *backing,size_t offset,size_t size) {
+    int cow=-1;   /* hvf_effective_flags' sharing test, made once: it counts the backing's references (every segment) per page */
     for(unsigned r=0;r<space->nseg+2;r++) {
         uint64_t base,length;size_t from;unsigned flags;int arena=0;
         if(r==0) { if(space->map_backing!=backing || !space->map_flags)continue;base=MAP_BASE;length=space->map_capacity;from=0;flags=0;arena=1; }
@@ -744,7 +752,12 @@ static void hvf_remap_backing(const GuestAddressSpace *space,HvfView *v,MemoryBa
             if(!(f&7))continue;
             if(!(f&SEG_SHARED) && !hvf_leaf(v,va,0) && !hvf_touched(backing,at,4096))continue;
             uint64_t ipa=hvf_page_ipa(backing,at);if(!ipa)continue;
-            hvf_map_page_in(v,va,ipa,hvf_effective_flags(space,backing,f,at),0);
+            if(cow<0)cow=backing->frozen || (backing->refs>1 && backing->refs>address_space_backing_refs(space,backing));
+            unsigned e=f;                                                       /* as hvf_effective_flags */
+            if(f&SEG_SHARED)e=f&7;
+            else if((f&2) && cow)e=f&~2u;
+            else if(f&2) { const BackingPage *page=backing->pages[at/backing->page_size];if(!page || page->refs>1)e=f&~2u; }
+            hvf_map_page_in(v,va,ipa,e,0);
         }
     }
 }
@@ -1038,14 +1051,24 @@ static void hvf_fp_pull(void) {
    its parent's (its page is the parent's). */
 /* This process has memory protected for a fork (hvf_backing_hold): the EL1 handlers,
    some of which write guest memory, stay off meanwhile. */
+/* Called on every resume (hvf_fast_publish). A backing stays held after its snapshot
+   goes until its process writes it again, so once some fork held memory that is not
+   written again (FEX's large allocations), hvf_held_live stays up and every resume of
+   every process walked all its segments: the Go linker under FEX, with a segment per
+   mapped archive (over a thousand), spent most of its time here. An answer of none is
+   kept until this process's memory changes or another backing becomes held; a held
+   answer is checked again each time (a thaw only makes it none). */
 static int hvf_holding(void) {
     if(!__atomic_load_n(&hvf_held_live,__ATOMIC_ACQUIRE))return 0;
-    const GuestAddressSpace *s=address_space;
+    const GuestAddressSpace *s=address_space;HvfView *v=hvf_own_view;
+    uint64_t epoch=__atomic_load_n(&hvf_hold_epoch,__ATOMIC_ACQUIRE);
+    if(v->unheld && v->unheld_generation==s->generation && v->unheld_epoch==epoch)return 0;
 #define HVF_HELD(b) ((b) && __atomic_load_n(&(b)->held,__ATOMIC_ACQUIRE) && __atomic_load_n(&(b)->frozen,__ATOMIC_ACQUIRE))
-    if(HVF_HELD(s->map_backing) || HVF_HELD(s->brk_backing))return 1;
-    for(unsigned i=0;i<s->nseg;i++)if(HVF_HELD(s->seg[i].backing))return 1;
-    return 0;
+    int held=HVF_HELD(s->map_backing) || HVF_HELD(s->brk_backing);
+    for(unsigned i=0;!held && i<s->nseg;i++)held=HVF_HELD(s->seg[i].backing);
 #undef HVF_HELD
+    v->unheld=!held;v->unheld_generation=s->generation;v->unheld_epoch=epoch;
+    return held;
 }
 static void hvf_fast_publish(uint64_t *frame,uint64_t tid) {
     int on=!trace && !profiling && !seccomp_active();
@@ -1090,6 +1113,12 @@ static void hvf_put_regs(void) {
         }
         hvf_fp_dirty=0;
     }
+}
+/* A write fault mapped its page: the view is current again unless remaps another thread
+   queued (hvf_backing_moved: an overlay's copies, discarded pages) or arena changes are
+   still pending, which the next sync must apply rather than skip. */
+static void hvf_fault_synced(HvfView *v,const GuestAddressSpace *space) {
+    if(!v->nmoved && v->arena_rev==space->arena_rev)v->generation=space->generation;
 }
 /* From the frame; else (a preemption, or another vector) from the vCPU: after an
    EL0 exception the guest's return address and flags are ELR/SPSR_EL1 (passed in),
@@ -1210,10 +1239,15 @@ static int hvf_held_yield(uint64_t far,uint64_t pc) {
 }
 /* A write fault on memory a fork held that has thawed: give this view's write permission
    back in one pass and resume the write through an ASID flush (1; the vCPU is then in
-   an EL1 routine). 0 when nothing was restored here. Under the mm lock, framed. */
+   an EL1 routine). 0 when nothing was restored here. Under the mm lock, framed. A later
+   fork that ran out of copy and overlay slots keeps a held backing as it is
+   (address_space_fork_backing): shared then, so the write takes the copy-on-write path
+   (0) instead of making the memory another process maps writable in place. */
 static int hvf_held_restore(MemoryBacking *b,uint64_t elr,uint64_t spsr) {
     if(__atomic_load_n(&b->frozen,__ATOMIC_ACQUIRE) || !__atomic_exchange_n(&b->held,0,__ATOMIC_ACQ_REL))return 0;
     __atomic_sub_fetch(&hvf_held_live,1,__ATOMIC_ACQ_REL);
+    size_t refs=__atomic_load_n(&b->refs,__ATOMIC_ACQUIRE);
+    if(refs>1 && refs>address_space_backing_refs(address_space,b))return 0;
     if(hvf_view!=hvf_own_view || !hvf_hold(hvf_view,address_space,b,0))return 0;
     hvf_resume_el0(elr,spsr);
     hvf_frame[HF_FLUSH]=(uint64_t)hvf_view->asid<<48;
@@ -2041,7 +2075,7 @@ static int hvf_unlocked_exit(void) {
             address_space_touched(address_space);
             if(address_space->layout==layout && hvf_view==hvf_own_view && hvf_view_matches(address_space)) {
                 unsigned around=hvf_fault_around(address_space,far);PROFILE_ADD(profile_fault_around,around);
-                hvf_remap_host_page(address_space,far,1+around);hvf_view->generation=address_space->generation;
+                hvf_remap_host_page(address_space,far,1+around);hvf_fault_synced(hvf_view,address_space);
             } else hvf_own_view->stale=HVF_STALE_COW;
             hvf_faulting=0;
         }
@@ -2280,7 +2314,7 @@ static int hvf_slice_run(void) {
                 address_space_touched(address_space);
                 if(address_space->layout==layout && hvf_view==hvf_own_view && hvf_view_matches(address_space)) {
                     unsigned around=hvf_fault_around(address_space,far);PROFILE_ADD(profile_fault_around,around);
-                    hvf_remap_host_page(address_space,far,1+around);hvf_view->generation=address_space->generation;
+                    hvf_remap_host_page(address_space,far,1+around);hvf_fault_synced(hvf_view,address_space);
                 } else hvf_own_view->stale=HVF_STALE_COW;
                 hvf_faulting=0;in_vector=hvf_fault_resume(elr,spsr);fast=1;continue;
             }

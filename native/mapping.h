@@ -87,7 +87,7 @@ static uint64_t shared_map(uint64_t fixed,uint64_t length,uint64_t prot,MemoryBa
     if(fixed && length<=GUEST_VA_END && !map_in_arena(fixed,page_up(length))) {
         /* Outside the arena: a segment of its own in a reservation of its range. */
         uint64_t bytes=page_up(length);
-        if(fixed%4096 || fixed<UINT64_C(0x10000) || bytes>GUEST_VA_END-fixed || (fixed<MAP_BASE+address_space->map_capacity && MAP_BASE<fixed+bytes) ||
+        if(fixed%4096 || fixed<UINT64_C(0x10000) || fixed>GUEST_VA_END || bytes>GUEST_VA_END-fixed || (fixed<MAP_BASE+address_space->map_capacity && MAP_BASE<fixed+bytes) ||
            map_outside_used(fixed,bytes))return linux_error(22);
         if(backing) { if(!backing_retain(backing,1))return linux_error(12); }
         else if(!(backing=backing_alloc((size_t)bytes,1)))return linux_error(12);
@@ -148,23 +148,58 @@ static uint64_t shared_unmap(uint64_t address,uint64_t bytes) {
    and when the last mapping goes (if it was ever writable); keyed by the file's
    device and inode. Writes to the file update the backing (file_share_written).
    ponytail: read() of the file does not see unflushed mapped changes (Linux's page
-   cache unifies them); flush before reads if that ever matters. */
-#define FILE_SHARES 1024 /* .NET maps each assembly it loads MAP_SHARED */
-/* mem: a memfs file (memfs.h), held; fd is then -1. */
+   cache unifies them); flush before reads if that ever matters.
+   Read-only mappings of a file that can be written (its layer is writable) are shares
+   too, to see those writes: the Go linker maps a large module's archives so, over a
+   thousand of them, and the old 1024 entries ran out (ENFILE: "mapping output file
+   failed: too many open files in system"). The table is indexed by device and inode,
+   and an entry holds a descriptor only once it is mapped writable. */
+#define FILE_SHARES 65536 /* Linux's default vm.max_map_count; .NET maps each assembly, Go's linker each archive */
+#define FILE_SHARE_BUCKETS (2u*FILE_SHARES)  /* the (device, inode) index: open addressing, at most half full */
+/* mem: a memfs file (memfs.h), held; fd is then -1. fd is also -1 for a share never mapped writable. */
 static struct FileShare { dev_t dev;ino_t ino;int fd;MemoryBacking *backing;size_t size;int writable;struct MemNode *mem; } file_shares[FILE_SHARES];
+static uint32_t file_share_index[FILE_SHARE_BUCKETS];                           /* an entry plus one, or 0 */
+static uint32_t file_share_free[FILE_SHARES];static unsigned file_share_nfree,file_share_top;   /* freed entries; 1 + the highest ever used */
+static unsigned file_share_bucket(uint64_t dev,uint64_t ino) {
+    uint64_t h=ino*UINT64_C(0x9E3779B97F4A7C15)^dev*UINT64_C(0xC2B2AE3D27D4EB4F);
+    return (unsigned)(h^(h>>29))&(FILE_SHARE_BUCKETS-1);
+}
+static struct FileShare *file_share_lookup(uint64_t dev,uint64_t ino) {
+    for(unsigned b=file_share_bucket(dev,ino);file_share_index[b];b=(b+1)&(FILE_SHARE_BUCKETS-1)) {
+        struct FileShare *f=&file_shares[file_share_index[b]-1];
+        if((uint64_t)f->dev==dev && (uint64_t)f->ino==ino)return f;
+    }
+    return NULL;
+}
 struct MemNode;
 static int mem_map_file(uint64_t guestfd,uint64_t *dev,uint64_t *ino,uint64_t *size,int *writable,struct MemNode **node);
 static void mem_map_read(struct MemNode *n,unsigned char *out,size_t count,uint64_t offset);
 static void mem_map_write(struct MemNode *n,const unsigned char *data,size_t count);
 /* Guards the table against file writes, which also run without the runtime lock. */
 static pthread_mutex_t file_share_lock=PTHREAD_MUTEX_INITIALIZER;
+/* Under file_share_lock (the runtime lock too: readers outside file_share_lock hold it). */
+static void file_share_indexed(const struct FileShare *f) {
+    unsigned b=file_share_bucket((uint64_t)f->dev,(uint64_t)f->ino);
+    while(file_share_index[b])b=(b+1)&(FILE_SHARE_BUCKETS-1);
+    file_share_index[b]=(uint32_t)(f-file_shares)+1;
+}
+static void file_share_unindexed(const struct FileShare *f) {     /* backward-shift deletion: no tombstones */
+    const unsigned mask=FILE_SHARE_BUCKETS-1;uint32_t entry=(uint32_t)(f-file_shares)+1;
+    unsigned i=file_share_bucket((uint64_t)f->dev,(uint64_t)f->ino);
+    while(file_share_index[i]!=entry)i=(i+1)&mask;
+    for(unsigned j=i;;) {
+        j=(j+1)&mask;
+        if(!file_share_index[j])break;
+        const struct FileShare *g=&file_shares[file_share_index[j]-1];
+        unsigned k=file_share_bucket((uint64_t)g->dev,(uint64_t)g->ino);   /* g's home: it may fill i unless home lies in (i, j] */
+        if(j>i?(k<=i || k>j):(k<=i && k>j)) { file_share_index[i]=file_share_index[j];i=j; }
+    }
+    file_share_index[i]=0;
+}
 static void file_share_written_at(uint64_t dev,uint64_t ino,uint64_t at,const unsigned char *data,size_t bytes) {
     pthread_mutex_lock(&file_share_lock);
-    for(unsigned i=0;i<FILE_SHARES;i++) {
-        struct FileShare *f=&file_shares[i];
-        if(!f->backing || (uint64_t)f->dev!=dev || (uint64_t)f->ino!=ino || at>=f->size)continue;
-        memcpy(backing_data(f->backing)+at,data,bytes<f->size-at?bytes:(size_t)(f->size-at));
-    }
+    struct FileShare *f=file_share_lookup(dev,ino);
+    if(f && at<f->size)memcpy(backing_data(f->backing)+at,data,bytes<f->size-at?bytes:(size_t)(f->size-at));
     pthread_mutex_unlock(&file_share_lock);
 }
 static void file_share_written(int fd,uint64_t at,const unsigned char *data,size_t bytes) {
@@ -174,8 +209,10 @@ static void file_share_written(int fd,uint64_t at,const unsigned char *data,size
 static void file_share_forget(struct FileShare *f) {
     pthread_mutex_lock(&file_share_lock);
     struct MemNode *mem=f->mem;
-    if(!mem)close(f->fd);
+    if(!mem && f->fd>=0)close(f->fd);
+    file_share_unindexed(f);
     backing_release(f->backing);memset(f,0,sizeof(*f));
+    file_share_free[file_share_nfree++]=(uint32_t)(f-file_shares);
     pthread_mutex_unlock(&file_share_lock);
     if(mem)mem_node_put_locked(mem);
     __atomic_fetch_sub(&file_shares_live,1,__ATOMIC_RELAXED);
@@ -183,7 +220,7 @@ static void file_share_forget(struct FileShare *f) {
 static void file_share_flush(struct FileShare *f) {
     if(!f->writable)return;                             /* never written through a mapping */
     if(f->mem) { mem_map_write(f->mem,backing_data(f->backing),f->size);return; }
-    struct stat st;if(fstat(f->fd,&st)<0)return;
+    struct stat st;if(f->fd<0 || fstat(f->fd,&st)<0)return;
     size_t bytes=(size_t)st.st_size<f->size?(size_t)st.st_size:f->size;
     for(size_t done=0;done<bytes;) {
         ssize_t n=pwrite(f->fd,backing_data(f->backing)+done,bytes-done,(off_t)done);
@@ -192,9 +229,38 @@ static void file_share_flush(struct FileShare *f) {
 }
 /* A shared segment went away: when only the table still holds the backing, flush and forget. */
 static void file_share_unmapped(MemoryBacking *backing) {
-    for(unsigned i=0;i<FILE_SHARES;i++)if(file_shares[i].backing==backing && backing->refs==2) {
+    for(unsigned i=0;i<file_share_top;i++)if(file_shares[i].backing==backing && backing->refs==2) {
         file_share_flush(&file_shares[i]);file_share_forget(&file_shares[i]);return;
     }
+}
+/* An image goes (exit, exec): its shared file mappings go as munmap takes them,
+   written back to their files and their table entries freed once only the table
+   holds them. Go's tools exit without munmap: each process of a build kept an
+   entry (and its memory) until the 1024th mapping failed with ENFILE (go build's
+   link: "mapping output file failed: too many open files in system"), and what a
+   process wrote through such a mapping never reached the file. The image's own
+   references to them go here, under the runtime lock: the rest of a dead image's
+   memory goes later (image_destroy_later, after the lock), and another process's
+   exit or munmap meanwhile counted these references still, skipped its write-back,
+   and left the entry to the table alone, never written. */
+static int file_share_pointer_order(const void *a,const void *b) {
+    uintptr_t x=(uintptr_t)*(MemoryBacking *const *)a,y=(uintptr_t)*(MemoryBacking *const *)b;return x<y?-1:x>y;
+}
+static void file_share_image_gone(GuestAddressSpace *space) {
+    if(!__atomic_load_n(&file_shares_live,__ATOMIC_RELAXED))return;
+    MemoryBacking *mine[SEGMENT_LIMIT+1];unsigned n=0;               /* its shared segments' backings, sorted: one pass over the table */
+    for(unsigned i=0;i<space->nseg;i++)if(space->seg[i].flags&SEG_SHARED)mine[n++]=space->seg[i].backing;
+    if(!n)return;
+    qsort(mine,n,sizeof(*mine),file_share_pointer_order);
+    for(unsigned j=0;j<file_share_top;j++) {
+        MemoryBacking *b=file_shares[j].backing;
+        if(!b || !bsearch(&b,mine,n,sizeof(*mine),file_share_pointer_order))continue;
+        for(unsigned i=0;i<space->nseg;)                             /* the table keeps it alive */
+            if(space->seg[i].backing==b && (space->seg[i].flags&SEG_SHARED)) { backing_release(b);space->seg[i]=space->seg[--space->nseg]; }
+            else i++;
+        if(b->refs==1) { file_share_flush(&file_shares[j]);file_share_forget(&file_shares[j]); }
+    }
+    memset(space->lookup_cache,0,sizeof(space->lookup_cache));
 }
 static int file_share_find(uint64_t guestfd) {
     uint64_t dev,ino,size;int writable;
@@ -202,8 +268,7 @@ static int file_share_find(uint64_t guestfd) {
         int fd=fs_host(guestfd);struct stat st;if(fd<0 || fstat(fd,&st)<0)return 0;
         dev=(uint64_t)st.st_dev;ino=(uint64_t)st.st_ino;
     }
-    for(unsigned i=0;i<FILE_SHARES;i++)if(file_shares[i].backing && (uint64_t)file_shares[i].dev==dev && (uint64_t)file_shares[i].ino==ino)return 1;
-    return 0;
+    return file_share_lookup(dev,ino)!=NULL;
 }
 static uint64_t file_share_map(uint64_t fixed,uint64_t length,uint64_t prot,uint64_t guestfd,uint64_t offset) {
     struct stat st;struct MemNode *mem=NULL;int fd=-1;
@@ -218,34 +283,32 @@ static uint64_t file_share_map(uint64_t fixed,uint64_t length,uint64_t prot,uint
         if(fstat(fd,&st)<0)return fs_error();if(!S_ISREG(st.st_mode))return linux_error(19);
     }
     size_t end=(size_t)page_up(offset+length);
-    struct FileShare *f=NULL,*free_entry=NULL;
-    for(unsigned i=0;i<FILE_SHARES;i++) {
-        if(file_shares[i].backing && file_shares[i].dev==st.st_dev && file_shares[i].ino==st.st_ino)f=&file_shares[i];
-        else if(!file_shares[i].backing && !free_entry)free_entry=&file_shares[i];
-    }
+    struct FileShare *f=file_share_lookup((uint64_t)st.st_dev,(uint64_t)st.st_ino);
     if(f && end>f->size) {
         if(f->backing->refs>1) { if(mem)mem_node_put_locked(mem);return linux_error(12); } /* mapped beyond what others share */
-        file_share_flush(f);file_share_forget(f);free_entry=f;f=NULL;
+        file_share_flush(f);file_share_forget(f);f=NULL;
     }
     if(f && mem) { mem_node_put_locked(mem);mem=NULL; }   /* the share holds it already */
     if(!f) {
-        if(!free_entry) { if(mem)mem_node_put_locked(mem);return linux_error(23); }
+        if(!file_share_nfree && file_share_top==FILE_SHARES) { if(mem)mem_node_put_locked(mem);return linux_error(23); }
         size_t size=end>(size_t)page_up((uint64_t)st.st_size)?end:(size_t)page_up((uint64_t)st.st_size);
         MemoryBacking *backing=backing_alloc(size,1);if(!backing) { if(mem)mem_node_put_locked(mem);return linux_error(12); }
-        int keep=-1;
         if(mem)mem_map_read(mem,backing_data(backing),(size_t)st.st_size<size?(size_t)st.st_size:size,0);
-        else {
+        else
             for(size_t done=0;done<(size_t)st.st_size && done<size;) {
                 ssize_t n=pread(fd,backing_data(backing)+done,size-done,(off_t)done);
                 if(n<=0)break;done+=(size_t)n;
             }
-            keep=dup(fd);if(keep<0) { backing_release(backing);return fs_error(); }
-            fcntl(keep,F_SETFD,FD_CLOEXEC);
-        }
         pthread_mutex_lock(&file_share_lock);
-        f=free_entry;*f=(struct FileShare){st.st_dev,st.st_ino,keep,backing,size,0,mem};
+        f=file_share_nfree?&file_shares[file_share_free[--file_share_nfree]]:&file_shares[file_share_top++];
+        *f=(struct FileShare){st.st_dev,st.st_ino,-1,backing,size,0,mem};file_share_indexed(f);
         pthread_mutex_unlock(&file_share_lock);
         __atomic_fetch_add(&file_shares_live,1,__ATOMIC_RELAXED);
+    }
+    if((prot&2) && !f->mem && f->fd<0) {                  /* written back through a descriptor of its own */
+        int keep=dup(fd);
+        if(keep<0) { uint64_t e=fs_error();if(f->backing->refs==1)file_share_forget(f);return e; }
+        fcntl(keep,F_SETFD,FD_CLOEXEC);f->fd=keep;
     }
     if(prot&2)f->writable=1;
     uint64_t result=shared_map(fixed,length,prot,f->backing,(size_t)offset);
@@ -277,7 +340,7 @@ static int map_mem_writable(uint64_t guestfd) { uint64_t d,i,s;int w;return mem_
 /* msync: write mapped files back (all of them; cheap at this scale). */
 static uint64_t guest_msync(void) {
     if(cpu->gpr[0]%4096 || cpu->gpr[2]&~UINT64_C(7))return linux_error(22);
-    for(unsigned i=0;i<FILE_SHARES;i++)if(file_shares[i].backing)file_share_flush(&file_shares[i]);
+    for(unsigned i=0;i<file_share_top;i++)if(file_shares[i].backing)file_share_flush(&file_shares[i]);
     return 0;
 }
 /* Reservations beyond the arena: an anonymous private PROT_NONE mapping the arena
@@ -402,6 +465,7 @@ static uint64_t reserve_commit_piece(uint64_t address,uint64_t size,unsigned fla
         if(!address_space_discard(address_space,backing,offset,(size_t)size))return linux_error(12);
         backing=reserve_window(window);                                              /* a copy, if it was shared after fork */
         if(!backing || !backing_retain(backing,1))return linux_error(12);
+        if(backing_moved_hook)backing_moved_hook(backing,offset,(size_t)size);      /* its pages unowned: read-only again (reserve_discard) */
     } else if(!(backing=backing_reserve((size_t)RESERVE_WINDOW)))return linux_error(12);
     uint64_t e=segments_remove(address,address+size);
     if(e || !flags) { backing_release(backing);return e; }
@@ -539,7 +603,8 @@ static uint64_t guest_dynamic_mmap_map(void) {
     if(outside) {
         flags=(flags&~UINT64_C(0x100000))|16;
         if(addr<UINT64_C(0x10000))return linux_error(1);                         /* below mmap_min_addr: EPERM */
-        if(bytes>GUEST_VA_END-addr)return linux_error(12);
+        if(addr>GUEST_VA_END || bytes>GUEST_VA_END-addr)                         /* the top 64 KiB are taken (GUEST_VA_END) */
+            return linux_error(noreplace && addr<USER_VA_END && bytes<=USER_VA_END-addr?17:12);
         /* ponytail: a range across the arena's edge is refused; split it if that is ever needed */
         if(addr<MAP_BASE+address_space->map_capacity && MAP_BASE<addr+bytes)return linux_error(22);
         if(noreplace && map_outside_used(addr,bytes))return linux_error(17);
@@ -560,6 +625,10 @@ static uint64_t guest_dynamic_mmap_map(void) {
            shared and writable: then it must see those writes. JITs map a memfd twice,
            asmjit (Erlang's BEAM) the executable view first. */
         file_share_find(cpu->gpr[4]) || (fs_host(cpu->gpr[4])>=0 && !FS(fs_slot(cpu->gpr[4])).ro) || map_mem_writable(cpu->gpr[4]));
+    /* Such a read-only shared mapping takes a segment; Go's linker maps every package
+       archive so. The last SEGMENT_SPARE stay for other memory: ENOMEM, as when Linux's
+       vm.max_map_count is reached, and the linker reads those archives instead. */
+    if(share_file && !(prot&2) && address_space->nseg>=SEGMENT_LIMIT-SEGMENT_SPARE)return linux_error(12);
     if(shared && ((flags&32) || share_file) && fixed) {
         uint64_t e=outside?map_outside_clear(addr,bytes):map_in_arena(addr,bytes)?guest_munmap(addr,bytes):0;
         if(e)return e;
@@ -665,10 +734,23 @@ static uint64_t guest_mprotect(void) {
 
 /* Zero the private commits in [address, address+bytes) of a reservation, giving their memory back. */
 static int reserve_discard(uint64_t address,uint64_t bytes) {
+    int discarded=0;
     for(unsigned i=0;i<address_space->nseg;i++) {
         Segment *s=&address_space->seg[i];uint64_t low=s->base>address?s->base:address,high=s->base+s->size<address+bytes?s->base+s->size:address+bytes;
-        if(low<high && !(s->flags&SEG_SHARED) && !address_space_discard(address_space,s->backing,s->offset+(size_t)(low-s->base),(size_t)(high-low)))return 0;
+        if(low>=high || (s->flags&SEG_SHARED))continue;
+        size_t offset=s->offset+(size_t)(low-s->base);
+        if(!address_space_discard(address_space,s->backing,offset,(size_t)(high-low))) { if(discarded)address_space_touched(address_space);return 0; }
+        /* Its pages have no owner now: the hypervisor's tables map them read-only
+           again (as the mmap arena's, address_space_arena_changed), so the next write
+           faults and owns its page. Left writable, writes went unseen, and the next
+           MADV_DONTNEED skipped those pages as never written: FEX empties its
+           return-address stack and lookup caches this way when it frees a code
+           buffer, and stale entries then sent threads into the freed code (amd64
+           go build: "unexpected fault address" in FEX's memory). */
+        if(backing_moved_hook)backing_moved_hook(s->backing,offset,(size_t)(high-low));
+        discarded=1;
     }
+    if(discarded)address_space_touched(address_space);            /* the tables sync before guest code runs */
     return 1;
 }
 /* Linux madvise advice values are not host ABI values. Pure hints are accepted on
@@ -747,7 +829,7 @@ static uint64_t map_call(uint64_t address,uint64_t length,uint64_t prot,uint64_t
 /* Whether [address, address+bytes) is free to map: unmapped arena pages, or unused
    address space outside it (not across its edge, nor the heap's room). */
 static int map_range_free(uint64_t address,uint64_t bytes) {
-    if(bytes>GUEST_VA_END || address<UINT64_C(0x10000) || bytes>GUEST_VA_END-address)return 0;
+    if(bytes>GUEST_VA_END || address<UINT64_C(0x10000) || address>GUEST_VA_END || bytes>GUEST_VA_END-address)return 0;
     if(map_in_arena(address,bytes)) {
         for(uint64_t p=(address-MAP_BASE)/4096;p<(address-MAP_BASE+bytes)/4096;p++)if(address_space->map_flags[p])return 0;
         return 1;
@@ -774,8 +856,8 @@ static uint64_t guest_mremap(void) {
     if(old%4096 || (flags&~UINT64_C(7)) || ((flags&6) && !(flags&1)) || !new_size || old_size>GUEST_VA_END || new_size>GUEST_VA_END)return linux_error(22);
     old_size=page_up(old_size);new_size=page_up(new_size);
     if((flags&4) && old_size!=new_size)return linux_error(22);                     /* MREMAP_DONTUNMAP moves, never resizes */
-    if((flags&2) && (target%4096 || target<UINT64_C(0x10000) || new_size>GUEST_VA_END-target || (target<old+old_size && old<target+new_size)))return linux_error(22);
-    if(old_size>GUEST_VA_END-old)return linux_error(14);
+    if((flags&2) && (target%4096 || target<UINT64_C(0x10000) || target>GUEST_VA_END || new_size>GUEST_VA_END-target || (target<old+old_size && old<target+new_size)))return linux_error(22);
+    if(old>GUEST_VA_END || old_size>GUEST_VA_END-old)return linux_error(14);
     mm_cache_range(old,old_size);if(flags&2)mm_cache_range(target,new_size);
     if(!address_space_map_flags(address_space))return linux_error(12);
     /* What the old range is. */
@@ -988,8 +1070,9 @@ static void proc_space_memory(const GuestAddressSpace *space,uint64_t *vsz,uint6
     *vsz=size;*rss=resident;
 }
 static size_t proc_maps(char *out,size_t capacity) {
-    GuestAddressSpace *space=address_space;size_t limit=2*space->nseg+space->nreserve+2+(space->map_flags?space->map_top:0),n=0,used=0;
+    GuestAddressSpace *space=address_space;size_t limit=2*space->nseg+space->nreserve+3+(space->map_flags?space->map_top:0),n=0,used=0;
     ProcMap *m=malloc(limit*sizeof(*m));if(!m)return 0;
+    m[n++]=(ProcMap){GUEST_VA_END,USER_VA_END,0,""};          /* taken: the hypervisor's page (address_space.h) */
     for(unsigned i=0;i<space->nseg;i++) {
         Segment *s=&space->seg[i];
         m[n++]=(ProcMap){s->base,s->base+s->size,(s->flags&7)|((s->flags&SEG_SHARED)?8:0),

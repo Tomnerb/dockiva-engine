@@ -37,6 +37,9 @@ PACKAGES = [
      3375998, '61c48ea8a775ac24b90cb21d0a8c49daee52231895f49970adb4813c8078da3f',
      'https://github.com/FEX-Emu/FEX/tree/FEX-2610',
      {'usr/bin/FEX': 'bin/FEX', 'usr/bin/FEXServer': 'bin/FEXServer',
+      # x86 programs' vDSO (native/fs.h x86_vdso_env)
+      'usr/share/fex-emu/GuestThunks/libVDSO-guest.so': 'share/fex-emu/GuestThunks/libVDSO-guest.so',
+      'usr/share/fex-emu/GuestThunks_32/libVDSO-guest.so': 'share/fex-emu/GuestThunks_32/libVDSO-guest.so',
       'usr/share/doc/fex-emu-armv8.4/copyright': 'share/FEX-COPYRIGHT'}),
     ('libc6_2.39-0ubuntu8.9_arm64.deb', LP+'libc6_2.39-0ubuntu8.9_arm64.deb',
      2776414, 'ad109797c5f78a5eeb6d4c296bfbaae68b239111a0c9ac0eb97b8d430284ac45',

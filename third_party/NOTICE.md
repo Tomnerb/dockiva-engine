@@ -22,7 +22,8 @@ M18 includes a minimal configured BusyBox 1.37.0 binary from unmodified upstream
 fex-emu PPA built it for Ubuntu 24.04:
 https://launchpad.net/~fex-emu/+archive/ubuntu/fex. Its source:
 https://github.com/FEX-Emu/FEX/tree/FEX-2610. `scripts/build_x86.py` unpacks
-`FEX` and `FEXServer` from it, with the arm64 glibc they load from Ubuntu 24.04's
+`FEX`, `FEXServer` and FEX's x86 vDSO (`libVDSO-guest.so`, 64- and 32-bit) from it,
+with the arm64 glibc they load from Ubuntu 24.04's
 libc6 (LGPL-2.1+) and gcc-14 runtime packages (GPL-3 with the GCC Runtime Library
 Exception), into the engine bundle's `_internal/build/x86`. That bundle's `share/`
 holds each package's copyright file, and `share/SOURCES` each package's SHA-256 and
