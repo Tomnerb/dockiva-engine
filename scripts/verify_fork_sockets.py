@@ -44,6 +44,7 @@ def main():
     shared_many = build('shared_many_guest', folder, linker)  # 1300 files mapped MAP_SHARED by two processes: coherent, no ENFILE
     shared_kill = build('shared_kill_guest', folder, linker)  # a parent and child sharing a file mapping killed together: both writes reach it
     recheck = build('epoll_recheck_guest', folder, linker)  # an epoll_wait whose edge another thread took rechecks within 10 ms
+    held_shared = build('fork_held_shared_guest', folder, linker)  # memory held for one fork, shared by the next: a write copies it
     stress, stress_leaf = (build(n, folder, linker) for n in ('fork_exec_stress_guest', 'fork_exec_stress_leaf'))
     stress_root = folder/'stress-root'  # fork_exec_stress_guest execs /leaf in /d0../d2 and reads /data
     shutil.rmtree(stress_root, ignore_errors=True)
@@ -100,6 +101,7 @@ def main():
                                      (mmap_probe, ['--mmap-limit-mib', '2048', '--dynamic'], b'mmap-probe PASS\n'),
                                      (discard_rewrite, ['--dynamic'], b'discard-rewrite PASS\n'),
                                      (nested, [], b'fork-nested PASS\n'),
+                                     (held_shared, ['--dynamic'], b'fork-held-shared PASS\n'),
                                      (recheck, [], b'epoll-recheck PASS\n'),
                                      (shared_exit, ['--root', str(shared), '--writable', '--dynamic'], b'shared-exit PASS\n'),
                                      (shared_many, ['--root', str(shared), '--writable', '--dynamic', '--storage-limit-mib', '0', '--mmap-limit-mib', '2048'], b'shared-many PASS\n'),

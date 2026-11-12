@@ -231,13 +231,15 @@ static void *backing_reaper(void *unused) {
     }
     return NULL;
 }
-/* A freed backing (refs 0): 1 when the reaper takes it. */
+/* A freed backing (refs 0): 1 when the reaper takes it. One still held for a fork is
+   freed instead, through the release hook that drops it from the hypervisor's count of
+   held backings (hvf_held_live): pooled, the count stayed up for good. */
 static int backing_reap(MemoryBacking *backing) {
     static int started;
     if(!backing_reaping)return 0;
     size_t owned=0,used=backing->used;
     for(size_t i=backing_next(backing,0,used);i<used;i=backing_next(backing,i+1,used))owned++;
-    backing->recycle=backing_dead_image && !__atomic_load_n(&backing->unpooled,__ATOMIC_RELAXED) && !backing->frozen && !backing->cow_copy && backing->bytes && owned<=BACKING_POOL_PAGES;
+    backing->recycle=backing_dead_image && !__atomic_load_n(&backing->unpooled,__ATOMIC_RELAXED) && !backing->frozen && !__atomic_load_n(&backing->held,__ATOMIC_ACQUIRE) && !backing->cow_copy && backing->bytes && owned<=BACKING_POOL_PAGES;
     for(size_t i=backing_next(backing,0,used);i<used;i=backing_next(backing,i+1,used)) {
         backing_page_release(backing->pages[i],backing->page_size);backing_set(backing,i,backing->recycle?&backing_zero_mark:NULL);
     }

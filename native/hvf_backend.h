@@ -125,6 +125,7 @@ typedef struct {
     uint64_t layout,arena_rev,generation;
     unsigned asid,asid_generation;            /* valid while asid_generation is hvf_asid_generation */
     struct { MemoryBacking *backing;size_t offset,size; } moved[8];unsigned nmoved; /* overlay ranges a host write copied, to map again (hvf_backing_moved) */
+    uint64_t unheld_generation,unheld_epoch;int unheld; /* hvf_holding found none of its memory held at that generation and hold epoch */
 } HvfView;
 static HvfView hvf_views[HVF_VIEWS];
 /* The view of the current process's memory: its own, or (a vfork child of a threaded
@@ -228,6 +229,7 @@ static void hvf_block_unmap(unsigned i) {
    Hypervisor-level (stage-2) protection did the same with no table pass, but
    hv_vm_protect took 30-150 us per 256 MiB block each way. */
 static unsigned hvf_held_live;                          /* backings held now (atomic) */
+static uint64_t hvf_hold_epoch;                         /* bumped after a backing becomes held (atomic): hvf_holding's cached answers expire */
 static uint64_t hvf_held_thaws;                         /* thaws so far, under hvf_held_lock */
 static pthread_mutex_t hvf_held_lock=PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t hvf_held_cond=PTHREAD_COND_INITIALIZER;
@@ -268,6 +270,7 @@ static void hvf_backing_hold(MemoryBacking *backing,int protect) {
        parent's writes after a thaw remap a page at a time when the locked path serves
        them) are writable again. */
     if(!__atomic_exchange_n(&backing->held,1,__ATOMIC_ACQ_REL))__atomic_add_fetch(&hvf_held_live,1,__ATOMIC_ACQ_REL);
+    __atomic_add_fetch(&hvf_hold_epoch,1,__ATOMIC_ACQ_REL);         /* after held: a reader that sees the new epoch sees it held */
     if(hvf_hold(hvf_own_view,address_space,backing,1))hvf_flush();
     PROFILE_ADD(profile_holds,1);
 }
@@ -950,14 +953,24 @@ static void hvf_fp_pull(void) {
    its parent's (its page is the parent's). */
 /* This process has memory protected for a fork (hvf_backing_hold): the EL1 handlers,
    some of which write guest memory, stay off meanwhile. */
+/* Called on every resume (hvf_fast_publish). A backing stays held after its snapshot
+   goes until its process writes it again, so once some fork held memory that is not
+   written again (FEX's large allocations), hvf_held_live stays up and every resume of
+   every process walked all its segments: the Go linker under FEX, with a segment per
+   mapped archive (over a thousand), spent most of its time here. An answer of none is
+   kept until this process's memory changes or another backing becomes held; a held
+   answer is checked again each time (a thaw only makes it none). */
 static int hvf_holding(void) {
     if(!__atomic_load_n(&hvf_held_live,__ATOMIC_ACQUIRE))return 0;
-    const GuestAddressSpace *s=address_space;
+    const GuestAddressSpace *s=address_space;HvfView *v=hvf_own_view;
+    uint64_t epoch=__atomic_load_n(&hvf_hold_epoch,__ATOMIC_ACQUIRE);
+    if(v->unheld && v->unheld_generation==s->generation && v->unheld_epoch==epoch)return 0;
 #define HVF_HELD(b) ((b) && __atomic_load_n(&(b)->held,__ATOMIC_ACQUIRE) && __atomic_load_n(&(b)->frozen,__ATOMIC_ACQUIRE))
-    if(HVF_HELD(s->map_backing) || HVF_HELD(s->brk_backing))return 1;
-    for(unsigned i=0;i<s->nseg;i++)if(HVF_HELD(s->seg[i].backing))return 1;
-    return 0;
+    int held=HVF_HELD(s->map_backing) || HVF_HELD(s->brk_backing);
+    for(unsigned i=0;!held && i<s->nseg;i++)held=HVF_HELD(s->seg[i].backing);
 #undef HVF_HELD
+    v->unheld=!held;v->unheld_generation=s->generation;v->unheld_epoch=epoch;
+    return held;
 }
 static void hvf_fast_publish(uint64_t *frame,uint64_t tid) {
     int on=!trace && !profiling && !seccomp_active();
@@ -1115,10 +1128,15 @@ static int hvf_held_yield(uint64_t far,uint64_t pc) {
 }
 /* A write fault on memory a fork held that has thawed: give this view's write permission
    back in one pass and resume the write through an ASID flush (1; the vCPU is then in
-   an EL1 routine). 0 when nothing was restored here. Under the mm lock, framed. */
+   an EL1 routine). 0 when nothing was restored here. Under the mm lock, framed. A later
+   fork that ran out of copy and overlay slots keeps a held backing as it is
+   (address_space_fork_backing): shared then, so the write takes the copy-on-write path
+   (0) instead of making the memory another process maps writable in place. */
 static int hvf_held_restore(MemoryBacking *b,uint64_t elr,uint64_t spsr) {
     if(__atomic_load_n(&b->frozen,__ATOMIC_ACQUIRE) || !__atomic_exchange_n(&b->held,0,__ATOMIC_ACQ_REL))return 0;
     __atomic_sub_fetch(&hvf_held_live,1,__ATOMIC_ACQ_REL);
+    size_t refs=__atomic_load_n(&b->refs,__ATOMIC_ACQUIRE);
+    if(refs>1 && refs>address_space_backing_refs(address_space,b))return 0;
     if(hvf_view!=hvf_own_view || !hvf_hold(hvf_view,address_space,b,0))return 0;
     hvf_resume_el0(elr,spsr);
     hvf_frame[HF_FLUSH]=(uint64_t)hvf_view->asid<<48;
