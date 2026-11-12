@@ -261,6 +261,7 @@ static int el1_zero_page(uint64_t page) {
         } else for(uint64_t p=page;p<page+4096;p+=8)*(volatile uint64_t *)p=0;
         return 1;
     }
+    if(!user_ok(page,0))return 0;                                         /* not mapped yet (first use maps it): the runtime decides */
     uint64_t any=0;
     for(uint64_t p=page;p<page+4096;p+=64) {
         const volatile uint64_t *q=(const volatile uint64_t *)p;

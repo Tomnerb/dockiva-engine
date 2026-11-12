@@ -19,9 +19,13 @@
 #include <stdatomic.h>
 #define HVF_IPA_BASE UINT64_C(0x80000000)
 /* Stage-1 tables of every process: 131072 x 4 KiB of guest-physical space, host pages
-   only as tables are used (freed ones are reused first). FEX maps about 5 GiB of
-   mostly untouched memory, about 2800 tables per x86 process (x86.go). */
+   only as tables are used (freed ones are reused first). Memory a process committed but
+   never touched gets no table until its first use (hvf_touched): FEX's allocator commits
+   about 32 GiB of slabs per x86 process and touches little of it. A test build sets a
+   small pool to run it out (verify_fork_sockets.py). */
+#ifndef HVF_TABLE_BYTES
 #define HVF_TABLE_BYTES (512u<<20)
+#endif
 #define HVF_TABLES (HVF_TABLE_BYTES/4096)
 #define HVF_CODE_BYTES (16u<<10)                    /* one host page: vectors and EL1 routines */
 #define HVF_FRAME_BYTES 512u                        /* each vCPU's register frame (WORKER_LIMIT of them) */
@@ -83,10 +87,18 @@ static uint32_t hvf_table_link[HVF_TABLES];        /* the next table of the same
    another view's entries (an EL1 routine faulted). So a freed table first waits in
    hvf_table_waiting until a full TLB invalidation begun after its free has finished
    (hvf_flush; every fork that holds memory runs one), then joins hvf_table_freed, the
-   latest last. Then tables never used (hvf_table_fresh); with the pool exhausted, the
-   old scan takes any free one. */
+   latest last. Then tables never used (hvf_table_fresh). With none of those left, a
+   flush runs on the spare tables (hvf_flush_spare) so the waiting ones can be taken.
+   The pool used to hand out any free table then, waiting or not: once it ran short, an
+   EL1 routine could fault instead of the run ending with "Guest memory exceeds the
+   hypervisor's page tables". */
 static uint32_t hvf_table_freed[HVF_TABLES],hvf_table_waiting[HVF_TABLES],hvf_table_waiting_since[HVF_TABLES];
-static unsigned hvf_table_nfreed,hvf_table_fresh,hvf_table_wait_head,hvf_table_nwaiting,hvf_table_hint;
+static unsigned hvf_table_nfreed,hvf_table_fresh,hvf_table_wait_head,hvf_table_nwaiting;
+/* The spare tables: the pool's first four, which map the code page alone and never
+   change, owned by no view (HVF_SPARE_OWNER). A flush runs on them (hvf_flush_spare)
+   under ASID 0, which no view takes, when the tables a vCPU used last may be freed. */
+#define HVF_SPARE_TABLES 4u
+#define HVF_SPARE_OWNER UINT16_MAX
 static uint32_t hvf_flushes_begun,hvf_flushes_done;  /* full invalidations begun, and the number of the latest one finished */
 typedef struct { const unsigned char *host;size_t size;uint64_t ipa; } HvfBlock;
 static HvfBlock hvf_blocks[HVF_BLOCKS];
@@ -125,6 +137,7 @@ typedef struct {
     uint64_t layout,arena_rev,generation;
     unsigned asid,asid_generation;            /* valid while asid_generation is hvf_asid_generation */
     struct { MemoryBacking *backing;size_t offset,size; } moved[8];unsigned nmoved; /* overlay ranges a host write copied, to map again (hvf_backing_moved) */
+    uint64_t want;                            /* an address whose first use ran out of tables: the rebuild maps its span (hvf_first_use) */
 } HvfView;
 static HvfView hvf_views[HVF_VIEWS];
 /* The view of the current process's memory: its own, or (a vfork child of a threaded
@@ -301,14 +314,15 @@ static void hvf_backing_gone(MemoryBacking *backing) {
    changes whenever table pages are freed, which invalidates every cached one. */
 static uint64_t hvf_table_epoch;
 static _Thread_local struct { uint64_t root,key,epoch;uint64_t *leaf; } hvf_walk;
-/* Table i, freed when since full invalidations had begun, waits (under hvf_mutex). */
+/* Table i, freed when since full invalidations had begun, waits (under hvf_mutex). A
+   table waits once per free, so the ring never fills. */
 static void hvf_table_wait(unsigned i,uint32_t since) {
-    if(hvf_table_nwaiting==HVF_TABLES)return;                         /* (only duplicates: the scan finds it) */
+    if(hvf_table_nwaiting==HVF_TABLES)return;
     unsigned at=(hvf_table_wait_head+hvf_table_nwaiting++)%HVF_TABLES;
     hvf_table_waiting[at]=i;hvf_table_waiting_since[at]=since;
 }
 /* A table for view v, under hvf_mutex (see hvf_table_freed); HVF_TABLES when none is
-   left. An index listed twice (the scan took it meanwhile) is skipped once owned. */
+   left that no walk can still reach. */
 static unsigned hvf_table_take_one(HvfView *v) {
     uint32_t done=__atomic_load_n(&hvf_flushes_done,__ATOMIC_ACQUIRE);
     while(hvf_table_nwaiting && (int32_t)(done-hvf_table_waiting_since[hvf_table_wait_head])>0) {
@@ -318,13 +332,14 @@ static unsigned hvf_table_take_one(HvfView *v) {
     unsigned i=HVF_TABLES;
     while(i==HVF_TABLES && hvf_table_nfreed) { i=hvf_table_freed[--hvf_table_nfreed];if(hvf_table_owner[i])i=HVF_TABLES; }
     if(i==HVF_TABLES && hvf_table_fresh<HVF_TABLES)i=hvf_table_fresh++;
-    for(unsigned n=0;i==HVF_TABLES && n<HVF_TABLES;n++) { unsigned k=(hvf_table_hint+n)%HVF_TABLES;if(!hvf_table_owner[k]) { i=k;hvf_table_hint=k+1; } }
     if(i==HVF_TABLES)return i;
     hvf_table_owner[i]=(unsigned short)(v-hvf_views);hvf_table_link[i]=v->table_chain;v->table_chain=i+1;v->tables++;
     return i;
 }
+static int hvf_flush_spare(void);
 static uint64_t hvf_table_of(HvfView *v,int zero) {
-    pthread_mutex_lock(&hvf_mutex);unsigned i=hvf_table_take_one(v);pthread_mutex_unlock(&hvf_mutex);
+    pthread_mutex_lock(&hvf_mutex);unsigned i=hvf_table_take_one(v),waiting=hvf_table_nwaiting;pthread_mutex_unlock(&hvf_mutex);
+    if(i==HVF_TABLES && waiting && hvf_flush_spare()) { pthread_mutex_lock(&hvf_mutex);i=hvf_table_take_one(v);pthread_mutex_unlock(&hvf_mutex); }
     if(i==HVF_TABLES) { hvf_exhausted=1;return 0; }
     if(zero)memset(hvf_tables+(size_t)i*4096,0,4096);
     return HVF_IPA_BASE+(uint64_t)i*4096;
@@ -349,7 +364,9 @@ static uint64_t *hvf_leaf(HvfView *v,uint64_t va,int create) {
         uint64_t *entry=&((uint64_t *)(hvf_tables+(table-HVF_IPA_BASE)))[(va>>(39-9*level))&511];
         if(!(*entry&1)) {
             if(!create)return NULL;
-            uint64_t next=hvf_table();if(!next)return NULL;*entry=next|3;
+            uint64_t next=hvf_table();if(!next)return NULL;
+            __atomic_thread_fence(__ATOMIC_RELEASE);                          /* zeroed before a sibling's walk can reach it (first use maps while siblings run) */
+            *entry=next|3;
         }
         table=*entry&UINT64_C(0x0000fffffffff000);
     }
@@ -385,9 +402,42 @@ static unsigned hvf_effective_flags(const GuestAddressSpace *space,MemoryBacking
     if(!page || page->refs>1)return flags&~2u;
     return flags;
 }
+/* Committed memory is mapped a leaf table (2 MiB) at a time, as it is used: a span of a
+   private mapping where every page reads as zero (none owned, none an overlay's page
+   still read from its base) gets no table until a fault there (hvf_first_use, or a
+   write's hvf_remap_host_page) maps the span whole, untouched pages read-only as a
+   build maps them. FEX's allocator commits about 32 GiB of slabs per x86 process and
+   touches little of it: mapped at once, that was 10000 to 16000 tables each, and a go
+   build compiles a dozen packages at once. Shared memory is always mapped. */
+/* The first host page of b in [h, end) that reads other than zero (owned, or an
+   overlay's page still read from its base), or end. */
+static size_t hvf_next_touched(const MemoryBacking *b,size_t h,size_t end) {
+    size_t top=end<b->used?end:b->used,next=h<top?backing_next(b,h,top):top;
+    if(next==top)next=end;
+    if(b->base) {                                                         /* an inherited page before it */
+        size_t stop=next<b->inherit_pages?next:b->inherit_pages;
+        for(size_t i=h;i<stop;i=(i|63)+1) {
+            uint64_t w=b->inherit[i>>6]>>(i&63);
+            if(w) { size_t at=i+(size_t)__builtin_ctzll(w);return at<stop?at:next; }
+        }
+    }
+    return next;
+}
+static int hvf_touched(const MemoryBacking *b,size_t offset,size_t size) {
+    size_t end=(offset+size+b->page_size-1)/b->page_size;
+    return hvf_next_touched(b,offset/b->page_size,end)<end;
+}
+/* Whether a mapped page of mmap-arena pages [first, end) is touched. */
+static int hvf_arena_touched(const GuestAddressSpace *space,const MemoryBacking *b,unsigned first,unsigned end) {
+    size_t per=b->page_size/4096,last=(end+per-1)/per;
+    for(size_t h=hvf_next_touched(b,first/per,last);h<last;h=hvf_next_touched(b,h+1,last))
+        for(size_t i=h*per;i<(h+1)*per;i++)if(i>=first && i<end && (space->map_flags[i]&7) && !(space->map_flags[i]&MAP_RESERVED))return 1;
+    return 0;
+}
 /* hvf_effective_flags for every page, a leaf table (2 MiB) at a time: a build maps
    every page of every segment (a stack alone is 2048), so the per-page work is a
-   store. Pages differ only by ownership, where the backing is private and writable. */
+   store. Pages differ only by ownership, where the backing is private and writable.
+   A private span with no table and nothing touched is left for its first use. */
 static void hvf_map_range(const GuestAddressSpace *space,uint64_t base,uint64_t size,unsigned flags,MemoryBacking *backing,size_t offset) {
     if(!size || !flags || !backing)return;
     if((base|size|offset)&4095)fail("Hypervisor backend needs page-aligned guest mappings (use --dynamic)");
@@ -402,14 +452,16 @@ static void hvf_map_range(const GuestAddressSpace *space,uint64_t base,uint64_t 
     uint64_t bits[2]={hvf_descriptor_bits(flags&~2u,0),hvf_descriptor_bits(flags,0)},single=hvf_descriptor_bits(uniform,0);
     int stale=0;
     for(uint64_t p=0;p<size;) {
+        uint64_t end=p+4096*(512-((base+p)>>12&511)),chunk=p+(HVF_CHUNK-(offset+p)%HVF_CHUNK);
+        if(end>chunk)end=chunk;
+        if(end>size)end=size;
+        uint64_t *leaf=hvf_leaf(v,base+p,0);
+        if(!leaf && !(flags&SEG_SHARED) && !hvf_touched(backing,offset+(size_t)p,(size_t)(end-p))) { p=end;ipa=0;continue; }
         if(!ipa || !((offset+p)%HVF_CHUNK)) {                                       /* each chunk's address (and its base's) */
             if(!(ipa=hvf_ipa_at(backing,offset+(size_t)p)))break;ipa-=p;
             if(over) { if(!(bipa=hvf_ipa_at(over,offset+(size_t)p)))break;bipa-=p; }
         }
-        uint64_t *leaf=hvf_leaf(v,base+p,1);if(!leaf)break;
-        uint64_t end=p+4096*(512-((base+p)>>12&511)),chunk=p+(HVF_CHUNK-(offset+p)%HVF_CHUNK);
-        if(end>chunk)end=chunk;
-        if(end>size)end=size;
+        if(!leaf && !(leaf=hvf_leaf(v,base+p,1)))break;
         for(;p<end;p+=4096) {
             uint64_t descriptor=(over && backing_inherits(backing,(offset+p)/backing->page_size)?bipa:ipa)+p;
             if(per_page) {
@@ -443,7 +495,7 @@ static void hvf_view_record(HvfView *v,const GuestAddressSpace *space) {
     v->brk_backing=space->brk_backing;v->map_backing=space->map_backing;
     v->brk_base=space->brk_base;v->brk_pages=space->brk_pages;
     memcpy(v->seg,space->seg,space->nseg*sizeof(Segment));
-    v->layout=space->layout;v->generation=space->generation;v->stale=0;v->nmoved=0;
+    v->layout=space->layout;v->generation=space->generation;v->stale=0;v->nmoved=0;v->want=0;
 }
 /* Returns how many pages from va on are now unmapped: 1, or up to the next 2 MiB
    boundary when no leaf table covers va (Go reserves and frees arenas of PROT_NONE
@@ -464,40 +516,39 @@ static void hvf_map_arena_page(GuestAddressSpace *space,unsigned i) {
     if(ipa)hvf_map_page(MAP_BASE+(uint64_t)i*4096,ipa,hvf_effective_flags(space,space->map_backing,flags,(size_t)i*4096),0);
     else hvf_unmap_page(MAP_BASE+(uint64_t)i*4096);                       /* PROT_NONE stays unmapped */
 }
-/* Apply mmap/munmap/mprotect/madvise changes to just the arena pages they touched.
-   Pages to unmap are cleared a leaf table (2 MiB) at a time, eight flag bytes at a
-   time where none of them is mapped or lent to a shared segment: Go reserves and
-   frees gigabytes of PROT_NONE pages, and a dirty range spans every change since the
-   last sync (walking it page by page dominated the start of every Go process). */
+/* Apply mmap/munmap/mprotect/madvise changes to just the arena pages they touched, a
+   leaf table (2 MiB) at a time. Without a table there is nothing to clear, and the
+   span is mapped only if it holds a touched page (Go probes 64 MiB at a time, and maps
+   its heap in 64 MiB arenas it fills as it goes). Pages to unmap are cleared eight flag
+   bytes at a time where none of them is mapped or lent to a shared segment: Go
+   reserves and frees gigabytes of PROT_NONE pages, and a dirty range spans every
+   change since the last sync (walking it page by page dominated the start of every Go
+   process). */
 static void hvf_remap_arena(GuestAddressSpace *space) {
-    int ipa=space->map_backing!=NULL;                                     /* arena pages can be mapped */
+    MemoryBacking *b=space->map_backing;                                  /* arena pages can be mapped */
     const unsigned char *flags=space->map_flags;
-    const uint64_t kept=ipa?UINT64_C(0x2727272727272727):UINT64_C(0x2020202020202020); /* mapped or reserved: not cleared */
+    const uint64_t kept=b?UINT64_C(0x2727272727272727):UINT64_C(0x2020202020202020); /* mapped or reserved: not cleared */
     for(unsigned i=space->arena_dirty_lo,hi=space->arena_dirty_hi;i<hi;) {
-        unsigned char f=flags?flags[i]:0;
-        if(f&MAP_RESERVED) { i++;continue; }                                    /* a shared segment's page */
-        if(ipa && (f&7)) { hvf_map_arena_page(space,i);i++;continue; }
         uint64_t va=MAP_BASE+(uint64_t)i*4096;
         unsigned end=i+512-(unsigned)((va>>12)&511);if(end>hi)end=hi;          /* this leaf table's last page */
         uint64_t *leaf=hvf_leaf(hvf_view,va,0);
-        if(!leaf && flags) {           /* nothing mapped here to clear: just find a page to map (Go probes 64 MiB at a time) */
-            unsigned j=i;
-            for(;j+64<=end;j+=64) { uint64_t w[8],any=0;memcpy(w,flags+j,64);for(unsigned k=0;k<8;k++)any|=w[k];if(any&UINT64_C(0x0707070707070707))break; }
-            if(j+64>end) { while(j<end && !(flags[j]&7))j++; }
-            if(j==end || !ipa) { i=end;continue; }
-            i=j;
+        if(!leaf) {
+            if(!flags || !b || !hvf_arena_touched(space,b,i,end)) { i=end;continue; }
+            if(!(leaf=hvf_leaf(hvf_view,va,1)))return;                      /* out of tables: the caller rebuilds */
         }
         while(i<end) {
             if(!(i&7) && i+8<=end) {
                 uint64_t w=0;if(flags)memcpy(&w,flags+i,8);
                 if(!(w&kept)) {
-                    if(leaf)for(unsigned k=0;k<8;k++) { uint64_t *slot=&leaf[((MAP_BASE>>12)+i+k)&511];if(*slot&1)hvf_stale_tlb=1;*slot=0; }
+                    for(unsigned k=0;k<8;k++) { uint64_t *slot=&leaf[((MAP_BASE>>12)+i+k)&511];if(*slot&1)hvf_stale_tlb=1;*slot=0; }
                     i+=8;continue;
                 }
             }
-            f=flags?flags[i]:0;
-            if(ipa && (f&7))break;                                              /* mapped: the outer loop maps it */
-            if(leaf && !(f&MAP_RESERVED)) { uint64_t *slot=&leaf[((MAP_BASE>>12)+i)&511];if(*slot&1)hvf_stale_tlb=1;*slot=0; }
+            unsigned char f=flags?flags[i]:0;
+            if(!(f&MAP_RESERVED)) {                                             /* (else a shared segment's page) */
+                if(b && (f&7))hvf_map_arena_page(space,i);
+                else { uint64_t *slot=&leaf[((MAP_BASE>>12)+i)&511];if(*slot&1)hvf_stale_tlb=1;*slot=0; }
+            }
             i++;
         }
     }
@@ -566,7 +617,8 @@ static void hvf_evict(void) {
     }
     if(!worker_threads) { pthread_mutex_lock(&hvf_mutex);for(unsigned i=hvf_nblocks;i--;)if(hvf_blocks[i].host)hvf_block_unmap(i);pthread_mutex_unlock(&hvf_mutex); } /* (no host: being unmapped) */
 }
-static void hvf_map_arena_all(GuestAddressSpace *space);
+static void hvf_map_arena_all(const GuestAddressSpace *space);
+static void hvf_fill(const GuestAddressSpace *space,uint64_t far);
 static void hvf_build(GuestAddressSpace *space) {
     hvf_exhausted=0;hvf_tables_free(hvf_view);
     if(!(hvf_view->root=hvf_table()))return;
@@ -576,6 +628,7 @@ static void hvf_build(GuestAddressSpace *space) {
     for(unsigned i=0;i<space->nseg;i++)hvf_map_range(space,space->seg[i].base,space->seg[i].size,space->seg[i].flags,space->seg[i].backing,space->seg[i].offset);
     hvf_map_range(space,space->brk_base,space->brk_pages,6,space->brk_backing,0);
     hvf_map_arena_all(space);
+    if(hvf_view->want)hvf_fill(space,hvf_view->want);                     /* a first use that ran out of tables */
 }
 static int hvf_same_segment(const Segment *a,const Segment *b) {
     return a->base==b->base && a->size==b->size && a->flags==b->flags && a->backing==b->backing && a->offset==b->offset;
@@ -587,24 +640,25 @@ static uint64_t hvf_mapped_ipa(uint64_t va) {
     uint64_t descriptor=leaf[(va>>12)&511];
     return (descriptor&1)?descriptor&UINT64_C(0x0000fffffffff000):0;
 }
-/* hvf_map_arena_page for every mapped arena page, with what it decides per page
-   (the backing's sharing, each chunk's guest-physical address) decided once: after
-   a fork of a large process (Node: tens of thousands of pages) it ran on every one. */
-static void hvf_map_arena_pass(GuestAddressSpace *space,uint64_t *mapped);
-static void hvf_map_arena_all(GuestAddressSpace *space) {
-    if(!profiling) { uint64_t n=0;hvf_map_arena_pass(space,&n);return; }
-    uint64_t at=profile_now_ns(),n=0;hvf_map_arena_pass(space,&n);
+/* hvf_map_arena_page for every mapped arena page (in [first, end)), with what it
+   decides per page (the backing's sharing, each chunk's guest-physical address) decided
+   once: after a fork of a large process (Node: tens of thousands of pages) it ran on
+   every one. A span with no table and nothing touched is left for its first use. */
+static void hvf_map_arena_pass(const GuestAddressSpace *space,unsigned first,unsigned end,uint64_t *mapped);
+static void hvf_map_arena_all(const GuestAddressSpace *space) {
+    if(!profiling) { uint64_t n=0;hvf_map_arena_pass(space,0,UINT_MAX,&n);return; }
+    uint64_t at=profile_now_ns(),n=0;hvf_map_arena_pass(space,0,UINT_MAX,&n);
     PROFILE_ADD(profile_arena_passes,1);PROFILE_ADD(profile_arena_ns,profile_now_ns()-at);PROFILE_ADD(profile_arena_pages,n);
 }
-static void hvf_map_arena_pass(GuestAddressSpace *space,uint64_t *mapped) {
+static void hvf_map_arena_pass(const GuestAddressSpace *space,unsigned first,unsigned end,uint64_t *mapped) {
     MemoryBacking *backing=space->map_backing;
     if(!space->map_flags || !backing)return;
-    unsigned pages=space->map_capacity/4096;if(space->map_top<pages)pages=space->map_top;
+    unsigned pages=space->map_capacity/4096;if(space->map_top<pages)pages=space->map_top;if(end<pages)pages=end;
     int shared=backing->frozen || (backing->refs>1 && backing->refs>address_space_backing_refs(space,backing));
     uint64_t bits[8];for(unsigned f=0;f<8;f++)bits[f]=hvf_descriptor_bits(f,0);
     size_t chunk=SIZE_MAX;uint64_t ipa=0,bipa=0,leaf_key=UINT64_MAX,*leaf=NULL;
     MemoryBacking *over=backing->base?BACKING_BASE(backing):NULL;   /* an overlay's base */
-    for(unsigned i=0;i<pages;) {
+    for(unsigned i=first;i<pages;) {
         if(!(i&7) && i+8<=pages) {                                        /* V8 and Go reserve gigabytes they never map */
             unsigned span=!(i&63) && i+64<=pages?64:8;uint64_t any=0;
             for(unsigned k=0;k<span;k+=8) { uint64_t w;memcpy(&w,space->map_flags+i+k,8);any|=w; }
@@ -613,6 +667,12 @@ static void hvf_map_arena_pass(GuestAddressSpace *space,uint64_t *mapped) {
         unsigned flags=space->map_flags[i++]&7;if(!flags)continue;
         size_t offset=(size_t)(i-1)*4096,at=backing->mapped_size<=HVF_CHUNK?0:offset/HVF_CHUNK;
         uint64_t va=MAP_BASE+offset;
+        if(va>>21!=leaf_key) {                                            /* a leaf table's span */
+            unsigned stop=(unsigned)(((va|UINT64_C(0x1fffff))+1-MAP_BASE)/4096);if(stop>pages)stop=pages;
+            if(!(leaf=hvf_leaf(hvf_view,va,0)) && !hvf_arena_touched(space,backing,i-1,stop)) { i=stop;continue; }
+            if(!leaf && !(leaf=hvf_leaf(hvf_view,va,1)))return;
+            leaf_key=va>>21;
+        }
         if(at!=chunk) { chunk=at;ipa=hvf_ipa_at(backing,at*HVF_CHUNK);bipa=over?hvf_ipa_at(over,at*HVF_CHUNK):0; }
         uint64_t use=over && backing_inherits(backing,offset/backing->page_size)?bipa:ipa;   /* an overlay's page it has not copied: its base's */
         if(!use) { hvf_unmap_page(va);leaf_key=UINT64_MAX;continue; }
@@ -620,7 +680,6 @@ static void hvf_map_arena_pass(GuestAddressSpace *space,uint64_t *mapped) {
             const BackingPage *page=backing->pages[offset/backing->page_size];
             if(shared || !page || page->refs>1)flags&=~2u;
         }
-        if(va>>21!=leaf_key) { if(!(leaf=hvf_leaf(hvf_view,va,1)))return;leaf_key=va>>21; }
         uint64_t descriptor=(use+(offset-at*HVF_CHUNK))|bits[flags],*slot=&leaf[(va>>12)&511];   /* as hvf_map_page */
         if(((*slot&1) && *slot!=descriptor) || (flags&1))hvf_stale_tlb=1;
         if(flags&1)hvf_stale_code=1;
@@ -654,8 +713,10 @@ static int hvf_sync_partial(GuestAddressSpace *space,HvfView *v) {
         const Segment *s=&space->seg[j];int kept=0;
         for(unsigned i=0;i<v->nseg && !kept;i++)kept=hvf_same_segment(s,&v->seg[i]);
         for(unsigned r=0;kept && r<removed;r++)if(s->base<removed_high[r] && removed_low[r]<s->base+s->size)kept=0;
-        /* A backing freed and another allocated at its address keeps the pointer, not the block. */
-        if(kept && s->backing && s->flags && s->size && hvf_mapped_ipa(s->base)!=hvf_page_ipa(s->backing,s->offset))kept=0;
+        /* A backing freed and another allocated at its address keeps the pointer, not the
+           block. Told by its first page, when that is mapped (an untouched one is not). */
+        uint64_t first=kept && s->backing && s->flags && s->size?hvf_mapped_ipa(s->base):0;
+        if(first && first!=hvf_page_ipa(s->backing,s->offset))kept=0;
         if(!kept || (all && !(s->flags&SEG_SHARED)))hvf_map_range(space,s->base,s->size,s->flags,s->backing,s->offset);
     }
     if(v->brk_backing!=space->brk_backing || v->brk_base!=space->brk_base || v->brk_pages!=space->brk_pages) {
@@ -666,7 +727,8 @@ static int hvf_sync_partial(GuestAddressSpace *space,HvfView *v) {
     if(all || v->map_backing!=space->map_backing)hvf_map_arena_all(space);
     return !hvf_exhausted;
 }
-/* Map backing's [offset, offset+size) again wherever space maps it, into v. */
+/* Map backing's [offset, offset+size) again wherever space maps it, into v (an untouched
+   page only where its span has a table: else its first use maps it). */
 static void hvf_remap_backing(const GuestAddressSpace *space,HvfView *v,MemoryBacking *backing,size_t offset,size_t size) {
     for(unsigned r=0;r<space->nseg+2;r++) {
         uint64_t base,length;size_t from;unsigned flags;int arena=0;
@@ -680,6 +742,7 @@ static void hvf_remap_backing(const GuestAddressSpace *space,HvfView *v,MemoryBa
             if(arena && (f&MAP_RESERVED))continue;
             if(arena)f&=7;
             if(!(f&7))continue;
+            if(!(f&SEG_SHARED) && !hvf_leaf(v,va,0) && !hvf_touched(backing,at,4096))continue;
             uint64_t ipa=hvf_page_ipa(backing,at);if(!ipa)continue;
             hvf_map_page_in(v,va,ipa,hvf_effective_flags(space,backing,f,at),0);
         }
@@ -836,14 +899,26 @@ static MemoryBacking *hvf_region(const GuestAddressSpace *space,uint64_t va,uint
         }
     return NULL;
 }
+/* The first use of a span left unmapped (hvf_touched): the mapping holding far is
+   mapped there whole, as a build maps a span it finds touched. Its leaf table first,
+   so every page of the span is mapped, untouched ones read-only. */
+static void hvf_fill(const GuestAddressSpace *space,uint64_t far) {
+    uint64_t low=0,high=0;size_t start=0;unsigned flags=0;
+    MemoryBacking *backing=hvf_region(space,far,&low,&high,&start,&flags);
+    if(!backing || !hvf_leaf(hvf_view,far,1))return;
+    uint64_t span=far&~UINT64_C(0x1fffff),lo=span>low?span:low,hi=span+0x200000<high?span+0x200000:high;
+    if(space->map_flags && low==MAP_BASE) { uint64_t n=0;hvf_map_arena_pass(space,(unsigned)((lo-MAP_BASE)/4096),(unsigned)((hi-MAP_BASE)/4096),&n); }
+    else hvf_map_range(space,lo,hi-lo,flags,backing,start+(size_t)(lo-low));
+}
 /* After a write fault made a page private (or charged it), remap the guest pages
    that share its host page, and the hosts-1 host pages after it, instead of
-   rebuilding every table. */
+   rebuilding every table; the first write to an untouched span maps the rest of it too. */
 static void hvf_remap_host_page(const GuestAddressSpace *space,uint64_t far,unsigned hosts) {
     uint64_t va=far&~UINT64_C(4095),low=0,high=0;size_t start=0;unsigned flags=0;
     MemoryBacking *backing=hvf_region(space,va,&low,&high,&start,&flags);
     if(!backing)return;
     hvf_exhausted=0;hvf_stale_tlb=0;hvf_stale_code=0;
+    int fresh=!hvf_leaf(hvf_view,va,0);
     uint64_t ipa=1,first=0,last=0;
     size_t host=(start+(size_t)(va-low))/backing->page_size*backing->page_size;
     for(size_t offset=host;ipa && offset<host+hosts*backing->page_size;offset+=4096) {
@@ -852,6 +927,7 @@ static void hvf_remap_host_page(const GuestAddressSpace *space,uint64_t far,unsi
         unsigned f=space->map_flags && low==MAP_BASE?space->map_flags[(page-MAP_BASE)/4096]&7:flags;
         if(f && (ipa=hvf_page_ipa(backing,offset))) { hvf_map_page(page,ipa,hvf_effective_flags(space,backing,f,offset),0);if(!first)first=page;last=page; }
     }
+    if(fresh && !hvf_exhausted)hvf_fill(space,va);                     /* new entries only: no TLB holds them */
     if(hvf_exhausted) { hvf_view->stale=HVF_STALE_NEW;return; } /* the next sync rebuilds (and evicts) */
     if(hvf_stale_tlb && (hvf_stale_code || !first))hvf_flush();
     else if(hvf_stale_tlb) { hvf_pending_va=first;hvf_pending_pages=(unsigned)((last-first)/4096+1); }
@@ -906,6 +982,28 @@ static int hvf_spurious_write(uint64_t far) {
     if(!(descriptor&1) || (descriptor&(UINT64_C(1)<<7)))return 0;
     PROFILE_ADD(profile_spurious_faults,1);
     hvf_pending_va=far&~UINT64_C(4095);hvf_pending_pages=1;return 1;
+}
+/* A read or instruction fetch took a translation fault on a page the address space maps
+   (with any protection, as a build would map it): its span was left for its first use
+   (hvf_touched). Map it (hvf_fill); 1 when the access can run again (the caller resumes
+   the guest; one its protection refuses then takes a permission fault), 0 for a genuine
+   fault. A sibling thread may have mapped it meanwhile. Out of tables, the rebuild maps
+   the span (want), or evicts, or ends the run with "Guest memory exceeds the
+   hypervisor's page tables". Under the mm lock. */
+static int hvf_first_use(uint64_t far,uint64_t esr) {
+    HvfView *v=hvf_own_view;
+    uint64_t low=0,high=0;size_t start=0;unsigned flags=0;
+    if(hvf_view!=v || !v->root || (esr&0x3c)!=4 || !hvf_region(address_space,far,&low,&high,&start,&flags))return 0;
+    if(low==MAP_BASE && address_space->map_flags)flags=address_space->map_flags[(far-MAP_BASE)/4096]&7;   /* (none for a shared segment's page) */
+    if(!(flags&7))return 0;
+    if(hvf_mapped_ipa(far))return 1;
+    PROFILE_ADD(profile_first_uses,1);
+    if(hvf_cpu->ttbr!=v->root || !hvf_view_matches(address_space)) { v->generation=UINT64_MAX;return 1; }   /* its tables lag: synced, then the access again */
+    hvf_exhausted=0;hvf_stale_tlb=0;hvf_stale_code=0;
+    hvf_fill(address_space,far);
+    if(hvf_exhausted) { v->stale=HVF_STALE_NEW;v->generation=UINT64_MAX;v->want=far;return 1; }
+    if(hvf_stale_tlb)hvf_flush();                                         /* code mapped: instruction caches */
+    return hvf_mapped_ipa(far)!=0;
 }
 /* Register transfer. The EL1 vector saves the guest's general registers, SP_EL0,
    TPIDR_EL0, ELR, SPSR, ESR and FAR to the vCPU's frame (plain memory) before its
@@ -1041,6 +1139,19 @@ static void hvf_flush(void) {
         fail("Hypervisor TLB/cache maintenance did not complete");
     for(uint32_t done=__atomic_load_n(&hvf_flushes_done,__ATOMIC_ACQUIRE);(int32_t)(number-done)>0 && !__atomic_compare_exchange_n(&hvf_flushes_done,&done,number,0,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE););
     hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_PC,pc),"set pc");hvf_check(hv_vcpu_set_reg(hvf_vcpu,HV_REG_CPSR,cpsr),"set cpsr");
+}
+/* hvf_flush on the spare tables (HVF_SPARE_OWNER), for a pool whose free tables all wait
+   for one (hvf_table_of): the tables this vCPU used last may be freed already (a
+   rebuild frees a view's before it takes new ones). 0 without a vCPU. */
+static uint64_t hvf_spare_root;
+static int hvf_flush_spare(void) {
+    if(!worker || !worker->backend)return 0;
+    uint64_t ttbr=0;
+    hvf_check(hv_vcpu_get_sys_reg(hvf_vcpu,HV_SYS_REG_TTBR0_EL1,&ttbr),"get ttbr0");
+    hvf_check(hv_vcpu_set_sys_reg(hvf_vcpu,HV_SYS_REG_TTBR0_EL1,hvf_spare_root),"set ttbr0");   /* ASID 0: no view's */
+    hvf_flush();
+    hvf_check(hv_vcpu_set_sys_reg(hvf_vcpu,HV_SYS_REG_TTBR0_EL1,ttbr),"set ttbr0");
+    return 1;
 }
 /* Back to the guest at pc with flags spsr, its registers otherwise unchanged. */
 static void hvf_resume_el0(uint64_t pc,uint64_t spsr) {
@@ -1285,6 +1396,13 @@ static void hvf_init_vm(void) {
     hvf_futex_init();
     hvf_tables=hvf_host_pages(HVF_TABLE_BYTES);hvf_system=hvf_host_pages(HVF_SYSTEM_BYTES);fd_mirror_base=hvf_host_pages(HVF_FDS_BYTES);
     hvf_check(hv_vm_map(hvf_tables,HVF_IPA_BASE,HVF_TABLE_BYTES,HV_MEMORY_READ|HV_MEMORY_WRITE),"hv_vm_map tables");
+    {   /* the spare tables (hvf_flush_spare): a root, then one table per level down to the code page */
+        uint64_t *t=(uint64_t *)(void *)hvf_tables;
+        for(unsigned level=0;level<3;level++)t[level*512+((HVF_SYSTEM_VA>>(39-9*level))&511)]=(HVF_IPA_BASE+(level+1)*4096)|3;
+        for(unsigned i=0;i<HVF_CODE_BYTES/4096;i++)t[3*512+((HVF_SYSTEM_VA>>12)&511)+i]=(HVF_IPA_BASE+HVF_TABLE_BYTES+i*4096)|hvf_descriptor_bits(0,1);
+        for(unsigned i=0;i<HVF_SPARE_TABLES;i++)hvf_table_owner[i]=HVF_SPARE_OWNER;
+        hvf_table_fresh=HVF_SPARE_TABLES;hvf_spare_root=HVF_IPA_BASE;
+    }
     hvf_check(hv_vm_map(hvf_system,HVF_IPA_BASE+HVF_TABLE_BYTES,HVF_CODE_BYTES,HV_MEMORY_READ|HV_MEMORY_EXEC),"hv_vm_map system");
     hvf_check(hv_vm_map(hvf_system+HVF_CODE_BYTES,HVF_IPA_BASE+HVF_TABLE_BYTES+HVF_CODE_BYTES,HVF_SYSTEM_BYTES-HVF_CODE_BYTES,HV_MEMORY_READ|HV_MEMORY_WRITE),"hv_vm_map frames");
     hvf_check(hv_vm_map(fd_mirror_base,HVF_IPA_BASE+HVF_TABLE_BYTES+HVF_SYSTEM_BYTES,HVF_FDS_BYTES,HV_MEMORY_READ|HV_MEMORY_WRITE),"hv_vm_map descriptors"); /* EL1 opens write it */
@@ -1718,6 +1836,9 @@ static int hvf_id_register(uint64_t esr,uint64_t *value) {
 /* A data abort for an unaligned access (an LDAXR, or an LSE2 atomic crossing 16
    bytes): SIGBUS, BUS_ADRALN, as Linux sends; FEX backpatches x86 atomics on it. */
 #define HVF_ALIGNMENT(esr) (((esr)>>26)==0x24 && ((esr)&0x3f)==0x21)
+/* A data abort for a store. Cache maintenance by address (CM) reports a write too, but
+   needs only a mapped page: on an untouched span, its first use (hvf_first_use). */
+#define HVF_STORE(esr) (((esr)>>26)==0x24 && ((esr)&(UINT64_C(1)<<6)) && !((esr)&(UINT64_C(1)<<8)) && !HVF_ALIGNMENT(esr))
 /* Whether address lies in a mapping of any protection, PROT_NONE included: a fault
    there is SEGV_ACCERR, as on Linux, and elsewhere SEGV_MAPERR. FEX tells a fault on
    the page it protects to interrupt its JIT code (a deferred signal) by SEGV_ACCERR. */
@@ -1891,7 +2012,7 @@ static int hvf_unlocked_exit(void) {
     uint64_t esr=0,elr=0,spsr=0,far=0;
     hvf_exception(&esr,&elr,&spsr,&far);
     unsigned ec=(unsigned)(esr>>26);
-    if(ec==0x24 && (esr&(UINT64_C(1)<<6)) && !HVF_ALIGNMENT(esr)) {
+    if(HVF_STORE(esr)) {
         if(profiling)__atomic_fetch_add(&profile_write_faults,1,__ATOMIC_RELAXED);
         /* A write to a copy-on-write or not yet charged page: the same handling as
            under the lock. A genuine fault goes to the locked path. */
@@ -1925,6 +2046,10 @@ static int hvf_unlocked_exit(void) {
             hvf_faulting=0;
         }
         hvf_resume_el1=hvf_fault_resume(elr,spsr);return 1;
+    }
+    if((ec==0x24 && !HVF_ALIGNMENT(esr)) || ec==0x20) {                     /* a read or fetch: an untouched span's first use */
+        if(!hvf_first_use(far,esr))return 0;
+        hvf_resume_el0(elr,spsr);return 1;
     }
     if(ec!=0x15 || seccomp_active())return 0;                                 /* SVC from EL0; filtered calls take the locked path */
     uint64_t call=hvf_frame[8];
@@ -2136,7 +2261,7 @@ static int hvf_slice_run(void) {
             hvf_put_regs();
             continue;
         }
-        if(ec==0x24 && (esr&(UINT64_C(1)<<6)) && !HVF_ALIGNMENT(esr)) {
+        if(HVF_STORE(esr)) {
         if(profiling)__atomic_fetch_add(&profile_write_faults,1,__ATOMIC_RELAXED);
             /* Write to a read-only view: lookup() detaches a copy-on-write page when the
                guest mapping is writable; a genuine read-only page stays a fault. */
@@ -2161,9 +2286,10 @@ static int hvf_slice_run(void) {
             }
             hvf_faulting=0;
         }
+        if(((ec==0x24 && !HVF_STORE(esr) && !HVF_ALIGNMENT(esr)) || ec==0x20) && hvf_first_use(far,esr)) { hvf_resume_el0(elr,spsr);fast=1;continue; }
         /* A read or instruction fetch that the address space allows (lookup: 4 read,
-           1 execute) faulted: the tables are stale, which is the runtime's fault, not
-           the guest's. Rebuild them and retry once; report it, so it can be found. */
+           1 execute) faulted on a mapped page: the tables are stale, which is the runtime's
+           fault, not the guest's. Rebuild them and retry once; report it, so it can be found. */
         if((ec==0x24 && !(esr&(UINT64_C(1)<<6)) && !HVF_ALIGNMENT(esr) && lookup(far,1,4)) || (ec==0x20 && lookup(far,1,1))) {
             static _Thread_local uint64_t stale_pc,stale_far,stale_generation;static int reported;
             if(elr!=stale_pc || far!=stale_far || address_space->generation!=stale_generation) {
