@@ -39,6 +39,7 @@ def main():
     vfork_threads = build('vfork_threads_guest', folder, linker)  # vfork from a threaded process shares its memory
     mmap_probe = build('mmap_probe_guest', folder, linker)  # Go's 64 MiB arena probes: cheap, first fit and zeroing exact
     nested = build('fork_nested_guest', folder, linker)  # a fork's child forks again, then writes the parent's memory (its own copy)
+    shared_exit = build('shared_exit_guest', folder, linker)  # exits with MAP_SHARED file mappings: written back, table entries freed
     recheck = build('epoll_recheck_guest', folder, linker)  # an epoll_wait whose edge another thread took rechecks within 10 ms
     stress, stress_leaf = (build(n, folder, linker) for n in ('fork_exec_stress_guest', 'fork_exec_stress_leaf'))
     stress_root = folder/'stress-root'  # fork_exec_stress_guest execs /leaf in /d0../d2 and reads /data
@@ -96,6 +97,7 @@ def main():
                                      (mmap_probe, ['--mmap-limit-mib', '2048', '--dynamic'], b'mmap-probe PASS\n'),
                                      (nested, [], b'fork-nested PASS\n'),
                                      (recheck, [], b'epoll-recheck PASS\n'),
+                                     (shared_exit, ['--root', str(shared), '--writable', '--dynamic'], b'shared-exit PASS\n'),
                                      (fd_fast, ['--root', str(shared), '--writable'], b'fd-fast PASS\n')):
             if backend == 'interpreter' and elf in (vfork_threads, threads, fork_threads, thread_group, futex, thread_limit, fp_preserve, sleep, vdso, sigmask, cow_stress, smp_atomic, fork_churn, thread_smp, out_edge, around, oom_kill, fastcall, fd_fast, recheck):
                 continue  # the interpreter has no CLONE_THREAD support (nor these SIMD instructions); its OOM kill ends the run

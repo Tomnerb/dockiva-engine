@@ -59,6 +59,7 @@ static void image_free(void) {
         if(address_space!=image_home)address_space_assign(image_home,&shared->state.memory);   /* the last sharer takes the memory */
         shared_image=NULL;free(shared);address_space=image_home;
     }
+    file_share_image_gone(address_space);
     address_space_thaw_dead(address_space);
     if(!image_destroy_later(address_space))address_space_destroy(address_space);
     memset(cpu,0,sizeof(*cpu));
