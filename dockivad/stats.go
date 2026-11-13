@@ -51,6 +51,17 @@ func (b *engine) usage(p string) usage {
 		rows[pid] = row{parent, rss, cpuTime(f[3])}
 	}
 	in := map[int64]bool{integer(s["pid"]): true}
+	// docker exec runs are dockivad's children, not the worker's, but their memory and
+	// CPU are the container's (a build run by exec showed the idle main run's 22 MiB).
+	b.execs.Range(func(_, v any) bool {
+		j := v.(*execJob)
+		j.mu.Lock()
+		if j.running && b.container(j.Container) == p {
+			in[int64(j.pid)] = true
+		}
+		j.mu.Unlock()
+		return true
+	})
 	for changed := true; changed; { // a few levels at most
 		changed = false
 		for pid, r := range rows {

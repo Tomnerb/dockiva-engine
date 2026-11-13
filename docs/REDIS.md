@@ -399,7 +399,8 @@ The virtual environment reports:
 | freeram | Unused portion of that budget, saturated at zero |
 | mem_unit | 1 byte |
 | procs | Root plus retained guest process slots, including waitable children; includes the legacy synchronous child while executing |
-| swap, high memory, shared-memory pool, buffer cache | Zero: these guest facilities are not supplied by this runtime |
+| totalswap, freeswap | Swap allowed beyond the budget (`--memory-swap-mib`, default 0; dockivad passes Docker's `--memory-swap` minus `-m`) and its unused part: charges past totalram count as swap in use |
+| high memory, shared-memory pool, buffer cache | Zero: these guest facilities are not supplied by this runtime |
 | load averages | Zero placeholder; load-average accounting is not implemented |
 
 Memory accounting includes the runtime's retained arenas and allocation headers.

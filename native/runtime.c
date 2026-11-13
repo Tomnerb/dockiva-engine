@@ -1344,6 +1344,13 @@ int main(int argc,char **argv) {
             if(errno || *end || !value || value>65536)fail("Memory budget must be 1..65536 MiB");
             resource_limit=(uint64_t)value*1024*1024;
         }
+        else if(!strcmp(argv[i],"--memory-swap-mib") && i+1<argc) {         /* swap beyond --memory-limit-mib */
+            const char *s=argv[++i];char *end;errno=0;
+            if(*s<'0' || *s>'9')fail("Invalid swap budget");
+            unsigned long long value=strtoull(s,&end,10);
+            if(errno || *end || value>(UINT64_C(1)<<24))fail("Swap budget must be 0..16777216 MiB");
+            resource_swap=(uint64_t)value*1024*1024;
+        }
         else if(!strcmp(argv[i],"--profile")) profiling=1;
         else if(!strcmp(argv[i],"--max-steps") && i+1<argc) {
             const char *s=argv[++i]; char *end; errno=0;
