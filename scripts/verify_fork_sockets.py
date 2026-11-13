@@ -51,6 +51,7 @@ def main():
     shared_many = build('shared_many_guest', folder, linker)  # 1300 files mapped MAP_SHARED by two processes: coherent, no ENFILE
     shared_kill = build('shared_kill_guest', folder, linker)  # a parent and child sharing a file mapping killed together: both writes reach it
     recheck = build('epoll_recheck_guest', folder, linker)  # an epoll_wait whose edge another thread took rechecks within 10 ms
+    fifo_threads = build('fifo_threads_guest', folder, linker)  # two threads of one process open both ends of a FIFO
     held_shared = build('fork_held_shared_guest', folder, linker)  # memory held for one fork, shared by the next: a write copies it
     stress, stress_leaf = (build(n, folder, linker) for n in ('fork_exec_stress_guest', 'fork_exec_stress_leaf'))
     stress_root = folder/'stress-root'  # fork_exec_stress_guest execs /leaf in /d0../d2 and reads /data
@@ -112,12 +113,13 @@ def main():
                                      (nested, [], b'fork-nested PASS\n'),
                                      (held_shared, ['--dynamic'], b'fork-held-shared PASS\n'),
                                      (recheck, [], b'epoll-recheck PASS\n'),
+                                     (fifo_threads, ['--root', str(shared), '--writable', '--signals'], b'fifo-threads PASS\n'),
                                      (shared_exit, ['--root', str(shared), '--writable', '--dynamic'], b'shared-exit PASS\n'),
                                      (shared_many, ['--root', str(shared), '--writable', '--dynamic', '--storage-limit-mib', '0', '--mmap-limit-mib', '2048'], b'shared-many PASS\n'),
                                      (shared_kill, ['--root', str(shared), '--writable', '--dynamic', '--signals'], b'shared-kill PASS\n'),
                                      (fd_fast, ['--root', str(shared), '--writable'], b'fd-fast PASS\n'),
                                      (lazy_map, ['--mmap-limit-mib', '1024'], b'lazy-map PASS\n')):
-            if backend == 'interpreter' and elf in (vfork_threads, threads, fork_threads, thread_group, futex, thread_limit, fp_preserve, sleep, vdso, sigmask, cow_stress, smp_atomic, fork_churn, thread_smp, out_edge, around, oom_kill, fastcall, fd_fast, recheck, lazy_map):
+            if backend == 'interpreter' and elf in (vfork_threads, threads, fork_threads, thread_group, futex, thread_limit, fp_preserve, sleep, vdso, sigmask, cow_stress, smp_atomic, fork_churn, thread_smp, out_edge, around, oom_kill, fastcall, fd_fast, recheck, fifo_threads, lazy_map):
                 continue  # the interpreter has no CLONE_THREAD support (nor these SIMD instructions); its OOM kill ends the run
             shutil.rmtree(shared, ignore_errors=True)
             shared.mkdir()

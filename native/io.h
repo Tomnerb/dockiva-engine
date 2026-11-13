@@ -233,7 +233,12 @@ static uint64_t io_event_transfer(GuestIO *f,int writing) {
    writers get ENXIO without a reader. O_RDWR is a read end that also counts as a
    writer, so it never waits or sees end of file. A process's marks as a waiting
    opener go when a signal ends its wait or it exits (io_fifo_forget); a wait that
-   goes on re-marks itself on every retry. */
+   goes on re-marks itself on every retry. A single-threaded process's own mark is
+   never the other end; a threaded one's is a sibling thread waiting there, which
+   pairs with this open as another process would (Node's libuv pool opens both
+   ends of one FIFO, each from its own thread), and keeps its mark until it opens
+   (the pairing writer's first write waits for it). */
+static int process_threaded(void);
 static uint64_t io_fifo_open(dev_t dev,ino_t ino,uint64_t flags) {
     struct GuestPipe *p=NULL;unsigned entry=IO_FIFOS;
     for(unsigned i=0;i<IO_FIFOS;i++) {
@@ -249,16 +254,19 @@ static uint64_t io_fifo_open(dev_t dev,ino_t ino,uint64_t flags) {
         io_fifos[entry].dev=dev;io_fifos[entry].ino=ino;io_fifos[entry].pipe=p;
     }
     unsigned mode=(unsigned)(flags&3);int reading=mode!=1,writing=mode!=0;
+    uint64_t self=process_threaded()?0:process_pid;                                 /* whose mark is not the other end */
     if(!reading && !p->readers && (flags&2048))return linux_error(6);                /* ENXIO */
-    if(!reading && !p->readers && !process_set_others(p->want_read,process_pid)) {  /* a writer waits for a reader */
+    if(!reading && !p->readers && !process_set_others(p->want_read,self)) {         /* a writer waits for a reader */
         if(!schedule_active)return linux_error(95);
         process_set_mark(p->want_write,process_pid,1);p->waiters|=PROCESS_BIT(process_pid);return IO_BLOCK;
     }
-    if(reading && !writing && !(flags&2048) && !p->writers && !process_set_others(p->want_write,process_pid)) { /* a reader waits for a writer */
+    if(reading && !writing && !(flags&2048) && !p->writers && !process_set_others(p->want_write,self)) { /* a reader waits for a writer */
         if(!schedule_active)return linux_error(95);
         process_set_mark(p->want_read,process_pid,1);p->waiters|=PROCESS_BIT(process_pid);return IO_BLOCK;
     }
-    process_set_mark(p->want_read,process_pid,0);process_set_mark(p->want_write,process_pid,0);
+    /* This open's own wait is over; a sibling's, at the other end, goes on until its retry opens. */
+    if(self || mode==0)process_set_mark(p->want_read,process_pid,0);
+    if(self || mode==1)process_set_mark(p->want_write,process_pid,0);
     int fd=io_free_slot(0);if(fd<0)return linux_error(24);
     unsigned cloexec=(flags&524288)!=0,nonblock=(flags&2048)!=0;
     if(reading) { p->readers++;p->read_nonblock=nonblock; } else { p->writers++;p->write_nonblock=nonblock; }
