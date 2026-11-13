@@ -1899,7 +1899,9 @@ static uint64_t fs_call(uint64_t call) {
             int fd=(int32_t)cpu->gpr[0]==-100?(fs_cwd?fs_cwd->fd:fs_root):fs_host(cpu->gpr[0]);
             if(fd<0)return linux_error(9);
             struct stat st;if(fstat(fd,&st)<0)return fs_error();
-            fs_stat_pack(out,&st);return 0;
+            int slot=(int32_t)cpu->gpr[0]==-100?-1:fs_slot(cpu->gpr[0]);GuestDirectory *dir=slot>=0?FS(slot).dir:NULL;
+            const char *at=(int32_t)cpu->gpr[0]==-100?(fs_cwd?fs_cwd->path:"/"):dir && !dir->lower?dir->path:"";
+            ov_dir_ino(at,&st);fs_stat_pack(out,&st);return 0;
         }
         {   /* /proc paths of ours: directories and empty read-only files, as procfs shows them */
             char proc_path[1025];int kind=fs_proc_path(cpu->gpr[0],cpu->gpr[1],proc_path)==0?fs_proc_kind(proc_path):0;
@@ -1925,6 +1927,7 @@ static uint64_t fs_call(uint64_t call) {
         int result=device?stat(device,&st):fs_leaf_stat(parent,leaf,&st);
         int saved=errno;close(parent);errno=saved;if(result<0)return fs_error();
         if(!S_ISREG(st.st_mode) && !S_ISDIR(st.st_mode) && !S_ISLNK(st.st_mode) && !S_ISSOCK(st.st_mode) && !S_ISFIFO(st.st_mode) && !device)return linux_error(13);
+        if(fs_lower>=0 && ov_leaf.layer==0)ov_dir_ino(ov_leaf.canon,&st);   /* copied up: the lower directory's number */
         fs_stat_pack(out,&st);return 0;
     }
     if(call==56) return fs_open();
@@ -2066,6 +2069,7 @@ static uint64_t fs_call(uint64_t call) {
     if(call==80) {
         unsigned char *out=lookup(cpu->gpr[1],128,2);if(!out) return linux_error(14);
         struct stat st;if(fstat(fd,&st)<0) return fs_error();
+        if(FS(slot).dir && !FS(slot).dir->lower)ov_dir_ino(FS(slot).dir->path,&st);   /* copied up: the lower directory's number */
         fs_stat_pack(out,&st);return 0;
     }
     if(call==62) {
