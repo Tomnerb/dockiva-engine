@@ -211,6 +211,18 @@ static int ov_pair(const char *canon,int *upper,int *lower,int *mount) {
     }
     return 0;
 }
+/* A directory copied up keeps its inode number, as on overlayfs (GNU tar extracting
+   into an existing directory checks that its number stayed): st, an upper directory
+   at canonical guest path canon, takes the number of the lower directory it shows.
+   One made where the lower one was removed (opaque) or hidden is new: its own number. */
+static void ov_dir_ino(const char *canon,struct stat *st) {
+    struct stat low,seen;int u,l,m;
+    if(fs_lower<0 || !S_ISDIR(st->st_mode) || canon[0]!='/' || !canon[1] ||
+       fstatat(fs_lower,canon+1,&low,FS_NOFOLLOW_AT) || !S_ISDIR(low.st_mode) || low.st_ino==st->st_ino)return;   /* most: not in the image, one stat */
+    if(ov_pair(canon,&u,&l,&m))return;
+    if(l>=0 && !fstat(l,&seen) && seen.st_ino==low.st_ino && seen.st_dev==low.st_dev)st->st_ino=low.st_ino;
+    ov_close2(u,l);
+}
 /* Mode bits as the guest set them; macOS refuses setgid on a file whose group the
    user is not in (a home under /tmp is group wheel): such a file takes the user's. */
 static int ov_chmod(int dir,const char *name,mode_t mode) {

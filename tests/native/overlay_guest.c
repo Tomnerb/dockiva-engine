@@ -3,8 +3,8 @@
    scripts/verify_overlay.py makes (contents listed there). Copy-up keeps mode and
    times, whiteouts hide lower files and directories, a directory made again is
    opaque, rename and link work across the layers, directories list merged, and a
-   lower file stays readable while open after its unlink. The verifier then checks
-   the lower tree is untouched. */
+   lower file stays readable while open after its unlink. A copied-up directory keeps
+   its inode number. The verifier then checks the lower tree is untouched. */
 typedef unsigned long U;
 static long call(U n,U a,U b,U c,U d,U e,U f) {
     register U x8 __asm__("x8")=n,x0 __asm__("x0")=a,x1 __asm__("x1")=b;
@@ -127,6 +127,13 @@ void _start(void) {
     CHECK(call(452,(U)fd,(U)"",0600,0,0,0)==-2 && C5(54,fd,"",0,0,0)==-2 && C2(80,fd,st)==0 && (ST_MODE&07777)==0644 && C1(57,fd)==0);
     CHECK(C4(38,AT,"/d/sub/.#c",AT,"/d/sub/c")==0 && has("/d/sub/c","new") && stat_of("/d/sub/c")==0 && (ST_MODE&07777)==0644);
     fd=open3("/e",040000,0);CHECK(fd>=0 && call(452,(U)fd,(U)"",0711,0x1000,0,0)==0 && C1(57,fd)==0 && stat_of("/e")==0 && (ST_MODE&07777)==0711);
+    /* a directory copied up keeps its inode number, by path, descriptor and working
+       directory (GNU tar checks it after extracting into one); one made again is new */
+    { unsigned long dir=(stat_of("/ino"),ST_INO),sub=(stat_of("/ino/sub"),ST_INO);
+      CHECK(dir && sub && put("/ino/f","f")==1 && stat_of("/ino")==0 && ST_INO==dir && lstat_of("/ino/")==0 && ST_INO==dir);
+      fd=open3("/ino",040000,0);CHECK(fd>=0 && C2(80,fd,st)==0 && ST_INO==dir && C4(79,fd,"",st,0x1000)==0 && ST_INO==dir && C1(57,fd)==0);
+      CHECK(C1(49,"/ino")==0 && C4(79,AT,"",st,0x1000)==0 && ST_INO==dir && stat_of(".")==0 && ST_INO==dir && C1(49,"/")==0);
+      CHECK(C3(35,AT,"/ino/sub",0x200)==0 && C3(34,AT,"/ino/sub",0755)==0 && stat_of("/ino/sub")==0 && ST_INO!=sub && stat_of("/ino")==0 && ST_INO==dir); }
     /* a lower directory as working directory and as dirfd, after files appear in it */
     CHECK(C1(49,"/cwd")==0 && put("rel","r")==1 && has("/cwd/rel","r") && C2(17,buffer,sizeof buffer)==5 && same(buffer,"/cwd",5) && C1(49,"/")==0);
     fd=open3("/deep/1/2",040000,0);CHECK(fd>=0 && put("/deep/1/2/new","n")==1);
