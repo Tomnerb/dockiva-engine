@@ -61,6 +61,23 @@ func memoryMiB(c obj) int64 {
 	return 256
 }
 
+// unlimitedSwapMiB stands for docker run --memory-swap -1 (the runtime's largest).
+const unlimitedSwapMiB = 1 << 24
+
+// swapMiB is the swap a container may use beyond its memory limit: docker run
+// --memory-swap minus -m. Unset (or 0) it is -m again, as Docker gives a container on a
+// host with swap: a build that fits in Linux's -m 6g (node's freed heap pages swapped
+// out) fits here too. Without -m (a profile's limit) there is none.
+func swapMiB(c obj) int64 {
+	if c["memory_swap_mib"] != nil {
+		return integer(c["memory_swap_mib"])
+	}
+	if c["memory_mib"] != nil {
+		return integer(c["memory_mib"])
+	}
+	return 0
+}
+
 func (b *engine) container(name string) string {
 	reject(namePattern.MatchString(name), "Invalid container name")
 	p := filepath.Join(b.State, name)
@@ -566,12 +583,23 @@ func setRestart(c, policy obj) {
 	c["restart"] = obj{"name": policy["Name"], "max": policy["MaximumRetryCount"]}
 }
 
-// setLimits applies HostConfig's Memory (docker run -m) and NanoCpus (--cpus).
+// setLimits applies HostConfig's Memory (docker run -m), MemorySwap (--memory-swap) and
+// NanoCpus (--cpus).
 func setLimits(c, host obj) {
 	if !idle(host["Memory"]) {
 		mib := (integer(host["Memory"]) + 1<<20 - 1) >> 20
 		reject(mib >= 6 && mib <= 65536, "Memory limit must be 6 MiB to 64 GiB")
 		c["memory_mib"] = json.Number(strconv.FormatInt(mib, 10))
+		delete(c, "memory_swap_mib") // -m alone: as much swap again
+	}
+	if v := host["MemorySwap"]; !idle(v) && integer(v) != 0 && c["memory_mib"] != nil {
+		swap := int64(unlimitedSwapMiB)
+		if integer(v) != -1 {
+			total, mib := (integer(v)+1<<20-1)>>20, integer(c["memory_mib"])
+			reject(total >= mib, "Minimum memoryswap limit should be larger than memory limit, see usage")
+			swap = total - mib
+		}
+		c["memory_swap_mib"] = json.Number(strconv.FormatInt(swap, 10))
 	}
 	if !idle(host["NanoCpus"]) {
 		// ponytail: --cpus sets the vCPU count, rounded up, not a CFS quota.
@@ -683,7 +711,7 @@ func runtimeCommand(p, native string, c obj, command []string, argv0 string, env
 			_ = os.Remove(marker)
 		}
 	}
-	args = append(args, "--argv0", argv0, "--max-steps", steps, "--memory-limit-mib", strconv.FormatInt(memory, 10), "--oom-file", filepath.Join(p, "oom"))
+	args = append(args, "--argv0", argv0, "--max-steps", steps, "--memory-limit-mib", strconv.FormatInt(memory, 10), "--memory-swap-mib", strconv.FormatInt(swapMiB(c), 10), "--oom-file", filepath.Join(p, "oom"))
 	// Abstract Unix socket names live in one directory per container, shared by its execs.
 	abstract := filepath.Join(p, "abstract")
 	check(os.MkdirAll(abstract, 0o700))

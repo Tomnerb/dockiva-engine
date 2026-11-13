@@ -13,11 +13,15 @@ typedef union { max_align_t alignment;struct { size_t bytes; } value; } Resource
 #define RESOURCE_MAPPED ((size_t)1<<(sizeof(size_t)*8-1))
 #define RESOURCE_UNCHARGED ((size_t)1<<(sizeof(size_t)*8-2)) /* resource_metadata: never charged */
 static uint64_t resource_limit=UINT64_C(256)*1024*1024,resource_used,resource_peak,resource_denials;
+/* Swap a container may use beyond resource_limit (docker run --memory-swap minus -m;
+   2x -m by default, as Docker gives a container on a host with swap). The guest sees
+   resource_limit as its memory and the rest as swap; macOS decides what is resident. */
+static uint64_t resource_swap;
 /* Charge bytes against the budget, or fail; scheduler workers charge concurrently. */
 static int resource_charge(uint64_t bytes) {
-    uint64_t used=__atomic_load_n(&resource_used,__ATOMIC_RELAXED);
+    uint64_t used=__atomic_load_n(&resource_used,__ATOMIC_RELAXED),ceiling=resource_limit+resource_swap;
     do {
-        if(used>resource_limit || bytes>resource_limit-used) { __atomic_fetch_add(&resource_denials,1,__ATOMIC_RELAXED);return 0; }
+        if(used>ceiling || bytes>ceiling-used) { __atomic_fetch_add(&resource_denials,1,__ATOMIC_RELAXED);return 0; }
     } while(!__atomic_compare_exchange_n(&resource_used,&used,used+bytes,1,__ATOMIC_RELAXED,__ATOMIC_RELAXED));
     used+=bytes;
     uint64_t peak=__atomic_load_n(&resource_peak,__ATOMIC_RELAXED);

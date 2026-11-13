@@ -41,6 +41,7 @@ static uint64_t guest_brk(uint64_t requested) {
     if(needed && !backing_data(address_space->brk_backing)) { address_space->brk_backing=backing_reserve(BRK_CAP); if(!backing_data(address_space->brk_backing)) return address_space->brk_current; }
     if(needed>address_space->brk_pages && !address_space_make_private(address_space,address_space->brk_backing,(size_t)address_space->brk_pages,(size_t)(needed-address_space->brk_pages)))return address_space->brk_current;
     if(needed>address_space->brk_pages) memset(backing_data(address_space->brk_backing)+(size_t)address_space->brk_pages,0,(size_t)(needed-address_space->brk_pages));
+    else if(needed<address_space->brk_pages && !address_space_discard(address_space,address_space->brk_backing,(size_t)needed,(size_t)(address_space->brk_pages-needed)))return address_space->brk_current;
     address_space->brk_pages=needed; address_space->brk_current=requested;
     address_space_changed(address_space);return requested;
 }

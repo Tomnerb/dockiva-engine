@@ -227,6 +227,18 @@ func healthConfig(c obj) any {
 	return obj{"Test": append([]string{"CMD"}, stringsOf(hc["test"])...), "Interval": hc["interval"], "Timeout": hc["timeout"], "StartPeriod": hc["start_period"], "StartInterval": hc["start_interval"], "Retries": hc["retries"]}
 }
 
+// memorySwap is HostConfig.MemorySwap: memory plus swap, -1 unlimited, 0 without -m.
+func memorySwap(c obj) int64 {
+	switch swap := swapMiB(c); {
+	case c["memory_mib"] == nil:
+		return 0
+	case swap == unlimitedSwapMiB:
+		return -1
+	default:
+		return (memoryMiB(c) + swap) << 20
+	}
+}
+
 func nanoCpus(c obj) int64 {
 	if c["cpus"] == nil {
 		return 0
@@ -270,7 +282,7 @@ func (b *engine) inspect(name string) obj {
 	if c["lower"] != nil {
 		driver, graph["LowerDir"] = "overlay2", c["lower"]
 	}
-	return obj{"Id": b.idOf(name), "Name": "/" + name, "Created": timestamp(c["created_at"]), "Path": cmd[0], "Args": cmd[1:], "Image": c["image"], "State": obj{"Status": state, "Running": running, "Paused": paused, "Restarting": s["state"] == "restarting", "Health": health(p, c), "OOMKilled": exists(filepath.Join(p, "oom")), "Dead": state == "dead", "Pid": pid, "ExitCode": code, "Error": text(s["error"]), "StartedAt": timestamp(s["started_at"]), "FinishedAt": timestamp(s["finished_at"])}, "Config": obj{"Image": img, "Entrypoint": cmd[:1], "Cmd": cmd[1:], "Env": stringsOf(c["env"]), "Labels": labels, "User": text(c["user"]), "Tty": c["tty"] == true, "OpenStdin": c["open_stdin"] == true, "StdinOnce": c["stdin_once"] == true, "WorkingDir": workdir(c), "Hostname": hostname(name, c), "Healthcheck": healthConfig(c), "ExposedPorts": exposedPorts(c)}, "HostConfig": obj{"NetworkMode": inspectNetwork(c), "PortBindings": hostPortBindings(c), "PublishAllPorts": c["publish_all"] == true, "ReadonlyRootfs": c["writable"] != true, "AutoRemove": c["auto_remove"] == true, "Binds": binds, "Memory": memoryMiB(c) << 20, "NanoCpus": nanoCpus(c), "RestartPolicy": restartPolicy(c), "ExtraHosts": extraHostList(c), "LogConfig": obj{"Type": "json-file", "Config": obj{}}, "Tmpfs": inspectTmpfs(c)}, "NetworkSettings": obj{"Ports": networkPortBindings(p, c, running), "Networks": b.containerNetworks(name, c), "IPAddress": text(c["ip"]), "Gateway": gatewayOf(c)}, "Mounts": b.inspectMounts(c), "Driver": driver, "GraphDriver": obj{"Name": driver, "Data": graph}, "Platform": "linux", "RestartCount": restartCount(s), "DockivaCompatibility": profileInspection(c)}
+	return obj{"Id": b.idOf(name), "Name": "/" + name, "Created": timestamp(c["created_at"]), "Path": cmd[0], "Args": cmd[1:], "Image": c["image"], "State": obj{"Status": state, "Running": running, "Paused": paused, "Restarting": s["state"] == "restarting", "Health": health(p, c), "OOMKilled": exists(filepath.Join(p, "oom")), "Dead": state == "dead", "Pid": pid, "ExitCode": code, "Error": text(s["error"]), "StartedAt": timestamp(s["started_at"]), "FinishedAt": timestamp(s["finished_at"])}, "Config": obj{"Image": img, "Entrypoint": cmd[:1], "Cmd": cmd[1:], "Env": stringsOf(c["env"]), "Labels": labels, "User": text(c["user"]), "Tty": c["tty"] == true, "OpenStdin": c["open_stdin"] == true, "StdinOnce": c["stdin_once"] == true, "WorkingDir": workdir(c), "Hostname": hostname(name, c), "Healthcheck": healthConfig(c), "ExposedPorts": exposedPorts(c)}, "HostConfig": obj{"NetworkMode": inspectNetwork(c), "PortBindings": hostPortBindings(c), "PublishAllPorts": c["publish_all"] == true, "ReadonlyRootfs": c["writable"] != true, "AutoRemove": c["auto_remove"] == true, "Binds": binds, "Memory": memoryMiB(c) << 20, "MemorySwap": memorySwap(c), "NanoCpus": nanoCpus(c), "RestartPolicy": restartPolicy(c), "ExtraHosts": extraHostList(c), "LogConfig": obj{"Type": "json-file", "Config": obj{}}, "Tmpfs": inspectTmpfs(c)}, "NetworkSettings": obj{"Ports": networkPortBindings(p, c, running), "Networks": b.containerNetworks(name, c), "IPAddress": text(c["ip"]), "Gateway": gatewayOf(c)}, "Mounts": b.inspectMounts(c), "Driver": driver, "GraphDriver": obj{"Name": driver, "Data": graph}, "Platform": "linux", "RestartCount": restartCount(s), "DockivaCompatibility": profileInspection(c)}
 }
 func onlyKeys(m obj, allowed ...string) bool {
 	for k := range m {
@@ -391,7 +403,7 @@ func (b *engine) createWith(name string, body obj, prepared *image) obj {
 		case "Memory", "NanoCpus":
 			ok = integer(v) > 0 // docker run -m, --cpus
 		case "MemorySwap":
-			ok = integer(v) >= -1 // there is no swap; the limit is -m
+			ok = integer(v) >= -1 // memory plus swap (setLimits), -1 unlimited
 		case "ConsoleSize":
 			a := array(v)
 			ok = len(a) == 2 && (idle(a[0]) && idle(a[1]) || integer(a[0]) > 0 && integer(a[0]) < 65536 && integer(a[1]) > 0 && integer(a[1]) < 65536)

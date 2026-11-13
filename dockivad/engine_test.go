@@ -544,12 +544,22 @@ func TestResourceLimits(t *testing.T) {
 	if host["Memory"] != int64(101<<20) || host["NanoCpus"] != int64(2e9) {
 		t.Fatalf("limits: %v %v", host["Memory"], host["NanoCpus"])
 	}
+	// --memory-swap: unset is as much swap as -m (Docker on a host with swap), -1 unlimited,
+	// else memory plus swap; never below -m.
+	for body, want := range map[string]int64{`"Memory":104857600`: 200 << 20, `"Memory":104857600,"MemorySwap":0`: 200 << 20,
+		`"Memory":104857600,"MemorySwap":-1`: -1, `"Memory":104857600,"MemorySwap":104857600`: 100 << 20, `"Memory":104857600,"MemorySwap":314572800`: 300 << 20} {
+		b.create("swap", decode([]byte(`{"Image":"dockiva/shell:demo","HostConfig":{`+body+`}}`), maxJSON))
+		if got := b.inspect("swap")["HostConfig"].(obj)["MemorySwap"]; got != want {
+			t.Fatalf("%s: MemorySwap %v, want %d", body, got, want)
+		}
+		b.remove("swap")
+	}
 	// The docker CLI sends zeros when -m and --cpus are absent: the profile's limits apply.
 	b.create("plain", decode([]byte(`{"Image":"dockiva/shell:demo","HostConfig":{"Memory":0,"NanoCpus":0,"MemorySwap":0}}`), maxJSON))
-	if host := b.inspect("plain")["HostConfig"].(obj); host["Memory"] == int64(0) || host["NanoCpus"] != int64(0) {
-		t.Fatalf("defaults: %v %v", host["Memory"], host["NanoCpus"])
+	if host := b.inspect("plain")["HostConfig"].(obj); host["Memory"] == int64(0) || host["NanoCpus"] != int64(0) || host["MemorySwap"] != int64(0) {
+		t.Fatalf("defaults: %v %v %v", host["Memory"], host["NanoCpus"], host["MemorySwap"])
 	}
-	for _, bad := range []string{`{"Memory":1024}`, `{"Memory":70000000000000}`, `{"NanoCpus":65000000000}`, `{"MemorySwap":-2}`} {
+	for _, bad := range []string{`{"Memory":1024}`, `{"Memory":70000000000000}`, `{"NanoCpus":65000000000}`, `{"MemorySwap":-2}`, `{"Memory":104857600,"MemorySwap":52428800}`} {
 		mustReject(t, func() {
 			b.create("bad", decode([]byte(`{"Image":"dockiva/shell:demo","HostConfig":`+bad+`}`), maxJSON))
 		})

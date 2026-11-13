@@ -1251,17 +1251,20 @@ static int proc_text(const char *path,char *text,size_t capacity,size_t *out) {
         length=address_space->auxv_count*8;
     } else if(!strcmp(path,"/proc/meminfo") || !strcmp(path,"/proc/vmstat")) {
         /* The memory budget and what the container uses of it (free, top, vmstat). */
-        uint64_t total=proc_mem_total(),used=proc_mem_used(),free=(used<total?total-used:0)>>10;total>>=10;used>>=10;
+        uint64_t total=proc_mem_total(),charged=proc_mem_used(),swap=resource_swap;
+        /* What the budget's memory cannot hold shows as swap in use, as on a host with swap. */
+        uint64_t used=(charged<total?charged:total)>>10,free=(total-(charged<total?charged:total))>>10;
+        uint64_t swapped=charged>total?charged-total:0,swap_free=(swapped<swap?swap-swapped:0)>>10;total>>=10;swap>>=10;
         if(path[6]=='m')length=(size_t)snprintf(text,capacity,"MemTotal:       %llu kB\nMemFree:        %llu kB\nMemAvailable:   %llu kB\n"
             "Buffers:               0 kB\nCached:                0 kB\nSwapCached:            0 kB\nActive:         %llu kB\nInactive:              0 kB\n"
             "Active(anon):   %llu kB\nInactive(anon):        0 kB\nActive(file):          0 kB\nInactive(file):        0 kB\n"
-            "Unevictable:           0 kB\nMlocked:               0 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\n"
+            "Unevictable:           0 kB\nMlocked:               0 kB\nSwapTotal:      %llu kB\nSwapFree:       %llu kB\n"
             "Dirty:                 0 kB\nWriteback:             0 kB\nAnonPages:      %llu kB\nMapped:                0 kB\nShmem:                 0 kB\n"
             "KReclaimable:          0 kB\nSlab:                  0 kB\nSReclaimable:          0 kB\nSUnreclaim:            0 kB\n"
             "KernelStack:           0 kB\nPageTables:            0 kB\nCommitLimit:    %llu kB\nCommitted_AS:   %llu kB\n"
             "HugePages_Total:       0\nHugePages_Free:        0\nHugepagesize:       2048 kB\n",
             (unsigned long long)total,(unsigned long long)free,(unsigned long long)free,(unsigned long long)used,(unsigned long long)used,
-            (unsigned long long)used,(unsigned long long)total,(unsigned long long)used);
+            (unsigned long long)swap,(unsigned long long)swap_free,(unsigned long long)used,(unsigned long long)(total+swap),(unsigned long long)(charged>>10));
         else length=(size_t)snprintf(text,capacity,"nr_free_pages %llu\nnr_inactive_anon 0\nnr_active_anon %llu\nnr_inactive_file 0\nnr_active_file 0\n"
             "nr_anon_pages %llu\nnr_mapped 0\nnr_file_pages 0\nnr_dirty 0\nnr_writeback 0\nnr_shmem 0\npgpgin 0\npgpgout 0\npswpin 0\npswpout 0\n"
             "pgalloc_normal 0\npgfree 0\npgfault 0\npgmajfault 0\n",(unsigned long long)(free/4),(unsigned long long)(used/4),(unsigned long long)(used/4));
