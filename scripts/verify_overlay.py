@@ -37,7 +37,7 @@ def lower_tree(lower):
     files = {'f': 'lower\n', 'suid': 's', 'd/a': 'a', 'd/b': 'b', 'd/sub/c': 'c', 'gone/x': 'x', 'h1': 'hard', 'map': 'L'*8192,
              'ro': 'ro', 'mv': 'mv', 'tdir/t': 't', 'open': 'open', 't1': 'trunc me', 'ch': 'chmod', 'ut': 'utimes', 'deep/1/2/3/f': 'deep',
              'x/y': 'y'}
-    for d in ('e', 'edir2', 'ddir', 'cwd'):
+    for d in ('e', 'edir2', 'ddir', 'cwd', 'ino/sub'):
         (lower/d).mkdir(parents=True)
     for name, text in files.items():
         (lower/name).parent.mkdir(parents=True, exist_ok=True)

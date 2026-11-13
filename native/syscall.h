@@ -765,7 +765,7 @@ static int fs_stat_cached(const char *path,int follow,struct stat *st,uint64_t *
         /* A path the upper layer holds (a file the container made: the go command's
            cache, a build's outputs) shows its own stat above anything below: one host
            call that refuses symlinks anywhere on the way. */
-        if(!fstatat(fs_root,full+1,st,FS_NOFOLLOW_AT) && !(follow && S_ISLNK(st->st_mode))) { *error=0;return S_ISREG(st->st_mode) || S_ISDIR(st->st_mode) || S_ISLNK(st->st_mode); }
+        if(!fstatat(fs_root,full+1,st,FS_NOFOLLOW_AT) && !(follow && S_ISLNK(st->st_mode))) { *error=0;ov_dir_ino(full,st);return S_ISREG(st->st_mode) || S_ISDIR(st->st_mode) || S_ISLNK(st->st_mode); }
 #endif
         return 0;
     }
