@@ -119,6 +119,34 @@ func TestRemoveImageRestrictedDirs(t *testing.T) {
 	}
 }
 
+// The work earlier engines left (builds whose stages held such directories, an
+// interrupted commit) goes at a start; images, containers and volumes stay.
+func TestStaleWorkRestrictedDirs(t *testing.T) {
+	dir := t.TempDir()
+	unlockLater(t, dir)
+	for _, d := range []string{"build/b-1/root", "build/trash-2/entry/rootfs", "load/l-3", ".commit-4/rootfs", ".removing-5"} {
+		restrictedTree(t, filepath.Join(dir, d))
+	}
+	for _, keep := range []string{"images", "containers", "build-cache", "volumes"} {
+		check(os.MkdirAll(filepath.Join(dir, keep, "x"), 0o700))
+	}
+	check(os.WriteFile(filepath.Join(dir, "load.json"), nil, 0o600)) // a file of these names is not the engine's work
+	stale := staleWork(dir)
+	for _, p := range stale {
+		if e := removeTree(p); e != nil {
+			t.Fatal(e)
+		}
+	}
+	names := []string{}
+	entries, _ := os.ReadDir(dir)
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	if got := strings.Join(names, " "); len(stale) != 4 || got != "build-cache containers images load.json volumes" {
+		t.Fatalf("%d removed, left: %s", len(stale), got)
+	}
+}
+
 // docker commit's copy: the image's files with the container's laid over them. Both
 // hold such directories; the copy has their modes and files, the sources keep theirs,
 // and the layer written from it lists them.

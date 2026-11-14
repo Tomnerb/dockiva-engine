@@ -26,6 +26,28 @@ func cleanupUnpublished(state string) {
 	}
 }
 
+// staleWork moves aside what an engine that has gone left in dir, the store or the
+// home before it: its builds' and loads' work (build, load) and its commits' (.commit-*),
+// and what an earlier sweep did not finish. It returns what to remove. Builds left
+// their work behind whenever a stage held a directory without write permission (Go's
+// module cache; restricted.go), and nothing removed it. Called before the engine
+// serves its API: nothing is building.
+func staleWork(dir string) []string {
+	entries, _ := os.ReadDir(dir)
+	gone := []string{}
+	for _, entry := range entries {
+		name := entry.Name()
+		if !entry.IsDir() || name != "build" && name != "load" && !strings.HasPrefix(name, ".commit-") && !strings.HasPrefix(name, ".removing-") {
+			continue
+		}
+		aside := filepath.Join(dir, ".removing-"+token()[:16])
+		if os.Rename(filepath.Join(dir, name), aside) == nil {
+			gone = append(gone, aside)
+		}
+	}
+	return gone
+}
+
 func run() {
 	syscall.Umask(0077)
 	if len(os.Args) > 1 && os.Args[1] == "_supervise" {
@@ -97,6 +119,17 @@ func run() {
 		cleanupUnpublished(b.State)
 		cleanupUnpublished(b.Cache)
 		migrateNames(b.Cache)
+		stale := staleWork(store)
+		if store != b.Home {
+			stale = append(stale, staleWork(b.Home)...) // from before the store
+		}
+		go func() { // gigabytes, perhaps: not in the way of the start
+			for _, p := range stale {
+				if e := removeTree(p); e != nil {
+					fmt.Fprintln(os.Stderr, "dockivad: an earlier engine's work stays until the next start:", e)
+				}
+			}
+		}()
 	}
 	if *importName != "" {
 		reject(*layout != "", "Import requires --import-layout")
