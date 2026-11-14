@@ -129,6 +129,12 @@ static _Thread_local ProcShared *proc_now=&proc_first;
 #define prctl_pdeathsig (proc_now->priv.pdeathsig)
 #define prctl_name (proc_now->priv.name)
 #define cap_held (proc_now->priv.caps)
+/* Root's CAP_DAC_OVERRIDE (fs_dac_begin). denied: the host refused a call for a file's
+   or directory's mode (fs_error); on: the call is being done again for root; ro: its
+   walk is in a read-only bind mount, where no mode changes; held: what that pass
+   changed, to put back (fs_dac_end). */
+#define FS_DAC_HELD 64
+static _Thread_local struct { int on,denied,ro,count;struct { int fd;mode_t mode,set; } held[FS_DAC_HELD]; } fs_dac;
 /* merged: the listing of a directory both image layers hold (overlay.h). */
 struct OvList;static void ov_list_free(struct OvList *list);
 typedef struct GuestDirectory { DIR *stream;unsigned refs,count;char path[1025];struct OvList *merged;int lower; } GuestDirectory; /* lower: opened there only */
@@ -221,6 +227,7 @@ static uint64_t fs_error(void) {
         case ENOTEMPTY:return linux_error(39);case EROFS:return linux_error(30);
         case EFBIG:return linux_error(27);case ENOSPC:return linux_error(28);
         case EXDEV:return linux_error(18);                                          /* openat2 RESOLVE_BENEATH, rename across mounts */
+        case EACCES:fs_dac.denied=1;return linux_error(13);                          /* root does the call again (FS_DAC_REDO) */
         default:return net_error();
     }
 }
@@ -504,6 +511,76 @@ static int fs_walk_fast(int base,const char *cur_start,const char *rest,int foll
 #define FS_ANY_AT 0
 #define fs_renameat renameat
 #endif
+/* Root's CAP_DAC_OVERRIDE. The container's files are the Mac user's, so macOS refuses
+   a directory or file whose mode lacks the owner's bits, to the guest's root as to
+   anyone, where Linux lets root through: tar as root makes a directory with its final
+   mode (0555 in Go's module cache) and then its contents, rm -rf removes them, and a
+   root shell lists a 0700-less directory. A file call the host refused with EACCES is
+   done once more for root holding the capability (FS_DAC_REDO), with fs_dac.on: that
+   pass takes no fast path, so the walk opens every directory on the way itself, and
+   each one of the container's (upper layer, writable bind mounts and volumes; never
+   the image's, which no container changes, nor a read-only mount's: fs_dac.ro)
+   lacking owner rwx is given them for the rest of
+   the call - by descriptor, or, where the mode refuses the open itself, by its name in
+   its already open parent with no symlink followed, so nothing outside the root is
+   changed. Callers that open the leaf do the same for it (fs_dac_leaf). fs_dac_end puts
+   each mode back by descriptor (the entry may be renamed or removed by then) unless it
+   changed meanwhile (a chmod by another thread; the call's own: fs_dac_chmod).
+   ponytail: for those microseconds the container's other processes see the wider
+   mode, and an engine killed then leaves it; CAP_DAC_READ_SEARCH alone is not honoured;
+   exec, chown, inotify and unix-socket paths are not redone (a root user rarely meets
+   an unsearchable directory there). */
+static int fs_dac_can(void) { return !guest_uid && (cap_held[0]&2u); }   /* capability 1 */
+static int fs_dac_begin(void) {
+    int denied=fs_dac.denied;fs_dac.denied=0;
+    if(!denied || fs_dac.on || !fs_dac_can())return 0;
+    fs_dac.on=1;return 1;
+}
+static void fs_dac_end(void) {
+    int saved=errno;struct stat st;
+    while(fs_dac.count) {
+        int i=--fs_dac.count,fd=fs_dac.held[i].fd;
+        if(!fstat(fd,&st) && (st.st_mode&07777)==fs_dac.held[i].set)(void)fchmod(fd,fs_dac.held[i].mode);
+        close(fd);
+    }
+    fs_dac.on=0;errno=saved;
+}
+#define FS_DAC_REDO(result,call) do { if((result)==linux_error(13) && fs_dac_begin()) { (result)=(call);fs_dac_end(); } } while(0)
+static mode_t fs_dac_need(const struct stat *st) {
+    mode_t need=S_ISDIR(st->st_mode)?0700:S_ISREG(st->st_mode)?0600:0;
+    return (st->st_mode&need)==need?0:need;
+}
+static void fs_dac_hold(int fd,mode_t mode,mode_t need) {
+    fs_dac.held[fs_dac.count].fd=fd;fs_dac.held[fs_dac.count].mode=mode;fs_dac.held[fs_dac.count++].set=mode|need;
+}
+/* A directory of the container's the pass opened (fd), or will change entries in. */
+static void fs_dac_fd(int fd) {
+    struct stat st;mode_t need=0;
+    if(!fs_dac.on || fs_dac.ro || fd<0 || fs_dac.count==FS_DAC_HELD || fstat(fd,&st) || !(need=fs_dac_need(&st)))return;
+    int keep=fcntl(fd,F_DUPFD_CLOEXEC,0);
+    if(keep<0 || fchmod(keep,(st.st_mode&07777)|need)) { if(keep>=0)close(keep);return; }
+    fs_dac_hold(keep,st.st_mode&07777,need);
+}
+/* The container's leaf in parent, before the pass opens it or changes its entries. */
+static void fs_dac_leaf(int parent,const char *leaf) {
+    struct stat st;mode_t need=0;
+    if(!fs_dac.on || fs_dac.ro || fs_dac.count==FS_DAC_HELD || fstatat(parent,leaf,&st,FS_NOFOLLOW_AT) || !(need=fs_dac_need(&st)))return;
+    mode_t mode=st.st_mode&07777;
+    if(fchmodat(parent,leaf,mode|need,FS_NOFOLLOW_AT))return;
+    int fd=openat(parent,leaf,O_RDONLY|FS_NOFOLLOW_OPEN|O_CLOEXEC|O_NONBLOCK);
+    if(fd<0) { (void)fchmodat(parent,leaf,mode,FS_NOFOLLOW_AT);return; }
+    fs_dac_hold(fd,mode,need);
+}
+/* The pass's own chmod of st's file to mode: that is what stays. */
+static void fs_dac_chmod(const struct stat *st,mode_t mode) {
+    struct stat held;
+    for(int i=0;i<fs_dac.count;i++)
+        if(!fstat(fs_dac.held[i].fd,&held) && held.st_ino==st->st_ino && held.st_dev==st->st_dev)fs_dac.held[i].mode=fs_dac.held[i].set=mode;
+}
+static int fs_subdir(int dir,const char *name) {
+    if(fs_dac.on)fs_dac_leaf(dir,name);
+    return openat(dir,name,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
+}
 static int fs_walk(int base,const char *base_path,const char *input,int follow,char leaf[1025],char canon[1025]);
 static int ov_walk(int base,const char *base_path,const char *input,int follow,char leaf[1025],char canon[1025]); /* overlay.h */
 /* A guest directory by canonical path, as a descriptor (a mount's own, if it is one). */
@@ -539,7 +616,7 @@ static int fs_walk(int base,const char *base_path,const char *input,int follow,c
     strcpy(cur,rest[0]=='/'?(fs_scope.root>=0?fs_scope.path:"/"):base_path);
     if(mem_mount_count && *cur && mem_mount_inside(cur))return mem_redirect_set(cur,rest);
 #ifdef O_NOFOLLOW_ANY
-    {   /* The fast path stays in base's host directory tree: not across a mount. */
+    if(!fs_dac.on) {   /* The fast path stays in base's host directory tree: not across a mount. */
         char full[1025];int fast=fs_walk_fast(base,cur,rest,follow,direct,leaf,full);
         if(fast!=-2) {
             if(fast>=0) { fs_where=fs_mount_of(full);if(canon)strcpy(canon,full); }
@@ -548,6 +625,7 @@ static int fs_walk(int base,const char *base_path,const char *input,int follow,c
     }
 #endif
     int fd=dup(base);if(fd<0)return -1;
+    if(fs_dac.on) { int m=fs_mount_count?fs_mount_of(cur):0;fs_dac.ro=m>0 && fs_mounts[m-1].readonly;fs_dac_fd(fd); }
     for(;;) {
         while(rest[pos]=='/')pos++;
         if(!rest[pos]) { strcpy(leaf,".");if(canon)strcpy(canon,cur);fs_where=fs_mount_of(cur);return fd; }
@@ -563,13 +641,14 @@ static int fs_walk(int base,const char *base_path,const char *input,int follow,c
                 if(!*cur)continue;                          /* position unknown: stay, as at "/" */
                 fs_canon_pop(cur);
                 int parent=fs_open_dir(cur);int saved=errno;close(fd);fd=parent;errno=saved;if(fd<0)return -1;
+                fs_dac_fd(fd);
                 continue;
             }
             if(fs_scope.resolve&8 && fs_is_root(fd)) { close(fd);errno=EXDEV;return -1; }
             if(!fs_is_root(fd)) {
                 int next=openat(fd,"..",O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
                 int saved=errno;close(fd);fd=next;errno=saved;if(fd<0)return -1;
-                fs_canon_pop(cur);
+                fs_dac_fd(fd);fs_canon_pop(cur);
             }
             continue;
         }
@@ -584,7 +663,7 @@ static int fs_walk(int base,const char *base_path,const char *input,int follow,c
             if(m>=0) {
                 if(!fs_mounts[m].directory && !last) { close(fd);errno=ENOTDIR;return -1; }
                 close(fd);fd=dup(fs_mounts[m].fd);if(fd<0)return -1;
-                strcpy(cur,at);
+                fs_dac.ro=fs_mounts[m].readonly;fs_dac_fd(fd);strcpy(cur,at);
                 if(last) {
                     strcpy(leaf,fs_mounts[m].directory?".":fs_mounts[m].name);
                     if(canon)strcpy(canon,at);
@@ -607,6 +686,7 @@ static int fs_walk(int base,const char *base_path,const char *input,int follow,c
                 if(fs_scope.resolve&8) { close(fd);errno=EXDEV;return -1; }
                 close(fd);fd=dup(FS_WALK_ROOT);if(fd<0)return -1;
                 strcpy(cur,fs_scope.root>=0?fs_scope.path:"/");
+                if(fs_dac.on) { int m=fs_mount_count?fs_mount_of(cur):0;fs_dac.ro=m>0 && fs_mounts[m-1].readonly;fs_dac_fd(fd); }
             }
             continue;
         }
@@ -615,12 +695,14 @@ static int fs_walk(int base,const char *base_path,const char *input,int follow,c
             if(canon) { strcpy(canon,cur);if(fs_canon_push(canon,part)<0) { close(fd);return -1; } }
             fs_where=fs_mount_of(cur);return fd;
         }
-        int next=openat(fd,part,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
+        int next=fs_subdir(fd,part);
         int saved=errno;close(fd);fd=next;errno=saved;if(fd<0)return -1;
         if(fs_canon_push(cur,part)<0) { close(fd);return -1; }
     }
 }
 #include "overlay.h"
+/* Whether the last walk's leaf is the container's own (fs_dac): not an image file. */
+static int ov_leaf_upper(void) { return !(fs_lower>=0 && ov_leaf.canon[0] && ov_leaf.layer==1); }
 /* Minimal /proc: /proc/self/exe and /proc/<pid>/exe name each process's executable
    (canonical guest paths, indexed by pid; PROCESS_LIMIT+1 processes). Path lookups
    resolve them to that file; readlink returns the path. */
@@ -700,15 +782,17 @@ static uint64_t fs_fchdir(void) {
 /* Working directories remain descriptor anchored and record the canonical
    (link-free) path. A renamed cwd is usable for relative I/O, but getcwd fails
    instead of returning an unverified stale pathname. */
-static uint64_t fs_chdir(void) {
+static uint64_t fs_chdir_once(void) {
     char leaf[1025],canon[1025];
     int parent=fs_lookup((uint64_t)-100,cpu->gpr[0],leaf,1,canon);if(parent<0)return fs_error();
+    if(fs_dac.on && ov_leaf_upper())fs_dac_leaf(parent,leaf);
     int fd=openat(parent,leaf,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
     int saved=errno;close(parent);errno=saved;if(fd<0)return fs_error();
     GuestCwd *next=calloc(1,sizeof(*next));if(!next) { close(fd);return linux_error(12); }
     next->fd=fd;next->refs=1;strcpy(next->path,canon);
     fs_cwd_release();fs_cwd=next;return 0;
 }
+static uint64_t fs_chdir(void) { uint64_t result=fs_chdir_once();FS_DAC_REDO(result,fs_chdir_once());return result; }
 /* Initial working directory from --cwd (an image WorkingDir), resolved inside the root. */
 static int mem_start_cwd(const char *path);
 static int fs_start_cwd(const char *path) {
@@ -1547,6 +1631,7 @@ static uint64_t fs_open(void) {
        refuses one before the leaf). */
     int link=opath && exists && S_ISLNK(before.st_mode);
     if(link)options=O_RDONLY|O_SYMLINK|FS_NOFOLLOW_OPEN|O_CLOEXEC|O_NONBLOCK;
+    if(fs_dac.on && exists && !(fs_lower>=0 && layers.canon[0] && layers.layer==1))fs_dac_leaf(parent,leaf);   /* root opens whatever its mode */
     int fd=openat(parent,leaf,options|(fresh?O_EXCL:0),mode);
     if(fd<0 && fresh && errno==EEXIST && !(flags&128)) { fresh=0;fd=openat(parent,leaf,options,mode); }
     if(fd<0) { uint64_t e=fs_error();close(parent);return e; }
@@ -1756,7 +1841,9 @@ static uint64_t fs_flock(int fd) {
         return (operation&4) || !schedule_active?linux_error(11):IO_BLOCK;
     return fs_lock_set(st.st_dev,st.st_ino,owner,0,INT64_MAX,type);
 }
-static uint64_t fs_call(uint64_t call) {
+static uint64_t fs_call_once(uint64_t call);
+static uint64_t fs_call(uint64_t call) { uint64_t result=fs_call_once(call);FS_DAC_REDO(result,fs_call_once(call));return result; }
+static uint64_t fs_call_once(uint64_t call) {
     if(call==166) { unsigned previous=fs_umask;fs_umask=(unsigned)cpu->gpr[0]&0777;return previous; }
     if(call==52 || call==53 || call==452) {
         uint64_t mode=cpu->gpr[call==52?1:2]&UINT64_C(07777); /* Linux ignores other bits (libuv passes st_mode); setuid/setgid/sticky allowed */
@@ -1778,6 +1865,7 @@ static uint64_t fs_call(uint64_t call) {
             struct stat st;int result=fs_leaf_stat(parent,leaf,&st);
             if(!result && !S_ISREG(st.st_mode) && !S_ISDIR(st.st_mode) && !S_ISSOCK(st.st_mode)) { errno=EACCES;result=-1; }
             if(!result)result=fchmodat(parent,leaf,(mode_t)mode,FS_NOFOLLOW_AT);
+            if(!result && fs_dac.on)fs_dac_chmod(&st,(mode_t)mode);
             int saved=errno;close(parent);errno=saved;return result<0?fs_error():0;
         } else if(fd<0)return linux_error(9);
         struct stat st;int result=fstat(fd,&st);
@@ -1873,6 +1961,7 @@ static uint64_t fs_call(uint64_t call) {
         char leaf[1025];int parent=fs_lookup((uint64_t)-100,cpu->gpr[0],leaf,1|FS_DIRECT,NULL);if(parent<0)return fs_error();
         if(!fs_path_writable()) { close(parent);return linux_error(30); }
         { OvLeaf w=ov_leaf;if(ov_prepare(&w,&parent,leaf,OV_MODIFY)) { uint64_t e=fs_error();close(parent);return e; } }
+        fs_dac_leaf(parent,leaf);
         int fd=openat(parent,leaf,O_WRONLY|FS_NOFOLLOW_OPEN|O_NONBLOCK|O_CLOEXEC);int saved=errno;close(parent);errno=saved;
         if(fd<0)return fs_error();
         struct stat st;if(fstat(fd,&st)<0 || !S_ISREG(st.st_mode)) { saved=S_ISDIR(st.st_mode)?EISDIR:EINVAL;close(fd);errno=saved;return fs_error(); }
@@ -2000,6 +2089,7 @@ static uint64_t fs_call(uint64_t call) {
             if(!fs_path_writable()) { close(other);close(parent);return linux_error(30); }
             if(!strcmp(target,".")) { close(other);close(parent);return linux_error(fs_where>0?16:13); }
             OvLeaf to=ov_leaf;struct stat moving;
+            if(fs_dac.on && !(layers && w.layer==1))fs_dac_leaf(parent,leaf);   /* a directory moving to another one is written (its "..") */
             int directory=upm_fs && layers && to.canon[0] && !fstatat(parent,leaf,&moving,FS_NOFOLLOW_AT) && S_ISDIR(moving.st_mode);
             if(directory && upm_has_files(to.canon)) { result=-1;errno=ENOTEMPTY; }        /* its pending files (upm.h) are entries */
             else if(layers || (fs_lower>=0 && to.canon[0]))result=layers && to.canon[0]?ov_rename(&w,parent,leaf,&to,other,target):(errno=EXDEV,-1);
@@ -2042,7 +2132,10 @@ static uint64_t fs_call(uint64_t call) {
         int layers=fs_lower>=0 && dir->path[0] && !(fs_mount_count && fs_mount_of(dir->path));
         if(!dir->stream && !dir->merged) {
             struct stat below;   /* only a directory both layers hold merges: a lower-only one (most of an image's) streams as it is */
-            if(layers && !dir->lower && ((!fstatat(fs_lower,dir->path[1]?dir->path+1:".",&below,FS_NOFOLLOW_AT) && S_ISDIR(below.st_mode)) || upm_has_files(dir->path)))dir->merged=ov_list(dir->path);
+            if(layers && !dir->lower && ((!fstatat(fs_lower,dir->path[1]?dir->path+1:".",&below,FS_NOFOLLOW_AT) && S_ISDIR(below.st_mode)) || upm_has_files(dir->path))) {
+                errno=0;dir->merged=ov_list(dir->path);
+                if(!dir->merged && errno==EACCES && fs_dac_can())return fs_error();   /* its mode refuses the walk there: root's redo lists it whole */
+            }
             if(!dir->merged) {
                 int copy=dup(fd);if(copy<0)return fs_error();
                 dir->stream=fdopendir(copy);if(!dir->stream) { int saved=errno;close(copy);errno=saved;return fs_error(); }
