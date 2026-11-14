@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"runtime/debug"
 	"slices"
 	"sort"
 	"strconv"
@@ -804,7 +805,13 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 			_, _ = w.Write([]byte("OK"))
 			return
 		case path == "/version" && method == "GET":
-			send(w, 200, obj{"Version": "0.18.0", "ApiVersion": "1.45", "MinAPIVersion": "1.24", "Os": "linux", "Arch": "arm64", "GitCommit": "preview", "GoVersion": runtime.Version(), "KernelVersion": "dockiva-engine", "Experimental": true, "Components": []any{obj{"Name": "dockivad", "Version": "0.18.0", "Details": obj{"ControlPlane": "Go", "PythonRuntime": "false"}}}})
+			commit, built := buildStamp()
+			engine := obj{"ApiVersion": "1.45", "MinAPIVersion": "1.24", "Os": "linux", "Arch": "arm64", "GitCommit": commit, "GoVersion": runtime.Version(), "KernelVersion": "dockiva-engine", "Experimental": "true", "BuildTime": ""}
+			if !built.IsZero() {
+				engine["BuildTime"] = built.UTC().Format(time.ANSIC)
+			}
+			send(w, 200, obj{"Version": "0.18.0", "ApiVersion": "1.45", "MinAPIVersion": "1.24", "Os": "linux", "Arch": "arm64", "GitCommit": commit, "GoVersion": runtime.Version(), "KernelVersion": "dockiva-engine", "Experimental": true, "BuildTime": stampTime(built),
+				"Components": []any{obj{"Name": "dockivad", "Version": "0.18.0", "Details": obj{"ControlPlane": "Go", "PythonRuntime": "false"}}, obj{"Name": "Engine", "Version": "0.18.0", "Details": engine}}})
 			return
 		case path == "/info" && method == "GET":
 			send(w, 200, obj{"ID": "dockiva-engine", "Name": "dockiva-engine", "ServerVersion": "0.18.0", "OSType": "linux", "Architecture": "aarch64", "OperatingSystem": "Dockiva Engine on " + runtime.GOOS, "Driver": "private-copy", "Containers": len(b.names()), "NCPU": min(runtime.NumCPU(), 64), "MemTotal": 0, "SecurityOptions": []any{}, "Warnings": []string{"Not a production isolation boundary"}})
@@ -1260,3 +1267,33 @@ func inspectNetwork(c obj) string {
 }
 
 var hostnamePattern = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9.-]{0,62})$`)
+
+// buildStamp is the engine commit `go build` recorded (vcs.revision, 12 characters,
+// "-dirty" for uncommitted changes) and that commit's time, for docker version.
+// A build outside a git checkout reports "unknown" and no time.
+func buildStamp() (string, time.Time) {
+	commit, when, dirty := "unknown", time.Time{}, false
+	if info, ok := debug.ReadBuildInfo(); ok {
+		for _, s := range info.Settings {
+			switch s.Key {
+			case "vcs.revision":
+				commit = s.Value[:min(12, len(s.Value))]
+			case "vcs.time":
+				when, _ = time.Parse(time.RFC3339, s.Value)
+			case "vcs.modified":
+				dirty = s.Value == "true"
+			}
+		}
+	}
+	if dirty && commit != "unknown" {
+		commit += "-dirty"
+	}
+	return commit, when
+}
+
+func stampTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
+}
