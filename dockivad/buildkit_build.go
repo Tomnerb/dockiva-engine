@@ -36,7 +36,7 @@ func (b *engine) bkBuild(ctx context.Context, st *bkSolve, opts map[string]strin
 	}
 	work, e := os.MkdirTemp(private(filepath.Join(b.storeDir(), "build")), "b-")
 	check(e)
-	defer func() { go os.RemoveAll(work) }()
+	defer func() { go removeTree(work) }()
 	bd := &builder{b: b, ctx: ctx, work: work, context: filepath.Join(work, "context"), network: opts["force-network-mode"],
 		args: map[string]string{}, used: map[string]bool{}, global: platformArgs(platform), platform: platform, nocache: nocache, named: map[string]namedContext{}}
 	bd.secret = func(id string) (value []byte, e error) { // RUN --mount=type=secret: the session's Secrets service

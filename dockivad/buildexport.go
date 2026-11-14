@@ -52,7 +52,7 @@ func (w bytesWriter) Write(p []byte) (int, error) {
 func exportTar(c *grpcCall, root string) int64 {
 	counted := &counter{}
 	tw := tar.NewWriter(io.MultiWriter(bytesWriter{c}, counted))
-	check(filepath.WalkDir(root, func(p string, d fs.DirEntry, e error) error {
+	check(walkTree(root, func(p string, d fs.DirEntry, e error) error {
 		if e != nil || p == root {
 			return e
 		}
@@ -78,7 +78,7 @@ func exportTree(c *grpcCall, root string) int64 {
 	listed := make(chan error, 1)
 	go func() {
 		listed <- safeRun(func() {
-			check(filepath.WalkDir(root, func(p string, d fs.DirEntry, e error) error {
+			check(walkTree(root, func(p string, d fs.DirEntry, e error) error {
 				if e != nil || p == root {
 					return e
 				}
@@ -101,7 +101,7 @@ func exportTree(c *grpcCall, root string) int64 {
 				case !mode.IsDir(): // devices, pipes and sockets stay behind
 					return nil
 				}
-				files = append(files, p) // read by the receive loop only after the listing (listed)
+				files = append(files, rel) // read by the receive loop only after the listing (listed)
 				return c.send(pbuf{}.num(1, packetStat).msg(2, st))
 			}))
 			check(c.send(pbuf{}.num(1, packetStat))) // the end of the listing
@@ -132,14 +132,14 @@ func exportTree(c *grpcCall, root string) int64 {
 			waitListing() // the files' numbers are only final once listed
 			id := p.num(3)
 			reject(id < uint64(len(files)), "The client asked for an unknown file")
-			total += sendFile(c, uint32(id), files[id])
+			total += sendFile(c, uint32(id), root, files[id])
 		}
 	}
 }
 
-func sendFile(c *grpcCall, id uint32, p string) int64 {
-	f, e := os.Open(p)
-	check(e)
+func sendFile(c *grpcCall, id uint32, root, rel string) int64 {
+	var f *os.File
+	check(through(root, rel, func(p string) (e error) { f, e = openGuest(p); return })) // restricted.go
 	defer f.Close()
 	buf := make([]byte, exportChunk)
 	var n int64

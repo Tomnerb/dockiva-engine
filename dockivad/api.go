@@ -118,6 +118,9 @@ func (b *engine) removeImage(ref string, force bool) []obj {
 			continue
 		}
 		p := filepath.Join(b.Cache, entry.Name())
+		if !exists(filepath.Join(p, "image.json")) { // half removed by an earlier engine: goes at the next start (migrateNames)
+			continue
+		}
 		meta := readObject(filepath.Join(p, "image.json"))
 		d := str(meta["digest"])
 		if digest == "" && strings.HasPrefix(d, "sha256:"+strings.TrimPrefix(ref, "sha256:")) {
@@ -150,8 +153,7 @@ func (b *engine) removeImage(ref string, force bool) []obj {
 	}
 	out := []obj{}
 	for p, name := range dirs {
-		retainLowers(b.storeDir(), b.State, p) // containers keep running over its files
-		check(os.RemoveAll(p))
+		removeImageDir(b.storeDir(), b.State, p) // containers keep running over its files
 		out = append(out, obj{"Untagged": name})
 		b.events.publish(imageEvent("untag", digest, digest)) // Docker names both by the image ID
 	}
@@ -344,7 +346,7 @@ func (b *engine) createWith(name string, body obj, prepared *image) obj {
 			if filesDone != nil {
 				<-filesDone
 			}
-			_ = os.RemoveAll(stage)
+			_ = removeTree(stage)
 		}
 	}()
 	allowed := map[string]bool{}
@@ -910,8 +912,7 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 			check(e)
 			rows := []any{}
 			for _, entry := range entries {
-				if entry.IsDir() && len(entry.Name()) == 64 {
-					p := filepath.Join(b.Cache, entry.Name(), "image.json")
+				if p := filepath.Join(b.Cache, entry.Name(), "image.json"); entry.IsDir() && len(entry.Name()) == 64 && exists(p) {
 					meta := readObject(p)
 					if !imageFilter(str(meta["name"]), filters) {
 						continue

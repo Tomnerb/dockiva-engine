@@ -401,7 +401,10 @@ func layerDir(root, dir string, create bool) (string, bool) {
 			if !create {
 				return "", false
 			}
-			check(mkdirGuest(p))
+			func() {
+				defer unlock(filepath.Dir(p), 0o700)()
+				check(mkdirGuest(p))
+			}()
 			continue
 		}
 		check(e)
@@ -416,7 +419,8 @@ func layerDir(root, dir string, create bool) (string, bool) {
 // cloneTree copies an unpacked root for a container: one APFS clone of the whole
 // tree (clonefileat), sharing blocks until written; a plain copy elsewhere. A clone
 // turns setuid and setgid off on files and directories (Debian's /var/mail is
-// 2775), so they are set again.
+// 2775), so they are set again. The copy has the modes of src, also where they keep
+// the engine from reading it.
 func cloneTree(src, dst string) {
 	s, e := syscall.BytePtrFromString(src)
 	check(e)
@@ -424,7 +428,18 @@ func cloneTree(src, dst string) {
 	check(e)
 	cwd := -2 // AT_FDCWD
 	const sysClonefileat, cloneNofollow = 462, 1
-	if _, _, errno := syscall.Syscall6(sysClonefileat, uintptr(cwd), uintptr(unsafe.Pointer(s)), uintptr(cwd), uintptr(unsafe.Pointer(d)), cloneNofollow, 0); errno == 0 {
+	clone := func() syscall.Errno {
+		_, _, errno := syscall.Syscall6(sysClonefileat, uintptr(cwd), uintptr(unsafe.Pointer(s)), uintptr(cwd), uintptr(unsafe.Pointer(d)), cloneNofollow, 0)
+		return errno
+	}
+	errno := clone()
+	var held []locked
+	defer func() { lockTree(dst, held); lockTree(src, held) }()
+	if errno == syscall.EACCES { // a directory or file the guest left unreadable (restricted.go): nothing is copied
+		unlockTree(src, &held)
+		errno = clone()
+	}
+	if errno == 0 {
 		// ponytail: one lstat per entry (~100 ms for 25k files); a list of an image's
 		// setuid files, kept at unpack, would spare it.
 		check(filepath.WalkDir(src, func(p string, entry fs.DirEntry, err error) error {
@@ -582,7 +597,7 @@ func commitImage(cache, name, layout string) string {
 	}
 	stage, e := os.MkdirTemp(cache, ".incoming-")
 	check(e)
-	defer os.RemoveAll(stage)
+	defer removeTree(stage)
 	dest := filepath.Join(stage, "layout")
 	check(os.MkdirAll(filepath.Join(dest, "blobs/sha256"), 0700))
 	for _, d := range im.blobs {
@@ -640,14 +655,20 @@ func (b *engine) commitPulled(name, layout string) string {
 
 // migrateNames moves images cached under a docker.io/ name (docker tag did, before
 // commitImage shortened names) to the familiar name imagePath looks up. One whose
-// familiar name is taken was unreachable anyway, and goes.
+// familiar name is taken was unreachable anyway, and goes. So does a cache directory
+// without its image.json: docker rmi removed that first, then failed on the image's
+// files where a directory lacked write permission, and listing images failed on it.
 func migrateNames(cache string) {
 	entries, e := os.ReadDir(cache)
 	check(e)
 	for _, entry := range entries {
 		_ = safeRun(func() {
 			dir := filepath.Join(cache, entry.Name())
-			if len(entry.Name()) != 64 || !exists(filepath.Join(dir, "image.json")) {
+			if len(entry.Name()) != 64 || !entry.IsDir() {
+				return
+			}
+			if !exists(filepath.Join(dir, "image.json")) { // left by a removal that failed half way
+				removeImageDir(filepath.Dir(cache), filepath.Join(filepath.Dir(cache), "containers"), dir)
 				return
 			}
 			meta := readObject(filepath.Join(dir, "image.json"))
@@ -657,8 +678,7 @@ func migrateNames(cache string) {
 			}
 			target := filepath.Join(cache, key(shortName(name)))
 			if exists(target) {
-				retainLowers(filepath.Dir(cache), filepath.Join(filepath.Dir(cache), "containers"), dir)
-				check(os.RemoveAll(dir))
+				removeImageDir(filepath.Dir(cache), filepath.Join(filepath.Dir(cache), "containers"), dir)
 				return
 			}
 			meta["name"] = shortName(name)
@@ -676,7 +696,7 @@ func ensureUnpacked(target string) {
 	im := loadImage(noLinks(target, "layout"))
 	stage, e := os.MkdirTemp(target, ".rootfs-")
 	check(e)
-	defer os.RemoveAll(stage)
+	defer removeTree(stage)
 	size := im.unpack(stage)
 	if e := os.Rename(stage, filepath.Join(target, "rootfs")); e != nil && !exists(filepath.Join(target, "rootfs")) {
 		check(e)

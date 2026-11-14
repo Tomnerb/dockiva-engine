@@ -179,7 +179,7 @@ func tarEntry(out *tar.Writer, name, p string, info os.FileInfo) error {
 		return e
 	}
 	if info.Mode().IsRegular() {
-		src, e := os.OpenFile(p, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+		src, e := openGuest(p)
 		check(e)
 		defer src.Close()
 		_, e = io.CopyN(out, src, h.Size)
@@ -239,7 +239,9 @@ func (b *engine) changes(name string) []obj {
 	}
 	var visit func(rel string) bool
 	visit = func(rel string) bool {
-		entries, e := os.ReadDir(filepath.Join(r.upper, filepath.FromSlash(rel)))
+		dir := filepath.Join(r.upper, filepath.FromSlash(rel))
+		defer unlock(dir, 0o500)()
+		entries, e := os.ReadDir(dir)
 		check(e)
 		changed := false
 		for _, entry := range entries {
@@ -311,7 +313,8 @@ func (b *engine) putArchive(name, requested string, body io.Reader, noOverwriteD
 			if to.files != nil {
 				to.files.remove(to.rel)
 			} else {
-				check(os.RemoveAll(dest))
+				defer unlock(filepath.Dir(dest), 0o700)()
+				check(removeTree(dest))
 			}
 			exists = false
 		}
@@ -323,6 +326,9 @@ func (b *engine) putArchive(name, requested string, body io.Reader, noOverwriteD
 			}
 			defer to.files.settle(to.rel, h.Typeflag == tar.TypeDir)
 		}
+		// Docker's root writes into a directory without write permission: it has it until
+		// the archive is in (restricted.go).
+		defer unlock(filepath.Dir(dest), 0o700)()
 		mode := tarMode(h)
 		switch h.Typeflag {
 		case tar.TypeDir:
