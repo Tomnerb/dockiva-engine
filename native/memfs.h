@@ -64,10 +64,19 @@ static int mem_is(const MemNode *n,uint32_t type) { return (n->mode&0170000)==ty
 #define MEM_DIR 0040000u
 #define MEM_REG 0100000u
 #define MEM_LNK 0120000u
-/* rwx (4, 2, 1) for the caller: root passes, except execute on a file with no x bit. */
+/* rwx (4, 2, 1) for the caller: root passes, except execute on a file with no x bit.
+   An upper directory's mirror (upm.h) is 0777 whatever the directory's mode: changing
+   its entries is the host directory's to allow, as for the files on disk beside them
+   (a user made files in a 0555 directory, and renamed ones not yet written back). */
+static void mem_dir_path(const MemNode *n,char out[1025]);
 static int mem_may(const MemNode *n,unsigned want) {
-    if(!guest_uid)return !(want&1) || mem_is(n,MEM_DIR) || (n->mode&0111);
-    unsigned bits=guest_uid==n->uid || n->fs==upm_fs?(n->mode>>6)&7:guest_gid==n->gid?(n->mode>>3)&7:n->mode&7;   /* upm.h: owned as host files are */
+    int layer=n->fs==upm_fs;
+    if(!guest_uid && !(layer && !fs_dac_can()))return !(want&1) || mem_is(n,MEM_DIR) || (n->mode&0111);   /* (the layer's files: root holding CAP_DAC_OVERRIDE, fs.h) */
+    if(layer && (want&2) && mem_is(n,MEM_DIR)) {
+        char path[1025];struct stat st;mem_dir_path(n,path);
+        if(path[0] && !fstatat(fs_root,path[1]?path+1:".",&st,FS_NOFOLLOW_AT) && (st.st_mode&0300)!=0300)return 0;
+    }
+    unsigned bits=guest_uid==n->uid || layer?(n->mode>>6)&7:guest_gid==n->gid?(n->mode>>3)&7:n->mode&7;   /* upm.h: owned as host files are */
     return (bits&want)==want;
 }
 /* Removing or renaming node out of dir: the sticky bit keeps others' files. */

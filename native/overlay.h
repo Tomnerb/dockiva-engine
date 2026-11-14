@@ -169,6 +169,7 @@ static int ov_mark(int dir,const char *name) {                    /* make ".wh.N
 static void ov_unmark(int dir,const char *name) { char wh[300];if(snprintf(wh,sizeof wh,OV_WH "%s",name)<=255)unlinkat(dir,wh,0); }
 static void ov_close2(int a,int b) { int saved=errno;if(a>=0)close(a);if(b>=0)close(b);errno=saved; }
 static int ov_subdir(int dir,const char *name) { return openat(dir,name,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC); }
+#define ov_updir fs_subdir   /* an upper or mounted directory: root's redo opens it whatever its mode (fs_dac, fs.h) */
 /* A directory stream from its start (a dup shares the descriptor's position). */
 static DIR *ov_opendir(int dir) {
     int copy=dup(dir);DIR *s=copy>=0 && lseek(copy,0,SEEK_SET)==0?fdopendir(copy):NULL;
@@ -190,19 +191,22 @@ static int ov_pair(const char *canon,int *upper,int *lower,int *mount) {
     if(m>0) {
         if(!fs_mounts[m-1].directory) { errno=ENOTDIR;return -1; }
         *mount=m-1;p+=strlen(fs_mounts[m-1].path);*upper=dup(fs_mounts[m-1].fd);if(*upper<0)return -1;
+        fs_dac.ro=fs_mounts[m-1].readonly;fs_dac_fd(*upper);
     } else {
+        fs_dac.ro=0;
         /* Most directories are in one layer only: a path the lower layer lacks is
            the upper one's, found in one call (and the reverse needs the walk). */
         struct stat st;
-        if(canon[1] && fstatat(fs_lower,canon+1,&st,FS_NOFOLLOW_AT) && (errno==ENOENT || errno==ENOTDIR)) {
+        if(!fs_dac.on && canon[1] && fstatat(fs_lower,canon+1,&st,FS_NOFOLLOW_AT) && (errno==ENOENT || errno==ENOTDIR)) {
             *upper=openat(fs_root,canon+1,O_RDONLY|O_DIRECTORY|FS_NOFOLLOW_OPEN|O_CLOEXEC);
             if(*upper>=0 || errno!=ELOOP)return *upper<0?-1:0;
         }
         *upper=dup(fs_root);*lower=dup(fs_lower);
         if(*upper<0 || *lower<0) { ov_close2(*upper,*lower);return -1; }
+        fs_dac_fd(*upper);
     }
     while(ov_part(&p,part)) {
-        int u=*upper>=0?ov_subdir(*upper,part):-1;
+        int u=*upper>=0?ov_updir(*upper,part):-1;
         if(u<0 && *upper>=0 && errno!=ENOENT) { ov_close2(*upper,*lower);return -1; }   /* a file or link hides what is below */
         int l=-1;
         if(*lower>=0 && !(u>=0?ov_marker(u,NULL):*upper>=0 && ov_marker(*upper,part)))l=ov_subdir(*lower,part);
@@ -233,11 +237,13 @@ static int ov_chmod(int dir,const char *name,mode_t mode) {
 /* A canonical guest directory of the root's layers in the upper layer: it and those
    above it are made from the lower ones where missing. Returns its descriptor. */
 static int ov_upper(const char *canon) {
-    if(canon[1]) { int d=openat(fs_root,canon+1,O_RDONLY|O_DIRECTORY|FS_NOFOLLOW_OPEN|O_CLOEXEC);if(d>=0)return d; } /* there already */
+    fs_dac.ro=0;
+    if(canon[1]) { int d=openat(fs_root,canon+1,O_RDONLY|O_DIRECTORY|FS_NOFOLLOW_OPEN|O_CLOEXEC);if(d>=0) { fs_dac_fd(d);return d; } } /* there already */
     int u=dup(fs_root),l=dup(fs_lower);const char *p=canon;char part[256];
     if(u<0 || l<0) { ov_close2(u,l);return -1; }
+    fs_dac_fd(u);
     while(ov_part(&p,part)) {
-        int nu=ov_subdir(u,part),nl=l>=0?ov_subdir(l,part):-1;
+        int nu=ov_updir(u,part),nl=l>=0?ov_subdir(l,part):-1;
         if(nu<0 && errno==ENOENT) {
             struct stat st;
             if(nl<0 || fstat(nl,&st) || ov_marker(u,part)) { ov_close2(u,l);ov_close2(nl,-1);errno=ENOENT;return -1; }
@@ -248,7 +254,7 @@ static int ov_upper(const char *canon) {
                 (void)ov_chmod(u,part,st.st_mode&07777);(void)utimensat(u,part,times,AT_SYMLINK_NOFOLLOW);
                 ov_dirty=1;                                            /* a lower directory now shows from above (fchmod of its descriptor): ov_changed */
             }
-            nu=ov_subdir(u,part);
+            nu=ov_updir(u,part);
         }
         if(nu<0) { ov_close2(u,l);ov_close2(nl,-1);return -1; }
         if(nl>=0 && ov_marker(nu,NULL)) { close(nl);nl=-1; }        /* an opaque directory: nothing lower is seen */
@@ -615,7 +621,7 @@ static int ov_walk(int base,const char *base_path,const char *input,int follow,c
     memcpy(rest,input,length+1);
     if(mem_mount_count && mem_mount_inside(cur))return mem_redirect_set(cur,rest);
     OvLinkWalk passed={0};char from[1025];
-    if(fs_scope.root<0) {
+    if(fs_scope.root<0 && !fs_dac.on) {
         char to[1025];int fast;
         if(ov_link_get(cur,rest,follow,to) && (fast=ov_walk_fast("/",to,follow,direct,leaf,canon))!=-2)return fast;
         if((fast=ov_walk_fast(cur,rest,follow,direct,leaf,canon))!=-2)return fast;
@@ -635,6 +641,7 @@ static int ov_walk(int base,const char *base_path,const char *input,int follow,c
         if(fd>=0) {
             strcpy(leaf,".");if(canon)strcpy(canon,cur);
             fs_where=0;ov_leaf.layer=layer;strcpy(ov_leaf.canon,cur);
+            if(!layer) { fs_dac.ro=0;fs_dac_fd(fd); }
             return fd;
         }
     }
@@ -669,7 +676,7 @@ static int ov_walk(int base,const char *base_path,const char *input,int follow,c
             if(i>=0) {
                 if(!fs_mounts[i].directory && !last) { ov_close2(u,l);errno=ENOTDIR;return -1; }
                 ov_close2(u,l);u=dup(fs_mounts[i].fd);l=-1;mount=i;if(u<0)return -1;
-                strcpy(cur,at);
+                fs_dac.ro=fs_mounts[i].readonly;fs_dac_fd(u);strcpy(cur,at);
                 if(last) { strcpy(leaf,fs_mounts[i].directory?".":fs_mounts[i].name);if(canon)strcpy(canon,at);fs_where=i+1;return u; }
                 continue;
             }
@@ -714,7 +721,7 @@ static int ov_walk(int base,const char *base_path,const char *input,int follow,c
         if(!S_ISDIR(st.st_mode)) { ov_close2(u,l);errno=ENOTDIR;return -1; }
         int nu=-1,nl=-1;
         if(layer==0) {
-            nu=ov_subdir(u,part);
+            nu=ov_updir(u,part);
             if(nu<0) { ov_close2(u,l);return -1; }
             if(mount<0 && l>=0 && !ov_marker(nu,NULL))nl=ov_subdir(l,part);
         } else if((nl=ov_subdir(l,part))<0) { ov_close2(u,l);return -1; }
