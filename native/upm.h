@@ -209,7 +209,18 @@ static int upm_write_back(MemNode *n,const char *canon,int force) {
     /* All from the directory, opened refusing a symlink anywhere on the way (another
        run, an exec, may have swapped one in): nothing lands outside the root. */
     int parent=dir[1]?openat(fs_root,dir+1,O_RDONLY|O_DIRECTORY|FS_NOFOLLOW_OPEN|O_CLOEXEC):dup(fs_root);
-    int fd=parent>=0?openat(parent,temp,O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC|O_NOFOLLOW,0600):-1,ok=fd>=0;
+    int fd=parent>=0?openat(parent,temp,O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC|O_NOFOLLOW,0600):-1,forced=0;
+    if(fd<0 && errno==EACCES) {
+        /* The directory, or one above it, lost the owner's bits after the file was made
+           (Go fills a module's directory, then makes it 0555): the file is the guest's
+           already, so it is written whoever made it, as root's calls are (fs_dac, fs.h).
+           It stayed in memory and went with the container's end. */
+        forced=!fs_dac.on;fs_dac.on=1;
+        if(parent>=0)close(parent);
+        parent=ov_upper(dir);
+        fd=parent>=0?openat(parent,temp,O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC|O_NOFOLLOW,0600):-1;
+    }
+    int ok=fd>=0;
     for(uint64_t at=0;ok && at<size;) {
         pthread_mutex_lock(&mem_lock);
         uint64_t got=mem_read_at(n,at,upm_buffer,size-at<UPM_CHUNK?size-at:UPM_CHUNK);
@@ -235,6 +246,7 @@ static int upm_write_back(MemNode *n,const char *canon,int force) {
         } else (void)unlinkat(parent,temp,0);
     } else if(fd>=0)(void)unlinkat(parent,temp,0);
     if(parent>=0)close(parent);
+    if(forced)fs_dac_end();
     mem_node_put(n);                                                           /* the pin (frees it once forgotten) */
     return done;
 }
@@ -262,6 +274,7 @@ static int64_t upm_move(MemNode *n,MemEntry *e,const char *from,const char *to,c
     }
     MemNode *into=upm_dir(dir,1);MemEntry *clash=into?mem_find(into,name):NULL;
     if(!into || (clash && clash->node))return 1;
+    if(!mem_may(into,3))return -13;
     upm_count(to,1);                                                           /* before it exists: walks look it up */
     MemEntry *now=mem_link(into,name,n);int64_t r=now?0:-12;
     if(!r && disk) {
@@ -285,6 +298,7 @@ static int64_t upm_cross(uint64_t call,MemPath *w,const int *res) {
     if(res[0]==1) {                                                            /* from a pending file */
         MemNode *n=w[0].node;char from[1025];snprintf(from,sizeof from,"%s",w[0].canon);
         if(!n || !from[0]) { pthread_mutex_unlock(&mem_lock);return -2; }
+        if(call!=37 && w[0].dir && !mem_may(w[0].dir,3)) { pthread_mutex_unlock(&mem_lock);return -13; }   /* its directory's mode, as mem_rename */
         if(call!=37 && !(flags&2)) {                                           /* a rename: in memory where it can be (upm_move) */
             n->refs++;pthread_mutex_unlock(&mem_lock);
             char leaf[1025],to[1025];int parent=fs_lookup(x[2],x[3],leaf,FS_DIRECT,to);
