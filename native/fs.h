@@ -500,6 +500,7 @@ static int fs_walk_fast(int base,const char *cur_start,const char *rest,int foll
 #define FS_DIRECT 0
 #define FS_NOFOLLOW_AT AT_SYMLINK_NOFOLLOW
 #define FS_NOFOLLOW_OPEN O_NOFOLLOW
+#define O_SYMLINK 010000000                 /* O_PATH (needs _GNU_SOURCE); with O_NOFOLLOW: the link itself */
 #define FS_ANY_AT 0
 #define fs_renameat renameat
 #endif
@@ -1414,11 +1415,13 @@ static uint64_t fs_open(void) {
     const uint64_t allowed=3|64|128|256|512|1024|2048|4096|16384|32768|65536|131072|262144|524288|1052672;
     /* Like Linux, ignore bits open(2) does not define (MySQL passes a mode there).
        O_PATH (a descriptor for *at calls, fstat and close; MariaDB walks directories
-       with it) opens read-only. ponytail: Linux needs no read permission for O_PATH
-       and can open a symlink itself (with O_NOFOLLOW); here those fail as plain opens.
-       O_TMPFILE is unsupported (callers fall back to a named file). */
+       with it) opens read-only; with O_NOFOLLOW on a symlink it opens the link itself
+       (glibc's fchmodat and lchmod: tar chmods each link it makes and takes fstat's
+       S_IFLNK as EOPNOTSUPP). ponytail: Linux needs no read permission for O_PATH; here
+       that fails as a plain open. O_TMPFILE is unsupported (callers fall back to a named file). */
     if((flags&UINT64_C(0x400000)) || (flags&3)==3) return linux_error(95);
-    if(flags&UINT64_C(0x200000))flags&=UINT64_C(16384|32768|524288);              /* O_DIRECTORY, O_NOFOLLOW, O_CLOEXEC */
+    int opath=(flags&UINT64_C(0x200000))!=0;
+    if(opath)flags&=UINT64_C(16384|32768|524288);                                  /* O_DIRECTORY, O_NOFOLLOW, O_CLOEXEC */
     flags&=allowed;
     if(!fs_detached.on) {                                  /* detached: checked under the lock, installed there */
         unsigned slot=0;while(slot<FS_SLOTS && FS(slot).fd) slot++;
@@ -1540,11 +1543,15 @@ static uint64_t fs_open(void) {
         int64_t r=upm_create(layers.canon,flags,cpu->gpr[3]);
         if(r!=UPM_DISK) { close(parent);if(r>=0)fs_count_created();return r<0?linux_error((unsigned)-r):(uint64_t)r; }
     }
+    /* O_PATH|O_NOFOLLOW on a symlink: the link itself (O_SYMLINK; FS_NOFOLLOW_OPEN still
+       refuses one before the leaf). */
+    int link=opath && exists && S_ISLNK(before.st_mode);
+    if(link)options=O_RDONLY|O_SYMLINK|FS_NOFOLLOW_OPEN|O_CLOEXEC|O_NONBLOCK;
     int fd=openat(parent,leaf,options|(fresh?O_EXCL:0),mode);
     if(fd<0 && fresh && errno==EEXIST && !(flags&128)) { fresh=0;fd=openat(parent,leaf,options,mode); }
     if(fd<0) { uint64_t e=fs_error();close(parent);return e; }
     struct stat info;
-    if(!fresh && (fstat(fd,&info)<0 || (!S_ISREG(info.st_mode) && !S_ISDIR(info.st_mode)) || (uint64_t)info.st_size>fs_file_limit)) {
+    if(!fresh && (fstat(fd,&info)<0 || (!S_ISREG(info.st_mode) && !S_ISDIR(info.st_mode) && !(link && S_ISLNK(info.st_mode))) || (uint64_t)info.st_size>fs_file_limit)) {
         close(fd);close(parent);return linux_error(13);
     }
     GuestDirectory *directory=NULL;
