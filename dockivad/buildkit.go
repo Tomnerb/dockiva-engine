@@ -25,7 +25,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"slices"
 	"sort"
 	"strconv"
@@ -627,7 +626,7 @@ func (b *engine) bkControlSolve(ctx context.Context, req pbFields) pbuf {
 			bkSolves.Unlock()
 			st.mu.Lock()
 			if st.llb.work != "" {
-				go os.RemoveAll(st.llb.work)
+				go removeTree(st.llb.work)
 			}
 			st.mu.Unlock()
 		})

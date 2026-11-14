@@ -40,18 +40,18 @@ func writeDiffLayer(root, base, blobs string) (digest string, size int64, change
 		check(out.WriteHeader(h))
 		changed = true
 	}
-	link := func(p string) string { target, e := os.Readlink(p); check(e); return target }
+	link := func(tree, rel string) string { target, e := readlinkIn(tree, rel); check(e); return target }
 	if base != "" {
 		// Whiteouts first. A directory root lacks, or holds as another type, is not
 		// descended: its whiteout or replacement removes it whole.
-		check(filepath.WalkDir(base, func(p string, d fs.DirEntry, err error) error {
+		check(walkTree(base, func(p string, d fs.DirEntry, err error) error {
 			check(err)
 			rel, e := filepath.Rel(base, p)
 			check(e)
 			if rel == "." {
 				return nil
 			}
-			st, e := os.Lstat(filepath.Join(root, rel))
+			st, e := lstatIn(root, rel)
 			gone := os.IsNotExist(e)
 			if gone {
 				dir, name := filepath.Split(rel)
@@ -68,7 +68,7 @@ func writeDiffLayer(root, base, blobs string) (digest string, size int64, change
 	// fresh is a directory base lacks (or had as another type): all beneath it is new,
 	// and base is not looked up there (its path may run through a file or symlink).
 	fresh := ""
-	check(filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+	check(walkTree(root, func(p string, d fs.DirEntry, err error) error {
 		check(err)
 		rel, e := filepath.Rel(root, p)
 		check(e)
@@ -79,11 +79,10 @@ func writeDiffLayer(root, base, blobs string) (digest string, size int64, change
 			return nil // the root itself; sockets, FIFOs and devices
 		}
 		if base != "" && !strings.HasPrefix(rel, fresh+"/") {
-			was := filepath.Join(base, rel)
-			old, e := os.Lstat(was)
+			old, e := lstatIn(base, rel)
 			if e == nil && old.Mode() == info.Mode() &&
 				(kind == fs.ModeDir ||
-					kind == fs.ModeSymlink && link(was) == link(p) ||
+					kind == fs.ModeSymlink && link(base, rel) == link(root, rel) ||
 					kind == 0 && old.Size() == info.Size() && old.ModTime().Equal(info.ModTime())) {
 				return nil
 			}
@@ -99,13 +98,13 @@ func writeDiffLayer(root, base, blobs string) (digest string, size int64, change
 		case fs.ModeDir:
 			h.Name, h.Typeflag = rel+"/", tar.TypeDir
 		case fs.ModeSymlink:
-			h.Typeflag, h.Linkname = tar.TypeSymlink, link(p)
+			h.Typeflag, h.Linkname = tar.TypeSymlink, link(root, rel)
 		default:
 			h.Size = info.Size()
 		}
 		add(h)
 		if kind == 0 {
-			in, e := os.OpenFile(p, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+			in, e := openGuest(p)
 			check(e)
 			defer in.Close()
 			_, e = io.CopyN(out, in, h.Size)
@@ -137,7 +136,7 @@ func imageDocs(layout string) (manifest, config obj) {
 // treeSize is the total size of the regular files under root (docker images SIZE).
 func treeSize(root string) int64 {
 	var n int64
-	check(filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+	check(walkTree(root, func(p string, d fs.DirEntry, err error) error {
 		check(err)
 		if d.Type().IsRegular() {
 			info, e := d.Info()

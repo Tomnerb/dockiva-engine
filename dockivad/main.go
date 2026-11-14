@@ -95,6 +95,7 @@ func run() {
 			moveToStore(b.Home, store)
 		}
 		cleanupUnpublished(b.State)
+		cleanupUnpublished(b.Cache)
 		migrateNames(b.Cache)
 	}
 	if *importName != "" {

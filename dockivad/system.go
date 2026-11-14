@@ -213,8 +213,7 @@ func (b *engine) pruneImages(danglingOnly bool, keep func(time.Time, obj) bool) 
 			if !keep(c.created, labels) {
 				continue
 			}
-			retainLowers(b.storeDir(), b.State, c.dir)
-			check(os.RemoveAll(c.dir))
+			removeImageDir(b.storeDir(), b.State, c.dir)
 			removed++
 			if !strings.HasPrefix(c.name, "<none>:") {
 				deleted = append(deleted, obj{"Untagged": c.name})

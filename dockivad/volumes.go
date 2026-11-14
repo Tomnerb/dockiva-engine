@@ -110,7 +110,7 @@ func (b *engine) removeVolume(name string) {
 	if users := b.volumeUsers(name); len(users) > 0 {
 		panic(apiError{409, "Volume " + name + " is in use by " + strings.Join(users, ", ")})
 	}
-	check(os.RemoveAll(filepath.Join(volumesDir(b.Home), name)))
+	check(removeTree(filepath.Join(volumesDir(b.Home), name)))
 }
 
 // removeAnonymousVolumes deletes the anonymous volumes a removed container used
@@ -550,7 +550,7 @@ func copyTree(root layers, from, to string) {
 			check(os.Mkdir(dest, 0o700))
 			check(setMode(dest, info.Mode()&permBits|0o700))
 		case info.Mode().IsRegular():
-			in, e := os.Open(p)
+			in, e := openGuest(p)
 			check(e)
 			defer in.Close()
 			out, e := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, info.Mode().Perm())

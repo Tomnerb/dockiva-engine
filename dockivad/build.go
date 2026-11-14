@@ -117,7 +117,7 @@ func (b *engine) build(w http.ResponseWriter, r *http.Request, q url.Values) {
 	}()
 	work, e := os.MkdirTemp(private(filepath.Join(b.storeDir(), "build")), "b-")
 	check(e)
-	defer func() { go os.RemoveAll(work) }()
+	defer func() { go removeTree(work) }()
 	quiet := q.Get("q") == "1" || q.Get("q") == "true"
 	var memory int64
 	if raw := q.Get("memory"); raw != "" && raw != "0" { // docker build -m
@@ -707,7 +707,7 @@ func (bd *builder) runStep(st *buildStage, o runOptions) {
 func (bd *builder) discardRoot(st *buildStage) {
 	old := filepath.Join(bd.work, "old-"+token()[:12])
 	check(os.Rename(st.root, old))
-	go os.RemoveAll(old)
+	go removeTree(old)
 }
 
 // The engine writes these into each container; a build keeps the stage's own.
@@ -920,7 +920,7 @@ func isGuestDir(root, guest string) bool {
 // copyIntoGuest copies a directory's contents into a guest directory, merging.
 func copyIntoGuest(src, root, dest string, mode os.FileMode, chmod bool) {
 	guestDir(root, dest)
-	check(filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
+	check(walkTree(src, func(p string, d fs.DirEntry, err error) error {
 		check(err)
 		rel, e := filepath.Rel(src, p)
 		check(e)
@@ -948,6 +948,7 @@ func copyFileTo(src, root, guest string, mode os.FileMode, chmod bool) {
 	parent, base := path.Split(path.Clean("/" + guest))
 	reject(base != "", "Cannot copy a file onto /")
 	dst := filepath.Join(guestDir(root, parent), base)
+	defer unlock(filepath.Dir(dst), 0o700)()
 	if old, e := os.Lstat(dst); e == nil {
 		reject(!old.IsDir(), "Cannot replace the directory "+guest+" with a file")
 		check(os.Remove(dst))

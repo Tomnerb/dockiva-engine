@@ -120,7 +120,7 @@ func removeFexState(root string, made []string) {
 				return
 			}
 			if path.Base(rel) == "fex-emu" {
-				check(os.RemoveAll(host))
+				check(removeTree(host))
 			} else {
 				_ = os.Remove(host) // a directory still holding files stays
 			}

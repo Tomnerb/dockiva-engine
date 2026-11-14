@@ -158,9 +158,12 @@ func (r layers) upperDir(rel string, create bool) string {
 		} else if !create {
 			panic(apiError{404, "No such directory: /" + sofar})
 		}
-		if e := os.Mkdir(next, 0o700); e != nil && !errors.Is(e, fs.ErrExist) {
-			check(e)
-		}
+		func() {
+			defer unlock(p, 0o700)()
+			if e := os.Mkdir(next, 0o700); e != nil && !errors.Is(e, fs.ErrExist) {
+				check(e)
+			}
+		}()
 		if from != nil {
 			check(setMode(next, from.Mode()&permBits))
 			_ = os.Chtimes(next, from.ModTime(), from.ModTime())
@@ -194,6 +197,7 @@ func (r layers) settle(rel string, directory bool) {
 	if !exists(wh) {
 		return
 	}
+	defer unlock(filepath.Dir(wh), 0o700)()
 	if directory {
 		f, e := os.OpenFile(filepath.Join(r.upper, dir, name, opaqueMarker), os.O_WRONLY|os.O_CREATE|syscall.O_NOFOLLOW, 0o600)
 		check(e)
@@ -210,12 +214,15 @@ func (r layers) remove(rel string) {
 	reject(name != "", "Cannot remove the container root")
 	up, low := r.lookup(rel)
 	if low != "" {
-		f, e := os.OpenFile(filepath.Join(r.upperDir(dir, true), whiteoutPrefix+name), os.O_WRONLY|os.O_CREATE|syscall.O_NOFOLLOW, 0o600)
+		parent := r.upperDir(dir, true)
+		defer unlock(parent, 0o700)()
+		f, e := os.OpenFile(filepath.Join(parent, whiteoutPrefix+name), os.O_WRONLY|os.O_CREATE|syscall.O_NOFOLLOW, 0o600)
 		check(e)
 		f.Close()
 	}
 	if up != "" {
-		check(os.RemoveAll(up))
+		defer unlock(filepath.Dir(up), 0o700)()
+		check(removeTree(up))
 	}
 }
 
@@ -233,6 +240,7 @@ func (r layers) copyUp(rel string) string {
 	check(e)
 	reject(!st.IsDir(), "Cannot copy a directory up: /"+rel)
 	dest := r.writable(rel)
+	defer unlock(filepath.Dir(dest), 0o700)()
 	cloneTree(host, dest)
 	if st.Mode().IsRegular() {
 		check(setMode(dest, st.Mode()&permBits))
@@ -248,10 +256,32 @@ type guestEntry struct {
 
 // readDir lists directory rel as the guest sees it, sorted by name.
 func (r layers) readDir(rel string) []guestEntry {
+	out, lock := r.openDir(rel)
+	lock()
+	return out
+}
+
+// openDir is readDir of a directory that stays readable (restricted.go) until lock
+// is called: for a walk into it.
+func (r layers) openDir(rel string) (out []guestEntry, lock func()) {
 	up, low := r.lookup(rel)
 	reject(up != "" || low != "", "No such directory: /"+rel)
 	out, seen := []guestEntry{}, map[string]bool{}
+	locks := []func(){}
+	lock = func() {
+		for _, l := range locks {
+			l()
+		}
+		locks = nil
+	}
+	defer func() {
+		if v := recover(); v != nil {
+			lock()
+			panic(v)
+		}
+	}()
 	add := func(dir string, upper bool) {
+		locks = append(locks, unlock(dir, 0o500))
 		entries, e := os.ReadDir(dir)
 		check(e)
 		for _, entry := range entries {
@@ -280,7 +310,7 @@ func (r layers) readDir(rel string) []guestEntry {
 		add(low, false)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].name < out[j].name })
-	return out
+	return out, lock
 }
 
 // walk visits rel and everything below it as the guest sees it, in lexical order
@@ -304,7 +334,9 @@ func (r layers) walkFrom(rel, host string, info os.FileInfo, fn func(rel, host s
 		}
 		return e
 	}
-	for _, entry := range r.readDir(rel) {
+	entries, lock := r.openDir(rel)
+	defer lock()
+	for _, entry := range entries {
 		if e := r.walkFrom(path.Join(rel, entry.name), entry.host, entry.info, fn); e != nil {
 			return e
 		}
@@ -321,6 +353,7 @@ func (r layers) writeFile(rel, content string) {
 		reject(s.Mode().IsRegular() || s.Mode()&os.ModeSymlink != 0, "Cannot replace "+rel)
 	}
 	p := r.writable(rel)
+	defer unlock(filepath.Dir(p), 0o700)()
 	if _, e := os.Lstat(p); e == nil {
 		check(os.Remove(p))
 	}
@@ -343,9 +376,12 @@ func (r layers) mountPoint(guest string, directory bool) {
 		if !ok {
 			if last && !directory {
 				p := r.writable(sofar)
-				f, e := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o644)
-				check(e)
-				f.Close()
+				func() {
+					defer unlock(filepath.Dir(p), 0o700)()
+					f, e := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o644)
+					check(e)
+					f.Close()
+				}()
 				r.settle(sofar, false)
 			} else {
 				r.upperDir(sofar, true)
@@ -428,7 +464,7 @@ func (b *engine) commitContainer(name string, q url.Values) obj {
 	}
 	work, e := os.MkdirTemp(b.storeDir(), ".commit-")
 	check(e)
-	defer os.RemoveAll(work)
+	defer removeTree(work)
 	merged := filepath.Join(work, "rootfs")
 	cloneTree(r.lower, merged)
 	applyUpper(r.upper, merged)
@@ -446,9 +482,16 @@ func (b *engine) commitContainer(name string, q url.Values) obj {
 
 // applyUpper lays an upper layer over a copy of its lower one: whiteouts remove,
 // opaque directories empty, the rest replaces (APFS clones). The engine's own files
-// (engineFiles) stay out.
+// (engineFiles) stay out. A directory the guest left without owner permissions
+// (restricted.go) is writable while it is filled, and gets its mode after.
 func applyUpper(upper, merged string) {
-	check(filepath.WalkDir(upper, func(p string, d fs.DirEntry, err error) error {
+	type late struct {
+		path string
+		mode fs.FileMode
+	}
+	dirs := []late{}
+	defer unlock(merged, 0o700)()
+	check(walkTree(upper, func(p string, d fs.DirEntry, err error) error {
 		check(err)
 		rel, e := filepath.Rel(upper, p)
 		check(e)
@@ -461,12 +504,12 @@ func applyUpper(upper, merged string) {
 			}
 		case strings.HasPrefix(name, whiteoutPrefix+whiteoutPrefix): // the opaque marker (seen at its directory), a copy-up in flight
 		case strings.HasPrefix(name, whiteoutPrefix):
-			check(os.RemoveAll(filepath.Join(filepath.Dir(dest), strings.TrimPrefix(name, whiteoutPrefix))))
+			check(removeTree(filepath.Join(filepath.Dir(dest), strings.TrimPrefix(name, whiteoutPrefix))))
 		default:
 			info, e := d.Info()
 			check(e)
 			if old, e := os.Lstat(dest); e == nil && !(old.IsDir() && d.IsDir()) || e == nil && exists(filepath.Join(p, opaqueMarker)) {
-				check(os.RemoveAll(dest))
+				check(removeTree(dest))
 			}
 			if !d.IsDir() {
 				cloneTree(p, dest)
@@ -478,8 +521,15 @@ func applyUpper(upper, merged string) {
 			if e := os.Mkdir(dest, 0o700); e != nil && !errors.Is(e, fs.ErrExist) {
 				check(e)
 			}
-			check(setMode(dest, info.Mode()&permBits))
+			mode := info.Mode() & permBits
+			check(setMode(dest, mode|0o700))
+			if mode&0o700 != 0o700 {
+				dirs = append(dirs, late{dest, mode})
+			}
 		}
 		return nil
 	}))
+	for i := len(dirs) - 1; i >= 0; i-- { // children first
+		check(setMode(dirs[i].path, dirs[i].mode))
+	}
 }

@@ -97,7 +97,7 @@ func (bd *builder) store(st *buildStage, in instruction, id, dir string) {
 	_ = safeRun(func() {
 		tmp, e := os.MkdirTemp(bd.work, "cache-")
 		check(e)
-		defer os.RemoveAll(tmp)
+		defer removeTree(tmp)
 		cloneTree(st.root, filepath.Join(tmp, "rootfs"))
 		now := time.Now().UTC().Format(time.RFC3339Nano)
 		save(filepath.Join(tmp, "config.json"), st.config)
@@ -175,7 +175,7 @@ func (bd *builder) release() {
 // changed, so the sum overstates the disk used. Ask APFS for private sizes if it matters.
 func changedSize(root, base string) int64 {
 	var n int64
-	check(filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+	check(walkTree(root, func(p string, d fs.DirEntry, err error) error {
 		check(err)
 		if !d.Type().IsRegular() {
 			return nil
@@ -185,7 +185,7 @@ func changedSize(root, base string) int64 {
 		if base != "" {
 			rel, e := filepath.Rel(root, p)
 			check(e)
-			if old, e := os.Lstat(filepath.Join(base, rel)); e == nil && old.Mode().IsRegular() && old.Size() == info.Size() && old.ModTime().Equal(info.ModTime()) {
+			if old, e := lstatIn(base, rel); e == nil && old.Mode().IsRegular() && old.Size() == info.Size() && old.ModTime().Equal(info.ModTime()) {
 				return nil
 			}
 		}
@@ -241,7 +241,7 @@ func treeHash(root string) string {
 
 // hashTree writes each entry's name, mode, size and content or symlink target.
 func hashTree(h io.Writer, root string) {
-	check(filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+	check(walkTree(root, func(p string, d fs.DirEntry, err error) error {
 		check(err)
 		rel, e := filepath.Rel(root, p)
 		check(e)
@@ -254,7 +254,7 @@ func hashTree(h io.Writer, root string) {
 			check(e)
 			fmt.Fprintf(h, "%q", target)
 		case info.Mode().IsRegular():
-			f, e := os.OpenFile(p, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+			f, e := openGuest(p)
 			check(e)
 			defer f.Close()
 			_, e = io.CopyN(h, f, info.Size())
@@ -315,5 +315,5 @@ func (b *engine) discard(dir string) {
 	trash, e := os.MkdirTemp(private(filepath.Join(b.storeDir(), "build")), "trash-")
 	check(e)
 	check(os.Rename(dir, filepath.Join(trash, "entry")))
-	go os.RemoveAll(trash)
+	go removeTree(trash)
 }
