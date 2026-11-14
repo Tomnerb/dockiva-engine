@@ -4,7 +4,8 @@
 over one shared lower tree, the second run proving the first left the shared files
 alone); new files kept in memory (--upper-memory, native/upm.h) renamed while open
 over lower and upper files (tests/native/upm_guest.c), and what that run wrote
-back: each file whole, and no whiteout beside it; then, with alpine as the lower
+back: each file whole, and no whiteout beside it; hard links inside a bind mount
+(tests/native/mountlink_guest.c), never across its boundary; then, with alpine as the lower
 layer, busybox copying, archiving, renaming
 and removing image files, and a container trying to change the image's files every
 way it can (writes, chmod, rename, links, truncate, MAP_SHARED writes, sockets,
@@ -12,7 +13,11 @@ FIFOs; MAP_SHARED writes are overlay_guest's) while another container uses them.
 mode, time and inode unchanged, and no copy-up leftovers may remain. Last, names that
 differ only by case (tests/native/case_guest.c) with both layers on a case-sensitive
 volume, as dockivad keeps them, with and without the memory layer, and statfs there
-(tests/native/statfs_guest.c): the size of the volume --statfs-from names."""
+(tests/native/statfs_guest.c): the size of the volume --statfs-from names. And root's
+CAP_DAC_OVERRIDE (tests/native/rootdac_guest.c): root changing 0555 and 000 directories
+of the upper layer, a bind mount and the image, with and without the memory layer,
+other users refused, the modes and the image left as they were, and a tar archive of
+0555 directories and 0444 files extracted by busybox tar as root."""
 import os
 from pathlib import Path
 import subprocess
@@ -75,6 +80,39 @@ def runtimes():
             print(f'{binary}: skipped (not built)')
 
 
+def mount_link_runs(t):
+    """mountlink_guest.c on every built runtime, with and without the memory layer, bind
+    mounts at /vol and /vol2; then what it left: one file under its three names in the
+    first mount, nothing in the second, no whiteout in either."""
+    failed = 0
+    lower = t/'link-lower'
+    (lower/'low').mkdir(parents=True)
+    (lower/'low/f').write_text('f')
+    build(ROOT/'tests/native/mountlink_guest.c', t/'mountlink')
+    before = snapshot(lower)
+    for binary, runtime, extra in runtimes():
+        for memory in (False, True):
+            tag = f'{binary}-{int(memory)}'
+            upper, state, vol, vol2 = t/f'link-up-{tag}', t/f'link-state-{tag}', t/f'link-vol-{tag}', t/f'link-vol2-{tag}'
+            for d in (upper, state, vol, vol2):
+                d.mkdir()
+            more = ['--upper-memory', str(state/'upper-sync'), '--layers-gen', str(state/'gen')] if memory else []
+            r = subprocess.run([str(runtime), 'run', str(t/'mountlink'), '--root', str(upper), '--lower', str(lower), '--writable', '--bind', str(vol), '/vol', '--bind', str(vol2), '/vol2',
+                                '--storage-limit-mib', '0', '--max-steps', '2000000000', '--process-tree', '--scheduled-network', '--dynamic', *more, *extra],
+                               capture_output=True, timeout=300)
+            ok = r.returncode == 0 and r.stdout == b'mountlink PASS\n' and b'ERROR: AddressSanitizer' not in r.stderr
+            names = sorted(str(p.relative_to(vol)) for p in vol.rglob('*'))
+            ok = ok and names == ['a', 'b', 'd', 'd/c', 's'] and len({(vol/n).stat().st_ino for n in ('a', 'b', 'd/c')}) == 1 and (vol/'a').stat().st_nlink == 3
+            ok = ok and not os.listdir(vol2) and not os.path.lexists(upper/'x') and (upper/'low/g').is_file()
+            failed += not ok
+            print(f'{binary} mountlink_guest{" with the memory layer" if memory else ""}:', 'PASS' if ok else
+                  f'FAIL exit={r.returncode} {r.stdout!r} vol={names} vol2={os.listdir(vol2)} {r.stderr.decode()[-1500:]}')
+    same = snapshot(lower) == before
+    failed += not same
+    print('mountlink lower layer unchanged:', 'PASS' if same else 'FAIL')
+    return failed
+
+
 # upm_guest.c's lower tree, and what its run leaves in the upper layer: files written
 # back, and the whiteouts of the lower files it removed (and only those).
 UPM_LOWER = {'u/lower': 'old lower', 'u/lower2': 'old lower2', 'u/up': 'old up', 'u/app.log.1': 'old log', 'u/k': 'k', 'u/nr': 'nr',
@@ -115,6 +153,68 @@ def upm_runs(t):
     return failed
 
 
+def dac_runs(t):
+    """rootdac_guest.c on every built runtime, with and without the memory layer, a
+    bind mount at /vol; then what it left: every file on disk, each mode as the guest set it."""
+    failed = 0
+    lower = t/'dac-lower'
+    for name in ('low/ro/x', 'low/ro/mv', 'low/ro/keep', 'low/ro2/x'):
+        (lower/name).parent.mkdir(parents=True, exist_ok=True)
+        (lower/name).write_text(name.rsplit('/', 1)[1])
+    (lower/'low/ro/sub').mkdir()
+    (lower/'low/ro').chmod(0o555)
+    (lower/'low/ro2').chmod(0o555)
+    build(ROOT/'tests/native/rootdac_guest.c', t/'rootdac')
+    before = snapshot(lower)
+
+    def left(base, hard=True):
+        """What is wrong under base (the host's /w or /vol) after the run (hard: it made a hard link there)."""
+        a = base/'a'
+        wrong = [] if a.stat().st_mode & 0o7777 == 0o555 else [f'a is {oct(a.stat().st_mode)}']
+        a.chmod(0o755)                                    # to look inside
+        want = {'d1b': 'd', 'd3': 'd+', 'd4': 'd', 'd5': 'd', 'y1b': 'y', 'y3': 'y', 'keep': 'kept', 'z': 'z', 'cwd': 'c'}
+        if (a/'d3').stat().st_mode & 0o7777 != 0:
+            wrong.append('d3 mode')
+        (a/'d3').chmod(0o600)
+        wrong += [k for k, v in want.items() if not (a/k).is_file() or (a/k).read_text() != v]
+        wrong += [k for k in ('d/in', 'pre2', 'last') if not (a/k).is_dir()] + [k for k in ('pre', 'd1', 'd2', 'y1', 'y2', 'f', 'g', 'mvd') if os.path.lexists(a/k)]
+        if not (a/'l').is_symlink() or not (a/'p').is_fifo() or (base/'out').stat().st_mode & 0o7777 != 0o555:
+            wrong.append('link, fifo or moved directory')
+        if hard and (not (a/'h').is_file() or (a/'h').stat().st_ino != (a/'d4').stat().st_ino):
+            wrong.append('hard link')
+        return wrong + [str(p) for p in base.rglob('.wh.*')]
+
+    for binary, runtime, extra in runtimes():
+        for memory in (False, True):
+            tag = f'{binary}-{int(memory)}'
+            upper, state, vol, ro = t/f'dac-up-{tag}', t/f'dac-state-{tag}', t/f'dac-vol-{tag}', t/f'dac-ro-{tag}'
+            for d in (upper, state, vol, ro/'locked'):
+                d.mkdir(parents=True)
+            (ro/'locked/f').write_text('f')
+            (ro/'locked').chmod(0)
+            more = ['--upper-memory', str(state/'upper-sync'), '--layers-gen', str(state/'gen')] if memory else []
+            r = subprocess.run([str(runtime), 'run', str(t/'rootdac'), '--root', str(upper), '--lower', str(lower), '--writable', '--bind', str(vol), '/vol', '--bind-ro', str(ro), '/ro',
+                                '--storage-limit-mib', '0', '--max-steps', '2000000000', '--process-tree', '--scheduled-network', '--dynamic', *more, *extra],
+                               capture_output=True, timeout=300)
+            ok = r.returncode == 0 and r.stdout == b'rootdac PASS\n' and b'ERROR: AddressSanitizer' not in r.stderr
+            wrong = []
+            if ok:
+                low = upper/'low/ro'
+                wrong = left(upper/'w') + left(vol, False) + ([] if low.stat().st_mode & 0o7777 == 0o555 else ['low/ro mode'])
+                low.chmod(0o755)
+                wrong += [k for k in ('.wh.x', '.wh.sub', '.wh.mv', 'f', 'mv2') if not (low/k).is_file()] + ([] if (low/'new').is_dir() else ['low/ro/new'])
+                wrong += [] if (ro/'locked').stat().st_mode & 0o7777 == 0 else ['the read-only mount changed']
+                wrong += ['low/ro2 copied up'] if (upper/'low/ro2').exists() and (upper/'low/ro2').stat().st_mode & 0o7777 != 0o555 else []
+            ok = ok and not wrong
+            failed += not ok
+            print(f'{binary} rootdac_guest{" with the memory layer" if memory else ""}:', 'PASS' if ok else
+                  f'FAIL exit={r.returncode} {r.stdout!r} wrong={wrong} {r.stderr.decode()[-1500:]}')
+    same = snapshot(lower) == before
+    failed += not same
+    print('rootdac lower layer unchanged:', 'PASS' if same else 'FAIL')
+    return failed
+
+
 ATTACK = r'''
 for f in /bin/busybox /lib/ld-musl-aarch64.so.1; do      # what this shell runs on: changed, not broken
   echo pwn >> $f; chmod 777 $f; touch -d 2001-01-01 $f; ln $f $f.hard; mv $f.hard $f.moved; rm $f.moved
@@ -137,6 +237,7 @@ def main():
         lower.mkdir()
         lower_tree(lower)
         build(ROOT/'tests/native/overlay_guest.c', t/'overlay')
+        failed += mount_link_runs(t)
         before = snapshot(lower)
         for binary, runtime, extra in runtimes():
             for run in (1, 2):                              # the second run sees the lower layer as the first did, with the lookup cache
@@ -156,6 +257,7 @@ def main():
         failed += not same
         print('lower layer unchanged:', 'PASS' if same else f'FAIL {[k for k in set(before)|set(after) if before.get(k) != after.get(k)]}')
         failed += upm_runs(t)
+        failed += dac_runs(t)
 
         # busybox on alpine's files as the lower layer
         lower = t/'alpine'
@@ -182,6 +284,14 @@ def main():
         ok = r.returncode == 0 and r.stdout.endswith(b'e2e PASS\n') and not leftovers(t/'e2e')
         failed += not ok
         print('busybox e2e on alpine layers:', 'PASS' if ok else f'FAIL exit={r.returncode} {r.stdout[-800:]!r} {r.stderr.decode()[-1500:]}')
+        # tar as root: 0555 directories made with their final mode, then filled; rm -rf after
+        script = ('set -e; mkdir -p /src/m/a/b /src/m/c; echo 1 > /src/m/a/f; echo 2 > /src/m/a/b/g; echo 3 > /src/m/c/h; chmod 444 /src/m/a/f /src/m/a/b/g /src/m/c/h; '
+                  'chmod 555 /src/m/a/b /src/m/a /src/m/c /src/m; tar cf /t.tar -C /src m; mkdir /dst; tar xf /t.tar -C /dst; test "$(find /dst | wc -l)" = 8; '
+                  'test "$(stat -c %a /dst/m/a)" = 555; test "$(stat -c %a /dst/m/a/b/g)" = 444; test "$(cat /dst/m/a/b/g)" = 2; rm -rf /dst /src; test ! -e /dst; test ! -e /src; echo tar PASS')
+        r = busybox(t/'tar', script, '--upper-memory', str(t/'tar-sync'))
+        ok = r.returncode == 0 and r.stdout.endswith(b'tar PASS\n') and not leftovers(t/'tar')
+        failed += not ok
+        print('busybox tar and rm -rf of 0555 directories as root:', 'PASS' if ok else f'FAIL exit={r.returncode} {r.stdout[-800:]!r} {r.stderr.decode()[-1500:]}')
         r = busybox(t/'attack', ATTACK)
         out = r.stdout.decode(errors='replace')
         ok = '==attack done==' in out and 'pwn' in out    # the container sees its own changes
