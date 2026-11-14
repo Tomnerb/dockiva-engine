@@ -181,7 +181,7 @@ func TestAPIContractAndRejectedOptions(t *testing.T) {
 		t.Fatal("version")
 	}
 	commit, _ := buildStamp() // test binaries carry no vcs stamp: "unknown"
-	if version.GitCommit != commit || len(version.Components) == 0 || version.Components[0].Name != "Engine" || version.Components[0].Details["GitCommit"] != commit {
+	if version.GitCommit != commit || len(version.Components) != 2 || version.Components[0].Name != "dockivad" || version.Components[1].Name != "Engine" || version.Components[1].Details["GitCommit"] != commit {
 		t.Fatalf("version commit: %s", v.Body.String())
 	}
 	if request(t, h, "GET", "/v1.99/info", "", "secret").Code != 400 {

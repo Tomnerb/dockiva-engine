@@ -811,7 +811,7 @@ func (b *engine) api(authorized func(*http.Request) bool) http.Handler {
 				engine["BuildTime"] = built.UTC().Format(time.ANSIC)
 			}
 			send(w, 200, obj{"Version": "0.18.0", "ApiVersion": "1.45", "MinAPIVersion": "1.24", "Os": "linux", "Arch": "arm64", "GitCommit": commit, "GoVersion": runtime.Version(), "KernelVersion": "dockiva-engine", "Experimental": true, "BuildTime": stampTime(built),
-				"Components": []any{obj{"Name": "Engine", "Version": "0.18.0", "Details": engine}, obj{"Name": "dockivad", "Version": "0.18.0", "Details": obj{"ControlPlane": "Go", "PythonRuntime": "false"}}}})
+				"Components": []any{obj{"Name": "dockivad", "Version": "0.18.0", "Details": obj{"ControlPlane": "Go", "PythonRuntime": "false"}}, obj{"Name": "Engine", "Version": "0.18.0", "Details": engine}}})
 			return
 		case path == "/info" && method == "GET":
 			send(w, 200, obj{"ID": "dockiva-engine", "Name": "dockiva-engine", "ServerVersion": "0.18.0", "OSType": "linux", "Architecture": "aarch64", "OperatingSystem": "Dockiva Engine on " + runtime.GOOS, "Driver": "private-copy", "Containers": len(b.names()), "NCPU": min(runtime.NumCPU(), 64), "MemTotal": 0, "SecurityOptions": []any{}, "Warnings": []string{"Not a production isolation boundary"}})
