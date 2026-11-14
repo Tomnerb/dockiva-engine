@@ -525,7 +525,8 @@ static int fs_walk_fast(int base,const char *cur_start,const char *rest,int foll
    its already open parent with no symlink followed, so nothing outside the root is
    changed. Callers that open the leaf do the same for it (fs_dac_leaf). fs_dac_end puts
    each mode back by descriptor (the entry may be renamed or removed by then) unless it
-   changed meanwhile (a chmod by another thread; the call's own: fs_dac_chmod).
+   changed meanwhile (a chmod by another thread; the call's own: fs_dac_chmod). A mode
+   that cannot be put back is said on stderr, the container's log (fs_dac_stuck).
    ponytail: for those microseconds the container's other processes see the wider
    mode, and an engine killed then leaves it; CAP_DAC_READ_SEARCH alone is not honoured;
    exec, chown, inotify and unix-socket paths are not redone (a root user rarely meets
@@ -536,11 +537,16 @@ static int fs_dac_begin(void) {
     if(!denied || fs_dac.on || !fs_dac_can())return 0;
     fs_dac.on=1;return 1;
 }
+/* A mode the pass widened stays so (errno says why): the call itself is done or
+   refused already, so the container's log is where it can be told. */
+static void fs_dac_stuck(mode_t mode,mode_t set) {
+    fprintf(stderr,"dockiva: a file or directory root's call opened up keeps mode %04o, not its own %04o: %s\n",(unsigned)set,(unsigned)mode,strerror(errno));
+}
 static void fs_dac_end(void) {
     int saved=errno;struct stat st;
     while(fs_dac.count) {
         int i=--fs_dac.count,fd=fs_dac.held[i].fd;
-        if(!fstat(fd,&st) && (st.st_mode&07777)==fs_dac.held[i].set)(void)fchmod(fd,fs_dac.held[i].mode);
+        if(fstat(fd,&st) || ((st.st_mode&07777)==fs_dac.held[i].set && fchmod(fd,fs_dac.held[i].mode)))fs_dac_stuck(fs_dac.held[i].mode,fs_dac.held[i].set);
         close(fd);
     }
     fs_dac.on=0;errno=saved;
@@ -567,9 +573,17 @@ static void fs_dac_leaf(int parent,const char *leaf) {
     if(!fs_dac.on || fs_dac.ro || fs_dac.count==FS_DAC_HELD || fstatat(parent,leaf,&st,FS_NOFOLLOW_AT) || !(need=fs_dac_need(&st)))return;
     mode_t mode=st.st_mode&07777;
     if(fchmodat(parent,leaf,mode|need,FS_NOFOLLOW_AT))return;
-    int fd=openat(parent,leaf,O_RDONLY|FS_NOFOLLOW_OPEN|O_CLOEXEC|O_NONBLOCK);
-    if(fd<0) { (void)fchmodat(parent,leaf,mode,FS_NOFOLLOW_AT);return; }
-    fs_dac_hold(fd,mode,need);
+    int fd=openat(parent,leaf,O_RDONLY|FS_NOFOLLOW_OPEN|O_CLOEXEC|O_NONBLOCK);struct stat now;
+    if(fd>=0 && !fstat(fd,&now) && now.st_ino==st.st_ino && now.st_dev==st.st_dev) { fs_dac_hold(fd,mode,need);return; }
+    /* Not opened (no descriptor to spare), or the name is another file's by now: put
+       back by name, where it still names the file widened and nothing changed its mode
+       since. Renamed or removed meanwhile, that file is out of reach. */
+    int saved=errno;
+    if(fd>=0)close(fd);
+    if(fstatat(parent,leaf,&now,FS_NOFOLLOW_AT))fs_dac_stuck(mode,mode|need);
+    else if(now.st_ino!=st.st_ino || now.st_dev!=st.st_dev) { errno=ESTALE;fs_dac_stuck(mode,mode|need); }
+    else if((now.st_mode&07777)==(mode|need) && fchmodat(parent,leaf,mode,FS_NOFOLLOW_AT))fs_dac_stuck(mode,mode|need);
+    errno=saved;
 }
 /* The pass's own chmod of st's file to mode: that is what stays. */
 static void fs_dac_chmod(const struct stat *st,mode_t mode) {
