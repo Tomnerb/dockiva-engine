@@ -1833,7 +1833,7 @@ static uint64_t fs_call(uint64_t call) {
         if(!fs_path_writable())error=linux_error(30);
         else if(where!=fs_where || where<0)error=linux_error(18);   /* EXDEV: never across a mount boundary */
         else if(!strcmp(from,".") || !strcmp(leaf,"."))error=linux_error(!strcmp(leaf,".")?17:1);
-        else if(old.layer==2)error=linux_error(2);
+        else if(old.canon[0] && old.layer==2)error=linux_error(2);   /* in the layers; in a bind mount (canon "") the host's linkat reports it */
         else if(ov_prepare(&w,&parent,leaf,OV_CREATE) || ov_prepare(&old,&source,from,OV_MODIFY))error=fs_error();  /* image layers: a lower file is copied up */
         else if(linkat(source,from,parent,leaf,0)<0)error=fs_error();
         else ov_created(&w,parent,leaf,0);

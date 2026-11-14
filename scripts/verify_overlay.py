@@ -4,7 +4,8 @@
 over one shared lower tree, the second run proving the first left the shared files
 alone); new files kept in memory (--upper-memory, native/upm.h) renamed while open
 over lower and upper files (tests/native/upm_guest.c), and what that run wrote
-back: each file whole, and no whiteout beside it; then, with alpine as the lower
+back: each file whole, and no whiteout beside it; hard links inside a bind mount
+(tests/native/mountlink_guest.c), never across its boundary; then, with alpine as the lower
 layer, busybox copying, archiving, renaming
 and removing image files, and a container trying to change the image's files every
 way it can (writes, chmod, rename, links, truncate, MAP_SHARED writes, sockets,
@@ -75,6 +76,39 @@ def runtimes():
             print(f'{binary}: skipped (not built)')
 
 
+def mount_link_runs(t):
+    """mountlink_guest.c on every built runtime, with and without the memory layer, bind
+    mounts at /vol and /vol2; then what it left: one file under its three names in the
+    first mount, nothing in the second, no whiteout in either."""
+    failed = 0
+    lower = t/'link-lower'
+    (lower/'low').mkdir(parents=True)
+    (lower/'low/f').write_text('f')
+    build(ROOT/'tests/native/mountlink_guest.c', t/'mountlink')
+    before = snapshot(lower)
+    for binary, runtime, extra in runtimes():
+        for memory in (False, True):
+            tag = f'{binary}-{int(memory)}'
+            upper, state, vol, vol2 = t/f'link-up-{tag}', t/f'link-state-{tag}', t/f'link-vol-{tag}', t/f'link-vol2-{tag}'
+            for d in (upper, state, vol, vol2):
+                d.mkdir()
+            more = ['--upper-memory', str(state/'upper-sync'), '--layers-gen', str(state/'gen')] if memory else []
+            r = subprocess.run([str(runtime), 'run', str(t/'mountlink'), '--root', str(upper), '--lower', str(lower), '--writable', '--bind', str(vol), '/vol', '--bind', str(vol2), '/vol2',
+                                '--storage-limit-mib', '0', '--max-steps', '2000000000', '--process-tree', '--scheduled-network', '--dynamic', *more, *extra],
+                               capture_output=True, timeout=300)
+            ok = r.returncode == 0 and r.stdout == b'mountlink PASS\n' and b'ERROR: AddressSanitizer' not in r.stderr
+            names = sorted(str(p.relative_to(vol)) for p in vol.rglob('*'))
+            ok = ok and names == ['a', 'b', 'd', 'd/c', 's'] and len({(vol/n).stat().st_ino for n in ('a', 'b', 'd/c')}) == 1 and (vol/'a').stat().st_nlink == 3
+            ok = ok and not os.listdir(vol2) and not os.path.lexists(upper/'x') and (upper/'low/g').is_file()
+            failed += not ok
+            print(f'{binary} mountlink_guest{" with the memory layer" if memory else ""}:', 'PASS' if ok else
+                  f'FAIL exit={r.returncode} {r.stdout!r} vol={names} vol2={os.listdir(vol2)} {r.stderr.decode()[-1500:]}')
+    same = snapshot(lower) == before
+    failed += not same
+    print('mountlink lower layer unchanged:', 'PASS' if same else 'FAIL')
+    return failed
+
+
 # upm_guest.c's lower tree, and what its run leaves in the upper layer: files written
 # back, and the whiteouts of the lower files it removed (and only those).
 UPM_LOWER = {'u/lower': 'old lower', 'u/lower2': 'old lower2', 'u/up': 'old up', 'u/app.log.1': 'old log', 'u/k': 'k', 'u/nr': 'nr',
@@ -137,6 +171,7 @@ def main():
         lower.mkdir()
         lower_tree(lower)
         build(ROOT/'tests/native/overlay_guest.c', t/'overlay')
+        failed += mount_link_runs(t)
         before = snapshot(lower)
         for binary, runtime, extra in runtimes():
             for run in (1, 2):                              # the second run sees the lower layer as the first did, with the lookup cache
