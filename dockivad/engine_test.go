@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -168,8 +169,20 @@ func TestAPIContractAndRejectedOptions(t *testing.T) {
 	if request(t, h, "GET", "/_ping", "", "").Code != 401 {
 		t.Fatal("missing auth accepted")
 	}
-	if request(t, h, "GET", "/version", "", "secret").Code != 200 {
+	v := request(t, h, "GET", "/version", "", "secret")
+	var version struct {
+		GitCommit  string
+		Components []struct {
+			Name    string
+			Details map[string]string
+		}
+	}
+	if v.Code != 200 || json.Unmarshal(v.Body.Bytes(), &version) != nil {
 		t.Fatal("version")
+	}
+	commit, _ := buildStamp() // test binaries carry no vcs stamp: "unknown"
+	if version.GitCommit != commit || len(version.Components) == 0 || version.Components[0].Name != "Engine" || version.Components[0].Details["GitCommit"] != commit {
+		t.Fatalf("version commit: %s", v.Body.String())
 	}
 	if request(t, h, "GET", "/v1.99/info", "", "secret").Code != 400 {
 		t.Fatal("version range")
