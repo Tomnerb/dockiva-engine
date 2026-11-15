@@ -5,7 +5,8 @@ over one shared lower tree, the second run proving the first left the shared fil
 alone); new files kept in memory (--upper-memory, native/upm.h) renamed while open
 over lower and upper files (tests/native/upm_guest.c), and what that run wrote
 back: each file whole, and no whiteout beside it; hard links inside a bind mount
-(tests/native/mountlink_guest.c), never across its boundary; then, with alpine as the lower
+(tests/native/mountlink_guest.c), never across its boundary; a directory of 5000 files
+listed whole (tests/native/bigdir_guest.c); then, with alpine as the lower
 layer, busybox copying, archiving, renaming
 and removing image files, and a container trying to change the image's files every
 way it can (writes, chmod, rename, links, truncate, MAP_SHARED writes, sockets,
@@ -110,6 +111,39 @@ def mount_link_runs(t):
     same = snapshot(lower) == before
     failed += not same
     print('mountlink lower layer unchanged:', 'PASS' if same else 'FAIL')
+    return failed
+
+
+def bigdir_runs(t):
+    """bigdir_guest.c on every built runtime, with and without the memory layer: 5000
+    files in a directory of the upper layer alone and 5000 in one the image has too,
+    each listed whole, and a name getdents64 refuses losing no other; then what it
+    left: the first directory removed, the second with its files."""
+    failed = 0
+    lower = t/'bigdir-lower'
+    (lower/'low').mkdir(parents=True)
+    (lower/'low/keep').write_text('k')
+    (lower/'ctl').mkdir()
+    for name in [f'g{i}' for i in range(9)] + ['bad\x01name']:
+        (lower/'ctl'/name).write_text('c')
+    build(ROOT/'tests/native/bigdir_guest.c', t/'bigdir')
+    names = sorted(f'f{i:04}' for i in range(5000))
+    for binary, runtime, extra in runtimes():
+        for memory in (False, True):
+            tag = f'{binary}-{int(memory)}'
+            upper, state = t/f'bigdir-up-{tag}', t/f'bigdir-state-{tag}'
+            upper.mkdir()
+            state.mkdir()
+            more = ['--upper-memory', str(state/'upper-sync'), '--layers-gen', str(state/'gen')] if memory else []
+            r = subprocess.run([str(runtime), 'run', str(t/'bigdir'), '--root', str(upper), '--lower', str(lower), '--writable',
+                                '--storage-limit-mib', '0', '--max-steps', '20000000000', '--process-tree', '--scheduled-network', '--dynamic', *more, *extra],
+                               capture_output=True, timeout=600)
+            ok = r.returncode == 0 and r.stdout == b'bigdir PASS\n' and b'ERROR: AddressSanitizer' not in r.stderr
+            left = sorted(os.listdir(upper/'low')) if (upper/'low').is_dir() else None
+            ok = ok and left == names and not os.path.lexists(upper/'big')
+            failed += not ok
+            print(f'{binary} bigdir_guest{" with the memory layer" if memory else ""}:', 'PASS' if ok else
+                  f'FAIL exit={r.returncode} {r.stdout!r} low={left and len(left)} big={os.path.lexists(upper/"big")} {r.stderr.decode()[-1500:]}')
     return failed
 
 
@@ -238,6 +272,7 @@ def main():
         lower_tree(lower)
         build(ROOT/'tests/native/overlay_guest.c', t/'overlay')
         failed += mount_link_runs(t)
+        failed += bigdir_runs(t)
         before = snapshot(lower)
         for binary, runtime, extra in runtimes():
             for run in (1, 2):                              # the second run sees the lower layer as the first did, with the lookup cache

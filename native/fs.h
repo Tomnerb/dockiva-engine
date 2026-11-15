@@ -135,9 +135,13 @@ static _Thread_local ProcShared *proc_now=&proc_first;
    changed, to put back (fs_dac_end). */
 #define FS_DAC_HELD 64
 static _Thread_local struct { int on,denied,ro,count;struct { int fd;mode_t mode,set; } held[FS_DAC_HELD]; } fs_dac;
-/* merged: the listing of a directory both image layers hold (overlay.h). */
+/* merged: the listing of a directory both image layers hold (overlay.h). count: the
+   records returned since the start, each one's d_off. held: the stream's entry (ino,
+   type, name) the last getdents64 buffer had no room for, first in the next; refused:
+   the error of the entry after the ones that call returned, the next call's answer. */
 struct OvList;static void ov_list_free(struct OvList *list);
-typedef struct GuestDirectory { DIR *stream;unsigned refs,count;char path[1025];struct OvList *merged;int lower; } GuestDirectory; /* lower: opened there only */
+typedef struct GuestDirectory { DIR *stream;unsigned refs;uint64_t count;char path[1025];struct OvList *merged;int lower; /* lower: opened there only */
+    uint64_t ino;unsigned char type,held,refused;char name[256]; } GuestDirectory;
 static void fs_directory_release(GuestDirectory *directory) {
     if(directory && !--directory->refs) { if(directory->stream)closedir(directory->stream);ov_list_free(directory->merged);free(directory); }
 }
@@ -2155,26 +2159,39 @@ static uint64_t fs_call_once(uint64_t call) {
                 dir->stream=fdopendir(copy);if(!dir->stream) { int saved=errno;close(copy);errno=saved;return fs_error(); }
             }
         }
+        /* Any number of entries: a directory is as large as the host's disk lets it be.
+           (Up to 4096 until 2026-11: the 4097th record was EOVERFLOW, and with it went
+           what the call had gathered, so ls, tar and rm -r saw a shorter directory and
+           no error.) No telldir and seekdir to step back from an entry that does not
+           fit: macOS keeps every telldir position until closedir and searches them all
+           at each call, 22 s for 200,000 entries. */
+        if(dir->refused) { uint64_t refused=dir->refused;dir->refused=0;return linux_error(refused); }
         uint64_t used=0;
         for(;;) {
-            long position=0;const char *name;uint64_t ino;unsigned type;
+            const char *name;uint64_t ino;unsigned type;
             if(dir->merged) {
                 if(dir->merged->at>=dir->merged->size)return used;
                 const char *at=dir->merged->data+dir->merged->at;memcpy(&ino,at,8);type=(unsigned char)at[8];name=at+9;
-            } else {
-                position=telldir(dir->stream);errno=0;
+            } else if(dir->held) { name=dir->name;ino=dir->ino;type=dir->type; }
+            else {
+                errno=0;
                 struct dirent *entry=readdir(dir->stream);
                 if(!entry)return errno?(used?used:fs_error()):used;
                 name=entry->d_name;ino=entry->d_ino;type=entry->d_type;
                 if(layers && ov_hidden(name))continue;
             }
-            size_t length=strlen(name);
-            if(length>255)return linux_error(36);
-            for(size_t i=0;i<length;i++)if((unsigned char)name[i]<32 || name[i]==127)return linux_error(13);
+            size_t length=strlen(name);unsigned refused=length>255?36:0;
+            for(size_t i=0;i<length && !refused;i++)if((unsigned char)name[i]<32 || name[i]==127)refused=13;
+            if(refused) {                                  /* after the records gathered (the stream is past the entry; the merged list is not) */
+                if(used && !dir->merged)dir->refused=(unsigned char)refused;
+                return used?used:linux_error(refused);
+            }
             unsigned reclen=(unsigned)((19+length+1+7)&~7u);
-            if(reclen>count-used) { if(!dir->merged)seekdir(dir->stream,position);return used?used:linux_error(22); }
-            if(dir->count>=4096)return linux_error(75);
-            if(dir->merged)dir->merged->at+=10+length;
+            if(reclen>count-used) {
+                if(!dir->merged && !dir->held) { dir->held=1;dir->ino=ino;dir->type=(unsigned char)type;memcpy(dir->name,name,length+1); }
+                return used?used:linux_error(22);
+            }
+            if(dir->merged)dir->merged->at+=10+length;else dir->held=0;
             unsigned char *record=out+used;memset(record,0,reclen);
             fs_pack(record,0,ino,8);fs_pack(record,8,++dir->count,8);fs_pack(record,16,reclen,2);
             record[18]=type==DT_DIR?4:type==DT_REG?8:type==DT_LNK?10:0;
@@ -2190,7 +2207,7 @@ static uint64_t fs_call_once(uint64_t call) {
         fs_stat_pack(out,&st);return 0;
     }
     if(call==62) {
-        if(FS(slot).dir) { if(cpu->gpr[1] || cpu->gpr[2])return linux_error(22);if(FS(slot).dir->stream)rewinddir(FS(slot).dir->stream);ov_list_free(FS(slot).dir->merged);FS(slot).dir->merged=NULL;FS(slot).dir->count=0;return 0; }
+        if(FS(slot).dir) { if(cpu->gpr[1] || cpu->gpr[2])return linux_error(22);if(FS(slot).dir->stream)rewinddir(FS(slot).dir->stream);ov_list_free(FS(slot).dir->merged);FS(slot).dir->merged=NULL;FS(slot).dir->count=0;FS(slot).dir->held=FS(slot).dir->refused=0;return 0; }
         if(cpu->gpr[2]>2) return linux_error(22);
         off_t result=lseek(fd,(off_t)(int64_t)cpu->gpr[1],(int)cpu->gpr[2]);
         return result<0?fs_error():(uint64_t)result;
