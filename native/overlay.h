@@ -218,9 +218,12 @@ static int ov_pair(const char *canon,int *upper,int *lower,int *mount) {
 /* A directory copied up keeps its inode number, as on overlayfs (GNU tar extracting
    into an existing directory checks that its number stayed): st, an upper directory
    at canonical guest path canon, takes the number of the lower directory it shows.
-   One made where the lower one was removed (opaque) or hidden is new: its own number. */
+   One made where the lower one was removed (opaque) or hidden is new: its own number.
+   Every stat of an upper directory comes here, so its times are set right here too:
+   the memory layer's write-backs must not show in them (upm_dir_times, upm.h). */
 static void ov_dir_ino(const char *canon,struct stat *st) {
     struct stat low,seen;int u,l,m;
+    upm_dir_times(canon,st);
     if(fs_lower<0 || !S_ISDIR(st->st_mode) || canon[0]!='/' || !canon[1] ||
        fstatat(fs_lower,canon+1,&low,FS_NOFOLLOW_AT) || !S_ISDIR(low.st_mode) || low.st_ino==st->st_ino)return;   /* most: not in the image, one stat */
     if(ov_pair(canon,&u,&l,&m))return;
@@ -729,7 +732,12 @@ static int ov_walk(int base,const char *base_path,const char *input,int follow,c
     }
 }
 /* A directory's merged listing (getdents of a directory in the root's layers): upper
-   names (not the reserved ones), then lower names neither shown above nor whited out.
+   names (not the reserved ones), then lower names neither shown above nor whited out,
+   then the files in memory (upm.h) the upper did not show. Those are collected first:
+   one written back while the upper names are read is then in both and listed once.
+   Collected last, it had left the memory after the disk was read without it, and the
+   listing lacked a file nobody had touched (find and tar lost one name of a few
+   hundred while a Go module cache went to disk).
    Records are d_ino (8), d_type (1), the name and its NUL. NULL when one layer serves. */
 typedef struct OvList { char *data;size_t size,at; } OvList;
 static int ov_name_compare(const void *a,const void *b) { return strcmp(*(char *const *)a,*(char *const *)b); }
@@ -745,15 +753,17 @@ static int ov_list_add(OvList *list,size_t *capacity,uint64_t ino,unsigned char 
 }
 static OvList *ov_list(const char *canon) {
     int u,l,m;if(ov_pair(canon,&u,&l,&m))return NULL;
-    int pending=upm_fs && upm_has_files(canon);                       /* files in memory (upm.h) list after the upper's */
+    int pending=upm_fs && upm_has_files(canon);
     if(u<0 || (l<0 && !pending)) { ov_close2(u,l);return NULL; }
-    OvList *list=calloc(1,sizeof(*list)),hidden={0};size_t capacity=0,hidden_capacity=0,names=0;char **seen=NULL;
+    OvList *list=calloc(1,sizeof(*list)),hidden={0},memory={0};size_t capacity=0,hidden_capacity=0,memory_capacity=0,names=0;char **seen=NULL;
     int ok=list!=NULL;struct dirent *e;
+    if(ok && pending)ok=upm_list(canon,&memory,&memory_capacity)==0;
     DIR *s=ok?ov_opendir(u):NULL;
     if(!s)ok=0;
-    while(ok && (e=readdir(s))!=NULL) {                               /* upper names, and whiteouts' names into hidden */
-        if(!ov_hidden(e->d_name))ok=!ov_list_add(list,&capacity,e->d_ino,e->d_type,e->d_name);
-        if(ok && strcmp(e->d_name,OV_OPQ))ok=!ov_list_add(&hidden,&hidden_capacity,0,0,ov_hidden(e->d_name)?e->d_name+4:e->d_name);
+    while(ok && (e=readdir(s))!=NULL) {                               /* upper names, and with the whiteouts' names into hidden (type 1: a name shown) */
+        int shown=!ov_hidden(e->d_name);
+        if(shown)ok=!ov_list_add(list,&capacity,e->d_ino,e->d_type,e->d_name);
+        if(ok && strcmp(e->d_name,OV_OPQ))ok=!ov_list_add(&hidden,&hidden_capacity,0,(unsigned char)shown,shown?e->d_name:e->d_name+4);
         names++;
     }
     if(s)closedir(s);
@@ -768,8 +778,12 @@ static OvList *ov_list(const char *canon) {
         if(!names || !bsearch(&key,seen,names,sizeof(*seen),ov_name_compare))ok=!ov_list_add(list,&capacity,e->d_ino,e->d_type,e->d_name);
     }
     if(s)closedir(s);
-    if(ok && pending)ok=upm_list(canon,list,&capacity)==0;
-    free(seen);free(hidden.data);ov_close2(u,l);
+    for(size_t at=0;ok && at<memory.size;at+=10+strlen(memory.data+at+9)) {   /* a whiteout's name is not the upper showing it (upm_move) */
+        const char *key=memory.data+at+9;uint64_t ino;memcpy(&ino,memory.data+at,8);
+        char **hit=names?bsearch(&key,seen,names,sizeof(*seen),ov_name_compare):NULL;
+        if(!hit || !(*hit)[-1])ok=!ov_list_add(list,&capacity,ino,(unsigned char)memory.data[at+8],key);
+    }
+    free(seen);free(hidden.data);free(memory.data);ov_close2(u,l);
     if(!ok) { if(list)free(list->data);free(list);return NULL; }
     return list;
 }
