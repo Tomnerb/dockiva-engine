@@ -8,8 +8,10 @@
    0555, as Go leaves a module's, and its write-back opens it up for each file; and
    tar leaves out of the archive a name the listing lacked). The mtime
    utimensat set stays through the write-back (tar -x sets a directory's after
-   filling it); a file made in the directory moves its times at once, and they stay
-   through that file's write-back too. Run by scripts/verify_overlay.py with and
+   filling it), also one set while the directory's files are being written back (a
+   seventh directory gets a new mtime on every pass, and must show it at the next);
+   a file made in the directory moves its times at once, and they stay through that
+   file's write-back too. Run by scripts/verify_overlay.py with and
    without the memory layer on an empty upper directory; it then checks the files
    and the directories' times on disk. Prints what went wrong, counted by kind. */
 typedef unsigned long U;
@@ -90,6 +92,16 @@ static void read_all(int from,int fresh) {
             same(d,C4(79,AT,path,st,0));
         }
         int left=0;
+        if(!fresh) {                                                         /* the seventh directory: the mtime set last pass, then another */
+            static U stamp;U set[4]={T,0,T+stamp,0};
+            dir_path(path,DIRS);
+            if(C4(79,AT,path,st,0))bad[CALLS]++;
+            if(u64(st+88)!=T+stamp || u64(st+96))bad[UTIME]++;
+            set[2]=T+ ++stamp;
+            if(C4(88,AT,path,set,0) || C4(79,AT,path,st,0))bad[CALLS]++;
+            if(u64(st+88)!=T+stamp)bad[UTIME]++;
+            file_path(path,DIRS,0);left+=pending(path);file_path(path,DIRS,FILES-1);left+=pending(path);
+        }
         for(int d=from;d<DIRS;d++) { file_path(path,d,0);left+=pending(path);file_path(path,d,FILES-1);left+=pending(path); }
         if(fresh)left+=pending("/w/d0/new");
         U spent=now_ms()-start;
@@ -100,10 +112,11 @@ static void read_all(int from,int fresh) {
 void _start(void) {
     char path[64];U times[4]={T,0,T,0},total=0;
     if(C3(34,AT,"/w",0755))bad[CALLS]++;
-    for(int d=0;d<DIRS;d++) {
+    for(int d=0;d<=DIRS;d++) {
         dir_path(path,d);if(C3(34,AT,path,0755))bad[CALLS]++;
         for(int i=0;i<FILES;i++) { file_path(path,d,i);put(path); }
     }
+    dir_path(path,DIRS);if(C4(88,AT,path,times,0))bad[CALLS]++;
     for(int d=0;d<DIRS;d++) {                                              /* as tar -x: the directory's mode and mtime, once it is filled */
         dir_path(path,d);
         if((d&1) && C3(53,AT,path,0555))bad[CALLS]++;                      /* as Go leaves a module's: its write-back opens it up meanwhile */
@@ -113,6 +126,7 @@ void _start(void) {
         keep(d);
     }
     read_all(0,0);
+    dir_path(path,DIRS);if(C4(88,AT,path,times,0) || C4(79,AT,path,st,0) || u64(st+88)!=T)bad[UTIME]++;   /* as the others, for the verifier */
     /* a new file: its directory's times move at once, and then stay */
     U clock[2];C2(113,0,clock);
     if(C4(88,AT,"/w/d0",times,0) || C4(79,AT,"/w/d0",st,0))bad[CALLS]++;

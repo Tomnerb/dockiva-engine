@@ -273,7 +273,8 @@ static int upm_has_files(const char *canon);
 struct OvList;static int upm_list(const char *canon,struct OvList *list,size_t *capacity);
 static void upm_moved(const char *from,const char *to);
 static void upm_dir_times(const char *canon,struct stat *st);
-static pthread_mutex_t upm_window=PTHREAD_MUTEX_INITIALIZER; /* one write-back changes its directory's times, or utimensat does */
+static int upm_utimens_begin(const char *canon);
+static void upm_utimens_end(const char *canon,int done,const struct timespec times[2]);
 static int64_t upm_create(const char *canon,uint64_t flags,uint64_t mode);
 #define UPM_DISK INT64_MIN
 #define MEM_HOST_PATH (-1001)                                /* memfs.h: a path the host resolves */
@@ -2022,19 +2023,20 @@ static uint64_t fs_call_once(uint64_t call) {
         if(!cpu->gpr[1]) {
             int fd=fs_host(cpu->gpr[0]),own=-1;if(fd<0)return linux_error(9);
             if(FS(fs_slot(cpu->gpr[0])).ro && (fd=own=ov_fd_upper(fs_slot(cpu->gpr[0])))<0)return linux_error(30);
-            pthread_mutex_lock(&upm_window);                               /* not while a write-back puts a directory's mtime back (upm.h) */
+            const char *at=FS(fs_slot(cpu->gpr[0])).dir?FS(fs_slot(cpu->gpr[0])).dir->path:"";
+            int mirrored=upm_utimens_begin(at);                            /* a directory a write-back may be at work in (upm.h) */
             int result=futimens(fd,times),saved=errno;
-            pthread_mutex_unlock(&upm_window);
+            if(mirrored)upm_utimens_end(at,!result,times);
             if(own>=0)close(own);
             errno=saved;return result<0?fs_error():0;
         }
-        char leaf[1025];int parent=fs_lookup(cpu->gpr[0],cpu->gpr[1],leaf,!(flags&0x100)|FS_DIRECT,NULL);if(parent<0)return fs_error();
+        char leaf[1025],canon[1025];int parent=fs_lookup(cpu->gpr[0],cpu->gpr[1],leaf,!(flags&0x100)|FS_DIRECT,canon);if(parent<0)return fs_error();
         if(!fs_path_writable()) { close(parent);return linux_error(30); }
         { OvLeaf w=ov_leaf;if(ov_prepare(&w,&parent,leaf,OV_MODIFY)) { uint64_t e=fs_error();close(parent);return e; } }
         /* The leaf is never followed by the host: a final symlink is followed by fs_lookup already. */
-        pthread_mutex_lock(&upm_window);
+        int mirrored=upm_utimens_begin(canon);
         int result=utimensat(parent,leaf,times,FS_NOFOLLOW_AT);int saved=errno;
-        pthread_mutex_unlock(&upm_window);
+        if(mirrored)upm_utimens_end(canon,!result,times);
         close(parent);errno=saved;
         return result<0?fs_error():0;
     }

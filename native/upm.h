@@ -45,17 +45,23 @@ static int upm_maybe(const char *canon) { return upm_fs && __atomic_load_n(&upm_
 static uint64_t upm_ns(const struct timespec *t) { return (uint64_t)t->tv_sec*1000000000+(uint64_t)t->tv_nsec; }
 /* What write-backs did to a mirrored directory's times on the host: while its ctime
    lies in from..seen (the clock when the first of them began; the ctime the last one
-   left, the end of time while one is at work) only they changed the directory since
-   the guest saw mtime and ctime, which it keeps seeing. Each write-back also puts the
-   mtime back on the host, so the layer on disk keeps it (a commit, the next run).
+   left, any later one while busy: so many are at work) only they changed the directory
+   since the guest saw mtime and ctime, which it keeps seeing. Each write-back also puts
+   the mtime back on the host, so the layer on disk keeps it (a commit, the next run).
+   utimensat of the directory never waits for a write-back (tar -x sets every
+   directory's times, and waiting for the file in flight each time more than doubled
+   an extraction): it is made under mem_lock, as a write-back's first look at the
+   directory and its last changes are, so it falls before one or after it, or, while
+   one is at work, leaves the times it asked for here (upm_utimens_end), which that
+   write-back then puts back instead.
    ponytail: a name made or removed on disk in the directory by someone else while
    one file of it is written back (tens of microseconds) is taken for the write-back's
-   and does not move the times; utimensat waits for the write-back (upm_window). */
-typedef struct UpmTimes { struct timespec from,seen,mtime,ctime; } UpmTimes;
+   and does not move the times. */
+typedef struct UpmTimes { struct timespec from,seen,mtime,ctime;unsigned busy; } UpmTimes;
 static unsigned char upm_mirrors[UPM_COUNTS];         /* directories with a mirror, by path hash (a superset) */
 static void upm_mirrored(const char *canon) { __atomic_store_n(&upm_mirrors[upm_slot(canon)],1,__ATOMIC_RELAXED); }
 static int upm_later(const struct timespec *a,const struct timespec *b) { return a->tv_sec>b->tv_sec || (a->tv_sec==b->tv_sec && a->tv_nsec>b->tv_nsec); }
-static int upm_times_ours(const UpmTimes *t,const struct stat *st) { return t && !upm_later(&t->from,&st->st_ctimespec) && !upm_later(&st->st_ctimespec,&t->seen); }
+static int upm_times_ours(const UpmTimes *t,const struct stat *st) { return t && !upm_later(&t->from,&st->st_ctimespec) && (t->busy || !upm_later(&st->st_ctimespec,&t->seen)); }
 /* st, the host's stat of the directory d mirrors, with the times the guest sees. mem_lock held. */
 static void upm_times(const MemNode *d,struct stat *st) {
     const UpmTimes *t=d->d.times;
@@ -143,16 +149,35 @@ static void upm_dir_times(const char *canon,struct stat *st) {
     if(!held)pthread_mutex_unlock(&mem_lock);
 }
 /* A write-back is about to change the directory d mirrors (open at parent): the
-   times the guest sees of it now are the ones it keeps seeing. 0: not kept. */
+   times the guest sees of it now are the ones it keeps seeing (another write-back at
+   work there has them already). 0: not kept. */
 static int upm_times_hold(MemNode *d,int parent) {
     struct stat pre;UpmTimes *t=d->d.times;
-    if(!t || parent<0 || fstat(parent,&pre))return 0;
+    if(!t || parent<0)return 0;
     pthread_mutex_lock(&mem_lock);
-    if(!upm_times_ours(t,&pre))t->from=mem_now();
-    upm_times(d,&pre);t->mtime=pre.st_mtimespec;t->ctime=pre.st_ctimespec;
-    t->seen=(struct timespec){(time_t)(~(uint64_t)0>>1),0};
+    int kept=!fstat(parent,&pre);
+    if(kept && !t->busy) {
+        if(!upm_times_ours(t,&pre))t->from=mem_now();
+        upm_times(d,&pre);t->mtime=pre.st_mtimespec;t->ctime=pre.st_ctimespec;
+    }
+    t->busy+=(unsigned)kept;
     pthread_mutex_unlock(&mem_lock);
-    return 1;
+    return kept;
+}
+/* fs.h's utimensat and futimens of canon, which may be a mirrored directory: begin
+   before the host's call (1: mem_lock is held, and end is owed), end after it (done:
+   it succeeded, with the host's times). */
+static int upm_utimens_begin(const char *canon) {
+    if(!upm_fs || canon[0]!='/' || !__atomic_load_n(&upm_mirrors[upm_slot(canon)],__ATOMIC_RELAXED))return 0;
+    pthread_mutex_lock(&mem_lock);return 1;
+}
+static void upm_utimens_end(const char *canon,int done,const struct timespec times[2]) {
+    MemNode *d=done?upm_dir(canon,0):NULL;UpmTimes *t=d?d->d.times:NULL;
+    if(t && t->busy) {                                                         /* a write-back at work: these are the times it leaves */
+        t->ctime=mem_now();
+        if(times[1].tv_nsec!=UTIME_OMIT)t->mtime=times[1].tv_nsec==UTIME_NOW?t->ctime:times[1];
+    }
+    pthread_mutex_unlock(&mem_lock);
 }
 /* Whether an upper directory holds pending files (rmdir, listings). */
 static int upm_has_files(const char *canon) {
@@ -259,7 +284,6 @@ static int upm_write_back(MemNode *n,const char *canon,int force) {
     char dir[1025],temp[64];const char *name;upm_split(canon,dir,&name);
     snprintf(temp,sizeof temp,OV_WH ".dkv.%d.%u",(int)getpid(),__atomic_add_fetch(&serial,1,__ATOMIC_RELAXED));
     pthread_mutex_unlock(&mem_lock);
-    pthread_mutex_lock(&upm_window);                                           /* the directory's times are this write-back's to change, until it ends */
     /* All from the directory, opened refusing a symlink anywhere on the way (another
        run, an exec, may have swapped one in): nothing lands outside the root. */
     int parent=dir[1]?openat(fs_root,dir+1,O_RDONLY|O_DIRECTORY|FS_NOFOLLOW_OPEN|O_CLOEXEC):dup(fs_root),saved=errno;
@@ -305,11 +329,10 @@ static int upm_write_back(MemNode *n,const char *canon,int force) {
     if(timed) {                                                                /* the mtime back, and the ctime all this left (after fs_dac_end's chmod too) */
         struct timespec back[2]={{0,UTIME_OMIT},d->d.times->mtime};struct stat post;
         (void)futimens(parent,back);
-        d->d.times->seen=fstat(parent,&post)?d->d.times->from:post.st_ctimespec;
+        if(!--d->d.times->busy)d->d.times->seen=fstat(parent,&post)?d->d.times->from:post.st_ctimespec;
     }
     if(parent>=0)close(parent);
     mem_node_put(n);mem_node_put(d);                                           /* the pins (n is freed once forgotten) */
-    pthread_mutex_unlock(&upm_window);
     return done;
 }
 /* upm_cross: pending file n (entry e at from; mem_lock held) renamed to to, a path of

@@ -220,7 +220,7 @@ def dac_runs(t):
 
 def dirlist_runs(t):
     """dirlist_guest.c on every built runtime, with and without the memory layer; then
-    what it left on disk: 300 files in each of six directories (and the one made last),
+    what it left on disk: 300 files in each of seven directories (and the one made last),
     the mtime it set (1000000000) on every directory but the one that got that file, and
     the mode it gave each (every other one 0555: none left opened up)."""
     failed = 0
@@ -240,9 +240,9 @@ def dirlist_runs(t):
                                 '--storage-limit-mib', '0', '--max-steps', '2000000000', '--process-tree', '--scheduled-network', '--dynamic', *more, *extra],
                                capture_output=True, timeout=300)
             ok = r.returncode == 0 and r.stdout == b'dirlist PASS\n' and b'ERROR: AddressSanitizer' not in r.stderr
-            wrong = [f'd{d}' for d in range(6) if not (upper/f'w/d{d}').is_dir() or sorted(os.listdir(upper/f'w/d{d}')) != sorted(names + ['new']*(d == 0))]
-            wrong += [f'd{d} mtime' for d in range(6) if (upper/f'w/d{d}').is_dir() and ((upper/f'w/d{d}').stat().st_mtime_ns == T*10**9) != (d > 0)]
-            wrong += [f'd{d} mode' for d in range(6) if (upper/f'w/d{d}').is_dir() and (upper/f'w/d{d}').stat().st_mode & 0o7777 != (0o555 if d & 1 else 0o755)]
+            wrong = [f'd{d}' for d in range(7) if not (upper/f'w/d{d}').is_dir() or sorted(os.listdir(upper/f'w/d{d}')) != sorted(names + ['new']*(d == 0))]
+            wrong += [f'd{d} mtime' for d in range(7) if (upper/f'w/d{d}').is_dir() and ((upper/f'w/d{d}').stat().st_mtime_ns == T*10**9) != (d > 0)]
+            wrong += [f'd{d} mode' for d in range(7) if (upper/f'w/d{d}').is_dir() and (upper/f'w/d{d}').stat().st_mode & 0o7777 != (0o555 if d & 1 else 0o755)]
             ok = ok and not wrong
             failed += not ok
             print(f'{binary} dirlist_guest{" with the memory layer" if memory else ""}:', 'PASS' if ok else
