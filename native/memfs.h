@@ -37,7 +37,7 @@ struct MemNode {
     MemFs *fs;MemNode *parent;MemEntry *entry; /* a directory's parent and own name (NULL: the root, or removed) */
     MemXattr *xattrs;
     union {
-        struct { MemEntry **list;uint32_t count,capacity,live;uint64_t next; } d; /* entries by offset; removed ones until compacted */
+        struct { MemEntry **list;uint32_t count,capacity,live;uint64_t next;struct UpmTimes *times; } d; /* entries by offset; removed ones until compacted; times: upm.h's */
         struct { MemLeaf **leaf;uint64_t leaves,pages; } f;
         char *target;
     };
@@ -99,7 +99,7 @@ static void mem_notify(MemNode *watched,uint32_t mask,const char *name,uint32_t 
 #define IN_OPEN 0x20u
 static void mem_node_free(MemNode *n) {
     if(mem_is(n,MEM_REG)) { mem_pages_free(n,0);free(n->f.leaf); }
-    else if(mem_is(n,MEM_DIR)) { for(uint32_t i=0;i<n->d.count;i++)free(n->d.list[i]);free(n->d.list); }
+    else if(mem_is(n,MEM_DIR)) { for(uint32_t i=0;i<n->d.count;i++)free(n->d.list[i]);free(n->d.list);free(n->d.times); }
     else if(mem_is(n,MEM_LNK))free(n->target);
     for(MemXattr *x=n->xattrs,*next;x;x=next) { next=x->next;free(x->name);free(x); }
     mem_notify(n,IN_IGNORED,NULL,0);                                            /* its watches go */
