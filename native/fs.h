@@ -276,6 +276,9 @@ static int upm_maybe(const char *canon);
 static int upm_has_files(const char *canon);
 struct OvList;static int upm_list(const char *canon,struct OvList *list,size_t *capacity);
 static void upm_moved(const char *from,const char *to);
+static void upm_dir_times(const char *canon,struct stat *st);
+static int upm_utimens_begin(const char *canon);
+static void upm_utimens_end(const char *canon,int done,const struct timespec times[2]);
 static int64_t upm_create(const char *canon,uint64_t flags,uint64_t mode);
 #define UPM_DISK INT64_MIN
 #define MEM_HOST_PATH (-1001)                                /* memfs.h: a path the host resolves */
@@ -546,11 +549,63 @@ static int fs_dac_begin(void) {
 static void fs_dac_stuck(mode_t mode,mode_t set) {
     fprintf(stderr,"dockiva: a file or directory root's call opened up keeps mode %04o, not its own %04o: %s\n",(unsigned)set,(unsigned)mode,strerror(errno));
 }
+/* What a stat shows of a file a pass has opened up (fs_dac_fd, fs_dac_leaf): its own
+   mode, not the wider one of those microseconds. GNU tar 1.35 compares a directory's
+   mode before and after reading it and said "file changed as we read it" (exit 1) of
+   0555 directories of a Go module cache while the memory layer wrote their files back
+   (upm_write_back opens the directory up for each file). An entry says: a stat of
+   this file whose ctime lies in from..until (the clock before the chmod; the ctime the
+   chmod back left, the end of time until then) was made while it was opened up, or
+   shows that mode anyway. One opened up again with the same mode goes on from the
+   first time: one stretch, whenever the stat was made in it.
+   ponytail: one entry per inode number modulo FS_DAC_WIDE; of two files opened up at
+   once in one slot the first shows its wider mode, as all did. */
+#define FS_DAC_WIDE 1024u
+static struct { uint64_t dev,ino;struct timespec from,until;mode_t mode; } fs_dac_wide[FS_DAC_WIDE];
+static pthread_mutex_t fs_dac_wide_lock=PTHREAD_MUTEX_INITIALIZER;
+static int fs_time_later(const struct timespec *a,const struct timespec *b) { return a->tv_sec>b->tv_sec || (a->tv_sec==b->tv_sec && a->tv_nsec>b->tv_nsec); }
+/* how 1: st's file is about to be opened up (st: as it is); 2: its mode is back (st:
+   as it is now); 0: it keeps another mode (a chmod meanwhile, or it could not be put
+   back): nothing to hide. */
+static void fs_dac_note(const struct stat *st,int how) {
+    unsigned k=(unsigned)((uint64_t)st->st_ino%FS_DAC_WIDE);
+    pthread_mutex_lock(&fs_dac_wide_lock);
+    int same=fs_dac_wide[k].ino==(uint64_t)st->st_ino && fs_dac_wide[k].dev==(uint64_t)st->st_dev;
+    if(how==1) {
+        if(!same || fs_dac_wide[k].mode!=(st->st_mode&07777))clock_gettime(CLOCK_REALTIME,&fs_dac_wide[k].from);
+        fs_dac_wide[k].dev=(uint64_t)st->st_dev;fs_dac_wide[k].mode=st->st_mode&07777;
+        fs_dac_wide[k].until=(struct timespec){(time_t)(~(uint64_t)0>>1),0};
+        __atomic_store_n(&fs_dac_wide[k].ino,(uint64_t)st->st_ino,__ATOMIC_RELEASE);
+    } else if(same) {
+        if(how==2)fs_dac_wide[k].until=st->st_ctimespec;
+        else __atomic_store_n(&fs_dac_wide[k].ino,0,__ATOMIC_RELEASE);
+    }
+    pthread_mutex_unlock(&fs_dac_wide_lock);
+}
+/* The permission bits a stat (st) shows. */
+static mode_t fs_dac_mode(const struct stat *st) {
+    mode_t mode=st->st_mode&07777;unsigned k=(unsigned)((uint64_t)st->st_ino%FS_DAC_WIDE);
+    if(__atomic_load_n(&fs_dac_wide[k].ino,__ATOMIC_ACQUIRE)!=(uint64_t)st->st_ino)return mode;   /* nearly always */
+    pthread_mutex_lock(&fs_dac_wide_lock);
+    if(fs_dac_wide[k].ino==(uint64_t)st->st_ino && fs_dac_wide[k].dev==(uint64_t)st->st_dev &&
+       !fs_time_later(&fs_dac_wide[k].from,&st->st_ctimespec) && !fs_time_later(&st->st_ctimespec,&fs_dac_wide[k].until))mode=fs_dac_wide[k].mode;
+    pthread_mutex_unlock(&fs_dac_wide_lock);
+    return mode;
+}
 static void fs_dac_end(void) {
     int saved=errno;struct stat st;
     while(fs_dac.count) {
         int i=--fs_dac.count,fd=fs_dac.held[i].fd;
-        if(fstat(fd,&st) || ((st.st_mode&07777)==fs_dac.held[i].set && fchmod(fd,fs_dac.held[i].mode)))fs_dac_stuck(fs_dac.held[i].mode,fs_dac.held[i].set);
+        if(fstat(fd,&st))fs_dac_stuck(fs_dac.held[i].mode,fs_dac.held[i].set);
+        else {
+            int back=(st.st_mode&07777)==fs_dac.held[i].mode;                  /* already: another pass's end, or a chmod to that very mode */
+            if((st.st_mode&07777)==fs_dac.held[i].set) {
+                back=!fchmod(fd,fs_dac.held[i].mode);
+                if(!back)fs_dac_stuck(fs_dac.held[i].mode,fs_dac.held[i].set);
+                else (void)fstat(fd,&st);
+            }
+            fs_dac_note(&st,back?2:0);                                         /* not back: changed meanwhile, and that is its mode */
+        }
         close(fd);
     }
     fs_dac.on=0;errno=saved;
@@ -568,7 +623,9 @@ static void fs_dac_fd(int fd) {
     struct stat st;mode_t need=0;
     if(!fs_dac.on || fs_dac.ro || fd<0 || fs_dac.count==FS_DAC_HELD || fstat(fd,&st) || !(need=fs_dac_need(&st)))return;
     int keep=fcntl(fd,F_DUPFD_CLOEXEC,0);
-    if(keep<0 || fchmod(keep,(st.st_mode&07777)|need)) { if(keep>=0)close(keep);return; }
+    if(keep<0)return;
+    fs_dac_note(&st,1);
+    if(fchmod(keep,(st.st_mode&07777)|need)) { fs_dac_note(&st,0);close(keep);return; }
     fs_dac_hold(keep,st.st_mode&07777,need);
 }
 /* The container's leaf in parent, before the pass opens it or changes its entries. */
@@ -576,7 +633,8 @@ static void fs_dac_leaf(int parent,const char *leaf) {
     struct stat st;mode_t need=0;
     if(!fs_dac.on || fs_dac.ro || fs_dac.count==FS_DAC_HELD || fstatat(parent,leaf,&st,FS_NOFOLLOW_AT) || !(need=fs_dac_need(&st)))return;
     mode_t mode=st.st_mode&07777;
-    if(fchmodat(parent,leaf,mode|need,FS_NOFOLLOW_AT))return;
+    fs_dac_note(&st,1);
+    if(fchmodat(parent,leaf,mode|need,FS_NOFOLLOW_AT)) { fs_dac_note(&st,0);return; }
     int fd=openat(parent,leaf,O_RDONLY|FS_NOFOLLOW_OPEN|O_CLOEXEC|O_NONBLOCK);struct stat now;
     if(fd>=0 && !fstat(fd,&now) && now.st_ino==st.st_ino && now.st_dev==st.st_dev) { fs_dac_hold(fd,mode,need);return; }
     /* Not opened (no descriptor to spare), or the name is another file's by now: put
@@ -587,11 +645,13 @@ static void fs_dac_leaf(int parent,const char *leaf) {
     if(fstatat(parent,leaf,&now,FS_NOFOLLOW_AT))fs_dac_stuck(mode,mode|need);
     else if(now.st_ino!=st.st_ino || now.st_dev!=st.st_dev) { errno=ESTALE;fs_dac_stuck(mode,mode|need); }
     else if((now.st_mode&07777)==(mode|need) && fchmodat(parent,leaf,mode,FS_NOFOLLOW_AT))fs_dac_stuck(mode,mode|need);
+    fs_dac_note(&st,0);                                                     /* no descriptor to say when it was back: stats show what they find */
     errno=saved;
 }
 /* The pass's own chmod of st's file to mode: that is what stays. */
 static void fs_dac_chmod(const struct stat *st,mode_t mode) {
     struct stat held;
+    fs_dac_note(st,0);
     for(int i=0;i<fs_dac.count;i++)
         if(!fstat(fs_dac.held[i].fd,&held) && held.st_ino==st->st_ino && held.st_dev==st->st_dev)fs_dac.held[i].mode=fs_dac.held[i].set=mode;
 }
@@ -1672,10 +1732,15 @@ static void fs_pack(unsigned char *p,unsigned offset,uint64_t value,unsigned siz
 }
 static void fs_stat_pack(unsigned char *out,const struct stat *st) {
     memset(out,0,128);fs_pack(out,8,st->st_ino,8);
-    fs_pack(out,16,(S_ISDIR(st->st_mode)?0040000:S_ISLNK(st->st_mode)?0120000:S_ISCHR(st->st_mode)?0020000:S_ISSOCK(st->st_mode)?0140000:S_ISFIFO(st->st_mode)?0010000:0100000)|(st->st_mode&07777),4); /* with setuid, setgid and sticky */
+    fs_pack(out,16,(S_ISDIR(st->st_mode)?0040000:S_ISLNK(st->st_mode)?0120000:S_ISCHR(st->st_mode)?0020000:S_ISSOCK(st->st_mode)?0140000:S_ISFIFO(st->st_mode)?0010000:0100000)|fs_dac_mode(st),4); /* with setuid, setgid and sticky; not as a pass opened it up */
     fs_pack(out,24,guest_uid,4);fs_pack(out,28,guest_gid,4);
-    fs_pack(out,20,st->st_nlink?st->st_nlink:1,4);fs_pack(out,48,(uint64_t)st->st_size,8);
-    fs_pack(out,56,4096,4);fs_pack(out,64,((uint64_t)st->st_size+511)/512,8);
+    /* A directory's size is one block, as most of ext4's: the host's counts its entries,
+       so it grew as the memory layer's files reached the disk (upm.h), and GNU tar says
+       "file changed as we read it" of a directory that grew between its two stats.
+       (/proc's directories stay 0, as procfs shows them.) */
+    uint64_t size=S_ISDIR(st->st_mode) && st->st_size?4096:(uint64_t)st->st_size;
+    fs_pack(out,20,st->st_nlink?st->st_nlink:1,4);fs_pack(out,48,size,8);
+    fs_pack(out,56,4096,4);fs_pack(out,64,(size+511)/512,8);
     /* Linux arm64 st_atime, st_mtime and st_ctime, each seconds then nanoseconds. */
     const struct timespec *times[3]={&st->st_atimespec,&st->st_mtimespec,&st->st_ctimespec};
     for(unsigned i=0;i<3;i++) { fs_pack(out,72+i*16,(uint64_t)times[i]->tv_sec,8);fs_pack(out,80+i*16,(uint64_t)times[i]->tv_nsec,8); }
@@ -1962,14 +2027,21 @@ static uint64_t fs_call_once(uint64_t call) {
         if(!cpu->gpr[1]) {
             int fd=fs_host(cpu->gpr[0]),own=-1;if(fd<0)return linux_error(9);
             if(FS(fs_slot(cpu->gpr[0])).ro && (fd=own=ov_fd_upper(fs_slot(cpu->gpr[0])))<0)return linux_error(30);
-            int result=futimens(fd,times);if(own>=0) { int saved=errno;close(own);errno=saved; }
-            return result<0?fs_error():0;
+            const char *at=FS(fs_slot(cpu->gpr[0])).dir?FS(fs_slot(cpu->gpr[0])).dir->path:"";
+            int mirrored=upm_utimens_begin(at);                            /* a directory a write-back may be at work in (upm.h) */
+            int result=futimens(fd,times),saved=errno;
+            if(mirrored)upm_utimens_end(at,!result,times);
+            if(own>=0)close(own);
+            errno=saved;return result<0?fs_error():0;
         }
-        char leaf[1025];int parent=fs_lookup(cpu->gpr[0],cpu->gpr[1],leaf,!(flags&0x100)|FS_DIRECT,NULL);if(parent<0)return fs_error();
+        char leaf[1025],canon[1025];int parent=fs_lookup(cpu->gpr[0],cpu->gpr[1],leaf,!(flags&0x100)|FS_DIRECT,canon);if(parent<0)return fs_error();
         if(!fs_path_writable()) { close(parent);return linux_error(30); }
         { OvLeaf w=ov_leaf;if(ov_prepare(&w,&parent,leaf,OV_MODIFY)) { uint64_t e=fs_error();close(parent);return e; } }
         /* The leaf is never followed by the host: a final symlink is followed by fs_lookup already. */
-        int result=utimensat(parent,leaf,times,FS_NOFOLLOW_AT);int saved=errno;close(parent);errno=saved;
+        int mirrored=upm_utimens_begin(canon);
+        int result=utimensat(parent,leaf,times,FS_NOFOLLOW_AT);int saved=errno;
+        if(mirrored)upm_utimens_end(canon,!result,times);
+        close(parent);errno=saved;
         return result<0?fs_error():0;
     }
     if(call==45) { /* truncate(path, length): ftruncate of the resolved regular file */

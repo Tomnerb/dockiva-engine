@@ -18,7 +18,10 @@ volume, as dockivad keeps them, with and without the memory layer, and statfs th
 CAP_DAC_OVERRIDE (tests/native/rootdac_guest.c): root changing 0555 and 000 directories
 of the upper layer, a bind mount and the image, with and without the memory layer,
 other users refused, the modes and the image left as they were, and a tar archive of
-0555 directories and 0444 files extracted by busybox tar as root."""
+0555 directories and 0444 files extracted by busybox tar as root. And directories read
+while the memory layer writes their files back (tests/native/dirlist_guest.c): every
+listing whole, the directories' times, size and mode unmoved, and on disk afterwards every
+file and the mtime and mode the guest gave each directory."""
 import os
 from pathlib import Path
 import subprocess
@@ -249,6 +252,38 @@ def dac_runs(t):
     return failed
 
 
+def dirlist_runs(t):
+    """dirlist_guest.c on every built runtime, with and without the memory layer; then
+    what it left on disk: 300 files in each of seven directories (and the one made last),
+    the mtime it set (1000000000) on every directory but the one that got that file, and
+    the mode it gave each (every other one 0555: none left opened up)."""
+    failed = 0
+    lower = t/'dirlist-lower'
+    lower.mkdir()
+    (lower/'keep').write_text('k')
+    build(ROOT/'tests/native/dirlist_guest.c', t/'dirlist')
+    names = [f'module-file-name-{i:03}.go' for i in range(300)]
+    for binary, runtime, extra in runtimes():
+        for memory in (False, True):
+            tag = f'{binary}-{int(memory)}'
+            upper, state = t/f'dirlist-up-{tag}', t/f'dirlist-state-{tag}'
+            upper.mkdir()
+            state.mkdir()
+            more = ['--upper-memory', str(state/'upper-sync'), '--layers-gen', str(state/'gen')] if memory else []
+            r = subprocess.run([str(runtime), 'run', str(t/'dirlist'), '--root', str(upper), '--lower', str(lower), '--writable',
+                                '--storage-limit-mib', '0', '--max-steps', '2000000000', '--process-tree', '--scheduled-network', '--dynamic', *more, *extra],
+                               capture_output=True, timeout=300)
+            ok = r.returncode == 0 and r.stdout == b'dirlist PASS\n' and b'ERROR: AddressSanitizer' not in r.stderr
+            wrong = [f'd{d}' for d in range(7) if not (upper/f'w/d{d}').is_dir() or sorted(os.listdir(upper/f'w/d{d}')) != sorted(names + ['new']*(d == 0))]
+            wrong += [f'd{d} mtime' for d in range(7) if (upper/f'w/d{d}').is_dir() and ((upper/f'w/d{d}').stat().st_mtime_ns == T*10**9) != (d > 0)]
+            wrong += [f'd{d} mode' for d in range(7) if (upper/f'w/d{d}').is_dir() and (upper/f'w/d{d}').stat().st_mode & 0o7777 != (0o555 if d & 1 else 0o755)]
+            ok = ok and not wrong
+            failed += not ok
+            print(f'{binary} dirlist_guest{" with the memory layer" if memory else ""}:', 'PASS' if ok else
+                  f'FAIL exit={r.returncode} {r.stdout!r} wrong={wrong} {r.stderr.decode()[-1500:]}')
+    return failed
+
+
 ATTACK = r'''
 for f in /bin/busybox /lib/ld-musl-aarch64.so.1; do      # what this shell runs on: changed, not broken
   echo pwn >> $f; chmod 777 $f; touch -d 2001-01-01 $f; ln $f $f.hard; mv $f.hard $f.moved; rm $f.moved
@@ -293,6 +328,7 @@ def main():
         print('lower layer unchanged:', 'PASS' if same else f'FAIL {[k for k in set(before)|set(after) if before.get(k) != after.get(k)]}')
         failed += upm_runs(t)
         failed += dac_runs(t)
+        failed += dirlist_runs(t)
 
         # busybox on alpine's files as the lower layer
         lower = t/'alpine'

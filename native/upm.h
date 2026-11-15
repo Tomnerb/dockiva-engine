@@ -22,7 +22,15 @@
    docker run --rm). A file made on disk meanwhile by another run (an exec) keeps the
    disk's version. ponytail: only regular files of existing upper directories; a
    crash of the engine loses what was not written back yet (at most UPM_AGE_NS of
-   closed files, as a VM's page cache loses its dirty pages). */
+   closed files, as a VM's page cache loses its dirty pages).
+
+   A directory's times: a file made, removed or renamed in memory moves its
+   directory's mtime and ctime at once, though the host's directory has not changed
+   (the mirror's own times, the last such change: upm_times); and a write-back, which
+   does change the host's directory, moves neither (UpmTimes). Without that, reading a
+   tree changed it: GNU tar stats a directory before and after reading it and says
+   "file changed as we read it" (exit 1) when its ctime moved, and the mtime tar -x
+   had just given a directory became the time its files reached the disk. */
 #define UPM_AGE_NS UINT64_C(2000000000)
 #define UPM_FILES_MAX 65536u
 #define UPM_COUNTS 65536u
@@ -35,6 +43,31 @@ static uint32_t upm_slot(const char *canon) { return ov_hash(canon)&(UPM_COUNTS-
 static void upm_count(const char *canon,int delta) { __atomic_add_fetch(&upm_counts[upm_slot(canon)],(uint32_t)delta,__ATOMIC_SEQ_CST); }
 static int upm_maybe(const char *canon) { return upm_fs && __atomic_load_n(&upm_counts[upm_slot(canon)],__ATOMIC_SEQ_CST)!=0; }
 static uint64_t upm_ns(const struct timespec *t) { return (uint64_t)t->tv_sec*1000000000+(uint64_t)t->tv_nsec; }
+/* What write-backs did to a mirrored directory's times on the host: while its ctime
+   lies in from..seen (the clock when the first of them began; the ctime the last one
+   left, any later one while busy: so many are at work) only they changed the directory
+   since the guest saw mtime and ctime, which it keeps seeing. Each write-back also puts
+   the mtime back on the host, so the layer on disk keeps it (a commit, the next run).
+   utimensat of the directory never waits for a write-back (tar -x sets every
+   directory's times, and waiting for the file in flight each time more than doubled
+   an extraction): it is made under mem_lock, as a write-back's first look at the
+   directory and its last changes are, so it falls before one or after it, or, while
+   one is at work, leaves the times it asked for here (upm_utimens_end), which that
+   write-back then puts back instead.
+   ponytail: a name made or removed on disk in the directory by someone else while
+   one file of it is written back (tens of microseconds) is taken for the write-back's
+   and does not move the times. */
+typedef struct UpmTimes { struct timespec from,seen,mtime,ctime;unsigned busy; } UpmTimes;
+static unsigned char upm_mirrors[UPM_COUNTS];         /* directories with a mirror, by path hash (a superset) */
+static void upm_mirrored(const char *canon) { __atomic_store_n(&upm_mirrors[upm_slot(canon)],1,__ATOMIC_RELAXED); }
+static int upm_later(const struct timespec *a,const struct timespec *b) { return a->tv_sec>b->tv_sec || (a->tv_sec==b->tv_sec && a->tv_nsec>b->tv_nsec); }
+static int upm_times_ours(const UpmTimes *t,const struct stat *st) { return t && !upm_later(&t->from,&st->st_ctimespec) && (t->busy || !upm_later(&st->st_ctimespec,&t->seen)); }
+/* st, the host's stat of the directory d mirrors, with the times the guest sees. mem_lock held. */
+static void upm_times(const MemNode *d,struct stat *st) {
+    const UpmTimes *t=d->d.times;
+    if(upm_times_ours(t,st)) { st->st_mtimespec=t->mtime;st->st_ctimespec=t->ctime; }
+    if(upm_later(&d->mtime,&st->st_ctimespec))st->st_mtimespec=st->st_ctimespec=d->mtime;   /* a name changed in memory since */
+}
 
 /* The hidden directory for an upper directory's guest path (made when make). mem_lock held. */
 static MemNode *upm_dir(const char *canon,int make) {
@@ -51,8 +84,9 @@ static MemNode *upm_dir(const char *canon,int make) {
             if(!make)return NULL;
             uint32_t uid=guest_uid,gid=guest_gid;
             if(!(n=mem_node_new(upm_fs,MEM_DIR|0777)))return NULL;
-            n->uid=uid;n->gid=gid;
+            n->uid=uid;n->gid=gid;n->mtime=n->ctime=(struct timespec){0,0};     /* no name changed in memory yet (upm_times) */
             if(!mem_link(cur,part,n)) { mem_node_free(n);return NULL; }
+            char path[1025];memcpy(path,canon,(size_t)(q-canon));path[q-canon]=0;upm_mirrored(path);
         }
         cur=n;
     }
@@ -103,6 +137,47 @@ static int upm_lexical(uint64_t dir,const char *input,char out[1025]) {
         p=q;
     }
     return strcmp(out,"/")!=0;
+}
+/* fs.h's stats (ov_dir_ino): an upper directory's times as the guest sees them. */
+static void upm_dir_times(const char *canon,struct stat *st) {
+    if(!upm_fs || !S_ISDIR(st->st_mode) || canon[0]!='/' || !__atomic_load_n(&upm_mirrors[upm_slot(canon)],__ATOMIC_RELAXED))return;
+    st->st_mode=(st->st_mode&~(mode_t)07777)|fs_dac_mode(st);                   /* a mode opened up shows by the host's ctime: before that is replaced */
+    int held=upm_lock_held;
+    if(!held)pthread_mutex_lock(&mem_lock);
+    MemNode *d=upm_dir(canon,0);
+    if(d)upm_times(d,st);
+    if(!held)pthread_mutex_unlock(&mem_lock);
+}
+/* A write-back is about to change the directory d mirrors (open at parent): the
+   times the guest sees of it now are the ones it keeps seeing (another write-back at
+   work there has them already). 0: not kept. */
+static int upm_times_hold(MemNode *d,int parent) {
+    struct stat pre;UpmTimes *t=d->d.times;
+    if(!t || parent<0)return 0;
+    pthread_mutex_lock(&mem_lock);
+    int kept=!fstat(parent,&pre);
+    if(kept && !t->busy) {
+        if(!upm_times_ours(t,&pre))t->from=mem_now();
+        upm_times(d,&pre);t->mtime=pre.st_mtimespec;t->ctime=pre.st_ctimespec;
+    }
+    t->busy+=(unsigned)kept;
+    pthread_mutex_unlock(&mem_lock);
+    return kept;
+}
+/* fs.h's utimensat and futimens of canon, which may be a mirrored directory: begin
+   before the host's call (1: mem_lock is held, and end is owed), end after it (done:
+   it succeeded, with the host's times). */
+static int upm_utimens_begin(const char *canon) {
+    if(!upm_fs || canon[0]!='/' || !__atomic_load_n(&upm_mirrors[upm_slot(canon)],__ATOMIC_RELAXED))return 0;
+    pthread_mutex_lock(&mem_lock);return 1;
+}
+static void upm_utimens_end(const char *canon,int done,const struct timespec times[2]) {
+    MemNode *d=done?upm_dir(canon,0):NULL;UpmTimes *t=d?d->d.times:NULL;
+    if(t && t->busy) {                                                         /* a write-back at work: these are the times it leaves */
+        t->ctime=mem_now();
+        if(times[1].tv_nsec!=UTIME_OMIT)t->mtime=times[1].tv_nsec==UTIME_NOW?t->ctime:times[1];
+    }
+    pthread_mutex_unlock(&mem_lock);
 }
 /* Whether an upper directory holds pending files (rmdir, listings). */
 static int upm_has_files(const char *canon) {
@@ -200,15 +275,19 @@ static _Thread_local unsigned char *upm_buffer;
 static int upm_write_back(MemNode *n,const char *canon,int force) {
     static unsigned serial;
     if(!force && n->refs)return 0;
+    MemEntry *here=upm_entry(canon);if(!here || here->node!=n)return 0;        /* renamed meanwhile: its old directory is left alone */
     if(!upm_buffer && (upm_buffer=mmap(NULL,UPM_CHUNK,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANON,-1,0))==MAP_FAILED) { upm_buffer=NULL;return 0; }
-    n->refs++;                                                                 /* pinned while mem_lock is released */
+    MemNode *d=here->dir;
+    if(!d->d.times)d->d.times=calloc(1,sizeof(UpmTimes));                      /* none: its times move, as they did */
+    n->refs++;d->refs++;                                                       /* pinned while mem_lock is released */
     uint64_t size=n->size;uint32_t mode=n->mode;struct timespec mtime=n->mtime,ctime=n->ctime,atime=n->atime;
     char dir[1025],temp[64];const char *name;upm_split(canon,dir,&name);
     snprintf(temp,sizeof temp,OV_WH ".dkv.%d.%u",(int)getpid(),__atomic_add_fetch(&serial,1,__ATOMIC_RELAXED));
     pthread_mutex_unlock(&mem_lock);
     /* All from the directory, opened refusing a symlink anywhere on the way (another
        run, an exec, may have swapped one in): nothing lands outside the root. */
-    int parent=dir[1]?openat(fs_root,dir+1,O_RDONLY|O_DIRECTORY|FS_NOFOLLOW_OPEN|O_CLOEXEC):dup(fs_root);
+    int parent=dir[1]?openat(fs_root,dir+1,O_RDONLY|O_DIRECTORY|FS_NOFOLLOW_OPEN|O_CLOEXEC):dup(fs_root),saved=errno;
+    int timed=upm_times_hold(d,parent);errno=saved;
     int fd=parent>=0?openat(parent,temp,O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC|O_NOFOLLOW,0600):-1,forced=0;
     if(fd<0 && errno==EACCES) {
         /* The directory, or one above it, lost the owner's bits after the file was made
@@ -218,6 +297,7 @@ static int upm_write_back(MemNode *n,const char *canon,int force) {
         forced=!fs_dac.on;fs_dac.on=1;
         if(parent>=0)close(parent);
         parent=ov_upper(dir);
+        if(!timed)timed=upm_times_hold(d,parent);                              /* not opened before: as fs_dac's chmod left it */
         fd=parent>=0?openat(parent,temp,O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC|O_NOFOLLOW,0600):-1;
     }
     int ok=fd>=0;
@@ -245,9 +325,14 @@ static int upm_write_back(MemNode *n,const char *canon,int force) {
             done=1;
         } else (void)unlinkat(parent,temp,0);
     } else if(fd>=0)(void)unlinkat(parent,temp,0);
-    if(parent>=0)close(parent);
     if(forced)fs_dac_end();
-    mem_node_put(n);                                                           /* the pin (frees it once forgotten) */
+    if(timed) {                                                                /* the mtime back, and the ctime all this left (after fs_dac_end's chmod too) */
+        struct timespec back[2]={{0,UTIME_OMIT},d->d.times->mtime};struct stat post;
+        (void)futimens(parent,back);
+        if(!--d->d.times->busy)d->d.times->seen=fstat(parent,&post)?d->d.times->from:post.st_ctimespec;
+    }
+    if(parent>=0)close(parent);
+    mem_node_put(n);mem_node_put(d);                                           /* the pins (n is freed once forgotten) */
     return done;
 }
 /* upm_cross: pending file n (entry e at from; mem_lock held) renamed to to, a path of
@@ -285,8 +370,9 @@ static int64_t upm_move(MemNode *n,MemEntry *e,const char *from,const char *to,c
         into->whiteouts|=!r;
     }
     if(r) { if(now)mem_unlink_entry(now);upm_count(to,-1);return r; }
+    MemNode *left=e->dir;
     mem_unlink_entry(e);upm_count(from,-1);                                    /* n keeps the new name: not freed */
-    n->ctime=into->mtime=into->ctime=mem_now();
+    n->ctime=left->mtime=left->ctime=into->mtime=into->ctime=mem_now();
     if(ov_gen) { ov_bump(from);ov_bump(to); }
     return 0;
 }
@@ -325,6 +411,7 @@ static int64_t upm_cross(uint64_t call,MemPath *w,const int *res) {
 /* A directory renamed on disk: its pending files move with it. */
 static void upm_rekey(MemNode *d,char path[1025],int delta) {
     size_t length=strlen(path);d->upper_only=0;                               /* a new path: whether the image has it, again */
+    if(delta>0)upm_mirrored(path);
     for(uint32_t i=0;i<d->d.count;i++) {
         MemEntry *e=d->d.list[i];if(!e->node)continue;
         if(length+1+strlen(e->name)>1024)continue;
@@ -441,7 +528,7 @@ static void upm_start(void) {
     fs->index=MEM_MOUNTS;fs->path[0]=0;fs->length=0;                          /* named by no guest path: mem_dir_path gives the layer's */
     upm_fs=fs;
     if(!(fs->root=mem_node_new(fs,MEM_DIR|0777))) { upm_fs=NULL;free(fs);return; }
-    fs->root->refs=1;fs->root->nlink=2;
+    fs->root->refs=1;fs->root->nlink=2;fs->root->mtime=fs->root->ctime=(struct timespec){0,0};upm_mirrored("/");
     upm_bytes_max=resource_limit/4;if(!upm_bytes_max || upm_bytes_max>(UINT64_C(512)<<20))upm_bytes_max=UINT64_C(512)<<20;
     pthread_t t;if(!pthread_create(&t,NULL,upm_writer,NULL))pthread_detach(t);
 }
